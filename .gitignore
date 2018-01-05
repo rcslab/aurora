@@ -1,0 +1,6 @@
+export_syms
+machine
+*.ko
+*.o
+x86
+.*.swp
