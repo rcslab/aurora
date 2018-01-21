@@ -1,5 +1,4 @@
-.PATH:  ${.CURDIR}
-KMOD    = slsmm
-SRCS    = slsmm.c
 
-.include <bsd.kmod.mk>
+SUBDIR= kmod test
+
+.include <bsd.subdir.mk>

@@ -4,3 +4,7 @@ machine
 *.o
 x86
 .*.swp
+test/.depend
+test/test
+test/test.debug
+test/test.full
