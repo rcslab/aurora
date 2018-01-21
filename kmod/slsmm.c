@@ -93,6 +93,7 @@ static int
 slsmm_mmap_single(struct cdev *cdev, vm_ooffset_t *foff, vm_size_t objsize, 
         vm_object_t *objp, int prot)
 {
+    printf("slsmm_mmap_single\n");
     struct slsmm_vm_handle_t *vmh;
     vm_object_t obj;
 
@@ -113,24 +114,29 @@ slsmm_mmap_single(struct cdev *cdev, vm_ooffset_t *foff, vm_size_t objsize,
 
 //=============================================================================
 
-static struct cdev *zero_dev;
+static struct cdev *slsmm_dev;
 
-static d_write_t null_write;
-static d_ioctl_t zero_ioctl;
-static d_read_t zero_read;
+static d_read_t slsmm_read;
+static d_write_t slsmm_write;
+static d_ioctl_t slsmm_ioctl;
 
-static struct cdevsw zero_cdevsw = {
+static char single;
+
+static struct cdevsw slsmm_cdevsw = {
     .d_version =  D_VERSION,
-    .d_read =	zero_read,
-    .d_write =	null_write,
-    .d_ioctl =	zero_ioctl,
+    .d_read =	slsmm_read,
+    .d_write =	slsmm_write,
+    .d_ioctl =	slsmm_ioctl,
     .d_name =	"slsmm",
-    .d_flags =	D_MMAP_ANON,
+    // XXX: This prevents you from managing the memory
+    // see vm_mmap_cdev in vm/vm_mmap.c
+    // .d_flags =	D_MMAP_ANON,
     .d_mmap_single = slsmm_mmap_single,
 };
 
-static int zero_read(struct cdev *dev __unused, struct uio *uio, int flags __unused) {
-    printf("called zero_read\n");
+static int
+slsmm_read(struct cdev *dev __unused, struct uio *uio, int flags __unused) {
+    printf("called slsmm_read\n");
     void *zbuf;
     ssize_t len;
     int error = 0;
@@ -148,9 +154,16 @@ static int zero_read(struct cdev *dev __unused, struct uio *uio, int flags __unu
     return (error);
 }
 
-static char single;
+static int
+slsmm_write(struct cdev *dev __unused, struct uio *uio, int flags __unused) {
+    printf("called null_write\n");
+    uio->uio_resid = 0;
 
-static int zero_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
+    return (0);
+}
+
+static int
+slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
         int flags __unused, struct thread *td) {
     printf("ioctl\n");
     int error;
@@ -174,24 +187,18 @@ static int zero_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unus
     return (error);
 }
 
-static int null_write(struct cdev *dev __unused, struct uio *uio, int flags __unused) {
-    printf("called null_write\n");
-    uio->uio_resid = 0;
-
-    return (0);
-}
-
-static int SLSMMHandler(struct module *inModule, int inEvent, void *inArg) {
+static int
+SLSMMHandler(struct module *inModule, int inEvent, void *inArg) {
     switch (inEvent) {
         case MOD_LOAD:
             uprintf("Load\n");
-            zero_dev = make_dev_credf(MAKEDEV_ETERNAL_KLD, &zero_cdevsw, 0,
+            slsmm_dev = make_dev_credf(MAKEDEV_ETERNAL_KLD, &slsmm_cdevsw, 0,
                     NULL, UID_ROOT, GID_WHEEL, 0666, "slsmm");
             return 0;
 
         case MOD_UNLOAD:
             uprintf("Unload\n");
-            destroy_dev(zero_dev);
+            destroy_dev(slsmm_dev);
             return 0;
 
         default:
