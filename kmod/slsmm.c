@@ -99,6 +99,7 @@ slsmm_mmap_single(struct cdev *cdev, vm_ooffset_t *foff, vm_size_t objsize,
 
     vmh = malloc(sizeof(struct slsmm_vm_handle_t), M_DEVBUF, M_NOWAIT | M_ZERO);
     if (vmh == NULL) return ENOMEM;
+    vmh->dev = cdev;
     obj = cdev_pager_allocate(vmh, OBJT_DEVICE, &slsmm_cdev_pager_ops, objsize, 
             prot, *foff, NULL);
     if (obj == NULL) {
