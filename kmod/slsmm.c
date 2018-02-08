@@ -23,7 +23,6 @@ static int
 slsmm_dev_pager_ctor(void *handle, vm_ooffset_t size, vm_prot_t prot,
         vm_ooffset_t foff, struct ucred *cred, u_short *color)
 {
-    printf("page ctor %ld %ld\n", size, foff);
     slsmm_object_t *vmh = handle;
     vmh->size = size;
     vmh->pages = malloc(sizeof(slsmm_page_t)*size, M_SLSMM, M_ZERO | M_WAITOK);
@@ -35,7 +34,6 @@ slsmm_dev_pager_ctor(void *handle, vm_ooffset_t size, vm_prot_t prot,
 static void
 slsmm_dev_pager_dtor(void *handle)
 {
-    printf("page dtor\n");
     slsmm_object_t *vmh = handle;
     struct cdev *dev = vmh->dev;
     free(vmh->pages, M_SLSMM);
@@ -48,22 +46,22 @@ static int
 slsmm_dev_pager_fault(vm_object_t object, vm_ooffset_t offset, int prot, 
         vm_page_t *mres)
 {
-    printf("page fault %ld %d\n", offset, prot);
-    //vm_memattr_t memattr = object->memattr;
     vm_pindex_t pidx = OFF_TO_IDX(offset);
-    slsmm_page_t page = vmh->pages[pidx];
+    slsmm_page_t page = vmh->pages[pidx]; 
     
     if (page.device == 0) {
-        printf("page alloc %lu", pidx);
-        page.page = vm_page_alloc(object, pidx, VM_ALLOC_NORMAL | VM_ALLOC_ZERO);
-        vm_page_insert(page.page, object, pidx);
+        page.page = vm_page_lookup(object, pidx);
         page.device = 1;
     }
 
-    vm_page_lock(*mres);
-    vm_page_free(*mres);
-    vm_page_unlock(*mres);
-    *mres = page.page;
+    if (*mres != page.page) {
+        if (*mres != NULL) {
+            vm_page_lock(*mres);
+            vm_page_free(*mres);
+            vm_page_unlock(*mres);
+        }
+        *mres = page.page;
+    }
     page.page->valid = VM_PAGE_BITS_ALL;
 
     return  (VM_PAGER_OK);
@@ -75,18 +73,19 @@ static struct cdev_pager_ops slsmm_cdev_pager_ops = {
     .cdev_pg_fault = slsmm_dev_pager_fault,
 };
 
-static int
+    static int
 slsmm_mmap_single(struct cdev *cdev, vm_ooffset_t *foff, vm_size_t objsize, 
         vm_object_t *objp, int prot)
 {
-    printf("slsmm_mmap_single\n");
     vm_object_t obj;
 
     vmh = malloc(sizeof(slsmm_object_t), M_SLSMM, M_NOWAIT | M_ZERO);
     if (vmh == NULL) return ENOMEM;
     vmh->dev = cdev;
-    obj = cdev_pager_allocate(vmh, OBJT_DEVICE, &slsmm_cdev_pager_ops, objsize, 
+
+    obj = cdev_pager_allocate(vmh, OBJT_MGTDEVICE, &slsmm_cdev_pager_ops, objsize, 
             prot, *foff, NULL);
+
     if (obj == NULL) {
         free(vmh, M_SLSMM);
         return EINVAL;
@@ -120,7 +119,6 @@ static struct cdevsw slsmm_cdevsw = {
 
 static int
 slsmm_read(struct cdev *dev __unused, struct uio *uio, int flags __unused) {
-    printf("called slsmm_read\n");
     void *zbuf;
     ssize_t len;
     int error = 0;
@@ -140,7 +138,6 @@ slsmm_read(struct cdev *dev __unused, struct uio *uio, int flags __unused) {
 
 static int
 slsmm_write(struct cdev *dev __unused, struct uio *uio, int flags __unused) {
-    printf("called null_write\n");
     uio->uio_resid = 0;
 
     return (0);
@@ -149,7 +146,6 @@ slsmm_write(struct cdev *dev __unused, struct uio *uio, int flags __unused) {
 static int
 slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
         int flags __unused, struct thread *td) {
-    printf("ioctl\n");
     int error;
     error = 0;
 
