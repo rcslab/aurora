@@ -24,7 +24,7 @@ slsmm_dev_pager_ctor(void *handle, vm_ooffset_t size, vm_prot_t prot,
         vm_ooffset_t foff, struct ucred *cred, u_short *color)
 {
     slsmm_object_t *vmh = handle;
-    vmh->size = size;
+    vmh->size = OFF_TO_IDX(size);
     vmh->pages = malloc(sizeof(slsmm_page_t)*size, M_SLSMM, M_ZERO | M_WAITOK);
     if (color) *color = 0;
     dev_ref(vmh->dev);
@@ -47,22 +47,22 @@ slsmm_dev_pager_fault(vm_object_t object, vm_ooffset_t offset, int prot,
         vm_page_t *mres)
 {
     vm_pindex_t pidx = OFF_TO_IDX(offset);
-    slsmm_page_t page = vmh->pages[pidx]; 
+    slsmm_page_t *page = vmh->pages + pidx; 
     
-    if (page.device == 0) {
-        page.page = vm_page_lookup(object, pidx);
-        page.device = 1;
+    if (page->device == 0) {
+        page->page = vm_page_lookup(object, pidx);
+        page->device = 1;
     }
 
-    if (*mres != page.page) {
+    if (*mres != page->page) {
         if (*mres != NULL) {
             vm_page_lock(*mres);
             vm_page_free(*mres);
             vm_page_unlock(*mres);
         }
-        *mres = page.page;
+        *mres = page->page;
     }
-    page.page->valid = VM_PAGE_BITS_ALL;
+    page->page->valid = VM_PAGE_BITS_ALL;
 
     return  (VM_PAGER_OK);
 }
@@ -150,6 +150,10 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
     error = 0;
 
     switch (cmd) {
+        case SLSMM_PAGE_FLAGS:
+            printf("page flags %lu\n", vmh->size);
+            for (size_t i = 0; i < vmh->size; i ++)
+                printf("%d\n", vmh->pages[i].page->aflags);
         case SLSMM_WRITE:
             single = *(char *)data;
             break;

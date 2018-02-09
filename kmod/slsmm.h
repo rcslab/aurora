@@ -9,6 +9,7 @@
 
 #define SLSMM_READ  _IOR('t', 1, char)
 #define SLSMM_WRITE _IOW('t', 2, char)
+#define SLSMM_PAGE_FLAGS _IO('t', 3)
 
 struct slsmm_page;
 struct slsmm_object;
