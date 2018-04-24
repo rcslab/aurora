@@ -15,7 +15,9 @@
 #include <vm/vm.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
+#include <vm/vm_pageout.h>
 #include <vm/vm_pager.h>
+#include <vm/pmap.h>
 
 MALLOC_DEFINE(M_SLSMM, "slsmm", "slsmm longer name");
 
@@ -48,6 +50,7 @@ slsmm_dev_pager_fault(vm_object_t object, vm_ooffset_t offset, int prot,
 {
     vm_pindex_t pidx = OFF_TO_IDX(offset);
     slsmm_page_t *page = vmh->pages + pidx; 
+    printf("Page Fault %lu\n", pidx);
     
     if (page->device == 0) {
         page->page = vm_page_lookup(object, pidx);
@@ -73,7 +76,7 @@ static struct cdev_pager_ops slsmm_cdev_pager_ops = {
     .cdev_pg_fault = slsmm_dev_pager_fault,
 };
 
-    static int
+static int
 slsmm_mmap_single(struct cdev *cdev, vm_ooffset_t *foff, vm_size_t objsize, 
         vm_object_t *objp, int prot)
 {
@@ -147,13 +150,27 @@ static int
 slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
         int flags __unused, struct thread *td) {
     int error;
+    int offset;
     error = 0;
+    vm_page_t page;
 
     switch (cmd) {
+        case SLSMM_RM_PAGE:
+            offset = *(int *)data;
+            vm_pindex_t pidx = OFF_TO_IDX(offset);
+            page = (vmh->pages + pidx)->page;
+
+            vm_pageout_clean(page, error);
+            
+            break;
         case SLSMM_PAGE_FLAGS:
             printf("page flags %lu\n", vmh->size);
-            for (size_t i = 0; i < vmh->size; i ++)
-                printf("%d\n", vmh->pages[i].page->aflags);
+            for (size_t i = 0; i < vmh->size; i ++) {
+                printf("%p\n", vmh->pages[i].page->object);
+                printf("%d\n", vmh->pages[i].page->object->ref_count);
+                printf("%d\n", vmh->pages[i].page->dirty);
+            }
+            break;
         case SLSMM_WRITE:
             single = *(char *)data;
             break;
