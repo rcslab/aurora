@@ -6,7 +6,7 @@
 #include <sys/malloc.h>
 #include <sys/ioccom.h>
 
-#define SLSMM_VMSPACE _IO('t', 1)
+#define SLSMM_DUMP _IOW('t', 1, int)
 
 MALLOC_DECLARE(M_SLSMM);
 
