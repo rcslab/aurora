@@ -49,6 +49,19 @@ write_page_to_fd(vm_page_t page, struct thread *td, int fd) {
 }
 
 static int
+vm_object_dump(vm_object_t object, struct thread *td, int fd) 
+{
+    int error = 0;
+    // dump original vm_object
+    vm_page_t page;
+    TAILQ_FOREACH(page, &object->memq, listq) {
+        error = write_page_to_fd(page, td, fd);
+        if (error) return error;
+    }
+    return error;
+}
+
+static int
 slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused, 
         int flags __unused, struct thread *td) {
     int error = 0;
@@ -71,14 +84,9 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
                 vm_object_shadow(&entry->object.vm_object, &entry->offset, 
                         entry->end-entry->start);
 
-                // dump original vm_object
-                vm_page_t page;
-                TAILQ_FOREACH(page, &object->memq, listq) {
-                    error = write_page_to_fd(page, td, fd);
-                    if (error) return error;
-                }
+                error = vm_object_dump(object, td, fd);
 
-                // on vm_map.c line 3437, it is deallocating the old object,
+                // on vm_map.c line 3437, it is deallocaing the old object,
                 // I do not understand why it is doing so
                 //vm_object_deallocate(object);
                 object = entry->object.vm_object;
