@@ -72,28 +72,21 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
     switch (cmd) {
         case SLSMM_DUMP:
             fd = *(int*)data;
-            printf("SLSMM_DUMP %d\n", fd);
 
             p_vmmap = &td->td_proc->p_vmspace->vm_map;
             entry = p_vmmap->header.next; 
 
             for (int i = 0; entry != &p_vmmap->header; i ++, entry = entry->next) {
-                vm_object_t object  = entry->object.vm_object;
+                vm_object_t object = entry->object.vm_object;
 
-                vm_object_reference(object);
+                vm_object_reference(entry->object.vm_object);
                 vm_object_shadow(&entry->object.vm_object, &entry->offset, 
                         entry->end-entry->start);
 
                 error = vm_object_dump(object, td, fd);
 
-                // on vm_map.c line 3437, it is deallocaing the old object,
-                // I do not understand why it is doing so
-                //vm_object_deallocate(object);
-                object = entry->object.vm_object;
-                // the backing object should be the original object
-                printf("backing_object %u\n", (unsigned int)object->backing_object);
-                vm_object_reference(object);
-
+                // decrease the ref_count. collapse intermediate shadow object
+                vm_object_deallocate(object);
             }
 
             break;
