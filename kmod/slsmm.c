@@ -19,33 +19,38 @@
 MALLOC_DEFINE(M_SLSMM, "slsmm", "S L S M M");
 
 static int
-write_page_to_fd(vm_page_t page, struct thread *td, int fd) {
+write_to_fd(vm_offset_t addr, size_t len, struct thread *td, int fd) {
     int error = 0;
     
-    size_t pagesize = pagesizes[page->psind];
-    //TODO: unmap
-    vm_offset_t vaddr = pmap_map(NULL, page->phys_addr, 
-            page->phys_addr+pagesize, VM_PROT_READ);
-
     struct uio auio;
     struct iovec aiov;
     bzero(&auio, sizeof(auio));
     bzero(&aiov, sizeof(aiov));
 
-    aiov.iov_base = (void*)vaddr;
-    aiov.iov_len = pagesize;
+    aiov.iov_base = (void*)addr;
+    aiov.iov_len = len;
     
     auio.uio_iov = &aiov;
     auio.uio_offset = 0;
     auio.uio_segflg = UIO_SYSSPACE;
     auio.uio_rw = UIO_WRITE;
     auio.uio_iovcnt = 1;
-    auio.uio_resid = pagesize;
+    auio.uio_resid = len;
     auio.uio_td = td;
 
     error = kern_writev(td, fd, &auio); 
 
     return error;
+}
+
+static int
+vm_page_dump(vm_page_t page, struct thread *td, int fd) {
+    size_t pagesize = pagesizes[page->psind];
+    //TODO: unmap
+    vm_offset_t vaddr = pmap_map(NULL, page->phys_addr, 
+            page->phys_addr+pagesize, VM_PROT_READ);
+    printf("%lx %ld\n", vaddr, pagesize);
+    return write_to_fd(vaddr, pagesize, td, fd);
 }
 
 static int
@@ -55,7 +60,7 @@ vm_object_dump(vm_object_t object, struct thread *td, int fd)
     // dump original vm_object
     vm_page_t page;
     TAILQ_FOREACH(page, &object->memq, listq) {
-        error = write_page_to_fd(page, td, fd);
+        error = vm_page_dump(page, td, fd);
         if (error) return error;
     }
     return error;
