@@ -20,7 +20,7 @@ MALLOC_DEFINE(M_SLSMM, "slsmm", "S L S M M");
 
 static int
 write_to_fd(void* addr, size_t len, struct thread *td, int fd) {
-    printf("%lx %ld\n", (unsigned long)addr, len);
+    //printf("%lx %ld\n", (unsigned long)addr, len);
     int error = 0;
     
     struct uio auio;
@@ -51,6 +51,7 @@ vm_page_dump(vm_page_t page, struct thread *td, int fd) {
     vm_offset_t vaddr = pmap_map(NULL, page->phys_addr, 
             page->phys_addr+pagesize, VM_PROT_READ);
 
+    printf("%lx %lx %zu\n", page->phys_addr, page->pindex, pagesize);
     write_to_fd(&page->phys_addr, sizeof(vm_paddr_t), td, fd);
     write_to_fd(&page->pindex, sizeof(vm_pindex_t), td, fd);
     write_to_fd(&pagesize, sizeof(size_t), td, fd);
@@ -63,13 +64,23 @@ vm_object_dump(vm_object_t object, struct thread *td, int fd)
 {
     int error = 0;
 
+    size_t len = 0;
+    for (vm_object_t p = object; p != NULL; p = p->backing_object)
+        printf("%d %lx\n", p->shadow_count, (size_t)p), len++;
+
+    printf("%lx back %lx\n", (size_t)object, (size_t)object->backing_object);
     // header
+    //write_to_fd(&len, sizeof(size_t), td, fd);
+    for (size_t i = 0; i < len; i ++) {
     write_to_fd(&object->resident_page_count, sizeof(int), td, fd);
 
     vm_page_t page;
     TAILQ_FOREACH(page, &object->memq, listq) {
         error = vm_page_dump(page, td, fd);
         if (error) return error;
+    }
+    object = object->backing_object;
+    break;
     }
     return error;
 }
@@ -84,7 +95,9 @@ vm_map_entry_dump(vm_map_entry_t entry, struct thread *td, int fd)
     vm_object_reference(entry->object.vm_object);
     vm_object_shadow(&entry->object.vm_object, &entry->offset, 
             entry->end-entry->start);
+    pmap_remove(td->td_proc->p_vmspace->vm_map.pmap, entry->start, entry->end);
 
+    printf("%lx\n", entry->start);
     // header
     write_to_fd(&entry->start, sizeof(vm_offset_t), td, fd);
     write_to_fd(&entry->end, sizeof(vm_offset_t), td, fd);
@@ -107,6 +120,7 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
 
     switch (cmd) {
         case SLSMM_DUMP:
+            printf("SLSMM_DUMP\n");
             fd = *(int*)data;
 
             p_vmmap = &td->td_proc->p_vmspace->vm_map;

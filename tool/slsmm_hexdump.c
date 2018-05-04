@@ -7,7 +7,7 @@ void load_vm_page(__vm_offset_t vaddr_base, FILE *f) {
     fread(&phys_addr, sizeof(__vm_paddr_t), 1, f);
     fread(&pindex, sizeof(__vm_pindex_t), 1, f);
     fread(&pagesize, sizeof(size_t), 1, f);
-    printf("phys_addr %lx pagesize %lu pindex %lx\n", phys_addr, pagesize, pindex);
+    printf("phys_addr %lx pagesize %lu pindex %lx vaddr base %lx\n", phys_addr, pagesize, pindex, vaddr_base);
     char buf[16];
     for (size_t i = 0; i < pagesize/16; i ++) {
         fread(buf, 16, 1, f);
