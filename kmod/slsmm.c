@@ -19,7 +19,8 @@
 MALLOC_DEFINE(M_SLSMM, "slsmm", "S L S M M");
 
 static int
-write_to_fd(vm_offset_t addr, size_t len, struct thread *td, int fd) {
+write_to_fd(void* addr, size_t len, struct thread *td, int fd) {
+    printf("%lx %ld\n", (unsigned long)addr, len);
     int error = 0;
     
     struct uio auio;
@@ -49,20 +50,50 @@ vm_page_dump(vm_page_t page, struct thread *td, int fd) {
     //TODO: unmap
     vm_offset_t vaddr = pmap_map(NULL, page->phys_addr, 
             page->phys_addr+pagesize, VM_PROT_READ);
-    printf("%lx %ld\n", vaddr, pagesize);
-    return write_to_fd(vaddr, pagesize, td, fd);
+
+    write_to_fd(&page->phys_addr, sizeof(vm_paddr_t), td, fd);
+    write_to_fd(&page->pindex, sizeof(vm_pindex_t), td, fd);
+    write_to_fd(&pagesize, sizeof(size_t), td, fd);
+
+    return write_to_fd((void*)vaddr, pagesize, td, fd);
 }
 
 static int
 vm_object_dump(vm_object_t object, struct thread *td, int fd) 
 {
     int error = 0;
-    // dump original vm_object
+
+    // header
+    write_to_fd(&object->resident_page_count, sizeof(int), td, fd);
+
     vm_page_t page;
     TAILQ_FOREACH(page, &object->memq, listq) {
         error = vm_page_dump(page, td, fd);
         if (error) return error;
     }
+    return error;
+}
+
+static int
+vm_map_entry_dump(vm_map_entry_t entry, struct thread *td, int fd)
+{
+    int error = 0;
+    
+    vm_object_t object = entry->object.vm_object;
+
+    vm_object_reference(entry->object.vm_object);
+    vm_object_shadow(&entry->object.vm_object, &entry->offset, 
+            entry->end-entry->start);
+
+    // header
+    write_to_fd(&entry->start, sizeof(vm_offset_t), td, fd);
+    write_to_fd(&entry->end, sizeof(vm_offset_t), td, fd);
+    // vm_object
+    error = vm_object_dump(object, td, fd);
+
+    // decrease the ref_count. collapse intermediate shadow object
+    vm_object_deallocate(object);
+
     return error;
 }
 
@@ -81,18 +112,8 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
             p_vmmap = &td->td_proc->p_vmspace->vm_map;
             entry = p_vmmap->header.next; 
 
-            for (int i = 0; entry != &p_vmmap->header; i ++, entry = entry->next) {
-                vm_object_t object = entry->object.vm_object;
-
-                vm_object_reference(entry->object.vm_object);
-                vm_object_shadow(&entry->object.vm_object, &entry->offset, 
-                        entry->end-entry->start);
-
-                error = vm_object_dump(object, td, fd);
-
-                // decrease the ref_count. collapse intermediate shadow object
-                vm_object_deallocate(object);
-            }
+            for (int i = 0; entry != &p_vmmap->header; i ++, entry = entry->next) 
+                vm_map_entry_dump(entry, td, fd);
 
             break;
     }

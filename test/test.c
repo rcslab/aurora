@@ -5,10 +5,12 @@
 #include <sys/ioctl.h>
 #include <fcntl.h>
 
-int tmp;
+//int tmp[8];
 
 int main() {
-    tmp = 0x12344321;
+    int *tmp = malloc(sizeof(int)*128);
+    memset(tmp, 0x3f, sizeof(int)*128);
+    printf("%lx\n", (void*)tmp);
     int fd = open("/dev/slsmm", O_RDWR, 0);
     int filefd = open("dump.x", O_WRONLY | O_CREAT);
     printf("%d %d\n", fd, filefd);
