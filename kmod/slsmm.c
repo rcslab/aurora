@@ -1,4 +1,5 @@
 #include "slsmm.h"
+#include "_slsmm.h"
 
 #include <sys/conf.h>
 #include <sys/module.h>         // moduledata_t
@@ -52,9 +53,13 @@ vm_page_dump(vm_page_t page, struct thread *td, int fd) {
             page->phys_addr+pagesize, VM_PROT_READ);
 
     printf("%lx %lx %zu\n", page->phys_addr, page->pindex, pagesize);
-    write_to_fd(&page->phys_addr, sizeof(vm_paddr_t), td, fd);
-    write_to_fd(&page->pindex, sizeof(vm_pindex_t), td, fd);
-    write_to_fd(&pagesize, sizeof(size_t), td, fd);
+
+    struct vm_page_info header = {
+        .phys_addr  = page->phys_addr,
+        .pindex     = page->pindex,
+        .pagesize   = pagesize,
+    };
+    write_to_fd(&header, sizeof(struct vm_page_info), td, fd);
 
     return write_to_fd((void*)vaddr, pagesize, td, fd);
 }
@@ -64,15 +69,11 @@ vm_object_dump(vm_object_t object, struct thread *td, int fd)
 {
     int error = 0;
 
-    size_t len = 0;
-    for (vm_object_t p = object; p != NULL; p = p->backing_object)
-        printf("%d %lx\n", p->shadow_count, (size_t)p), len++;
-
-    printf("%lx back %lx\n", (size_t)object, (size_t)object->backing_object);
     // header
-    //write_to_fd(&len, sizeof(size_t), td, fd);
-    for (size_t i = 0; i < len; i ++) {
-    write_to_fd(&object->resident_page_count, sizeof(int), td, fd);
+    struct vm_object_info header = {
+        .resident_page_count = object->resident_page_count,
+    };
+    write_to_fd(&header, sizeof(struct vm_object_info), td, fd);
 
     vm_page_t page;
     TAILQ_FOREACH(page, &object->memq, listq) {
@@ -80,8 +81,6 @@ vm_object_dump(vm_object_t object, struct thread *td, int fd)
         if (error) return error;
     }
     object = object->backing_object;
-    break;
-    }
     return error;
 }
 
@@ -99,8 +98,12 @@ vm_map_entry_dump(vm_map_entry_t entry, struct thread *td, int fd)
 
     printf("%lx\n", entry->start);
     // header
-    write_to_fd(&entry->start, sizeof(vm_offset_t), td, fd);
-    write_to_fd(&entry->end, sizeof(vm_offset_t), td, fd);
+    struct vm_map_entry_info header = {
+        .start  = entry->start,
+        .end    = entry->end,
+    };
+    write_to_fd(&header, sizeof(struct vm_map_entry_info), td, fd);
+
     // vm_object
     error = vm_object_dump(object, td, fd);
 
