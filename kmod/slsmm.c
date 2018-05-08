@@ -14,6 +14,7 @@
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>     //vm_page
+#include <vm/vm_radix.h>
 
 #include <machine/vmparam.h>
 
@@ -21,7 +22,6 @@ MALLOC_DEFINE(M_SLSMM, "slsmm", "S L S M M");
 
 static int
 write_to_fd(void* addr, size_t len, struct thread *td, int fd) {
-    //printf("%lx %ld\n", (unsigned long)addr, len);
     int error = 0;
     
     struct uio auio;
@@ -52,60 +52,65 @@ vm_page_dump(vm_page_t page, struct thread *td, int fd) {
     vm_offset_t vaddr = pmap_map(NULL, page->phys_addr, 
             page->phys_addr+pagesize, VM_PROT_READ);
 
-    printf("%lx %lx %zu\n", page->phys_addr, page->pindex, pagesize);
-
-    struct vm_page_info header = {
+    struct vm_page_info page_info = {
         .phys_addr  = page->phys_addr,
         .pindex     = page->pindex,
         .pagesize   = pagesize,
     };
-    write_to_fd(&header, sizeof(struct vm_page_info), td, fd);
+    write_to_fd(&page_info, sizeof(struct vm_page_info), td, fd);
 
     return write_to_fd((void*)vaddr, pagesize, td, fd);
 }
 
 static int
-vm_object_dump(vm_object_t object, struct thread *td, int fd) 
+vm_map_entry_dump(vm_map_entry_t entry, vm_offset_t start, vm_offset_t end, 
+        struct thread *td, int fd)
 {
     int error = 0;
-
-    // header
-    struct vm_object_info header = {
-        .resident_page_count = object->resident_page_count,
-    };
-    write_to_fd(&header, sizeof(struct vm_object_info), td, fd);
-
+    int dump_page_count = 0;
     vm_page_t page;
-    TAILQ_FOREACH(page, &object->memq, listq) {
-        error = vm_page_dump(page, td, fd);
-        if (error) return error;
-    }
-    object = object->backing_object;
-    return error;
-}
+    vm_pindex_t sindex = (start-entry->start)/PAGE_SIZE;
+    vm_pindex_t eindex = (end-entry->start+PAGE_SIZE-1)/PAGE_SIZE;
 
-static int
-vm_map_entry_dump(vm_map_entry_t entry, struct thread *td, int fd)
-{
-    int error = 0;
-    
     vm_object_t object = entry->object.vm_object;
+
+    // count number of pages to dump
+    for (vm_pindex_t idx = sindex; idx < eindex; idx ++) {
+        page = vm_radix_lookup(&object->rtree, idx);
+        if (page != NULL) dump_page_count ++;
+    }
+    if (dump_page_count == 0) return 0;
 
     vm_object_reference(entry->object.vm_object);
     vm_object_shadow(&entry->object.vm_object, &entry->offset, 
             entry->end-entry->start);
     pmap_remove(td->td_proc->p_vmspace->vm_map.pmap, entry->start, entry->end);
 
-    printf("%lx\n", entry->start);
-    // header
-    struct vm_map_entry_info header = {
+    // vm_map_entry header
+    struct vm_map_entry_info entry_info = {
         .start  = entry->start,
         .end    = entry->end,
     };
-    write_to_fd(&header, sizeof(struct vm_map_entry_info), td, fd);
+    write_to_fd(&entry_info, sizeof(struct vm_map_entry_info), td, fd);
 
-    // vm_object
-    error = vm_object_dump(object, td, fd);
+    // vm_object header
+    struct vm_object_info object_info = {
+        .resident_page_count = object->resident_page_count,
+        .dump_page_count = dump_page_count,
+    };
+    write_to_fd(&object_info, sizeof(struct vm_object_info), td, fd);
+
+    // dump pages
+    for (vm_pindex_t idx = sindex; idx < eindex; idx ++) {
+        page = vm_radix_lookup(&object->rtree, idx);
+        if (page == NULL) continue;
+
+        error = vm_page_dump(page, td, fd);
+        if (error) break;
+
+        dump_page_count --;
+        if (dump_page_count == 0) break;
+    }
 
     // decrease the ref_count. collapse intermediate shadow object
     vm_object_deallocate(object);
@@ -120,6 +125,7 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
     int fd = 0;
     vm_map_t p_vmmap;
     vm_map_entry_t entry;
+    struct dump_range_req *param;
 
     switch (cmd) {
         case SLSMM_DUMP:
@@ -130,8 +136,18 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
             entry = p_vmmap->header.next; 
 
             for (int i = 0; entry != &p_vmmap->header; i ++, entry = entry->next) 
-                vm_map_entry_dump(entry, td, fd);
+                vm_map_entry_dump(entry, 0, (vm_offset_t)-1, td, fd);
 
+            break;
+
+        case SLSMM_DUMP_RANGE:
+            param = (struct dump_range_req*)data;
+
+            p_vmmap = &td->td_proc->p_vmspace->vm_map;
+            entry = p_vmmap->header.next; 
+
+            for (int i = 0; entry != &p_vmmap->header; i ++, entry = entry->next)
+                vm_map_entry_dump(entry, param->start, param->end, td, param->fd);
             break;
     }
 

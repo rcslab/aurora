@@ -29,9 +29,9 @@ void load_vm_page(struct vm_object_info *object, struct vm_map_entry_info *entry
 void load_vm_object(struct vm_map_entry_info *entry, FILE *f) {
     struct vm_object_info header;
     fread(&header, sizeof(struct vm_object_info), 1, f);
-    printf("page_count %d\n", header.resident_page_count);
+    printf("page_count %d\n", header.dump_page_count);
 
-    for (int i = 0; i < header.resident_page_count; i ++)
+    for (int i = 0; i < header.dump_page_count; i ++)
         load_vm_page(&header, entry, f);
 }
 
