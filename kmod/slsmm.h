@@ -25,6 +25,7 @@ struct dump_range_req {
     vm_offset_t start;
     vm_offset_t end;
     int fd;
+    int pid;
 };
 
 #define SLSMM_DUMP          _IOW('d', 1, int)

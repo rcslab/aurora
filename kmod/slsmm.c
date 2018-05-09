@@ -63,57 +63,83 @@ vm_page_dump(vm_page_t page, struct thread *td, int fd) {
 }
 
 static int
-vm_map_entry_dump(vm_map_entry_t entry, vm_offset_t start, vm_offset_t end, 
-        struct thread *td, int fd)
-{
+count_dump_page(vm_object_t object, vm_pindex_t sidx, vm_pindex_t eidx) {
+    int count = 0;
+    vm_page_t page;
+
+    if (eidx - sidx > object->resident_page_count) {
+        TAILQ_FOREACH(page, &object->memq, listq) {
+            printf("%lx\n", page->pindex);
+            if (page->pindex >= sidx && page->pindex < eidx) count ++;
+        }
+    } else {
+        for (vm_pindex_t idx = sidx; idx < eidx; idx ++) {
+            page = vm_radix_lookup(&object->rtree, idx);
+            if (page != NULL) count ++;
+        }
+    }
+
+    return count;
+}
+
+static int
+vm_map_dump(vm_map_t vmmap, vm_offset_t start, vm_offset_t end, struct thread *td, int fd) {
     int error = 0;
     int dump_page_count = 0;
+    vm_map_entry_t entry;
+    vm_pindex_t sidx;
+    vm_pindex_t eidx;
+    vm_object_t object;
     vm_page_t page;
-    vm_pindex_t sindex = (start-entry->start)/PAGE_SIZE;
-    vm_pindex_t eindex = (end-entry->start+PAGE_SIZE-1)/PAGE_SIZE;
 
-    vm_object_t object = entry->object.vm_object;
+    for (entry = vmmap->header.next; entry != &vmmap->header; entry = entry->next) {
+        object = entry->object.vm_object;
+        sidx = start < entry->start ? 0 : (start - entry->start) / PAGE_SIZE;
+        eidx = end < entry->start + 1 - PAGE_SIZE ? 0 : 
+            (end + PAGE_SIZE - entry->start - 1) / PAGE_SIZE;
 
-    // count number of pages to dump
-    for (vm_pindex_t idx = sindex; idx < eindex; idx ++) {
-        page = vm_radix_lookup(&object->rtree, idx);
-        if (page != NULL) dump_page_count ++;
+        dump_page_count = count_dump_page(object, sidx, eidx); 
+        if (dump_page_count == 0) continue;
+
+        vm_object_reference(entry->object.vm_object);
+        vm_object_shadow(&entry->object.vm_object, &entry->offset, 
+                entry->end-entry->start);
+        pmap_remove(vmmap->pmap, entry->start, entry->end);
+
+        // vm_map_entry header
+        struct vm_map_entry_info entry_info = {
+            .start  = entry->start,
+            .end    = entry->end,
+        };
+        write_to_fd(&entry_info, sizeof(struct vm_map_entry_info), td, fd);
+
+        // vm_object header
+        struct vm_object_info object_info = {
+            .resident_page_count = object->resident_page_count,
+            .dump_page_count = dump_page_count,
+        };
+        write_to_fd(&object_info, sizeof(struct vm_object_info), td, fd);
+
+        if (eidx - sidx > object->resident_page_count) {
+            TAILQ_FOREACH(page, &object->memq, listq) {
+                if (page->pindex >= sidx && page->pindex < eidx) {
+                    error = vm_page_dump(page, td, fd);
+                    if (error) break;
+                }
+            }
+        } else {
+            for (vm_pindex_t idx = sidx; idx < eidx; idx ++) {
+                page = vm_radix_lookup(&object->rtree, idx);
+                if (page != NULL) {
+                    error = vm_page_dump(page, td, fd);
+                    if (error) break;
+                }
+            }
+        }
+
+        // decrease the ref_count. collapse intermediate shadow object
+        vm_object_deallocate(object);
     }
-    if (dump_page_count == 0) return 0;
-
-    vm_object_reference(entry->object.vm_object);
-    vm_object_shadow(&entry->object.vm_object, &entry->offset, 
-            entry->end-entry->start);
-    pmap_remove(td->td_proc->p_vmspace->vm_map.pmap, entry->start, entry->end);
-
-    // vm_map_entry header
-    struct vm_map_entry_info entry_info = {
-        .start  = entry->start,
-        .end    = entry->end,
-    };
-    write_to_fd(&entry_info, sizeof(struct vm_map_entry_info), td, fd);
-
-    // vm_object header
-    struct vm_object_info object_info = {
-        .resident_page_count = object->resident_page_count,
-        .dump_page_count = dump_page_count,
-    };
-    write_to_fd(&object_info, sizeof(struct vm_object_info), td, fd);
-
-    // dump pages
-    for (vm_pindex_t idx = sindex; idx < eindex; idx ++) {
-        page = vm_radix_lookup(&object->rtree, idx);
-        if (page == NULL) continue;
-
-        error = vm_page_dump(page, td, fd);
-        if (error) break;
-
-        dump_page_count --;
-        if (dump_page_count == 0) break;
-    }
-
-    // decrease the ref_count. collapse intermediate shadow object
-    vm_object_deallocate(object);
 
     return error;
 }
@@ -122,32 +148,31 @@ static int
 slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused, 
         int flags __unused, struct thread *td) {
     int error = 0;
-    int fd = 0;
     vm_map_t p_vmmap;
     vm_map_entry_t entry;
     struct dump_range_req *param;
+    struct proc *p;
 
     switch (cmd) {
-        case SLSMM_DUMP:
-            printf("SLSMM_DUMP\n");
-            fd = *(int*)data;
-
-            p_vmmap = &td->td_proc->p_vmspace->vm_map;
-            entry = p_vmmap->header.next; 
-
-            for (int i = 0; entry != &p_vmmap->header; i ++, entry = entry->next) 
-                vm_map_entry_dump(entry, 0, (vm_offset_t)-1, td, fd);
-
-            break;
-
         case SLSMM_DUMP_RANGE:
             param = (struct dump_range_req*)data;
+            printf("%d\n", param->pid);
 
-            p_vmmap = &td->td_proc->p_vmspace->vm_map;
+            if (param->pid == -1) p = td->td_proc;
+            else {
+                error = pget(param->pid, PGET_WANTREAD, &p);
+                if (error) break;
+            }
+            p_vmmap = &p->p_vmspace->vm_map;
+            printf("%d %lx %lx\n", param->pid, (vm_offset_t)p, (vm_offset_t)td->td_proc);
+            printf("%lx\n", (vm_offset_t)p_vmmap);
+
             entry = p_vmmap->header.next; 
 
-            for (int i = 0; entry != &p_vmmap->header; i ++, entry = entry->next)
-                vm_map_entry_dump(entry, param->start, param->end, td, param->fd);
+            vm_map_dump(p_vmmap, param->start, param->end, td, param->fd);
+
+            if (param->pid != -1) PRELE(p);
+
             break;
     }
 
