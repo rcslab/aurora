@@ -39,6 +39,16 @@ int main() {
     printf("%lx %lx\n", info.start, info.end);
     ioctl(fd, SLSMM_DUMP_RANGE, &info);
     printf("done\n");
+    return 0;
+
+    int filefd2 = open("dump1.x", O_RDONLY);
+    struct restore_req restore_info = {
+        .fd = filefd2,
+        .pid = pid,
+    };
+    printf("%d\n", filefd2);
+    ioctl(fd, SLSMM_RESTORE, &restore_info);
+    printf("done\n");
 
     return 0;
 }

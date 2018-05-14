@@ -35,7 +35,9 @@ void load_vm_object(struct vm_map_entry_info *entry, FILE *f) {
         load_vm_page(&header, entry, f);
 }
 
-void load_vm_map_entry(FILE *f) {
+void load_vmspace_entry(FILE *f) {
+    struct vmspace_info vms;
+    fread(&vms, sizeof(struct vmspace_info), 1, f);
     while(1) {
         struct vm_map_entry_info header;
         int error = fread(&header, sizeof(struct vm_map_entry_info), 1, f);
@@ -49,6 +51,6 @@ void load_vm_map_entry(FILE *f) {
 int main(int argc, char** argv) {
     if (argc != 2) return 1;
     FILE *f = fopen(argv[1], "r");
-    load_vm_map_entry(f);
+    load_vmspace_entry(f);
     return 0;
 }
