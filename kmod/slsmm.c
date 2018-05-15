@@ -1,6 +1,7 @@
 #include "slsmm.h"
 #include "_slsmm.h"
 
+#include <sys/param.h>
 #include <sys/conf.h>
 #include <sys/module.h>         // moduledata_t
 #include <sys/proc.h>           // struct proc
@@ -8,6 +9,7 @@
 #include <sys/queue.h>          // TAILQ
 #include <sys/syscallsubr.h>    // kern_writev
 #include <sys/uio.h>            // struct uio
+#include <sys/rwlock.h>
 
 #include <vm/vm.h>
 #include <vm/pmap.h>
@@ -91,19 +93,13 @@ vm_page_dump(vm_page_t page, struct thread *td, int fd) {
 }
 
 static int
-count_dump_page(vm_object_t object, vm_pindex_t sidx, vm_pindex_t eidx) {
+count_inrange_page(vm_map_entry_t entry, vm_offset_t start, vm_offset_t end) {
     int count = 0;
     vm_page_t page;
 
-    if (eidx - sidx > object->resident_page_count) {
-        TAILQ_FOREACH(page, &object->memq, listq) {
-            if (page->pindex >= sidx && page->pindex < eidx) count ++;
-        }
-    } else {
-        for (vm_pindex_t idx = sidx; idx < eidx; idx ++) {
-            page = vm_radix_lookup(&object->rtree, idx);
-            if (page != NULL) count ++;
-        }
+    TAILQ_FOREACH(page, &entry->object.vm_object->memq, listq) {
+        vm_offset_t vaddr = entry->start + page->pindex * PAGE_SIZE;
+        if (vaddr >= start && vaddr < end) count ++;
     }
 
     return count;
@@ -116,13 +112,11 @@ vmspace_dump(struct vmspace *vms, vm_offset_t start, vm_offset_t end, struct thr
     int entry_count = 0;
     vm_map_t vmmap = &vms->vm_map;
     vm_map_entry_t entry;
-    vm_pindex_t sidx;
-    vm_pindex_t eidx;
     vm_object_t object;
     vm_page_t page;
 
     for (entry = vmmap->header.next; entry != &vmmap->header; entry = entry->next)
-        entry_count ++;
+        if (count_inrange_page(entry, start ,end) > 0) entry_count ++;
     struct vmspace_info vms_info = {
         .min = vmmap->min_offset,
         .max = vmmap->max_offset,
@@ -131,17 +125,15 @@ vmspace_dump(struct vmspace *vms, vm_offset_t start, vm_offset_t end, struct thr
         .vm_maxsaddr = vms->vm_maxsaddr, 
         .entry_count = entry_count,
     };
-    printf("%lx %lx\n", vms_info.min, vms_info.max);
+    printf("entry count %d\n", vms_info.entry_count);
     write_to_fd(&vms_info, sizeof(struct vmspace_info), td, fd);
 
     for (entry = vmmap->header.next; entry != &vmmap->header; entry = entry->next) {
         object = entry->object.vm_object;
-        sidx = start < entry->start ? 0 : (start - entry->start) / PAGE_SIZE;
-        eidx = end < entry->start + 1 - PAGE_SIZE ? 0 : 
-            (end + PAGE_SIZE - entry->start - 1) / PAGE_SIZE;
 
-        dump_page_count = count_dump_page(object, sidx, eidx); 
-        if (dump_page_count == 0) continue;
+        dump_page_count = count_inrange_page(entry, start, end); 
+        printf("%lx %lx %d\n", entry->start, entry->end, dump_page_count);
+        //if (dump_page_count == 0) continue;
 
         vm_object_reference(entry->object.vm_object);
         vm_object_shadow(&entry->object.vm_object, &entry->offset, 
@@ -154,7 +146,7 @@ vmspace_dump(struct vmspace *vms, vm_offset_t start, vm_offset_t end, struct thr
             .end    = entry->end,
             .offset = entry->offset,
         };
-        printf("%lx %lx\n", entry_info.start, entry_info.end);
+        //printf("%lx %lx\n", entry_info.start, entry_info.end);
         write_to_fd(&entry_info, sizeof(struct vm_map_entry_info), td, fd);
 
         // vm_object header
@@ -164,20 +156,11 @@ vmspace_dump(struct vmspace *vms, vm_offset_t start, vm_offset_t end, struct thr
         };
         write_to_fd(&object_info, sizeof(struct vm_object_info), td, fd);
 
-        if (eidx - sidx > object->resident_page_count) {
-            TAILQ_FOREACH(page, &object->memq, listq) {
-                if (page->pindex >= sidx && page->pindex < eidx) {
-                    error = vm_page_dump(page, td, fd);
-                    if (error) break;
-                }
-            }
-        } else {
-            for (vm_pindex_t idx = sidx; idx < eidx; idx ++) {
-                page = vm_radix_lookup(&object->rtree, idx);
-                if (page != NULL) {
-                    error = vm_page_dump(page, td, fd);
-                    if (error) break;
-                }
+        TAILQ_FOREACH(page, &object->memq, listq) {
+            vm_offset_t vaddr = entry->start + page->pindex * PAGE_SIZE;
+            if (vaddr >= start && vaddr < end) {
+                error = vm_page_dump(page, td, fd);
+                if (error) break;
             }
         }
 
@@ -197,7 +180,10 @@ vmspace_restore(struct proc *p, struct thread *td, int fd) {
     struct vm_map_entry_info entry_info;
     struct vm_object_info object_info;
     struct vm_page_info page_info;
+    vm_object_t object;
     vm_map_entry_t entry;
+    vm_page_t page;
+    vm_offset_t vaddr;
 
     error = read_from_fd(&vms_info, sizeof(struct vmspace_info), td, fd);
     newvmspace = vmspace_alloc(vms_info.min, vms_info.max, NULL);
@@ -207,31 +193,43 @@ vmspace_restore(struct proc *p, struct thread *td, int fd) {
     newvmspace->vm_daddr = vms_info.vm_daddr;
     newvmspace->vm_maxsaddr = vms_info.vm_maxsaddr;
 
+    printf("entry count %d\n", vms_info.entry_count);
     for (int i = 0; i < vms_info.entry_count; i ++) {
         error = read_from_fd(&entry_info, sizeof(struct vm_map_entry_info), td, fd);
         error = read_from_fd(&object_info, sizeof(struct vm_object_info), td, fd);
         printf("%lx %lx\n", entry_info.start, entry_info.end);
 
-        //object = vm_object_allocate(OBJT_DEFAULT, atop(entry_info.end - entry_info.start));
-        vm_map_lock(newmap);
-        error = vm_map_insert(newmap, NULL, entry_info.offset, entry_info.start,
-                entry_info.end, entry_info.protection, entry_info.max_protection, 0);
-        vm_map_unlock(newmap);
+        object = vm_object_allocate(OBJT_DEFAULT, atop(entry_info.end - entry_info.start));
 
-        char tmp[4096];
+        VM_OBJECT_WLOCK(object);
         for (int i = 0; i < object_info.dump_page_count; i ++) {
             error = read_from_fd(&page_info, sizeof(struct vm_page_info), td, fd);
-            error = read_from_fd(tmp, page_info.pagesize, td, fd);
-        }
 
+            page = vm_page_alloc(object, page_info.pindex, VM_ALLOC_NORMAL);
+
+            vaddr = pmap_map(NULL, page->phys_addr, 
+                    page->phys_addr+PAGE_SIZE, VM_PROT_READ);
+
+            error = read_from_fd((void*)vaddr, page_info.pagesize, td, fd);
+        }
+        VM_OBJECT_WUNLOCK(object);
+
+        vm_map_lock(newmap);
+        error = vm_map_insert(newmap, object, entry_info.offset, entry_info.start,
+                entry_info.end, entry_info.protection, entry_info.max_protection, 0);
+        vm_map_unlock(newmap);
         if (error) break;
     } 
 
+
     printf("check\n");
+    entry = newmap->header.next;
     for (entry = newmap->header.next; entry != &newmap->header; entry = entry->next) {
-        printf("%lx %lx\n", entry->start, entry->end);
-        printf("%d\n", entry->object.vm_object->resident_page_count);
+        object = entry->object.vm_object;
+        printf("%lx %lx %d\n", entry->start, entry->end, object->resident_page_count);
     }
+
+    p->p_vmspace = newvmspace;
 
     return error;
 }
@@ -269,7 +267,7 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
                 error = pget(restore_param->pid, PGET_WANTREAD, &p);
                 if (error) break;
             }
-            
+
             vmspace_restore(p, td, restore_param->fd);
 
             if (restore_param->pid != -1) PRELE(p);
