@@ -3,6 +3,7 @@
 
 #include <sys/param.h>
 #include <sys/conf.h>
+#include <sys/shm.h>            // shmexit
 #include <sys/module.h>         // moduledata_t
 #include <sys/proc.h>           // struct proc
 #include <sys/pcpu.h>           // curproc
@@ -116,7 +117,8 @@ vmspace_dump(struct vmspace *vms, vm_offset_t start, vm_offset_t end, struct thr
     vm_page_t page;
 
     for (entry = vmmap->header.next; entry != &vmmap->header; entry = entry->next)
-        if (count_inrange_page(entry, start ,end) > 0) entry_count ++;
+        if (count_inrange_page(entry, start ,end) >= 0) entry_count ++;
+
     struct vmspace_info vms_info = {
         .min = vmmap->min_offset,
         .max = vmmap->max_offset,
@@ -171,6 +173,86 @@ vmspace_dump(struct vmspace *vms, vm_offset_t start, vm_offset_t end, struct thr
     return error;
 }
 
+/*
+static int
+vmspace_restore(struct proc *p, struct thread *td, int fd) 
+{
+    int error = 0;
+    struct vmspace_info vms_info;
+    struct vmspace *vmspace;
+    vm_map_t map;
+    vm_map_entry_t entry;
+
+    error = read_from_fd(&vms_info, sizeof(struct vmspace_info), td, fd);
+    if (error) return error;
+
+    vmspace = p->p_vmspace;
+    map = &vmspace->vm_map;
+    if (vmspace->vm_refcnt == 1 && vm_map_min(map) == vms_info.min && 
+            vm_map_max(map) == vms_info.max) {
+        printf("1\n");
+        shmexit(vmspace);
+        pmap_remove_pages(vmspace_pmap(vmspace));
+        vm_map_remove(map, vm_map_min(map), vm_map_max(map));
+    } else {
+        printf("2\n");
+        error = vmspace_exec(p, vms_info.min, vms_info.max);
+        if (error) return error;
+        vmspace = p->p_vmspace;
+        map = &vmspace->vm_map;
+    }
+
+    for (int i = 0; i < vms_info.entry_count; i ++) {
+        struct vm_map_entry_info entry_info;
+        struct vm_object_info object_info;
+        vm_object_t object;
+
+        error = read_from_fd(&entry_info, sizeof(struct vm_map_entry_info), td, fd); 
+        if (error) return error;
+        error = read_from_fd(&object_info, sizeof(struct vm_object_info), td, fd);
+        if (error) return error;
+
+        object = vm_object_allocate(OBJT_DEFAULT, atop(entry_info.end - entry_info.start));
+
+        VM_OBJECT_WLOCK(object);
+        for (int j = 0; j < object_info.dump_page_count; j ++) {
+            struct vm_page_info page_info;
+            vm_page_t page;
+            vm_offset_t vaddr;
+
+            error = read_from_fd(&page_info, sizeof(struct vm_page_info), td, fd);
+            if (error) return error;
+
+            page = vm_page_alloc(object, page_info.pindex, VM_ALLOC_NORMAL);
+            if (page == NULL) return (ENOMEM);    
+            
+            vaddr = pmap_map(NULL, page->phys_addr, page->phys_addr+PAGE_SIZE,
+                    VM_PROT_WRITE);
+            error = read_from_fd((void*)vaddr, page_info.pagesize, td, fd);
+            if (error) return error;
+        }
+        VM_OBJECT_WUNLOCK(object);
+
+        vm_object_reference(object);
+        vm_map_lock(map);
+        error = vm_map_insert(map, object, entry_info.offset, entry_info.start,
+                entry_info.end, entry_info.protection, entry_info.max_protection, 0);
+        vm_map_unlock(map);
+        if (error) return error;
+    }
+
+    printf("check\n");
+    for (entry = map->header.next; entry != &map->header; entry = entry->next) {
+        vm_object_t object;
+        object = entry->object.vm_object;
+        printf("%lx %lx %d\n", entry->start, entry->end, object->resident_page_count);
+    }
+    printf("done\n");
+
+    return error;
+}
+*/
+
 static int
 vmspace_restore(struct proc *p, struct thread *td, int fd) {
     int error = 0;
@@ -214,6 +296,7 @@ vmspace_restore(struct proc *p, struct thread *td, int fd) {
         }
         VM_OBJECT_WUNLOCK(object);
 
+        vm_object_reference(object);
         vm_map_lock(newmap);
         error = vm_map_insert(newmap, object, entry_info.offset, entry_info.start,
                 entry_info.end, entry_info.protection, entry_info.max_protection, 0);
@@ -231,8 +314,10 @@ vmspace_restore(struct proc *p, struct thread *td, int fd) {
 
     p->p_vmspace = newvmspace;
 
+    printf("return\n");
     return error;
 }
+
 
 static int
 slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused, 
