@@ -18,14 +18,14 @@ int main(int argc, char* argv[]) {
     int slsmm_fd = open("/dev/slsmm", O_RDWR);
     int file_fd = open(argv[1], O_WRONLY | O_CREAT);
 
-    struct dump_range_req param = {
+    struct dump_param param = {
         .start  = 0,
         .end    = (vm_offset_t)-1,
         .fd     = file_fd,
         .pid    = pid,
     };
 
-    int error = ioctl(slsmm_fd, SLSMM_DUMP_RANGE, &param);
+    int error = ioctl(slsmm_fd, SLSMM_DUMP, &param);
 
     close(slsmm_fd);
     close(file_fd);

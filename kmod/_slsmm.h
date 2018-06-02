@@ -1,7 +1,7 @@
-#ifndef ___SLSMM_H__
-#define ___SLSMM_H__
+#ifndef __SLSMM_H_
+#define __SLSMM_H_
 
-#include <sys/kernel.h>
+#include <sys/malloc.h>
 
 MALLOC_DECLARE(M_SLSMM);
 

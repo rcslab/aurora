@@ -1,10 +1,8 @@
-#ifndef __SLSMM_H__
-#define __SLSMM_H__
+#ifndef _SLSMM_H_
+#define _SLSMM_H_
 
-#include <sys/param.h>
-#include <sys/malloc.h>
+#include <sys/types.h>
 #include <sys/ioccom.h>
-
 #include <vm/vm.h>
 
 struct vmspace_info {
@@ -35,20 +33,18 @@ struct vm_page_info {
     size_t      pagesize;
 };
 
-struct dump_range_req {
+struct dump_param {
     vm_offset_t start;
     vm_offset_t end;
-    int fd;
-    int pid;
+    int         fd;
+    int         pid;
 };
 
-struct restore_req {
-    int fd;
-    int pid;
+struct restore_param {
+    int     fd;
 };
 
-#define SLSMM_DUMP          _IOW('d', 1, int)
-#define SLSMM_DUMP_RANGE    _IOW('d', 2, struct dump_range_req)
-#define SLSMM_RESTORE       _IOW('r', 1, struct restore_req)
+#define SLSMM_DUMP      _IOW('d', 1, struct dump_param)
+#define SLSMM_RESTORE   _IOW('r', 1, struct restore_param)
 
 #endif

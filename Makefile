@@ -1,4 +1,3 @@
-
-SUBDIR= kmod test
+SUBDIR = kmod tests tools
 
 .include <bsd.subdir.mk>
