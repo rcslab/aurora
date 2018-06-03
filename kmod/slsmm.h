@@ -42,6 +42,7 @@ struct dump_param {
 
 struct restore_param {
     int     fd;
+    int     pid;
 };
 
 #define SLSMM_DUMP      _IOW('d', 1, struct dump_param)

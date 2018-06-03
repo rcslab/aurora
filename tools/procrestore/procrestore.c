@@ -18,7 +18,7 @@ int main(int argc, char* argv[]) {
     int file_fd = open(argv[1], O_RDONLY);
     printf("%d\n", file_fd);
 
-    struct restore_req param = {
+    struct restore_param param = {
         .fd     = file_fd,
         .pid    = pid,
     };

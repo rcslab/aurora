@@ -14,14 +14,29 @@ reg_dump(struct proc *p, int fd)
     int error = 0;
     struct thread *td;
     struct reg regs;
+    struct fpreg fpregs;
 
     PROC_LOCK(p);
+    _PHOLD(p);
     FOREACH_THREAD_IN_PROC(p, td) {
-        proc_read_regs(td, &regs);
-        fd_write(&regs, sizeof(struct reg), fd);
+        PROC_SLOCK(p);
+        thread_lock(td);
+        thread_suspend_one(td);
+        thread_unlock(td);
+
+        error = proc_read_regs(td, &regs);
+        error = proc_read_fpregs(td, &fpregs);
+        if (error) break;
+        thread_unsuspend(p);
+        PROC_SUNLOCK(p);
+
+        error = fd_write(&regs, sizeof(struct reg), fd);
+        error = fd_write(&fpregs, sizeof(struct fpreg), fd);
+        if (error) break;
 
         break; //assume single thread now
     }
+    _PRELE(p);
     PROC_UNLOCK(p);
 
     return error;
@@ -33,14 +48,34 @@ reg_restore(struct proc *p, int fd)
     int error = 0;
     struct thread *td;
     struct reg regs;
+    struct fpreg fpregs;
 
     PROC_LOCK(p);
+    _PHOLD(p);
     FOREACH_THREAD_IN_PROC(p, td) {
-        fd_read(&regs, sizeof(struct reg), fd);
-        proc_write_regs(td, &regs);
+        error = fd_read(&regs, sizeof(struct reg), fd);
+        error = fd_read(&fpregs, sizeof(struct fpreg), fd);
+        printf("cpu restore read error\n");
+        if (error) break;
+
+        PROC_SLOCK(p);
+        /*
+        thread_lock(td);
+        thread_suspend_one(td);
+        thread_unlock(td);
+        */
+
+        error = proc_write_regs(td, &regs);
+        error = proc_write_fpregs(td, &fpregs);
+        printf("cpu restore write error\n");
+        if (error) break;
+
+        //thread_unsuspend(p);
+        PROC_SUNLOCK(p);
 
         break; //assume single thread now
     }
+    _PRELE(p);
     PROC_UNLOCK(p);
 
     return error;

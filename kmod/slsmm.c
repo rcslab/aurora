@@ -17,42 +17,44 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
         int flag __unused, struct thread *td)
 {
     int error = 0;
-    struct dump_param *param;
+    struct dump_param *dparam;
+    struct restore_param *rparam;
     struct proc *p;
 
     switch (cmd) {
         case SLSMM_DUMP:
             printf("SLSMM_DUMP\n");
-            param = (struct dump_param *)data;
+            dparam = (struct dump_param *)data;
 
-            if (param->pid == -1) {
+            if (dparam->pid == -1) {
                 p = td->td_proc;
             } else {
-                error = pget(param->pid, PGET_WANTREAD, &p);
+                error = pget(dparam->pid, PGET_WANTREAD, &p);
                 if (error) break;
             }
 
-            error = reg_dump(p, param->fd);
+            error = reg_dump(p, dparam->fd);
             printf("cpu error %d\n", error);
-            error = vmspace_dump(p->p_vmspace, param->start, param->end, td, param->fd);
+            error = vmspace_dump(p->p_vmspace, dparam->start, dparam->end, td, dparam->fd);
             printf("mem error %d\n", error);
 
             break;
 
         case SLSMM_RESTORE:
             printf("SLSMM_RESTORE\n");
-            param = (struct dump_param *)data;
+            rparam = (struct restore_param *)data;
+            printf("%d\n", rparam->fd);
 
-            if (param->pid == -1) {
+            if (rparam->pid == -1) {
                 p = td->td_proc;
             } else {
-                error = pget(param->pid, PGET_WANTREAD, &p);
+                error = pget(rparam->pid, PGET_WANTREAD, &p);
                 if (error) break;
             }
 
-            error = reg_restore(p, param->fd);
+            error = reg_restore(p, rparam->fd);
             printf("cpu error %d\n", error);
-            error = vmspace_restore(p, td, param->fd);
+            error = vmspace_restore(p, td, rparam->fd);
             printf("mem error %d\n", error);
 
             break;
