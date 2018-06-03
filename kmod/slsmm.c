@@ -173,7 +173,6 @@ vmspace_dump(struct vmspace *vms, vm_offset_t start, vm_offset_t end, struct thr
     return error;
 }
 
-/*
 static int
 vmspace_restore(struct proc *p, struct thread *td, int fd) 
 {
@@ -251,8 +250,8 @@ vmspace_restore(struct proc *p, struct thread *td, int fd)
 
     return error;
 }
-*/
 
+/*
 static int
 vmspace_restore(struct proc *p, struct thread *td, int fd) {
     int error = 0;
@@ -317,6 +316,7 @@ vmspace_restore(struct proc *p, struct thread *td, int fd) {
     printf("return\n");
     return error;
 }
+*/
 
 
 static int
@@ -329,6 +329,7 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
 
     switch (cmd) {
         case SLSMM_DUMP_RANGE:
+            printf("DUMP\n");
             param = (struct dump_range_req*)data;
 
             if (param->pid == -1) p = td->td_proc;

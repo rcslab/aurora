@@ -1,7 +1,8 @@
+#include "slsmm.h"
+
 #include <stdio.h>
 
-#include "../kmod/slsmm.h"
-
+#include <machine/reg.h>
 
 void print_bytes(__vm_offset_t addr, size_t size, FILE *f) {
     if (size == 0) return;
@@ -46,6 +47,14 @@ void load_vmspace_entry(FILE *f) {
         printf("vm_entry start %lx end %lx\n", header.start, header.end);
         load_vm_object(&header, f);
     }
+}
+
+void load_regs(FILE *f) {
+    struct reg regs; 
+    struct fpreg fpregs;
+    fread(&regs, sizeof(struct reg), 1, f);
+    fread(&fpregs, sizeof(struct fpreg), 1, f);
+    printf("rip %lx\n", regs.r_rip);
 }
 
 int main(int argc, char** argv) {
