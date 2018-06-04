@@ -45,12 +45,7 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
             rparam = (struct restore_param *)data;
             printf("%d\n", rparam->fd);
 
-            if (rparam->pid == -1) {
-                p = td->td_proc;
-            } else {
-                error = pget(rparam->pid, PGET_WANTREAD, &p);
-                if (error) break;
-            }
+            p = td->td_proc;
 
             error = reg_restore(p, rparam->fd);
             printf("cpu error %d\n", error);

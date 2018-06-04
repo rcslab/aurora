@@ -8,6 +8,10 @@
 struct vmspace_info {
     vm_offset_t min;
     vm_offset_t max;
+    segsz_t vm_swrss;
+    segsz_t vm_tsize;
+    segsz_t vm_dsize;
+    segsz_t vm_ssize;
     caddr_t vm_taddr;
     caddr_t vm_daddr;
     caddr_t vm_maxsaddr;

@@ -55,7 +55,6 @@ reg_restore(struct proc *p, int fd)
     FOREACH_THREAD_IN_PROC(p, td) {
         error = fd_read(&regs, sizeof(struct reg), fd);
         error = fd_read(&fpregs, sizeof(struct fpreg), fd);
-        printf("cpu restore read error\n");
         if (error) break;
 
         PROC_SLOCK(p);
@@ -67,7 +66,6 @@ reg_restore(struct proc *p, int fd)
 
         error = proc_write_regs(td, &regs);
         error = proc_write_fpregs(td, &fpregs);
-        printf("cpu restore write error\n");
         if (error) break;
 
         //thread_unsuspend(p);
