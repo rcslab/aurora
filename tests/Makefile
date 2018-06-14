@@ -1,5 +1,5 @@
-PROG = darr
-SRCS = darr.c
+PROG = array
+SRCS = array.c
 MAN = 
 
 .include <bsd.prog.mk>

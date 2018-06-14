@@ -8,7 +8,9 @@
 #include <sys/kernel.h>
 #include <sys/module.h>
 #include <sys/proc.h>
+#include <sys/ptrace.h>
 #include <sys/systm.h>
+#include <sys/syscallsubr.h>
 
 MALLOC_DEFINE(M_SLSMM, "slsmm", "S L S M M");
 
@@ -33,10 +35,14 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
                 if (error) break;
             }
 
+            kern_ptrace(td, PT_SUSPEND, dparam->pid, NULL, 0);
+
             error = reg_dump(p, dparam->fd);
             printf("cpu error %d\n", error);
-            error = vmspace_dump(p->p_vmspace, dparam->start, dparam->end, td, dparam->fd);
-            printf("mem error %d\n", error);
+            //error = vmspace_dump(p->p_vmspace, dparam->start, dparam->end, td, dparam->fd);
+            //printf("mem error %d\n", error);
+
+            if (dparam->pid != -1) PRELE(p);
 
             break;
 
@@ -46,6 +52,7 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
             printf("%d\n", rparam->fd);
 
             p = td->td_proc;
+
 
             error = reg_restore(p, rparam->fd);
             printf("cpu error %d\n", error);
