@@ -35,12 +35,20 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
                 if (error) break;
             }
 
-            kern_ptrace(td, PT_SUSPEND, dparam->pid, NULL, 0);
+            PROC_LOCK(p);
+            kern_psignal(p, SIGSTOP);
+            PROC_UNLOCK(p);
+            uprintf("suspended\n");
 
             error = reg_dump(p, dparam->fd);
             printf("cpu error %d\n", error);
-            //error = vmspace_dump(p->p_vmspace, dparam->start, dparam->end, td, dparam->fd);
-            //printf("mem error %d\n", error);
+            error = vmspace_dump(p->p_vmspace, dparam->start, dparam->end, td, dparam->fd);
+            printf("mem error %d\n", error);
+
+            PROC_LOCK(p);
+            kern_psignal(p, SIGCONT);
+            PROC_UNLOCK(p);
+            uprintf("unsuspended\n");
 
             if (dparam->pid != -1) PRELE(p);
 
@@ -49,15 +57,19 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
         case SLSMM_RESTORE:
             printf("SLSMM_RESTORE\n");
             rparam = (struct restore_param *)data;
-            printf("%d\n", rparam->fd);
 
-            p = td->td_proc;
+            if (rparam->pid == -1) {
+                p = td->td_proc;
+            } else {
+                error = pget(rparam->pid, PGET_WANTREAD, &p);
+                if (error) break;
+            }
 
-
-            error = reg_restore(p, rparam->fd);
-            printf("cpu error %d\n", error);
-            error = vmspace_restore(p, td, rparam->fd);
-            printf("mem error %d\n", error);
+            PROC_LOCK(p);
+            kern_psignal(p, SIGCONT);
+            PROC_UNLOCK(p);
+            uprintf("unsuspended\n");
+            break;
 
             break;
     }

@@ -5,7 +5,7 @@
 #include <sys/pcpu.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
-
+#include <sys/signalvar.h>
 #include <machine/reg.h>
 
 int
@@ -14,18 +14,6 @@ reg_dump(struct proc *p, int fd)
     int error = 0;
     struct thread *td;
 
-    PROC_LOCK(p);
-    PROC_SLOCK(p);
-    FOREACH_THREAD_IN_PROC(p, td) {
-        thread_lock(td);
-        thread_suspend_one(td);
-        thread_unlock(td);
-    }
-    PROC_SUNLOCK(p);
-    PROC_UNLOCK(p);
-    printf("suspended\n");
-
-    /*
     struct reg regs;
     struct fpreg fpregs;
     PROC_LOCK(p);
@@ -62,15 +50,6 @@ reg_dump(struct proc *p, int fd)
 
         break; //assume single thread now
     }
-    PROC_UNLOCK(p);
-
-    printf("regs saved\n");
-    */
-
-    PROC_LOCK(p);
-    PROC_SLOCK(p);
-    thread_unsuspend(p);
-    PROC_SUNLOCK(p);
     PROC_UNLOCK(p);
 
     return error;
