@@ -11,6 +11,7 @@
 #include <sys/ptrace.h>
 #include <sys/systm.h>
 #include <sys/syscallsubr.h>
+#include <sys/time.h>
 
 MALLOC_DEFINE(M_SLSMM, "slsmm", "S L S M M");
 
@@ -22,6 +23,17 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
     struct dump_param *dparam;
     struct restore_param *rparam;
     struct proc *p;
+
+    void *reg_buffer = NULL;
+    size_t reg_dump_size;
+
+    vm_object_t *objects = NULL;
+    struct vm_map_entry_info *entries = NULL;
+    size_t nentries = 0;
+
+    struct timespec prev, curr;
+    nanotime(&curr);
+    long nanos[5];
 
     switch (cmd) {
         case SLSMM_DUMP:
@@ -35,22 +47,49 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
                 if (error) break;
             }
 
+            // suspend process
+            prev = curr, nanouptime(&curr);
             PROC_LOCK(p);
             kern_psignal(p, SIGSTOP);
             PROC_UNLOCK(p);
-            uprintf("suspended\n");
+            prev = curr, nanouptime(&curr);
+            nanos[0] = curr.tv_nsec - prev.tv_nsec;
 
-            error = reg_dump(p, dparam->fd);
-            printf("cpu error %d\n", error);
-            error = vmspace_dump(p->p_vmspace, dparam->start, dparam->end, td, dparam->fd);
-            printf("mem error %d\n", error);
+            // dump cpu registers
+            error = reg_dump(&reg_buffer, &reg_dump_size, p, dparam->fd);
+            if (error) break;
+            prev = curr, nanouptime(&curr);
+            nanos[1] = curr.tv_nsec - prev.tv_nsec;
 
+            // create memory shadow objects
+            error = shadow_object_list(p->p_vmspace, &objects, &entries, &nentries);
+            if (error) break;
+            prev = curr, nanouptime(&curr);
+            nanos[2] = curr.tv_nsec - prev.tv_nsec;
+
+            // resume process
             PROC_LOCK(p);
             kern_psignal(p, SIGCONT);
             PROC_UNLOCK(p);
-            uprintf("unsuspended\n");
-
             if (dparam->pid != -1) PRELE(p);
+            prev = curr, nanouptime(&curr);
+            nanos[3] = curr.tv_nsec - prev.tv_nsec;
+
+            // write cpu and mem dump to disk
+            fd_write(reg_buffer, reg_dump_size, dparam->fd);
+            vm_objects_dump(p->p_vmspace, objects, entries, nentries, dparam->fd);
+            prev = curr, nanouptime(&curr);
+            nanos[4] = curr.tv_nsec - prev.tv_nsec;
+
+            if (reg_buffer) free(reg_buffer, M_SLSMM);
+            if (objects) free(objects, M_SLSMM);
+            if (entries) free(entries, M_SLSMM);
+
+            uprintf("suspend\t%ld ns\n", nanos[0]);
+            uprintf("cpu\t%ld ns\n", nanos[1]);
+            uprintf("mem\t%ld ns\n", nanos[2]);
+            uprintf("resume\t%ld ns\n", nanos[3]);
+            uprintf("disk\t%ld ns\n", nanos[4]);
 
             break;
 

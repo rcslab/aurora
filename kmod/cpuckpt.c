@@ -1,7 +1,9 @@
 #include "cpuckpt.h"
 #include "fileio.h"
+#include "_slsmm.h"
 
 #include <sys/conf.h>
+#include <sys/malloc.h>
 #include <sys/pcpu.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
@@ -9,13 +11,21 @@
 #include <machine/reg.h>
 
 int
-reg_dump(struct proc *p, int fd)
+reg_dump(void **buffer, size_t *buf_size, struct proc *p, int fd)
 {
     int error = 0;
+    size_t offset = 0;
     struct thread *td;
-
     struct reg regs;
     struct fpreg fpregs;
+
+    *buf_size = (sizeof(struct reg) + sizeof(struct fpreg)) * p->p_numthreads;
+    *buffer = malloc(*buf_size, M_SLSMM, M_NOWAIT);
+    if (*buffer == NULL) {
+        printf("ENOMEM\n");
+        return ENOMEM;
+    }
+
     PROC_LOCK(p);
     FOREACH_THREAD_IN_PROC(p, td) {
         error = proc_read_regs(td, &regs);
@@ -27,26 +37,15 @@ reg_dump(struct proc *p, int fd)
         thread_lock(td);
         error = proc_read_fpregs(td, &fpregs);
         thread_unlock(td);
-
         if (error) {
             printf("CPU fpreg dump error %d\n", error);
             break;
         }
 
-        PROC_UNLOCK(p);
-        error = fd_write(&regs, sizeof(struct reg), fd);
-        if (error) {
-            printf("CPU reg write error %d\n", error);
-            PROC_LOCK(p);
-            break;
-        }
-        error = fd_write(&fpregs, sizeof(struct fpreg), fd);
-        if (error) {
-            printf("CPU fpreg write error %d\n", error);
-            PROC_LOCK(p);
-            break;
-        }
-        PROC_LOCK(p);
+        error = write_buf(*buffer, &regs, &offset, sizeof(struct reg), *buf_size);
+        if (error) break;
+        error = write_buf(*buffer, &fpregs, &offset, sizeof(struct fpreg), *buf_size);
+        if (error) break;
 
         break; //assume single thread now
     }

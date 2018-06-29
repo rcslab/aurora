@@ -13,7 +13,7 @@ fd_read(void* addr, size_t len, int fd)
 
     struct uio auio;
     struct iovec aiov;
-    bzero(&aiov, sizeof(struct uio));
+    bzero(&auio, sizeof(struct uio));
     bzero(&aiov, sizeof(struct iovec));
 
     aiov.iov_base = (void*)addr;
@@ -39,7 +39,7 @@ fd_write(void* addr, size_t len, int fd)
 
     struct uio auio;
     struct iovec aiov;
-    bzero(&aiov, sizeof(struct uio));
+    bzero(&auio, sizeof(struct uio));
     bzero(&aiov, sizeof(struct iovec));
 
     aiov.iov_base = (void*)addr;
@@ -57,3 +57,16 @@ fd_write(void* addr, size_t len, int fd)
 
     return error;
 }
+
+int
+write_buf(uint8_t *buf, void *src, size_t *offset, size_t size, size_t cap) {
+    if (*offset + size > cap) {
+        printf("Exceed buffer size\n");
+        return -1;
+    }
+    memcpy(buf+*offset, src, size);
+    *offset += size;
+    return 0;
+}
+
+
