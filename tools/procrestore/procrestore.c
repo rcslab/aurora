@@ -17,8 +17,10 @@ int main(int argc, char* argv[]) {
 		printf("Usage: procdump <filename> <PID>\n");
 		return 0;
 	}
-	if (pid > 0) pid = strtol(argv[2], &argv[2], 10);
-	else pid = getpid();
+
+	pid = strtol(argv[2], &argv[2], 10);
+	if (pid < 0) 
+		pid = getpid();
 
 	slsmm_fd = open("/dev/slsmm", O_RDWR);
 	if (!slsmm_fd) {
