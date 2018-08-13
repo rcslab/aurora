@@ -1,89 +1,146 @@
-#include "_slsmm.h"
-#include "slsmm.h"
-#include "fileio.h"
-#include "cpuckpt.h"
-#include "memckpt.h"
+#include <sys/types.h>
 
-#include <sys/conf.h>       // cdev
+#include <sys/conf.h>
 #include <sys/kernel.h>
+#include <sys/malloc.h>
 #include <sys/module.h>
+#include <sys/param.h>
+#include <sys/pcpu.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
+#include <sys/rwlock.h>
+#include <sys/shm.h>
+#include <sys/signalvar.h>
 #include <sys/systm.h>
 #include <sys/syscallsubr.h>
 #include <sys/time.h>
 
+#include <machine/param.h>
+#include <machine/reg.h>
+
+#include <vm/pmap.h>
+#include <vm/vm.h>
+#include <vm/vm_extern.h>
+#include <vm/vm_map.h>
+#include <vm/vm_object.h>
+#include <vm/vm_page.h>
+#include <vm/vm_radix.h>
+#include <vm/uma.h>
+
+
+#include "_slsmm.h"
+#include "cpuckpt.h"
+#include "memckpt.h"
+#include "slsmm.h"
+#include "fileio.h"
+
+
 MALLOC_DEFINE(M_SLSMM, "slsmm", "S L S M M");
 
 static int
-slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
+slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data,
         int flag __unused, struct thread *td)
 {
     int error = 0;
-    struct dump_param *dparam;
-    struct restore_param *rparam;
+    struct slsmm_param *sparam;
     struct proc *p;
+    int fd;
 
-    void *reg_buffer = NULL;
+    struct cpu_info *reg_buffer = NULL;
     size_t reg_dump_size;
 
-    vm_object_t *objects = NULL;
-    struct vm_map_entry_info *entries = NULL;
-    size_t nentries = 0;
+    struct vmspace *vmspace;
+    vm_ooffset_t unused;
 
     struct timespec prev, curr;
-    nanotime(&curr);
     long nanos[5];
+
+    nanotime(&curr);
+
+    /* 
+     * Get a hold of the process to be 
+     * checkpointed, bringing its thread stack to memory
+     * and preventing it from exiting, to avoid race
+     * conditions.
+     */
+    /*
+     * XXX Is holding appropriate here? Is it done correctly? It brings the stack
+     * into memory, but what about swapped out pages? 
+     */
+    /*
+     * In general, a nice optimization would be to use swapped out pages as part of
+     * out checkpoint.
+     */
+    sparam = (struct slsmm_param *) data;
+    if (error) {
+	    printf("Error: copyin failed with code %d\n", error);
+	    return error;
+    }
+
+    fd = sparam->fd;
+    error = pget(sparam->pid, PGET_WANTREAD, &p);
+    if (error) {
+	    printf("Error: pget failed with code %d\n", error);
+	    return error;
+    }
+
+    PROC_LOCK(p);
+    kern_psignal(p, SIGSTOP);
 
     switch (cmd) {
         case SLSMM_DUMP:
             printf("SLSMM_DUMP\n");
-            dparam = (struct dump_param *)data;
 
-            if (dparam->pid == -1) {
-                p = td->td_proc;
-            } else {
-                error = pget(dparam->pid, PGET_WANTREAD, &p);
-                if (error) break;
-            }
-
-            // suspend process
             prev = curr, nanouptime(&curr);
-            PROC_LOCK(p);
-            kern_psignal(p, SIGSTOP);
-            PROC_UNLOCK(p);
+
+	    /* Dump the CPU registers */
+	    /*
+	     * XXX This error path, and error paths in general, is wrong.
+	     * Must be fixed after we fix the happy path.
+	     */
+            error = reg_dump(&reg_buffer, &reg_dump_size, p, fd);
+            if (error) {
+		    printf("Error: reg_dump failed with error code %d\n", error);
+		    break;
+	    }
+
             prev = curr, nanouptime(&curr);
             nanos[0] = curr.tv_nsec - prev.tv_nsec;
 
-            // dump cpu registers
-            error = reg_dump(&reg_buffer, &reg_dump_size, p, dparam->fd);
-            if (error) break;
+	    vmspace = vmspace_fork(p->p_vmspace, &unused);
+	    if (!vmspace) {
+	        printf("Error: vmspace could not be forked\n");
+	        break;
+	    }
+
+
             prev = curr, nanouptime(&curr);
             nanos[1] = curr.tv_nsec - prev.tv_nsec;
 
-            // create memory shadow objects
-            error = shadow_object_list(p->p_vmspace, &objects, &entries, &nentries);
-            if (error) break;
+	    /* Unlock the process ASAP to let it execute */
+            kern_psignal(p, SIGCONT);
+            PROC_UNLOCK(p);
+
+	    /* Release the hold we got when looking up the proc structure */
+            PRELE(p);
+
             prev = curr, nanouptime(&curr);
             nanos[2] = curr.tv_nsec - prev.tv_nsec;
 
-            // resume process
-            PROC_LOCK(p);
-            kern_psignal(p, SIGCONT);
-            PROC_UNLOCK(p);
-            if (dparam->pid != -1) PRELE(p);
+	    /* Write dump to disk */
+            fd_write(reg_buffer, reg_dump_size, fd);
+	    error = vmspace_checkpoint(vmspace, sparam->fd);
+            if (error) {
+		    printf("Error: vmspace_checkpoint failed with error code %d\n", error);
+		    break;
+	    }
+
             prev = curr, nanouptime(&curr);
             nanos[3] = curr.tv_nsec - prev.tv_nsec;
 
-            // write cpu and mem dump to disk
-            fd_write(reg_buffer, reg_dump_size, dparam->fd);
-            vm_objects_dump(p->p_vmspace, objects, entries, nentries, dparam->fd);
-            prev = curr, nanouptime(&curr);
-            nanos[4] = curr.tv_nsec - prev.tv_nsec;
-
-            if (reg_buffer) free(reg_buffer, M_SLSMM);
-            if (objects) free(objects, M_SLSMM);
-            if (entries) free(entries, M_SLSMM);
+            if (reg_buffer) 
+		    free(reg_buffer, M_SLSMM);
+	    vmspace_free(vmspace);
 
             uprintf("suspend\t%ld ns\n", nanos[0]);
             uprintf("cpu\t%ld ns\n", nanos[1]);
@@ -95,25 +152,28 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data __unused,
 
         case SLSMM_RESTORE:
             printf("SLSMM_RESTORE\n");
-            rparam = (struct restore_param *)data;
 
-            if (rparam->pid == -1) {
-                p = td->td_proc;
-            } else {
-                error = pget(rparam->pid, PGET_WANTREAD, &p);
-                if (error) break;
-            }
+	    error = reg_restore(p, fd);
+            if (error) {
+		    printf("Error: reg_restore failed with error code %d\n", error);
+		    break;
+	    }
+	    error = vmspace_restore(p, fd);
+            if (error) {
+		    printf("Error: vmspace_restore failed with error code %d\n", error);
+		    break;
+	    }
 
-            PROC_LOCK(p);
-            kern_psignal(p, SIGCONT);
-            PROC_UNLOCK(p);
-            uprintf("unsuspended\n");
-            break;
+	    kern_psignal(p, SIGCONT);
+	    PROC_UNLOCK(p);
+
+	    /* Release the hold we got when looking up the proc structure */
+	    PRELE(p);
 
             break;
     }
 
-    printf("ret error %d\n", error);
+    printf("Error code %d\n", error);
     return error;
 }
 

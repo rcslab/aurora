@@ -8,26 +8,39 @@
 #include <unistd.h>
 
 int main(int argc, char* argv[]) {
+    int pid;
+    int slsmm_fd, file_fd;
+    int error;
+    struct slsmm_param param;
+
     if (argc != 3) {
+	printf("Usage: procdump <filename> <PID>\n");
         return 0;
     }
 
-    int pid = strtol(argv[2], &argv[2], 10); 
-    printf("%s %d\n", argv[1], pid);
+    pid = strtol(argv[2], &argv[2], 10); 
 
-    int slsmm_fd = open("/dev/slsmm", O_RDWR);
-    int file_fd = open(argv[1], O_WRONLY | O_CREAT);
+    slsmm_fd = open("/dev/slsmm", O_RDWR);
+    if (!slsmm_fd) {
+	    printf("ERROR: SLS device file not opened\n");
+	    exit(1); 
+    }
 
-    struct dump_param param = {
-        .start  = 0,
-        .end    = (vm_offset_t)-1,
-        .fd     = file_fd,
-        .pid    = pid,
+    file_fd = open(argv[1], O_WRONLY | O_CREAT | O_TRUNC | O_APPEND);
+    if (!file_fd) {
+	    printf("ERROR: Checkpoint file not opened\n");
+	    exit(1); 
+    }
+
+    param = (struct slsmm_param) { 
+	    .fd = file_fd, 
+	    .pid = pid, 
     };
 
-    int error = ioctl(slsmm_fd, SLSMM_DUMP, &param);
+    ioctl(slsmm_fd, SLSMM_DUMP, &param);
 
-    close(slsmm_fd);
     close(file_fd);
+    close(slsmm_fd);
+
     return 0;
 }

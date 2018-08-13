@@ -1,3 +1,3 @@
-SUBDIR = procdump procrestore hexdump
+SUBDIR = procdump procrestore 
 
 .include <bsd.subdir.mk>

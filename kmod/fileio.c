@@ -28,6 +28,9 @@ fd_read(void* addr, size_t len, int fd)
     auio.uio_td = curthread;
 
     error = kern_readv(curthread, fd, &auio);
+    if (error) {
+	    printf("Error: kern_readv failed with code %d\n", error);
+    }
 
     return error;
 }
@@ -54,6 +57,9 @@ fd_write(void* addr, size_t len, int fd)
     auio.uio_td = curthread;
 
     error = kern_writev(curthread, fd, &auio);
+    if (error) {
+	    printf("Error: kern_writev failed with code %d\n", error);
+    }
 
     return error;
 }

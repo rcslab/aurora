@@ -1,8 +1,6 @@
-#include "memckpt.h"
-#include "_slsmm.h"
-#include "slsmm.h"
-#include "fileio.h"
+#include <sys/types.h>
 
+#include <sys/limits.h>
 #include <sys/param.h>
 #include <sys/proc.h>
 #include <sys/rwlock.h>
@@ -19,219 +17,268 @@
 
 #include <machine/param.h>
 
-static void
-print_shadow_list(vm_object_t object)
+#include "memckpt.h"
+#include "_slsmm.h"
+#include "slsmm.h"
+#include "fileio.h"
+
+/*
+ * XXX: We should check whether we dump all necessary info into the structures
+ */
+/*
+ * Dump the address space into a file.
+ */
+int
+vmspace_checkpoint(struct vmspace *vmspace, int fd)
 {
-    vm_object_t obj;
-    
-    for (obj = object; obj != NULL; obj = obj->backing_object) {
-        if (obj != object) printf("->");
-        printf("%lx", (vm_offset_t)obj);
-    }
-    printf("\n");
+	int error = 0;
+	struct vm_object *vm_object;
+	struct vm_map_entry *entry;
+	struct vm_map_entry_info entry_info;
+	struct vm_map *vm_map;
+	vm_offset_t vaddr;
+	vm_page_t page;
+	vm_pindex_t object_size;
+	vm_pindex_t poffset;
+	struct vmspace_info vmspace_info;
+
+	/* Dump the vmspace information, as well as the entry-node pairs */
+	vm_map = &(vmspace->vm_map);
+	vmspace_info = (struct vmspace_info) {
+		.vm_swrss = vmspace->vm_swrss,
+		.vm_tsize = vmspace->vm_tsize,
+		.vm_dsize = vmspace->vm_dsize,
+		.vm_ssize = vmspace->vm_ssize,
+		.vm_taddr = vmspace->vm_taddr,
+		.vm_daddr = vmspace->vm_daddr,
+		.vm_maxsaddr = vmspace->vm_maxsaddr,
+		.nentries = vm_map->nentries,
+	};
+	error = fd_write(&vmspace_info, sizeof(struct vmspace_info), fd);
+	if (error)
+		return error;
+
+	/*
+	 * Iteration pattern (start from -> next, stop at header) from
+	 * FreeBSD code
+	 */
+	for (entry = vm_map->header.next; entry != &(vm_map->header);
+	     entry = entry->next) {
+
+		/*
+		 * XXX: Cannot handle submaps yet, we suppose the .vm_object
+		 * member is an object
+		 */
+		if (entry->eflags & MAP_ENTRY_IS_SUB_MAP) {
+			printf("WARNING: Submap entry found, dump will be wrong\n");
+			continue;
+		}
+
+		/*
+		 * XXX: What does having a null vm object for the entry mean?
+		 * (Probably that it is currently unused, so no mapping has
+		 * been done)
+		 */
+		vm_object = entry->object.vm_object;
+		if (vm_object != NULL) {
+			object_size = vm_object->size;
+		} else {
+			/*
+			 * Sentinel value, would need the whole space to be backed by
+			 * a single object (possible but improbable).
+			 */
+			object_size = ULONG_MAX;
+		}
+
+		entry_info = (struct vm_map_entry_info) {
+			.start = entry->start,
+			.end = entry->end,
+			.offset = entry->offset,
+			.eflags = entry->eflags,
+			.protection = entry->protection,
+			.max_protection = entry->max_protection,
+			.size = object_size,
+		};
+		error = fd_write(&entry_info, sizeof(struct vm_map_entry_info), fd);
+
+		if (vm_object == NULL)
+			continue;
+
+		/*
+		 * Dump the actual page data to disk after mapping it to
+		 * the kernel
+		 */
+		TAILQ_FOREACH(page, &vm_object->memq, listq) {
+
+			if (!page) {
+				printf("ERROR: vm_page_t page is NULL");
+				break;
+			}
+			/* The only thing we need from a page is its current virtual address */
+			error = fd_write(&page->pindex, sizeof(vm_pindex_t), fd);
+			if (error)
+				break;
+		
+			vaddr = pmap_map(NULL, page->phys_addr,
+				 page->phys_addr + PAGE_SIZE, VM_PROT_READ);
+
+			if (!vaddr) {
+				printf("ERROR: vaddr is NULL");
+				break;
+			}
+			error = fd_write((void *)vaddr, PAGE_SIZE, fd);
+
+
+			if (error)
+				break;
+		}
+
+		/* Sentinel value, no more pages to read */
+		poffset = ULONG_MAX;
+		error = fd_write(&poffset, sizeof(vm_pindex_t), fd);
+	}
+	
+
+	return error;
 }
 
 int
-shadow_object_list(struct vmspace *vms, vm_object_t **objects, 
-        struct vm_map_entry_info **entries, size_t *size)
+vmspace_restore(struct proc *p, int fd)
 {
-    int error = 0;
-    vm_map_t vmmap = &vms->vm_map;
-    vm_map_entry_t entry;
+	struct vmspace_info vmspace_info;
+	struct vm_map_entry_info entry_info;
+	vm_pindex_t poffset;
 
-    *size = 0;
-    *objects = malloc(vmmap->nentries*sizeof(vm_object_t), M_SLSMM, M_NOWAIT); 
-    if (*objects == NULL) return ENOMEM;
-    *entries = malloc(vmmap->nentries*sizeof(struct vm_map_entry_info), M_SLSMM, M_NOWAIT); 
-    if (*entries == NULL) {
-        if (*objects) free(*objects, M_SLSMM);
-        return ENOMEM;
-    }
+	struct vmspace *vmspace;
+	struct vm_map *map;
+	struct vm_object *object;
+	struct vm_page *page;
+	vm_offset_t vaddr;
 
-    for (entry = vmmap->header.next; entry != &vmmap->header; entry = entry->next) {
-        (*objects)[*size] = entry->object.vm_object;
-        if ((*objects)[*size] == NULL) continue;
-        
-        (*entries)[*size].start = entry->start;
-        (*entries)[*size].end = entry->end;
-        (*entries)[*size].offset = entry->offset;
-        *size += 1;
+	int error = 0;
 
-        vm_object_reference(entry->object.vm_object);
-        vm_object_shadow(&entry->object.vm_object, &entry->offset,
-                entry->end-entry->start);
-        pmap_remove(vmmap->pmap, entry->start, entry->end);
-    }
+	vmspace = p->p_vmspace;
+	map = &vmspace->vm_map;
 
-    return error;
-}
+	/*
+	 * XXX Reading should be done all at once, before starting restore,
+	 * so that we are sure we have succeeded in reading all past state
+	 * before going ahead with overwriting the process address space.
+	 * Should be taken care of after making sure everything works. The
+	 * same holds for the construction of the new vm_map.
+	 */
 
-int
-vm_objects_dump(struct vmspace *vms, vm_object_t *objects, 
-       struct vm_map_entry_info *entries, size_t size, int fd)
-{
-    int error = 0;
-    vm_map_t vmmap = &vms->vm_map;
-    struct vmspace_info vms_info = {
-        .min = vmmap->min_offset,
-        .max = vmmap->max_offset,
-        .vm_swrss = vms->vm_swrss,
-        .vm_tsize = vms->vm_tsize,
-        .vm_dsize = vms->vm_dsize,
-        .vm_ssize = vms->vm_ssize,
-        .vm_taddr = vms->vm_taddr,
-        .vm_daddr = vms->vm_daddr,
-        .vm_maxsaddr = vms->vm_maxsaddr, 
-        .entry_count = vmmap->nentries,
-    };
+	/*
+	 * Blow away the old address space, as done in exec_new_vmspace
+	 */
 
-    error = fd_write(&vms_info, sizeof(struct vmspace_info), fd);
-    if (error) return error;
+	pmap_remove_pages(vmspace_pmap(vmspace));
+	vm_map_remove(map, vm_map_min(map), vm_map_max(map));
 
-    printf("%lx\n", (vm_offset_t)entries);
-    for (size_t i = 0; i < size; i ++) {
-        vm_page_t page;
-        printf("entry %zu %lx %lx %d\n", i, entries[i].start, entries[i].end,
-                objects[i]->resident_page_count);
+	/* XXX We have to look further into how to handle System V shmem */
+	shmexit(vmspace);
 
-        error = fd_write(entries+i, sizeof(struct vm_map_entry_info), fd);
-        if (error) break;
+	/* If all pages were wired using mlockall(), undo that */
+	/* XXX Commented out because for some reason FreeBSD can't find vm_map_modflags */
+	/*
+	vm_map_lock(map);
+	vm_map_modflags(map, 0, MAP_WIREFUTURE); 
+	vm_map_unlock(map);
+	*/
 
-        struct vm_object_info object_info = {
-            .resident_page_count = objects[i]->resident_page_count,
-            .dump_page_count = objects[i]->resident_page_count,
-        };
-        error = fd_write(&object_info, sizeof(struct vm_object_info), fd);
-        if (error) break;
+	error = fd_read(&vmspace_info, sizeof(struct vmspace_info), fd);
+	if (error)
+		return error;
 
-        // dump page
-        TAILQ_FOREACH(page, &objects[i]->memq, listq) {
-            vm_offset_t vaddr = pmap_map(NULL, page->phys_addr, 
-                    page->phys_addr+PAGE_SIZE, VM_PROT_READ);
+	/* Copy vmspace state to the existing vmspace */
+	vmspace->vm_swrss = vmspace_info.vm_swrss;
+	vmspace->vm_tsize = vmspace_info.vm_tsize;
+	vmspace->vm_dsize = vmspace_info.vm_dsize;
+	vmspace->vm_ssize = vmspace_info.vm_ssize;
+	vmspace->vm_taddr = vmspace_info.vm_taddr;
+	vmspace->vm_taddr = vmspace_info.vm_daddr;
+	vmspace->vm_maxsaddr = vmspace_info.vm_maxsaddr;
 
-            struct vm_page_info page_info = {
-                .phys_addr  = page->phys_addr,
-                .pindex     = page->pindex,
-                .pagesize   = PAGE_SIZE,
-            };
-            error = fd_write(&page_info, sizeof(struct vm_page_info), fd);
-            if (error) break;
-            error = fd_write((void*)vaddr, PAGE_SIZE, fd);
-            if (error) break;
-        }
+	for (int i = 0; i < vmspace_info.nentries; i++) {
 
-        vm_object_deallocate(objects[i]);
+		/* Read an entry, add it to the map */
+		error = fd_read(&entry_info, sizeof(struct vm_map_entry_info), fd);
+		if (error)
+			return error;
 
-    }
+		/* 
+		 * XXX If we need to create an entry that has no object, 
+		 * we skip it for now, since these entries seem to have 
+		 * size 0 anyway. There is relevant code from the kernel,
+		 * but it's part of vm_object_allocate. We could just 
+		 * allocate a vm_object of size 0 to back the entry. 
+		 */
+		if (entry_info.size == ULONG_MAX) {
+			continue;
+		}
+		
+		/* XXX Only works for anonymous objects */
+		object = vm_object_allocate(OBJT_DEFAULT, entry_info.size);
+		if (object == NULL) {
+			printf("vm_object_allocate error\n");
+			return (ENOMEM);
+		}
 
-    return error;
-}
 
-int
-vmspace_restore(struct proc *p, struct thread *td, int fd) {
-    int error = 0;
-    struct vmspace_info vms_info;
-    struct vmspace *vms;
-    vm_map_t map;
+		/* XXX Only we have a reference to the object, why take a lock? */
+		VM_OBJECT_WLOCK(object);
+		for (;;) {
+	 		fd_read(&poffset, sizeof(vm_pindex_t), fd);
+			/* Sentinel value, no more pages left to read */
+			if (poffset == ULONG_MAX)
+				break;
 
-    error = fd_read(&vms_info, sizeof(struct vmspace_info), fd);
-    if (error) return error;
+			page = vm_page_alloc(object, poffset, VM_ALLOC_NORMAL);
+			if (page == NULL) {
+				printf("vm_page_alloc error\n");
+				return (ENOMEM);
+			}
 
-    vms = p->p_vmspace;
-    map = &vms->vm_map;
-    if (vms->vm_refcnt == 1 && vm_map_min(map) == vms_info.min && 
-            vm_map_max(map) == vms_info.max) {
-        shmexit(vms);
-        pmap_remove_pages(vmspace_pmap(vms));
-        vm_map_remove(map, vm_map_min(map), vm_map_max(map));
-    } else {
-        error = vmspace_exec(p, vms_info.min, vms_info.max);
-        if (error) return error;
-        vms = p->p_vmspace;
-        map = &vms->vm_map;
-    }
-
-    printf("%lx %lx %lx %lx\n", vms->vm_swrss, vms->vm_tsize, 
-            vms->vm_dsize, vms->vm_ssize);
-
-    for (int i = 0; i < vms_info.entry_count; i ++) {
-        struct vm_map_entry_info entry_info;
-        struct vm_object_info object_info;
-        vm_object_t object;
-
-        error = fd_read(&entry_info, sizeof(struct vm_map_entry_info), fd);
-        if (error) return error;
-        error = fd_read(&object_info, sizeof(struct vm_object_info), fd);
-        if (error) return error;
-
-        object = vm_object_allocate(OBJT_DEFAULT, 
-                atop(entry_info.end-entry_info.start));
-        if (object == NULL) {
-            printf("vm_object_allocate error\n");
-            return (ENOMEM);
-        }
-
-        VM_OBJECT_WLOCK(object);
-        for (int j = 0; j < object_info.dump_page_count; j ++) {
-            struct vm_page_info page_info;
-            vm_page_t page;
-            vm_offset_t vaddr;
-
-            error = fd_read(&page_info, sizeof(struct vm_page_info), fd);
-            if (error) {
-                printf("fd_read page_info error\n");
-                VM_OBJECT_WUNLOCK(object);
-                return error;
-            }
-
-            page = vm_page_alloc(object, page_info.pindex, VM_ALLOC_NORMAL);
-            if (page == NULL) {
-                printf("vm_page_alloc error\n");
-                return (ENOMEM);
-            }
-            vaddr = pmap_map(NULL, page->phys_addr, page->phys_addr+PAGE_SIZE,
+			vm_page_lock(page);
+			vaddr = pmap_map(NULL, page->phys_addr, page->phys_addr + PAGE_SIZE,
                     VM_PROT_WRITE);
-            printf("%lx\n", vaddr);
-            error = fd_read((void*)vaddr, page_info.pagesize, fd); 
 
-            if (error) {
-                printf("fd_read data error\n");
-                VM_OBJECT_WUNLOCK(object);
-                return error;
-            }
-        }
-        VM_OBJECT_WUNLOCK(object);
+			error = fd_read((void *) vaddr, PAGE_SIZE, fd);
+			pmap_enter(&vmspace->vm_pmap, 
+                    entry_info.start + IDX_TO_OFF(poffset) - entry_info.offset,
+                    page, entry_info.protection, VM_PROT_READ, 0);
 
-        vm_object_reference(object);
-        vm_map_lock(map);
-        error = vm_map_insert(map, object, entry_info.offset, entry_info.start,
+			/* 
+			 * Mark page as about to be used, keeping it from paging out. 
+             * Probably doesn't do anything, but maybe... (It should be removed 
+             * after we find the bug)
+			 */
+			vm_page_activate(page);
+			vm_page_unlock(page);
+
+			if (error) {
+				printf("fd_read data error\n");
+				VM_OBJECT_WUNLOCK(object);
+				return error;
+			}
+		}
+		VM_OBJECT_WUNLOCK(object);
+
+
+		/* Enter the object into the map */
+		vm_object_reference(object);
+		vm_map_lock(map);
+		/* XXX What flags should be used? */
+		error = vm_map_insert(map, object, entry_info.offset, entry_info.start,
                 entry_info.end, entry_info.protection, 
                 entry_info.max_protection, MAP_COPY_ON_WRITE | MAP_PREFAULT);
-        vm_map_unlock(map);
+	
+		vm_map_unlock(map);
 
-        if (error) {
-            printf("vm_map_insert error\n");
-            return error;
-        }
-    }
-
-    vms->vm_swrss = vms_info.vm_swrss;
-    vms->vm_tsize = vms_info.vm_tsize;
-    vms->vm_dsize = vms_info.vm_dsize;
-    vms->vm_ssize = vms_info.vm_ssize;
-    vms->vm_taddr = vms_info.vm_taddr;
-    vms->vm_daddr = vms_info.vm_daddr;
-    vms->vm_maxsaddr = vms_info.vm_maxsaddr;
-
-    printf("%lx %lx %lx %lx\n", vms->vm_swrss, vms->vm_tsize, 
-            vms->vm_dsize, vms->vm_ssize);
-
-    vm_map_entry_t entry;
-    for (entry = map->header.next; entry != &map->header; entry = entry->next) {
-        vm_object_t object = entry->object.vm_object;
-        printf("%lx %lx %d\n", entry->start, entry->end, object->resident_page_count);
-    }
-
-    return error;
+		if (error) {
+			printf("vm_map_insert error\n");
+			return error;
+		}
+	}
+	return error;
 }
-

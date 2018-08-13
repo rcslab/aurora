@@ -1,6 +1,7 @@
 #include "cpuckpt.h"
 #include "fileio.h"
 #include "_slsmm.h"
+#include "debug.h"
 
 #include <sys/conf.h>
 #include <sys/malloc.h>
@@ -10,83 +11,77 @@
 #include <sys/signalvar.h>
 #include <machine/reg.h>
 
+/*
+ * Get the state of all threads of the process. This function
+ * takes and leaves the process locked.
+ */
 int
-reg_dump(void **buffer, size_t *buf_size, struct proc *p, int fd)
+reg_dump(struct cpu_info **cpu_info, size_t *cpu_info_size, struct proc *p, 
+        int fd)
 {
     int error = 0;
-    size_t offset = 0;
     struct thread *td;
-    struct reg regs;
-    struct fpreg fpregs;
 
-    *buf_size = (sizeof(struct reg) + sizeof(struct fpreg)) * p->p_numthreads;
-    *buffer = malloc(*buf_size, M_SLSMM, M_NOWAIT);
-    if (*buffer == NULL) {
+    *cpu_info_size = sizeof(struct cpu_info) * p->p_numthreads;
+    *cpu_info = malloc(*cpu_info_size, M_SLSMM, M_NOWAIT);
+    if (*cpu_info == NULL) {
         printf("ENOMEM\n");
         return ENOMEM;
     }
 
-    PROC_LOCK(p);
+    /*
+     * XXX We are assuming a single thread, so we use *cpu_info 
+     * as a pointer to struct cpu_state 
+     */
     FOREACH_THREAD_IN_PROC(p, td) {
-        error = proc_read_regs(td, &regs);
+        thread_lock(td);
+
+        error = proc_read_regs(td, &(*cpu_info)->regs);
         if (error) {
+	    thread_unlock(td);
             printf("CPU reg dump error %d\n", error);
             break;
         }
 
-        thread_lock(td);
-        error = proc_read_fpregs(td, &fpregs);
+
+        error = proc_read_fpregs(td, &(*cpu_info)->fpregs);
         thread_unlock(td);
         if (error) {
             printf("CPU fpreg dump error %d\n", error);
             break;
         }
 
-        error = write_buf(*buffer, &regs, &offset, sizeof(struct reg), *buf_size);
-        if (error) break;
-        error = write_buf(*buffer, &fpregs, &offset, sizeof(struct fpreg), *buf_size);
-        if (error) break;
-
-        break; //assume single thread now
+	    /* Assume single thread */
+        break; 
     }
-    PROC_UNLOCK(p);
 
     return error;
 }
 
+/*
+ * Set the state of all threads of the process. This function
+ * takes and leaves the process locked.
+ */
 int
 reg_restore(struct proc *p, int fd)
 {
     int error = 0;
     struct thread *td;
-    struct reg regs;
-    struct fpreg fpregs;
+    struct cpu_info cpu_info;
 
-    PROC_LOCK(p);
-    _PHOLD(p);
     FOREACH_THREAD_IN_PROC(p, td) {
-        error = fd_read(&regs, sizeof(struct reg), fd);
-        error = fd_read(&fpregs, sizeof(struct fpreg), fd);
+        error = fd_read(&cpu_info, sizeof(struct cpu_info), fd);
         if (error) break;
 
-        PROC_SLOCK(p);
-        /*
-        thread_lock(td);
-        thread_suspend_one(td);
-        thread_unlock(td);
-        */
-
-        error = proc_write_regs(td, &regs);
-        error = proc_write_fpregs(td, &fpregs);
+        error = proc_write_regs(td, &cpu_info.regs);
+        error = proc_write_fpregs(td, &cpu_info.fpregs);
         if (error) break;
 
-        //thread_unsuspend(p);
-        PROC_SUNLOCK(p);
 
-        break; //assume single thread now
+	    /* Assume single thread */
+        break; 
     }
-    _PRELE(p);
-    PROC_UNLOCK(p);
+        
 
     return error;
 }
