@@ -4,11 +4,11 @@
 #include <sys/types.h>
 
 struct slsmm_param{
-    int     fd;
-    int     pid;
+	int	fd;
+	int	pid;
 };
 
-#define SLSMM_DUMP      _IOW('z', 1, struct slsmm_param)
-#define SLSMM_RESTORE   _IOW('z', 2, struct slsmm_param)
+#define SLSMM_DUMP		_IOW('z', 1, struct slsmm_param)
+#define SLSMM_RESTORE	_IOW('z', 2, struct slsmm_param)
 
 #endif

@@ -1,7 +1,6 @@
 #include "cpuckpt.h"
 #include "fileio.h"
 #include "_slsmm.h"
-#include "debug.h"
 
 #include <sys/conf.h>
 #include <sys/malloc.h>
@@ -16,46 +15,33 @@
  * takes and leaves the process locked.
  */
 int
-reg_dump(struct cpu_info **cpu_info, size_t *cpu_info_size, struct proc *p, 
-        int fd)
+thread_checkpoint(struct proc *p, struct thread_info *thread_info)
 {
-    int error = 0;
-    struct thread *td;
+	struct thread *td;
+	int threadno;
+	int error = 0;
 
-    *cpu_info_size = sizeof(struct cpu_info) * p->p_numthreads;
-    *cpu_info = malloc(*cpu_info_size, M_SLSMM, M_NOWAIT);
-    if (*cpu_info == NULL) {
-        printf("ENOMEM\n");
-        return ENOMEM;
-    }
+	threadno = 0;
+	FOREACH_THREAD_IN_PROC(p, td) {
+		thread_lock(td);
 
-    /*
-     * XXX We are assuming a single thread, so we use *cpu_info 
-     * as a pointer to struct cpu_state 
-     */
-    FOREACH_THREAD_IN_PROC(p, td) {
-        thread_lock(td);
+		error = proc_read_regs(td, &thread_info[threadno].regs);
+		if (error) {
+			thread_unlock(td);
+			printf("CPU reg dump error %d\n", error);
+			break;
+		}
 
-        error = proc_read_regs(td, &(*cpu_info)->regs);
-        if (error) {
-	    thread_unlock(td);
-            printf("CPU reg dump error %d\n", error);
-            break;
-        }
+		error = proc_read_fpregs(td, &thread_info[threadno].fpregs);
+		thread_unlock(td);
+		if (error) {
+			printf("CPU fpreg dump error %d\n", error);
+			break;
+		}
 
+	}
 
-        error = proc_read_fpregs(td, &(*cpu_info)->fpregs);
-        thread_unlock(td);
-        if (error) {
-            printf("CPU fpreg dump error %d\n", error);
-            break;
-        }
-
-	    /* Assume single thread */
-        break; 
-    }
-
-    return error;
+	return error;
 }
 
 /*
@@ -63,25 +49,70 @@ reg_dump(struct cpu_info **cpu_info, size_t *cpu_info_size, struct proc *p,
  * takes and leaves the process locked.
  */
 int
-reg_restore(struct proc *p, int fd)
+thread_restore(struct proc *p, struct thread_info *thread_info)
 {
-    int error = 0;
-    struct thread *td;
-    struct cpu_info cpu_info;
+	int error = 0;
+	struct thread *td;
+	int threadno;
 
-    FOREACH_THREAD_IN_PROC(p, td) {
-        error = fd_read(&cpu_info, sizeof(struct cpu_info), fd);
-        if (error) break;
+	/* 
+	 * XXX: We assume that the number of threads of the process to be restored
+	 * is the same one as that of the process to be overwritten. This is extremely
+	 * not true most of the time.
+	 */
 
-        error = proc_write_regs(td, &cpu_info.regs);
-        error = proc_write_fpregs(td, &cpu_info.fpregs);
-        if (error) break;
+	threadno = 0;
+	FOREACH_THREAD_IN_PROC(p, td) {
+		thread_lock(td);
 
+		error = proc_write_regs(td, &thread_info[threadno].regs);
+		error = proc_write_fpregs(td, &thread_info[threadno].fpregs);
+		thread_info[threadno].tid = td->td_tid;
 
-	    /* Assume single thread */
-        break; 
-    }
-        
+		thread_unlock(td);
+		if (error) break;
+	}
 
-    return error;
+	return error;
 }
+
+/*
+ * Get the process state, including file descriptors, sockets, and metadata
+ * like PIDs. This function takes and leaves the process locked.
+ */
+int
+proc_checkpoint(struct proc *p, struct proc_info *proc_info)
+{
+	proc_info->nthreads = p->p_numthreads;
+	proc_info->pid = p->p_pid;
+
+	/*
+	 * TODO: Checkpoint file descriptors. Maybe check if a
+	 * file descriptor is a regular file before checkpointing? 
+	 * If it's a special file that corresponds to stuff we cannot
+	 * checkpoint, it is no use storing it.
+	 */
+
+	return 0;
+}
+
+/*
+ * Set the process state, including file descriptors, sockets, and metadata
+ * like PIDs. This function takes and leaves the process locked.
+ */
+int
+proc_restore(struct proc *p, struct proc_info *proc_info)
+{
+	/* TODO: Change PID if possible (or even feasible) */
+	/*
+	 * TODO: Change the number of threads in the process 
+	 * to match those of the checkpointed process 
+	 */
+	/*
+	 * TODO: Restore file descriptors. See proc_checkpoint for thoughts
+	 * on that.
+	 */
+
+	return 0;
+}
+

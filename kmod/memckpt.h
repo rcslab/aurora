@@ -40,35 +40,35 @@ struct proc;
 
 /* State of the vmspace, but also of its vm_map */
 struct vmspace_info {
-    /* State of the vmspace object */
-    segsz_t vm_swrss;
-    segsz_t vm_tsize;
-    segsz_t vm_dsize;
-    segsz_t vm_ssize;
-    caddr_t vm_taddr;
-    caddr_t vm_daddr;
-    caddr_t vm_maxsaddr;
-    int nentries;
-    /*  
-     * Needed to know how many index-page pairs
-     * to read from the file 
-     */
+	/* State of the vmspace object */
+	segsz_t vm_swrss;
+	segsz_t vm_tsize;
+	segsz_t vm_dsize;
+	segsz_t vm_ssize;
+	caddr_t vm_taddr;
+	caddr_t vm_daddr;
+	caddr_t vm_maxsaddr;
+	int nentries;
+	/*  
+	 * Needed to know how many index-page pairs
+	 * to read from the file 
+	 */
 };
 
 /* State of a vm_map_entry and its backing object */
 struct vm_map_entry_info {
-    /* State of the map entry */
-    vm_offset_t start;
-    vm_offset_t end;
-    vm_ooffset_t offset;
-    vm_eflags_t eflags;
-    vm_prot_t protection;
-    vm_prot_t max_protection;
-    /* XXX: Obey inheritance values */
-    /* vm_inherit_t inheritance; */
-    /* State of the object*/
-    vm_pindex_t size;
-    /* XXX Bookkeeping for swapped out pages? */
+	/* State of the map entry */
+	vm_offset_t start;
+	vm_offset_t end;
+	vm_ooffset_t offset;
+	vm_eflags_t eflags;
+	vm_prot_t protection;
+	vm_prot_t max_protection;
+	/* XXX: Obey inheritance values */
+	/* vm_inherit_t inheritance; */
+	/* State of the object*/
+	vm_pindex_t size;
+	/* XXX Bookkeeping for swapped out pages? */
 };
 
 

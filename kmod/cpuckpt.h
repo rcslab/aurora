@@ -34,13 +34,21 @@ struct proc;
 struct reg;
 struct fpreg;
 
-struct cpu_info {
-	struct reg regs;
-	struct fpreg fpregs;
+struct proc_info {
+	size_t nthreads;
+	pid_t pid;
 };
 
-int reg_dump(struct cpu_info **cpu_info, size_t *cpu_info_size, struct proc *p, 
-        int fd);
-int reg_restore(struct proc *p, int fd);
+struct thread_info {
+	struct reg regs;
+	struct fpreg fpregs;
+	lwpid_t tid;
+};
+
+int thread_checkpoint(struct proc *p, struct thread_info *thread_info);
+int thread_restore(struct proc *p, struct thread_info *thread_info);
+
+int proc_checkpoint(struct proc *p, struct proc_info *proc_info);
+int proc_restore(struct proc *p, struct proc_info *proc_info);
 
 #endif

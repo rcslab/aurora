@@ -2,12 +2,12 @@
 
 int main()
 {
-        int i;
+	int i;
 
-        for (i = 0; /* true */; i++) {
-                printf("%d\n", i);
-                sleep(1);
-        }
-        return 0;
+	for (i = 0; /* true */; i++) {
+		printf("%d\n", i);
+		sleep(1);
+	}
+	return 0;
 }
 

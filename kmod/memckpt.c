@@ -63,7 +63,7 @@ vmspace_checkpoint(struct vmspace *vmspace, int fd)
 	 * FreeBSD code
 	 */
 	for (entry = vm_map->header.next; entry != &(vm_map->header);
-	     entry = entry->next) {
+		 entry = entry->next) {
 
 		/*
 		 * XXX: Cannot handle submaps yet, we suppose the .vm_object
@@ -241,17 +241,17 @@ vmspace_restore(struct proc *p, int fd)
 
 			vm_page_lock(page);
 			vaddr = pmap_map(NULL, page->phys_addr, page->phys_addr + PAGE_SIZE,
-                    VM_PROT_WRITE);
+					VM_PROT_WRITE);
 
 			error = fd_read((void *) vaddr, PAGE_SIZE, fd);
 			pmap_enter(&vmspace->vm_pmap, 
-                    entry_info.start + IDX_TO_OFF(poffset) - entry_info.offset,
-                    page, entry_info.protection, VM_PROT_READ, 0);
+					entry_info.start + IDX_TO_OFF(poffset) - entry_info.offset,
+					page, entry_info.protection, VM_PROT_READ, 0);
 
 			/* 
 			 * Mark page as about to be used, keeping it from paging out. 
-             * Probably doesn't do anything, but maybe... (It should be removed 
-             * after we find the bug)
+			 * Probably doesn't do anything, but maybe... (It should be removed 
+			 * after we find the bug)
 			 */
 			vm_page_activate(page);
 			vm_page_unlock(page);
@@ -270,8 +270,8 @@ vmspace_restore(struct proc *p, int fd)
 		vm_map_lock(map);
 		/* XXX What flags should be used? */
 		error = vm_map_insert(map, object, entry_info.offset, entry_info.start,
-                entry_info.end, entry_info.protection, 
-                entry_info.max_protection, MAP_COPY_ON_WRITE | MAP_PREFAULT);
+				entry_info.end, entry_info.protection, 
+				entry_info.max_protection, MAP_COPY_ON_WRITE | MAP_PREFAULT);
 	
 		vm_map_unlock(map);
 
