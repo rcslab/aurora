@@ -39,6 +39,7 @@ thread_checkpoint(struct proc *p, struct thread_info *thread_info)
 			break;
 		}
 
+		threadno++;
 	}
 
 	return error;
@@ -71,6 +72,8 @@ thread_restore(struct proc *p, struct thread_info *thread_info)
 
 		thread_unlock(td);
 		if (error) break;
+
+		threadno++;
 	}
 
 	return error;
