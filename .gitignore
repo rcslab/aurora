@@ -2,7 +2,6 @@ export_syms
 machine
 x86
 
-tests/array
 tools/hexdump/slsmm_hexdump
 tools/procdump/procdump
 tools/procrestore/procrestore

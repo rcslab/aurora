@@ -1,5 +1,3 @@
-PROG = array
-SRCS = array.c
-MAN = 
+SUBDIR = array 
 
-.include <bsd.prog.mk>
+.include <bsd.subdir.mk>

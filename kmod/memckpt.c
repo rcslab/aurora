@@ -22,6 +22,125 @@
 #include "slsmm.h"
 #include "fileio.h"
 
+/* insert a shadow object to each vm_object in a vmspace,
+ * return the list of original vm_object and vm_entry for dump
+ */
+int
+object_list_get(struct vmspace *vmspace, vm_object_t **objects,
+		struct vm_map_entry_info **entries)
+{
+	int error = 0;
+	int i = 0;
+	vm_map_t vm_map = &vmspace->vm_map;
+	vm_map_entry_t entry;
+
+	/* allocate space for vm_object list and vm_entry list */
+	*objects = malloc(vm_map->nentries*sizeof(vm_object_t), M_SLSMM, M_NOWAIT);
+	if (*objects == NULL) return ENOMEM;
+
+	*entries = malloc(vm_map->nentries*sizeof(struct vm_map_entry_info), 
+			  M_SLSMM, M_NOWAIT);
+	if (*entries == NULL) {
+		free(*objects, M_SLSMM);
+		objects = NULL;
+		return ENOMEM;
+	}
+	for (int i = 0; i < vm_map->nentries; i ++)
+		(*entries)[i].magic = random();
+
+	for (entry = vm_map->header.next, i = 0; entry != &vm_map->header; 
+	     entry = entry->next, i++) {
+		vm_pindex_t object_size;
+
+		/* grab vm_object */
+		(*objects)[i] = entry->object.vm_object;
+		if ((*objects)[i]) object_size = (*objects)[i]->size;
+		else object_size = ULONG_MAX;
+
+		/* grab vm_entry info */
+		(*entries)[i].start = entry->start;
+		(*entries)[i].end = entry->end;
+		(*entries)[i].offset = entry->offset;
+		(*entries)[i].eflags = entry->eflags;
+		(*entries)[i].protection = entry->protection;
+		(*entries)[i].max_protection = entry->max_protection;
+		(*entries)[i].size = object_size;
+
+		/* insert a shadow object */
+		vm_object_reference(entry->object.vm_object);
+		vm_object_shadow(&entry->object.vm_object, &entry->offset,
+				 entry->end-entry->start);
+		pmap_remove(vm_map->pmap, entry->start, entry->end);
+	}
+
+	return error;
+}
+
+/* give a list of objects and dump it to a given fd */
+int
+object_list_dump(struct vmspace *vmspace, vm_object_t *objects,
+		 struct vm_map_entry_info *entries, int fd) 
+{
+	int error = 0;
+	vm_map_t vm_map = &vmspace->vm_map;
+	struct vmspace_info vmspace_info = (struct vmspace_info) {
+		.vm_swrss = vmspace->vm_swrss,
+		.vm_tsize = vmspace->vm_tsize,
+		.vm_dsize = vmspace->vm_dsize,
+		.vm_ssize = vmspace->vm_ssize,
+		.vm_taddr = vmspace->vm_taddr,
+		.vm_daddr = vmspace->vm_daddr,
+		.vm_maxsaddr = vmspace->vm_maxsaddr,
+		.nentries = vm_map->nentries,
+	};
+
+	error = fd_write(&vmspace_info, sizeof(struct vmspace_info), fd);
+	if (error)
+		return error;
+
+	for (size_t i = 0; i < vm_map->nentries; i ++) {
+		vm_page_t page;
+		vm_pindex_t poffset;
+
+		if (entries->eflags & MAP_ENTRY_IS_SUB_MAP) {
+			printf("WARNING: Submap entry found, dump will be wrong\n");
+			continue;
+		}
+
+		error = fd_write(entries+i, sizeof(struct vm_map_entry_info), fd);
+		if (error)
+			return error;
+		if (objects[i] == NULL)
+			continue;
+
+		TAILQ_FOREACH(page, &objects[i]->memq, listq) {
+			if (!page) {
+				printf("ERROR: vm_page_t page is NULL");
+				continue;
+			}
+
+			error = fd_write(&page->pindex, sizeof(vm_pindex_t), fd);
+			if (error)
+				return error;
+
+            vm_offset_t vaddr = pmap_map(NULL, page->phys_addr, 
+                    page->phys_addr+PAGE_SIZE, VM_PROT_READ);
+			if (!vaddr)
+				return error;
+
+			error = fd_write((void*)vaddr, PAGE_SIZE, fd);
+			if (error)
+				return error;
+        }
+		poffset = ULONG_MAX;
+		fd_write(&poffset, sizeof(vm_pindex_t), fd);
+
+		vm_object_deallocate(objects[i]);
+	}
+
+	return error;
+}
+
 /*
  * XXX: We should check whether we dump all necessary info into the structures
  */
@@ -112,22 +231,21 @@ vmspace_checkpoint(struct vmspace *vmspace, int fd)
 
 			if (!page) {
 				printf("ERROR: vm_page_t page is NULL");
-				break;
+				continue;
 			}
 			/* The only thing we need from a page is its current virtual address */
 			error = fd_write(&page->pindex, sizeof(vm_pindex_t), fd);
 			if (error)
-				break;
+				return error;
 		
 			vaddr = pmap_map(NULL, page->phys_addr,
 				 page->phys_addr + PAGE_SIZE, VM_PROT_READ);
 
 			if (!vaddr) {
 				printf("ERROR: vaddr is NULL");
-				break;
+				return error;
 			}
 			error = fd_write((void *)vaddr, PAGE_SIZE, fd);
-
 
 			if (error)
 				break;
@@ -138,27 +256,15 @@ vmspace_checkpoint(struct vmspace *vmspace, int fd)
 		error = fd_write(&poffset, sizeof(vm_pindex_t), fd);
 	}
 	
-
 	return error;
 }
 
 int
-vmspace_restore(struct proc *p, int fd)
+vmspace_restore(struct proc *p, struct dump *dump)
 {
-	struct vmspace_info vmspace_info;
-	struct vm_map_entry_info entry_info;
-	vm_pindex_t poffset;
-
-	struct vmspace *vmspace;
-	struct vm_map *map;
-	struct vm_object *object;
-	struct vm_page *page;
-	vm_offset_t vaddr;
-
 	int error = 0;
-
-	vmspace = p->p_vmspace;
-	map = &vmspace->vm_map;
+	struct vmspace *vmspace = p->p_vmspace;
+	struct vm_map *map = &vmspace->vm_map;
 
 	/*
 	 * XXX Reading should be done all at once, before starting restore,
@@ -186,68 +292,27 @@ vmspace_restore(struct proc *p, int fd)
 	vm_map_unlock(map);
 	*/
 
-	error = fd_read(&vmspace_info, sizeof(struct vmspace_info), fd);
-	if (error)
-		return error;
-
 	/* Copy vmspace state to the existing vmspace */
-	vmspace->vm_swrss = vmspace_info.vm_swrss;
-	vmspace->vm_tsize = vmspace_info.vm_tsize;
-	vmspace->vm_dsize = vmspace_info.vm_dsize;
-	vmspace->vm_ssize = vmspace_info.vm_ssize;
-	vmspace->vm_taddr = vmspace_info.vm_taddr;
-	vmspace->vm_taddr = vmspace_info.vm_daddr;
-	vmspace->vm_maxsaddr = vmspace_info.vm_maxsaddr;
+	vmspace->vm_swrss = dump->vmspace.vm_swrss;
+	vmspace->vm_tsize = dump->vmspace.vm_tsize;
+	vmspace->vm_dsize = dump->vmspace.vm_dsize;
+	vmspace->vm_ssize = dump->vmspace.vm_ssize;
+	vmspace->vm_taddr = dump->vmspace.vm_taddr;
+	vmspace->vm_taddr = dump->vmspace.vm_daddr;
+	vmspace->vm_maxsaddr = dump->vmspace.vm_maxsaddr;
 
-	for (int i = 0; i < vmspace_info.nentries; i++) {
+	/* restore vm_map entries */
+	for (int i = 0; i < dump->vmspace.nentries; i ++) {
+		vm_page_t page;
+		if (dump->entries[i].size == ULONG_MAX) continue;
 
-		/* Read an entry, add it to the map */
-		error = fd_read(&entry_info, sizeof(struct vm_map_entry_info), fd);
-		if (error)
-			return error;
-
-		/* 
-		 * XXX If we need to create an entry that has no object, 
-		 * we skip it for now, since these entries seem to have 
-		 * size 0 anyway. There is relevant code from the kernel,
-		 * but it's part of vm_object_allocate. We could just 
-		 * allocate a vm_object of size 0 to back the entry. 
-		 */
-		if (entry_info.size == ULONG_MAX) {
-			continue;
-		}
-		
-		/* XXX Only works for anonymous objects */
-		object = vm_object_allocate(OBJT_DEFAULT, entry_info.size);
-		if (object == NULL) {
-			printf("vm_object_allocate error\n");
-			return (ENOMEM);
-		}
-
-
-		/* XXX Only we have a reference to the object, why take a lock? */
-		VM_OBJECT_WLOCK(object);
-		for (;;) {
-	 		fd_read(&poffset, sizeof(vm_pindex_t), fd);
-			/* Sentinel value, no more pages left to read */
-			if (poffset == ULONG_MAX)
-				break;
-
-			page = vm_page_alloc(object, poffset, VM_ALLOC_NORMAL);
-			if (page == NULL) {
-				printf("vm_page_alloc error\n");
-				return (ENOMEM);
-			}
-
+		VM_OBJECT_WLOCK(dump->objects[i]);
+		TAILQ_FOREACH(page, &dump->objects[i]->memq, listq) {
 			vm_page_lock(page);
-			vaddr = pmap_map(NULL, page->phys_addr, page->phys_addr + PAGE_SIZE,
-					VM_PROT_WRITE);
-
-			error = fd_read((void *) vaddr, PAGE_SIZE, fd);
-			pmap_enter(&vmspace->vm_pmap, 
-					entry_info.start + IDX_TO_OFF(poffset) - entry_info.offset,
-					page, entry_info.protection, VM_PROT_READ, 0);
-
+			vm_pindex_t va = dump->entries[i].start + IDX_TO_OFF(page->pindex) - 
+				dump->entries[i].offset;
+			pmap_enter(vmspace_pmap(vmspace), va, page, 
+					dump->entries[i].protection, VM_PROT_READ, 0);
 			/* 
 			 * Mark page as about to be used, keeping it from paging out. 
 			 * Probably doesn't do anything, but maybe... (It should be removed 
@@ -255,24 +320,14 @@ vmspace_restore(struct proc *p, int fd)
 			 */
 			vm_page_activate(page);
 			vm_page_unlock(page);
-
-			if (error) {
-				printf("fd_read data error\n");
-				VM_OBJECT_WUNLOCK(object);
-				return error;
-			}
 		}
-		VM_OBJECT_WUNLOCK(object);
+		VM_OBJECT_WUNLOCK(dump->objects[i]);
 
-
-		/* Enter the object into the map */
-		vm_object_reference(object);
 		vm_map_lock(map);
-		/* XXX What flags should be used? */
-		error = vm_map_insert(map, object, entry_info.offset, entry_info.start,
-				entry_info.end, entry_info.protection, 
-				entry_info.max_protection, MAP_COPY_ON_WRITE | MAP_PREFAULT);
-	
+		error = vm_map_insert(map, dump->objects[i], dump->entries[i].offset, 
+				dump->entries[i].start, dump->entries[i].end, 
+				dump->entries[i].protection, dump->entries[i].max_protection, 
+				MAP_COPY_ON_WRITE | MAP_PREFAULT);
 		vm_map_unlock(map);
 
 		if (error) {
@@ -280,5 +335,6 @@ vmspace_restore(struct proc *p, int fd)
 			return error;
 		}
 	}
+	
 	return error;
 }
