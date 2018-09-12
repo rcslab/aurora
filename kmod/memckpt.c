@@ -46,7 +46,7 @@ object_list_get(struct vmspace *vmspace, vm_object_t **objects,
 		return ENOMEM;
 	}
 	for (int i = 0; i < vm_map->nentries; i ++)
-		(*entries)[i].magic = random();
+		(*entries)[i].magic = SLS_ENTRY_INFO_MAGIC;
 
 	for (entry = vm_map->header.next, i = 0; entry != &vm_map->header; 
 	     entry = entry->next, i++) {
@@ -84,6 +84,7 @@ object_list_dump(struct vmspace *vmspace, vm_object_t *objects,
 	int error = 0;
 	vm_map_t vm_map = &vmspace->vm_map;
 	struct vmspace_info vmspace_info = (struct vmspace_info) {
+		.magic = SLS_VMSPACE_INFO_MAGIC,
 		.vm_swrss = vmspace->vm_swrss,
 		.vm_tsize = vmspace->vm_tsize,
 		.vm_dsize = vmspace->vm_dsize,
@@ -164,6 +165,7 @@ vmspace_checkpoint(struct vmspace *vmspace, int fd)
 	/* Dump the vmspace information, as well as the entry-node pairs */
 	vm_map = &(vmspace->vm_map);
 	vmspace_info = (struct vmspace_info) {
+		.magic = SLS_VMSPACE_INFO_MAGIC,
 		.vm_swrss = vmspace->vm_swrss,
 		.vm_tsize = vmspace->vm_tsize,
 		.vm_dsize = vmspace->vm_dsize,

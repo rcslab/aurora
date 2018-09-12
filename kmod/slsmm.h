@@ -17,12 +17,14 @@
 #include <vm/vm.h>
 #include <vm/vm_map.h>
 
+#define SLS_PROC_INFO_MAGIC 0x736c7301
 struct proc_info {
 	int magic;
 	size_t nthreads;
 	pid_t pid;
 };
 
+#define SLS_THREAD_INFO_MAGIC 0x736c7302
 struct thread_info {
 	int magic;
 	struct reg regs;
@@ -30,6 +32,7 @@ struct thread_info {
 	lwpid_t tid;
 };
 
+#define SLS_VMSPACE_INFO_MAGIC 0x736c7303
 /* State of the vmspace, but also of its vm_map */
 struct vmspace_info {
 	int magic;
@@ -48,6 +51,7 @@ struct vmspace_info {
 	 */
 };
 
+#define SLS_ENTRY_INFO_MAGIC 0x736c7304
 /* State of a vm_map_entry and its backing object */
 struct vm_map_entry_info {
 	int magic;
@@ -66,7 +70,6 @@ struct vm_map_entry_info {
 };
 
 struct dump {
-	int magic;
 	struct proc_info proc;
 	struct thread_info *threads;
 	struct vmspace_info vmspace;

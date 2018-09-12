@@ -50,14 +50,18 @@ slsmm_dump(struct proc *p, int fd, int mode)
 			t_resumed, t_flush_disk;
 
 	proc_info = malloc(sizeof(struct proc_info), M_SLSMM, M_NOWAIT);
-	proc_info->magic = random();
+	proc_info->magic = SLS_PROC_INFO_MAGIC;
 	thread_info = malloc(sizeof(struct thread_info) * p->p_numthreads, 
 			     M_SLSMM, M_NOWAIT);
-	proc_info->magic = random();
 	if (!proc_info || !thread_info) {
 		error = ENOMEM;
 		goto slsmm_dump_cleanup;
 	}
+
+	// set magic number for proc and threads
+	proc_info->magic = SLS_PROC_INFO_MAGIC;
+	for (int i = 0; i < p->p_numthreads; i++)
+		thread_info[i].magic = SLS_THREAD_INFO_MAGIC;
 
 	nanotime(&t_suspend);
 	/* suspend the process */
@@ -300,7 +304,6 @@ struct dump *alloc_dump() {
 	struct dump *dump = NULL;
 	dump = malloc(sizeof(struct dump), M_SLSMM, M_NOWAIT);
 	if (dump == NULL) return NULL;
-	dump->magic = random();
 	dump->threads = NULL;
 	dump->entries = NULL;
 	dump->objects = NULL;
@@ -321,11 +324,20 @@ load_dump(struct dump *dump, int fd)
 	int error = 0;
 	size_t size;
 
+	// cleanup
+	if (dump->threads) free(dump->threads, M_SLSMM);
+	if (dump->entries) free(dump->entries, M_SLSMM);
+	if (dump->objects) free(dump->objects, M_SLSMM);
+
 	// load proc info
 	error = fd_read(&dump->proc, sizeof(struct proc_info), fd);
 	if (error) {
 		printf("Error: cannot read proc_info\n");
 		return error;
+	}
+	if (dump->proc.magic != SLS_PROC_INFO_MAGIC) {
+		printf("Error: SLS_PROC_INFO_MAGIC not match\n");
+		return -1;
 	}
 
 	// allocate thread info
@@ -340,12 +352,21 @@ load_dump(struct dump *dump, int fd)
 		printf("Error: cannot read thread_info\n");
 		return error;
 	}
+	for (int i = 0; i < dump->proc.nthreads; i ++)
+		if (dump->threads[i].magic != SLS_THREAD_INFO_MAGIC) {
+			printf("Error: SLS_THREAD_INFO_MAGIC not match\n");
+			return -1;
+		}
 
 	// load vmspace
 	error = fd_read(&dump->vmspace, sizeof(struct vmspace_info), fd);
 	if (error) {
 		printf("Error: cannot read vmspace\n");
 		return error;
+	}
+	if (dump->vmspace.magic != SLS_VMSPACE_INFO_MAGIC) {
+		printf("Error: SLS_VMSPACE_INFO_MAGIC not match\n");
+		return -1;
 	}
 	
 	size = sizeof(struct vm_map_entry_info) * dump->vmspace.nentries;
@@ -362,6 +383,10 @@ load_dump(struct dump *dump, int fd)
 		error = fd_read(dump->entries + i, sizeof(struct vm_map_entry_info), fd);
 		if (error) 
 			return error;
+		if (dump->entries[i].magic != SLS_ENTRY_INFO_MAGIC) {
+			printf("Error: SLS_ENTRY_INFO_MAGIC not match\n");
+			return -1;
+		}
 
 		if (dump->entries[i].size == ULONG_MAX) {
 			dump->objects[i] = NULL;
@@ -487,7 +512,6 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data,
 	/* Release the hold we got when looking up the proc structure */
 	PRELE(p);
 
-	printf("Error code %d\n", error);
 	return error;
 }
 
