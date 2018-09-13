@@ -2,6 +2,12 @@ export_syms
 machine
 x86
 
+tests/array/array
+tests/compute/compute
+tests/multithread/multithread
+tests/signal/signal
+tests/sleep/sleep
+
 tools/hexdump/slsmm_hexdump
 tools/procdump/procdump
 tools/procrestore/procrestore
@@ -13,4 +19,4 @@ tools/procrestore/procrestore
 *.debug
 *.full
 *.core
-*.depend
+*.depend*
