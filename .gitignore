@@ -5,6 +5,7 @@ x86
 tests/array/array
 tests/compute/compute
 tests/multithread/multithread
+tests/register/register
 tests/signal/signal
 tests/sleep/sleep
 
