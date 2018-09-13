@@ -1,9 +1,9 @@
 #ifndef _CPUCKPT_H_
 #define _CPUCKPT_H_
 
-#include "slsmm.h"
-
 #include <sys/types.h>
+
+#include "slsmm.h"
 
 struct proc;
 struct reg;

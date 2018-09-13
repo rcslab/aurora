@@ -22,6 +22,8 @@ struct proc_info {
 	int magic;
 	size_t nthreads;
 	pid_t pid;
+	/* All fields valid except for the mutex */
+	struct sigacts sigacts;
 };
 
 #define SLS_THREAD_INFO_MAGIC 0x736c7302
@@ -30,6 +32,8 @@ struct thread_info {
 	struct reg regs;
 	struct fpreg fpregs;
 	lwpid_t tid;
+	sigset_t sigmask;
+	sigset_t oldsigmask;
 };
 
 #define SLS_VMSPACE_INFO_MAGIC 0x736c7303

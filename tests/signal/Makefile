@@ -2,7 +2,7 @@ NAME=signal
 
 PROG= $(NAME)
 SRC= $(NAME).c
-CFLAGS += -lpthread
+CFLAGS += -O0
 MAN=
 
 .include <bsd.prog.mk>

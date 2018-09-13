@@ -1,6 +1,4 @@
-#include "cpuckpt.h"
-#include "fileio.h"
-#include "_slsmm.h"
+#include <sys/types.h>
 
 #include <sys/conf.h>
 #include <sys/malloc.h>
@@ -8,7 +6,12 @@
 #include <sys/proc.h>
 #include <sys/ptrace.h>
 #include <sys/signalvar.h>
+#include <sys/sleepqueue.h>
 #include <machine/reg.h>
+
+#include "cpuckpt.h"
+#include "fileio.h"
+#include "_slsmm.h"
 
 /*
  * Get the state of all threads of the process. This function
@@ -38,6 +41,9 @@ thread_checkpoint(struct proc *p, struct thread_info *thread_info)
 			printf("CPU fpreg dump error %d\n", error);
 			break;
 		}
+
+		bcopy(&td->td_sigmask, &thread_info[threadno].sigmask, sizeof(sigset_t));
+		bcopy(&td->td_oldsigmask, &thread_info[threadno].oldsigmask, sizeof(sigset_t));
 
 		threadno++;
 	}
@@ -70,6 +76,9 @@ thread_restore(struct proc *p, struct thread_info *thread_info)
 		error = proc_write_fpregs(td, &thread_info[threadno].fpregs);
 		thread_info[threadno].tid = td->td_tid;
 
+		bcopy(&thread_info[threadno].sigmask, &td->td_sigmask, sizeof(sigset_t));
+		bcopy(&thread_info[threadno].oldsigmask, &td->td_oldsigmask, sizeof(sigset_t));
+
 		thread_unlock(td);
 		if (error) break;
 
@@ -96,6 +105,8 @@ proc_checkpoint(struct proc *p, struct proc_info *proc_info)
 	 * checkpoint, it is no use storing it.
 	 */
 
+	sigacts_copy(&proc_info->sigacts, p->p_sigacts);
+
 	return 0;
 }
 
@@ -106,6 +117,8 @@ proc_checkpoint(struct proc *p, struct proc_info *proc_info)
 int
 proc_restore(struct proc *p, struct proc_info *proc_info)
 {
+	struct sigacts *newsigacts, *oldsigacts;
+
 	/* TODO: Change PID if possible (or even feasible) */
 	/*
 	 * TODO: Change the number of threads in the process 
@@ -115,6 +128,17 @@ proc_restore(struct proc *p, struct proc_info *proc_info)
 	 * TODO: Restore file descriptors. See proc_checkpoint for thoughts
 	 * on that.
 	 */
+
+	newsigacts = sigacts_alloc();
+	/*
+	 * We bcopy the exact way it's done in sigacts_copy().
+	 */
+	bcopy(&proc_info->sigacts, newsigacts,
+			offsetof(struct sigacts, ps_refcnt));
+
+	oldsigacts = p->p_sigacts;
+	p->p_sigacts = newsigacts;
+	sigacts_free(oldsigacts);
 
 	return 0;
 }
