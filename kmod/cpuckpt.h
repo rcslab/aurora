@@ -9,10 +9,7 @@ struct proc;
 struct reg;
 struct fpreg;
 
-int thread_checkpoint(struct proc *p, struct thread_info *thread_info);
-int thread_restore(struct proc *p, struct thread_info *thread_info);
-
-int proc_checkpoint(struct proc *p, struct proc_info *proc_info);
-int proc_restore(struct proc *p, struct proc_info *proc_info);
+int proc_checkpoint(struct proc *p, struct proc_info *proc_info, struct thread_info *thread_infos);
+int proc_restore(struct proc *p, struct proc_info *proc_info, struct thread_info *thread_infos);
 
 #endif

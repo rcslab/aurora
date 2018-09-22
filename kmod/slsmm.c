@@ -40,20 +40,24 @@ static int
 slsmm_dump(struct proc *p, int fd, int mode)
 {
 	int error = 0;
+	int j = 0;
 	struct proc_info *proc_info = NULL;
-	struct thread_info *thread_info = NULL;
+	struct thread_info *thread_infos = NULL;
 	struct vm_map_entry_info *entries = NULL;
-	struct vmspace *vmspace_copy = NULL;
+	vm_map_t vm_map = &p->p_vmspace->vm_map;
 	vm_object_t *objects = NULL;
-	vm_ooffset_t unused;
-	struct timespec t_suspend, t_thread_ckpt, t_proc_ckpt, t_vmspace, 
+	struct timespec t_suspend, t_suspend_complete, t_proc_ckpt, t_vmspace, 
 			t_resumed, t_flush_disk;
 
 	proc_info = malloc(sizeof(struct proc_info), M_SLSMM, M_NOWAIT);
 	proc_info->magic = SLS_PROC_INFO_MAGIC;
-	thread_info = malloc(sizeof(struct thread_info) * p->p_numthreads, 
+	thread_infos = malloc(sizeof(struct thread_info) * p->p_numthreads, 
 			     M_SLSMM, M_NOWAIT);
-	if (!proc_info || !thread_info) {
+	objects = malloc(sizeof(vm_object_t) * vm_map->nentries, M_SLSMM, M_NOWAIT);
+	entries = malloc(sizeof(struct vm_map_entry_info) * vm_map->nentries, 
+			M_SLSMM, M_NOWAIT);
+
+	if (!proc_info || !thread_infos || !objects || !entries) {
 		error = ENOMEM;
 		goto slsmm_dump_cleanup;
 	}
@@ -61,46 +65,29 @@ slsmm_dump(struct proc *p, int fd, int mode)
 	// set magic number for proc and threads
 	proc_info->magic = SLS_PROC_INFO_MAGIC;
 	for (int i = 0; i < p->p_numthreads; i++)
-		thread_info[i].magic = SLS_THREAD_INFO_MAGIC;
+		thread_infos[i].magic = SLS_THREAD_INFO_MAGIC;
 
 	nanotime(&t_suspend);
 	/* suspend the process */
 	PROC_LOCK(p);
 	kern_psignal(p, SIGSTOP);
 
+	nanotime(&t_suspend_complete);
+
 	/* Dump the process states */
-	error = proc_checkpoint(p, proc_info);
+	error = proc_checkpoint(p, proc_info, thread_infos);
 	if (error) {
 		printf("Error: proc_checkpoint failed with error code %d\n", error);
 		goto slsmm_dump_cleanup;
 	}
 	nanotime(&t_proc_ckpt);
 
-	/* Dump the thread states */
-	error = thread_checkpoint(p, thread_info);
-	if (error) {
-		printf("Error: reg_checkpoint failed with error code %d\n", error);
-		goto slsmm_dump_cleanup;
-	}
-	nanotime(&t_thread_ckpt);
 
 	/* prepare the vmspace for dump */
-	switch (mode) {
-		case SLSMM_CKPT_FULL:
-			vmspace_copy = vmspace_fork(p->p_vmspace, &unused);
-			if (!vmspace_copy) {
-				printf("Error: vmspace_fork failed\n");
-				goto slsmm_dump_cleanup;
-			}
-			break;
-
-		case SLSMM_CKPT_DELTA:
-			error = object_list_get(p->p_vmspace, &objects, &entries); 
-			if (error) {
-				printf("Error: failed to insert shadow object %d\n", error);
-				goto slsmm_dump_cleanup;
-			}
-			break;
+	error = vmspace_checkpoint(p->p_vmspace, objects, entries, mode); 
+	if (error) {
+		printf("Error: vmspace_checkpoint failed with error code %d\n", error);
+		goto slsmm_dump_cleanup;
 	}
 	nanotime(&t_vmspace);
 
@@ -110,27 +97,20 @@ slsmm_dump(struct proc *p, int fd, int mode)
 	nanotime(&t_resumed);
 
 	fd_write(proc_info, sizeof(struct proc_info), fd);
-	fd_write(thread_info, sizeof(struct thread_info) * p->p_numthreads, fd);
+	fd_write(thread_infos, sizeof(struct thread_info) * p->p_numthreads, fd);
 
-	switch (mode) {
-		case SLSMM_CKPT_FULL:
-			error = vmspace_checkpoint(vmspace_copy, fd);
-			break;
-
-		case SLSMM_CKPT_DELTA:
-			error = object_list_dump(p->p_vmspace, objects, entries, fd);
-			break;
-	}
-
+	error = vmspace_dump(p->p_vmspace, objects, entries, fd, mode);
 	if (error) {
-		printf("Error: failed to write disk %d\n", error);
+		printf("Error: vmspace_dump failed with error code %d\n", error);
 		goto slsmm_dump_cleanup;
 	}
 	nanotime(&t_flush_disk);
 
-	uprintf("proc_ckpt	%ldns\n", t_proc_ckpt.tv_nsec-t_suspend.tv_nsec);
-	uprintf("thread_ckpt	%ldns\n", t_thread_ckpt.tv_nsec-t_proc_ckpt.tv_nsec);
-	uprintf("vmspace		%ldns\n", t_vmspace.tv_nsec-t_thread_ckpt.tv_nsec);
+
+	uprintf("j %d\n", j);
+	uprintf("suspend %ldns\n", t_suspend_complete.tv_nsec-t_suspend.tv_nsec);
+	uprintf("proc_ckpt	%ldns\n", t_proc_ckpt.tv_nsec-t_suspend_complete.tv_nsec);
+	uprintf("vmspace		%ldns\n", t_vmspace.tv_nsec-t_proc_ckpt.tv_nsec);
 	uprintf("total_suspend	%ldns\n", t_resumed.tv_nsec-t_suspend.tv_nsec); 
 	uprintf("flush_disk	%ldns\n", t_flush_disk.tv_nsec-t_resumed.tv_nsec);
 
@@ -138,7 +118,7 @@ slsmm_dump_cleanup:
 	if (objects) free(objects, M_SLSMM);
 	if (entries) free(entries, M_SLSMM);
 	if (proc_info) free(proc_info, M_SLSMM);
-	if (thread_info) free(thread_info, M_SLSMM);
+	if (thread_infos) free(thread_infos, M_SLSMM);
 
 	return error;
 }
@@ -271,13 +251,7 @@ slsmm_restore(struct proc *p, int nfds, int *fds)
 	PROC_LOCK(p);
 	kern_psignal(p, SIGSTOP);
 
-	error = proc_restore(p, &dump->proc);
-	if (error) {
-		printf("Error: reg_restore failed with error code %d\n", error);
-		goto slsmm_restore_cleanup;
-	}
-
-	error = thread_restore(p, dump->threads);
+	error = proc_restore(p, &dump->proc, dump->threads);
 	if (error) {
 		printf("Error: reg_restore failed with error code %d\n", error);
 		goto slsmm_restore_cleanup;
@@ -459,7 +433,10 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data,
 			 */
 			/*
 			 * XXX Is holding appropriate here? Is it done correctly? 
-			 * It brings the stack into memory, 
+			 * There _is_ a pfind() that just gets us the struct proc,
+			 * after all.
+			 *
+			 * This call brings the stack into memory, 
 			 * but what about swapped out pages? 
 			 */
 			/*

@@ -71,11 +71,11 @@ void *thread_func(void *data)
 {
 
 	for (;;) {
-		//pthread_mutex_lock(&mutex);
+		pthread_mutex_lock(&mutex);
 		payload(COMPUTE, data);
 		payload(PRINT, data);
-		//pthread_mutex_unlock(&mutex);
-		//payload(COMPUTE, data);
+		pthread_mutex_unlock(&mutex);
+		payload(COMPUTE, data);
 	}
 
 	pthread_exit(NULL);

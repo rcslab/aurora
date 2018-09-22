@@ -11,6 +11,7 @@
 #include <sys/shm.h>
 
 #include <machine/param.h>
+#include <machine/pcb.h>
 #include <machine/reg.h>
 
 #include <vm/pmap.h>
@@ -34,6 +35,7 @@ struct thread_info {
 	lwpid_t tid;
 	sigset_t sigmask;
 	sigset_t oldsigmask;
+	uint64_t fs_base;
 };
 
 #define SLS_VMSPACE_INFO_MAGIC 0x736c7303

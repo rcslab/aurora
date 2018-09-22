@@ -2,6 +2,7 @@
 #include <stdlib.h>
 
 #include <signal.h>
+#include <machine/sysarch.h>
 
 #define CYCLES (1000 * 1000 * 1000)
 void handle_sigusr(int signal)
@@ -11,9 +12,9 @@ void handle_sigusr(int signal)
 
 int main()
 {
-
 	struct sigaction sa;
 	int i;
+	void *addr;
 
 	sa.sa_handler = handle_sigusr;
 	sa.sa_flags = SA_RESTART;
@@ -32,6 +33,8 @@ int main()
 			;
 
 		printf("Program still here.\n");
+		amd64_get_fsbase(&addr);
+		printf("Userspace pointer: %p\n", addr);
 	}
 
 	return 0;

@@ -21,6 +21,7 @@ int main()
 	*/
 
 	int i;
+	uint16_t fs;
 	
 	for (;;) {
 		rax = rbx = rcx = rdx = 0;
@@ -32,7 +33,12 @@ int main()
 			rdx += 4;
 		}
 
+		asm volatile ("mov %%fs, %0\n\t"
+			      : "=r" (fs)
+		);
 
+
+		printf("fs %u\n", fs);
 		printf("rax %lu\trbx %lu\trax %lu\trdx %lu\t\n", rax, rbx, rcx, rdx);
 		/*
 		printf("cs %d\tds %d\tes %d\tfs %d\tgs %d\tss %d\t\n", cs, ds, es, fs, gs, ss);
