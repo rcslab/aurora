@@ -18,6 +18,8 @@
 #include <vm/vm.h>
 #include <vm/vm_map.h>
 
+#include "hash.h"
+
 #define SLS_PROC_INFO_MAGIC 0x736c7301
 struct proc_info {
 	int magic;
@@ -71,6 +73,12 @@ struct vm_map_entry_info {
 	/* XXX: Obey inheritance values */
 	/* vm_inherit_t inheritance; */
 	/* State of the object*/
+	/*
+	 * What _exactly_ is this? Can't we use the 
+	 * map entry's bounds? I suspect this size
+	 * has to do with the number of resident
+	 * pages, in which case it's wrong wrong wrong
+	 */
 	vm_pindex_t size;
 	/* XXX Bookkeeping for swapped out pages? */
 };
@@ -80,6 +88,7 @@ struct dump {
 	struct thread_info *threads;
 	struct vmspace_info vmspace;
 	struct vm_map_entry_info *entries;
+	/* Not really dumped, used to access the pages */
 	vm_object_t *objects;
 };
 
@@ -96,6 +105,12 @@ struct restore_param {
 
 int load_dumps(struct dump *dump, int nfds, int *fds);
 int load_dump(struct dump *dump, int fd);
+
+struct dump *compose_dump(int nfds, int *fds);
+
+int dump_clone(struct dump *dst, struct dump *src);
+int copy_dump_pages(struct dump *dst, struct dump *src);
+
 struct dump *alloc_dump(void);
 void free_dump(struct dump *dump);
 

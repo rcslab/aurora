@@ -47,6 +47,7 @@ thread_checkpoint(struct thread *td, struct thread_info *thread_info)
 
 	thread_info->tid = td->td_tid;
 	thread_info->fs_base = td->td_pcb->pcb_fsbase;
+	thread_info->magic = SLS_THREAD_INFO_MAGIC;
 
 	return error;
 }
@@ -92,6 +93,7 @@ proc_checkpoint(struct proc *p, struct proc_info *proc_info, struct thread_info 
 
 	proc_info->nthreads = p->p_numthreads;
 	proc_info->pid = p->p_pid;
+	proc_info->magic = SLS_PROC_INFO_MAGIC;
 
 	/*
 	 * TODO: Checkpoint file descriptors. Maybe check if a
@@ -113,17 +115,6 @@ proc_checkpoint(struct proc *p, struct proc_info *proc_info, struct thread_info 
 	return 0;
 }
 
-
-/*
- * No need to initialize the thread in proc_restore(), we are going to do that
- * in thread_restore() with actual data. This function is used as a no-op
- * in thread_create() below.
- */
-static int 
-initialize_thread_noop(struct thread *td, void *thunk)
-{
-	return 0;
-}
 
 /*
  * Set the process state, including file descriptors, sockets, and metadata

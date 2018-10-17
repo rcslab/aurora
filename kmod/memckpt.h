@@ -9,10 +9,11 @@ struct vmspace;
 struct thread;
 struct proc;
 
-int vmspace_checkpoint(struct vmspace *vms, vm_object_t *objects,
-		    struct vm_map_entry_info *entries, int mode);
-int vmspace_dump(struct vmspace *vmspace, vm_object_t *objects,
-		     struct vm_map_entry_info *entries, int fd, int mode);
+vm_offset_t userpage_map(vm_paddr_t phys_addr);
+void userpage_unmap(vm_offset_t vaddr);
+
+int vmspace_checkpoint(struct vmspace *vms, struct dump *dump, long mode);
+int vmspace_dump(struct dump *dump, int fd, long mode);
 int vmspace_restore(struct proc *p, struct dump *dump);
 
 #endif

@@ -20,6 +20,7 @@ int main() {
 			 * out the loop
 			 */
 			bogus = (bogus * BOGUS_CONSTANT) % 10;
+		printf("%d %lld\n", bogus, i);
 	}
 
 	return 0;

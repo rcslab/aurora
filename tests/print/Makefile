@@ -1,4 +1,4 @@
-NAME=compute
+NAME=print
 
 PROG= $(NAME)
 SRC= $(NAME).c
