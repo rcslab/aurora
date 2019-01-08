@@ -1,9 +1,10 @@
 #include "_slsmm.h"
 #include "cpuckpt.h"
-#include "memckpt.h"
-#include "slsmm.h"
+#include "dump.h"
 #include "fileio.h"
 #include "hash.h"
+#include "memckpt.h"
+#include "slsmm.h"
 
 #include <sys/types.h>
 
@@ -41,21 +42,28 @@ struct dump *alloc_dump() {
 	dump = malloc(sizeof(struct dump), M_SLSMM, M_NOWAIT);
 	if (dump == NULL) return NULL;
 	dump->threads = NULL;
-	dump->entries = NULL;
-	/* NOTE: The objects are _never_ used as actual objects, they
-	 * are only here to pass information around and will be removed
-	 * from the dump in the future. That's why we're using malloc
-	 * instead of their actual constructor.
-	 */
-	dump->objects = NULL;
+	dump->memory.entries = NULL;
+
 	return dump;
 }
 
 void free_dump(struct dump *dump) {
+	struct vm_map_entry_info *entries;
+	char *filename;
+	int i;
+
 	if (!dump) return;
 	if (dump->threads) free(dump->threads, M_SLSMM);
-	if (dump->entries) free(dump->entries, M_SLSMM);
-	if (dump->objects) free(dump->objects, M_SLSMM);
+
+	entries = dump->memory.entries;
+	if (entries) {
+		for (i = 0; i < dump->memory.vmspace.nentries; i++) {
+			filename = dump->memory.entries[i].filename;
+			if (filename)
+				free(filename, M_SLSMM);
+		}
+		free(entries, M_SLSMM);
+	}
 	free(dump, M_SLSMM);
 }
 
@@ -69,6 +77,7 @@ load_dump(struct dump *dump, int fd)
 	struct dump_page *page_entry, *new_entry; 
 	struct page_tailq *page_bucket;
 	int already_there;
+	struct vm_map_entry_info *cur_entry;
 
 
 	// load proc info
@@ -101,39 +110,50 @@ load_dump(struct dump *dump, int fd)
 		}
 
 	// load vmspace
-	error = fd_read(&dump->vmspace, sizeof(struct vmspace_info), fd);
+	error = fd_read(&dump->memory.vmspace, sizeof(struct vmspace_info), fd);
 	if (error) {
 		printf("Error: cannot read vmspace\n");
 		return error;
 	}
-	if (dump->vmspace.magic != SLS_VMSPACE_INFO_MAGIC) {
+	if (dump->memory.vmspace.magic != SLS_VMSPACE_INFO_MAGIC) {
 		printf("Error: SLS_VMSPACE_INFO_MAGIC not match\n");
 		return -1;
 	}
 	
-	size = sizeof(struct vm_map_entry_info) * dump->vmspace.nentries;
-	dump->entries = malloc(size, M_SLSMM, M_NOWAIT);
-	if (!dump->entries) {
+	size = sizeof(struct vm_map_entry_info) * dump->memory.vmspace.nentries;
+	dump->memory.entries = malloc(size, M_SLSMM, M_NOWAIT);
+	if (!dump->memory.entries) {
 		printf("Error: cannot allocate entries\n");
 		return ENOMEM;
 	}
 
 
-	for (int i = 0; i < dump->vmspace.nentries; i++) {
+	for (int i = 0; i < dump->memory.vmspace.nentries; i++) {
+		cur_entry = &dump->memory.entries[i];
 
-		error = fd_read(&dump->entries[i], sizeof(struct vm_map_entry_info), fd);
+		error = fd_read(cur_entry, sizeof(struct vm_map_entry_info), fd);
 		if (error) 
 			return error;
 
-		if (dump->entries[i].magic != SLS_ENTRY_INFO_MAGIC) {
+		if (cur_entry->magic != SLS_ENTRY_INFO_MAGIC) {
 			printf("Error: SLS_ENTRY_INFO_MAGIC not match\n");
 			return -1;
 		}
 
-		if (dump->entries[i].size == ULONG_MAX) {
+		if (cur_entry->size == ULONG_MAX) {
 			continue;
 		}
 
+		cur_entry->filename = malloc(cur_entry->filename_len, M_SLSMM, M_NOWAIT);
+		/* XXX Clean up in an orderly fashion */
+		if(cur_entry->filename_len && !cur_entry->filename) {
+			printf("Error: Allocation for file name failed\n");
+		}
+
+
+		error = fd_read(cur_entry->filename, cur_entry->filename_len, fd);
+		if (error)
+			return error;
 
 		for (;;) {
 
@@ -150,18 +170,27 @@ load_dump(struct dump *dump, int fd)
 			new_entry = malloc(sizeof(*page_entry), M_SLSMM, M_NOWAIT);
 			hashpage = malloc(PAGE_SIZE, M_SLSMM, M_NOWAIT);
 
-			/* Too lazy for proper handling (jk please remind me if this gets left in)  */
-			KASSERT(hashpage & new_entry, "hashpage non-null");
+			if (!(hashpage && new_entry)) {
+				printf("Error: Allocations failed\n");
+				free(new_entry, M_SLSMM);
+				free(hashpage, M_SLSMM);
+				return -ENOMEM;
+			}
 
 			new_entry->vaddr = vaddr;
-			new_entry->data =  hashpage;
+			new_entry->data = hashpage;
 			error = fd_read(hashpage, PAGE_SIZE, fd);
-			/* Put some error handling here FFS (to no one in particular) */
+			if (error) {
+				printf("Error: reading data failed\n");
+				free(new_entry, M_SLSMM);
+				free(hashpage, M_SLSMM);
+				return error;
+			}
 
 			/* 
 			 * Add the new page to the hash table, if it already  
 			 * exists there don't replace it (we suppose we are
-			 * calling load_dump() from the freshest dump to the 
+			 * calling load_dump() from the most recent dump to the 
 			 * oldest).
 			 */
 			page_bucket = &slspages[vaddr & hashmask];
@@ -238,4 +267,101 @@ error:
 	free_dump(currdump);
 
 	return NULL;
+}
+
+/* give a list of objects and dump it to a given fd */
+int
+vmspace_dump(struct dump *dump, int fd, vm_object_t *objects, long mode) 
+{
+	vm_page_t page;
+	vm_pindex_t poffset;
+	vm_offset_t vaddr, vaddr_data;
+	struct vm_map_entry_info *entries, *cur_entry; 
+	int error = 0;
+	int i;
+
+	/* Shorthands */
+	entries = dump->memory.entries;
+
+	error = fd_write(&dump->memory.vmspace, sizeof(struct vmspace_info), fd);
+	if (error)
+		return error;
+
+	for (i = 0; i < dump->memory.vmspace.nentries; i++) {
+
+		cur_entry = &entries[i];
+
+		if (entries->eflags & MAP_ENTRY_IS_SUB_MAP) {
+			printf("WARNING: Submap entry found, dump will be wrong\n");
+			continue;
+		}
+
+
+		error = fd_write(cur_entry, sizeof(struct vm_map_entry_info), fd);
+		if (error)
+			return error;
+
+
+		if (objects[i] == NULL) 
+			continue;
+
+		
+		if (cur_entry->filename) {
+			error = fd_write(cur_entry->filename, cur_entry->filename_len, fd);
+			if (error) {
+				printf("Error: Could not write filename\n");
+				return error;
+			}
+		}
+
+		TAILQ_FOREACH(page, &objects[i]->memq, listq) {
+			/*
+			 * XXX Does this check make sense? We _are_ getting pages
+			 * from a valid object, after all, why would it have NULL
+			 * pointers in its list?
+			 */
+			if (!page) {
+				printf("ERROR: vm_page_t page is NULL");
+				continue;
+			}
+
+			/* 
+			 * Map the page to the address space, and save a virtual address - 
+			 * data pair to disk.
+			 */
+			vaddr_data = IDX_TO_VADDR(page->pindex, cur_entry->start, cur_entry->offset);
+			error = fd_write(&vaddr_data, sizeof(vm_offset_t), fd);
+			if (error)
+				return error;
+
+			/* Never fails on amd64, check is here for futureproofing */
+			vaddr = userpage_map(page->phys_addr);
+			if (!vaddr) {
+				printf("Mapping page failed\n");
+				/* EINVAL seems the most appropriate */
+				error = -EINVAL;
+				return error;
+			}
+
+			error = fd_write((void*) vaddr, PAGE_SIZE, fd);
+			if (error)
+				return error;
+
+			userpage_unmap(vaddr);
+
+        	}
+
+		/* Sentinel value that denotes there are no more pages */
+		poffset = ULONG_MAX;
+		error = fd_write(&poffset, sizeof(vm_offset_t), fd);
+		if (error)
+			return error;
+
+		/* For delta dumps, deallocate the object to collapse the chain again. */
+		if (mode == DELTA_DUMP) {
+			vm_object_deallocate(objects[i]);
+		}
+	}
+
+	return 0;
 }

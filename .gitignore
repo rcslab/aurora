@@ -4,6 +4,7 @@ x86
 
 tests/array/array
 tests/compute/compute
+tests/mmap/mmap
 tests/multithread/multithread
 tests/print/print
 tests/register/register

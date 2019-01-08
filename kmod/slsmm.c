@@ -1,5 +1,6 @@
 #include "_slsmm.h"
 #include "cpuckpt.h"
+#include "dump.h"
 #include "memckpt.h"
 #include "slsmm.h"
 #include "fileio.h"
@@ -46,8 +47,8 @@ slsmm_dump(struct proc *p, int fd, int mode)
 	struct thread_info *thread_infos = NULL;
 	struct vm_map_entry_info *entries = NULL;
 	struct dump *dump;
+	vm_object_t *objects;
 	vm_map_t vm_map = &p->p_vmspace->vm_map;
-	vm_object_t *objects = NULL;
 	struct timespec t_suspend, t_suspend_complete, t_proc_ckpt, t_vmspace, 
 			t_resumed, t_flush_disk;
 
@@ -63,13 +64,13 @@ slsmm_dump(struct proc *p, int fd, int mode)
 
 	thread_infos = malloc(sizeof(struct thread_info) * p->p_numthreads, 
 			     M_SLSMM, M_NOWAIT);
-	objects = malloc(sizeof(vm_object_t) * vm_map->nentries, M_SLSMM, M_NOWAIT);
 	entries = malloc(sizeof(struct vm_map_entry_info) * vm_map->nentries, 
+			M_SLSMM, M_NOWAIT);
+	objects = malloc(sizeof(vm_object_t) * vm_map->nentries, 
 			M_SLSMM, M_NOWAIT);
 
 	dump->threads = thread_infos;
-	dump->entries = entries;
-	dump->objects = objects;
+	dump->memory.entries = entries;
 
 	if (!thread_infos || !objects || !entries) {
 		error = ENOMEM;
@@ -78,9 +79,18 @@ slsmm_dump(struct proc *p, int fd, int mode)
 
 	nanotime(&t_suspend);
 
+	/* 
+	 * Send the signal before locking, otherwise
+	 * the thread state flags don't get updated.
+	 *
+	 * This causes the process to get detached from
+	 * its terminal, unfortunately. We can solve this
+	 * by using a different kind of STOP (e.g. breakpoint).
+	 */
+	kern_psignal(p, SIGSTOP);
+
 	/* Suspend the process */
 	PROC_LOCK(p);
-	kern_psignal(p, SIGSTOP);
 
 	nanotime(&t_suspend_complete);
 
@@ -94,22 +104,33 @@ slsmm_dump(struct proc *p, int fd, int mode)
 
 
 	/* Prepare the vmspace for dump */
-	error = vmspace_checkpoint(p->p_vmspace, dump, mode); 
+	error = vmspace_checkpoint(p->p_vmspace, &dump->memory, objects, mode); 
 	if (error) {
 		printf("Error: vmspace_checkpoint failed with error code %d\n", error);
 		goto slsmm_dump_cleanup;
 	}
 	nanotime(&t_vmspace);
 
-	/* Unlock the process ASAP to let it execute */
-	kern_psignal(p, SIGCONT);
 	PROC_UNLOCK(p);
+
+	/* Let the process execute ASAP */
+	kern_psignal(p, SIGCONT);
+
 	nanotime(&t_resumed);
 
-	fd_write(&dump->proc, sizeof(struct proc_info), fd);
-	fd_write(thread_infos, sizeof(struct thread_info) * p->p_numthreads, fd);
+	error = fd_write(&dump->proc, sizeof(struct proc_info), fd);
+	if (error) {
+		printf("Error: Writing process info dump failed with code %d\n", error);
+		goto slsmm_dump_cleanup;
+	}
 
-	error = vmspace_dump(dump, fd, mode);
+	error = fd_write(thread_infos, sizeof(struct thread_info) * p->p_numthreads, fd);
+	if (error) {
+		printf("Error: Writing thread info dump failed with code %d\n", error);
+		goto slsmm_dump_cleanup;
+	}
+
+	error = vmspace_dump(dump, fd, objects, mode);
 	if (error) {
 		printf("Error: vmspace_dump failed with error code %d\n", error);
 		goto slsmm_dump_cleanup;
@@ -124,6 +145,7 @@ slsmm_dump(struct proc *p, int fd, int mode)
 	uprintf("flush_disk	%ldns\n", t_flush_disk.tv_nsec-t_resumed.tv_nsec);
 
 slsmm_dump_cleanup:
+	free(objects, M_SLSMM);
 	free_dump(dump);
 
 	return error;
@@ -138,34 +160,38 @@ slsmm_restore(struct proc *p, int nfds, int *fds)
 
 	error = setup_hashtable();
 	if (error)
-		goto error;
+		goto slsmm_restore_cleanup;
 
 	dump = compose_dump(nfds, fds);
 	if (!dump)
 		return -1;
 
-	PROC_LOCK(p);
+	/* 
+	 * Send the signal before locking, otherwise
+	 * the thread state flags don't get updated.
+	 */
 	kern_psignal(p, SIGSTOP);
 
+	PROC_LOCK(p);
 	error = proc_restore(p, &dump->proc, dump->threads);
 	if (error) {
 		printf("Error: reg_restore failed with error code %d\n", error);
-		goto error;
+		goto slsmm_restore_cleanup;
 	}
 
-	error = vmspace_restore(p, dump);
+	error = vmspace_restore(p, &dump->memory);
 	if (error) {
 		printf("Error: vmspace_restore failed with error code %d\n", error);
-		goto error;
+		goto slsmm_restore_cleanup;
 	}
 
+	PROC_UNLOCK(p);
 	kern_psignal(p, SIGCONT);
 
-	PROC_UNLOCK(p);
 
 	free_dump(dump);
 	cleanup_hashtable();
-error:
+slsmm_restore_cleanup:
 
 	return error;
 }
@@ -215,8 +241,11 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data,
 	 */
 	switch (cmd) {
 		case FULL_DUMP:
-		case DELTA_DUMP:
 			error = slsmm_dump(p, dparam->fd, SLSMM_CKPT_FULL);
+			break;
+
+		case DELTA_DUMP:
+			error = slsmm_dump(p, dparam->fd, SLSMM_CKPT_DELTA);
 			break;
 
 		case SLSMM_RESTORE:

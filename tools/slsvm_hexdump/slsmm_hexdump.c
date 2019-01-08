@@ -21,8 +21,7 @@ struct hexdump {
 	int idx;
 	struct proc_info *proc_info;
 	struct thread_info *thread_info;
-	struct vmspace_info *vmspace_info;
-	struct entry *entries;
+	struct memckpt_info *memckpt_info;
 	struct hexdump *prev, *next;
 };
 

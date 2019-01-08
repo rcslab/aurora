@@ -1,10 +1,16 @@
-#include <sys/types.h>
+#include <sys/param.h>
 
+#include <machine/param.h>
+
+#include <sys/fcntl.h>
 #include <sys/limits.h>
+#include <sys/mman.h>
+#include <sys/namei.h>
 #include <sys/param.h>
 #include <sys/proc.h>
 #include <sys/rwlock.h>
 #include <sys/shm.h>
+#include <sys/vnode.h>
 
 #include <vm/pmap.h>
 #include <vm/vm.h>
@@ -15,23 +21,12 @@
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
-#include <machine/param.h>
 
 #include "memckpt.h"
 #include "_slsmm.h"
 #include "slsmm.h"
 #include "fileio.h"
 
-/*
- * XXX Small function or define for these two? I went with 
- * define because the operation is simple enough, and
- * so that we are free to use an uppercase name that 
- * denotes a simple calculation.
- */
-#define IDX_TO_VADDR(idx, entry_start, entry_offset) \
-	(IDX_TO_OFF(idx) + entry_start - entry_offset)
-#define VADDR_TO_IDX(vaddr, entry_start, entry_offset) \
-	(OFF_TO_IDX(vaddr - entry_start + entry_offset))
 
 /* Map a user memory area to kernelspace. */
 vm_offset_t
@@ -53,19 +48,23 @@ userpage_unmap(vm_offset_t vaddr)
  * return the list of original vm_object and vm_entry for dump
  */
 int
-vmspace_checkpoint(struct vmspace *vmspace, struct dump *dump, long mode)
+vmspace_checkpoint(struct vmspace *vmspace, struct memckpt_info *dump, vm_object_t *objects, long mode)
 {
 	vm_map_t vm_map; 
 	struct vm_map_entry *entry;
-	vm_object_t *objects; 
 	struct vm_map_entry_info *entries; 
-	vm_pindex_t object_size;
+	struct vm_map_entry_info *cur_entry;
+	char *freebuf = NULL, *filepath;
+	char *retbuf = "error";
+	size_t filepath_len;
+	struct vnode *vp;
+	vm_object_t obj;
 	int error = 0;
 	int i; 
 
 
 	/* Shorthands */
-	objects = dump->objects;
+
 	entries = dump->entries;
 	vm_map = &vmspace->vm_map;
 
@@ -84,25 +83,111 @@ vmspace_checkpoint(struct vmspace *vmspace, struct dump *dump, long mode)
 	for (entry = vm_map->header.next, i = 0; entry != &vm_map->header; 
 	     entry = entry->next, i++) {
 
+		cur_entry = &entries[i];
+		cur_entry->magic = SLS_ENTRY_INFO_MAGIC;
+
 		/* 
-		 * Grab vm_object. If the entry is unbacked, write a sentinel
-		 * value in the object_size field.
+		 * Grab vm_object. Write sentinel values in the fields
+		 * related to the object associated with the entry, to be
+		 * overwritten with valid data if such an object exists;
 		 */
-		objects[i] = entry->object.vm_object;
-		if (objects[i]) 
-			object_size = objects[i]->size;
-		else 
-			object_size = ULONG_MAX;
 
 		/* Grab vm_entry info. */
-		entries[i].start = entry->start;
-		entries[i].end = entry->end;
-		entries[i].offset = entry->offset;
-		entries[i].eflags = entry->eflags;
-		entries[i].protection = entry->protection;
-		entries[i].max_protection = entry->max_protection;
-		entries[i].size = object_size;
-		entries[i].magic = SLS_ENTRY_INFO_MAGIC;
+		cur_entry->start = entry->start;
+		cur_entry->end = entry->end;
+		cur_entry->offset = entry->offset;
+		cur_entry->eflags = entry->eflags;
+		cur_entry->protection = entry->protection;
+		cur_entry->max_protection = entry->max_protection;
+
+		/* 
+		 * Sentinel values, will be overwritten for entries 
+		 * that are backed by objects.
+		 */
+		cur_entry->size = ULONG_MAX;
+		cur_entry->file_offset = ULONG_MAX;
+		cur_entry->type = OBJT_DEAD;
+
+		cur_entry->file_offset = 0;
+		cur_entry->filename_len = 0;
+		cur_entry->filename = NULL;
+
+		cur_entry->is_shadow = false;
+		cur_entry->backing_offset = 0;
+		cur_entry->backing_object =  NULL;
+		cur_entry->current_object =  NULL;
+
+
+		obj = objects[i] = entry->object.vm_object;
+		if (obj) {
+			/* XXX Shadow hack */
+			cur_entry->current_object = obj;
+
+			cur_entry->size = obj->size;
+			cur_entry->type= obj->type;
+
+			/*
+			 * Used for mmap'd files - we are using the filename
+			 * to find out how to map.
+			 */
+			if (cur_entry->type == OBJT_VNODE) {
+				/* 
+				 * Get the filename. Fun fact: The .handle field in the 
+				 * vm_object is actually the backing vnode for OBJT_VNODE 
+				 */
+				vp = (struct vnode *) obj->handle;
+				
+				/* XXX Verify this is enough */
+				/*
+				 * XXX We are passing the current thread to the cache lookup
+				 * function, not the one being checkpointed. 
+				 * This makes sense because we want to use its own credentials.
+				 * We have to make sure that security checks are the only
+				 * reason we need the thread.
+				 */
+
+				/* XXX Move allocation to dump.c */ 
+				filepath = malloc(PATH_MAX, M_SLSMM, M_NOWAIT);
+				if (!filepath) {
+					error = ENOMEM;
+					goto out;
+				}
+
+				error = vn_fullpath(curthread, vp, &retbuf, &freebuf);
+				if (error) {
+					printf("vn_path_to_global_path: error %d\n", error);	
+					free(filepath, M_SLSMM);
+					goto out;
+				}
+
+				filepath_len = strnlen(retbuf, PATH_MAX);
+				strncpy(filepath, retbuf, filepath_len);
+				filepath[filepath_len++] = '\0';
+
+
+				/* Allocation done in vn_fullpath() */
+				free(freebuf, M_TEMP);
+
+
+				/* FIXME Probably wrong, offset is probably in the object */
+				cur_entry->file_offset = 0;
+
+				
+				cur_entry->filename_len = filepath_len;
+				cur_entry->filename = filepath;
+			} else if (obj->backing_object != NULL) {
+				/* Always OBJT_DEFAULT (look at vm_object_shadow())*/
+
+				cur_entry->is_shadow = true;
+				cur_entry->backing_offset = 
+					obj->backing_object_offset;
+				cur_entry->backing_object = obj->backing_object;
+
+			}
+
+
+		} 
+
 
 		/*
 		 * If in delta mode, we are playing tricks with object chains.
@@ -124,109 +209,227 @@ vmspace_checkpoint(struct vmspace *vmspace, struct dump *dump, long mode)
 		 * since we are soon going into unmapped territory with this
 		 * (i.e. fork).
 		 */
-		if (mode == DELTA_DUMP) {
+		if (mode == DELTA_DUMP && objects[i]) {
 			vm_object_reference(entry->object.vm_object);
 			vm_object_shadow(&entry->object.vm_object, &entry->offset,
 					 entry->end-entry->start);
 			pmap_remove(vm_map->pmap, entry->start, entry->end);
 		}
 	}
+out:
 
 	return error;
 }
 
-/* give a list of objects and dump it to a given fd */
-int
-vmspace_dump(struct dump *dump, int fd, long mode) 
+/* 
+ * XXX Shadowing hack for vmspace_restore, defined here in order not to not 
+ * put pressure on the stack. If this works, replace with a hashtable.
+ */
+#define HACK_MAX_ENTRIES 128 
+/* Linear search to find the proper index */
+vm_object_t entry_id[HACK_MAX_ENTRIES];
+/* Use the index here ot get the object to be shadowed */
+vm_object_t entry_obj[HACK_MAX_ENTRIES];
+/* (Assume shadows always get retrieved after the original object) */
+
+
+
+
+static vm_object_t
+vm_object_restore(struct vm_map_entry_info *entry, int *flags, 
+					boolean_t *writecounted)
 {
-	vm_page_t page;
-	vm_pindex_t poffset;
-	vm_offset_t vaddr, vaddr_data;
-	vm_object_t *objects; 
-	struct vm_map_entry_info *entries; 
-	int error = 0;
-	int i;
+	struct nameidata backing_file;
+	vm_object_t new_object = NULL;
+	struct vnode *vp;
+	int error;
 
-	/* Shorthands */
-	objects = dump->objects;
-	entries = dump->entries;
+	switch (entry->type) {
+	case OBJT_DEFAULT:
 
-	error = fd_write(&dump->vmspace, sizeof(struct vmspace_info), fd);
-	if (error)
-		return error;
-
-	for (i = 0; i < dump->vmspace.nentries; i++) {
-
-		if (entries->eflags & MAP_ENTRY_IS_SUB_MAP) {
-			printf("WARNING: Submap entry found, dump will be wrong\n");
-			continue;
-		}
-
-		error = fd_write(&entries[i], sizeof(struct vm_map_entry_info), fd);
-		if (error)
-			return error;
-
-
-		if (objects[i] == NULL) 
-			continue;
-
-		TAILQ_FOREACH(page, &objects[i]->memq, listq) {
-			/*
-			 * XXX Does this check make sense? We _are_ getting pages
-			 * from a valid object, after all, why would it have NULL
-			 * pointers in its list?
-			 */
-			if (!page) {
-				printf("ERROR: vm_page_t page is NULL");
-				continue;
+		/* XXX Shadow hack */
+		if (entry->is_shadow) {
+			vm_object_t old_object = NULL;
+			for (int i = 0; i < HACK_MAX_ENTRIES; i++) {
+				if (entry->backing_object == entry_id[i]) {
+					old_object = entry_obj[i];
+					break;	
+				}
 			}
 
-			/* 
-			 * Map the page to the address space, and save a virtual address - 
-			 * data pair to disk.
-			 */
-			vaddr_data = IDX_TO_VADDR(page->pindex, entries[i].start, entries[i].offset);
-			error = fd_write(&vaddr_data, sizeof(vm_offset_t), fd);
-			if (error)
-				return error;
 
-			vaddr = userpage_map(page->phys_addr);
-			if (!vaddr)
-				return error;
+			vm_offset_t offset = entry->backing_offset;
+			int len = entry->end - entry->start;
+			vm_object_shadow(&old_object, &offset, len);
 
-			error = fd_write((void*) vaddr, PAGE_SIZE, fd);
-			if (error)
-				return error;
+			return old_object;
+		}
 
-			userpage_unmap(vaddr);
 
-        	}
+		return vm_object_allocate(OBJT_DEFAULT, entry->size);
 
-		/* Sentinel value that denotes there are no more pages */
-		poffset = ULONG_MAX;
-		error = fd_write(&poffset, sizeof(vm_offset_t), fd);
-		if (error)
-			return error;
+	case OBJT_VNODE:
+		/* The length field for the nameidata structure isn't used */
+		NDINIT(&backing_file, LOOKUP, FOLLOW, UIO_SYSSPACE, 
+				entry->filename, curthread);
 
-		/* For delta dumps, deallocate the object to collapse the chain again. */
-		if (mode == DELTA_DUMP) 
-			vm_object_deallocate(objects[i]);
+		/* 
+		 * XXX If an "old" checkpoint
+		 * is used (e.g. one that was taken in a 
+		 * previous boot cycle) then this call locks
+		 * the system and we get a "sleeping thread" panic.
+		 *
+		 * The panic also happens when the file to be used is
+		 * over NFS, I suppose because lookups are much slower
+		 * compared to local filesystems. 
+		 *
+		 * The probable cause of the deadlock is the thread lock,
+		 * judging from the locks that the ast routine takes (the
+		 * offending call is ast() while trying namei()). However,
+		 * we have to make sure that this is the case, and, if so,
+		 * maybe fetch the vnodes before beginning the restore 
+		 * process.
+		 */
+
+		/* XXX Is letting go of the lock OK?*/
+		PROC_UNLOCK(curthread->td_proc);
+		error = namei(&backing_file);
+		PROC_LOCK(curthread->td_proc);
+
+		if (error) {
+			printf("Error: namei failed with error %d\n", error);
+			return NULL;
+		}
+
+		vp = backing_file.ni_vp;
+
+		/* 
+		 * XXX vm_mmap_vnode() has a ton of useful checks, but
+		 * it seems like just grabbing the object also works.
+		 */
+		error = vm_mmap_vnode(curthread, entry->end - entry->start, 
+				entry->protection, &entry->max_protection, 
+				flags, vp, &entry->offset, 
+				&new_object, writecounted);
+		if (error) {
+			printf("Error: vm_mmap_vnode failed with error %d\n", error);
+		}
+
+		return new_object;
+	case OBJT_PHYS:
+		/* 
+		 * XXX Actually mimic the linker and use physical pages
+		 */
+		return vm_object_allocate(OBJT_DEFAULT, entry->size);
+
+	case OBJT_DEAD:
+		/* Guard entry */
+		if (entry->size == ULONG_MAX) 
+			return NULL;
+
+		/* FALLTHROUGH */
+	default:
+		printf("Error: Invalid vm_object type %d\n", entry->type);
+		return new_object;
 	}
+}
 
-	return error;
+static void
+data_restore(struct vmspace *vmspace, vm_object_t object, 
+				struct vm_map_entry_info *entry)
+{
+	
+	struct dump_page *page_entry;
+	vm_offset_t vaddr, addr; 
+	vm_pindex_t offset;
+	vm_page_t new_page; 
+
+	/* 
+	 * Traverse _everything_. This can be obviously be 
+	 * improved upon by using the higher (middle,
+	 * since the higher are basically unused) instead of the lower bits 
+	 * of an address when hashing, and also using more buckets.
+	 */
+
+	VM_OBJECT_WLOCK(object);
+	for (int j = 0; j <= hashmask; j++) {
+		LIST_FOREACH(page_entry, &slspages[j & hashmask], next) {
+			vaddr = page_entry->vaddr;
+			if (vaddr < entry->start || vaddr >= entry->end)
+				continue;
+
+			/* 
+			 * We cannot add the page we have saved the data in
+			 * to the object, because it currently belongs to 
+			 * the kernel. So we get another one, copy the contents
+			 * to it, and add the mapping to the page tables.
+			 */
+
+			offset = VADDR_TO_IDX(vaddr, entry->start, entry->offset);
+			new_page = vm_page_grab(object, offset, VM_ALLOC_NORMAL);
+
+			addr = userpage_map(new_page->phys_addr);
+			memcpy((void *) addr, (void *) page_entry->data, PAGE_SIZE);
+			userpage_unmap(addr);
+
+			pmap_enter(vmspace_pmap(vmspace), vaddr, new_page, 
+					entry->protection, VM_PROT_READ, 0);
+				
+		}
+
+	}
+	VM_OBJECT_WUNLOCK(object);
+}
+
+/* 
+ * Work backwards from the entry flags to find out what
+ * flags exactly we need to pass to vm_map_insert. Normally
+ * we'd just create the entry directly, but the methods we
+ * need are static.
+ */
+static int
+map_flags_from_entry(vm_eflags_t flags)
+{
+	int cow = 0;
+
+	if (flags & (MAP_ENTRY_COW | MAP_ENTRY_NEEDS_COPY))
+		cow |= MAP_COPY_ON_WRITE;
+	if (flags & MAP_ENTRY_NOFAULT)
+		cow |= MAP_NOFAULT;
+	if (flags & MAP_ENTRY_NOSYNC)
+		cow |= MAP_DISABLE_SYNCER;
+	if (flags & MAP_ENTRY_NOCOREDUMP)
+		cow |= MAP_DISABLE_COREDUMP;
+	if (flags & MAP_ENTRY_GROWS_DOWN)
+		cow |= MAP_STACK_GROWS_DOWN;
+	if (flags & MAP_ENTRY_GROWS_UP)
+		cow |= MAP_STACK_GROWS_UP;
+	if (flags & MAP_ENTRY_VN_WRITECNT)
+		cow |= MAP_VN_WRITECOUNT;
+	if ((flags & MAP_ENTRY_GUARD) != 0)
+		cow |= MAP_CREATE_GUARD;
+	if ((flags & MAP_ENTRY_STACK_GAP_DN) != 0)
+		cow |= MAP_CREATE_STACK_GAP_DN;
+	if ((flags & MAP_ENTRY_STACK_GAP_UP) != 0)
+		cow |= MAP_CREATE_STACK_GAP_UP;
+
+
+	return cow;
 }
 
 int
-vmspace_restore(struct proc *p, struct dump *dump)
+vmspace_restore(struct proc *p, struct memckpt_info *dump)
 {
 	struct vmspace *vmspace; 
 	struct vm_map *vm_map;
-	struct vm_map_entry_info *cur_entry;
+	struct vm_map_entry_info *entry;
 	vm_object_t new_object;
-	vm_pindex_t offset;
-	vm_page_t new_page; 
-	vm_offset_t vaddr; 
+	//vm_offset_t addr;
 	int error = 0;
+	int cow;
+	boolean_t writecounted;
+	int flags;
+
 
 	/* Shorthands */
 	vmspace = p->p_vmspace;
@@ -266,8 +469,7 @@ vmspace_restore(struct proc *p, struct dump *dump)
 	vmspace->vm_maxsaddr = dump->vmspace.vm_maxsaddr;
 
 	/* restore vm_map entries */
-	for (int i = 0; i < dump->vmspace.nentries; i ++) {
-		struct dump_page *page_entry;
+	for (int i = 0; i < dump->vmspace.nentries; i++) {
 
 		/*
 		 * We assume no entry will span the whole virtual address space,
@@ -276,70 +478,44 @@ vmspace_restore(struct proc *p, struct dump *dump)
 		 * a backing object, to be honest.
 		 */
 
-		cur_entry = &dump->entries[i];
-		if (cur_entry->size == ULONG_MAX)
-			continue;
+		entry = &dump->entries[i];
+		
+		/* XXX Shadow hack */
+		entry_id[i] = entry->current_object;
 
-		/* XXX Repair file mappings */
-		new_object = vm_object_allocate(OBJT_DEFAULT, cur_entry->size);
-		if (!new_object) {
-			printf("Error: vm_object_allocate failed\n");
-			return ENOMEM;
-		}
-
+		writecounted = FALSE;
+		flags = 0;
 
 		/* 
-		 * Traverse _everything_. This can be obviously be 
-		 * improved upon by using the higher (middle,
-		 * since the higher are basically unused) instead of the lower bits 
-		 * of an address when hashing, and also using more buckets.
+		 * We can have a new_object that is null, in fact this is how
+		 * we would normally create an anonymous mapping.
 		 */
+		new_object = vm_object_restore(entry, &flags, &writecounted);
 
-		VM_OBJECT_WLOCK(new_object);
-		for (int j = 0; j <= hashmask; j++) {
+		/* XXX Shadow hack */
+		entry_obj[i] = new_object; 
 
-			LIST_FOREACH(page_entry, &slspages[j & hashmask], next) {
-				if (cur_entry->start <=  page_entry->vaddr && 
-					 	page_entry->vaddr < cur_entry->end) {
 
-					/* 
-					 * We cannot add the page we have saved the data in
-					 * to the object, because it currently belongs to 
-					 * the kernel. So we get another one, copy the contents
-					 * to it, and add the mapping to the page tables.
-					 */
-
-					offset = VADDR_TO_IDX(page_entry->vaddr, 
-							cur_entry->start, cur_entry->offset);
-					new_page = vm_page_grab(new_object, offset, VM_ALLOC_NORMAL);
-
-					vaddr = userpage_map(new_page->phys_addr);
-					memcpy((void *) vaddr, (void *) page_entry->data, PAGE_SIZE);
-					userpage_unmap(vaddr);
-
-					pmap_enter(vmspace_pmap(vmspace), page_entry->vaddr, new_page, 
-							cur_entry->protection, VM_PROT_READ, 0);
-						
-				}
-			}
-
-		}
-		VM_OBJECT_WUNLOCK(new_object);
-
-		/* The actual place where we add the entry to userspace */
-
-		vm_map_lock(vm_map);
-		error = vm_map_insert(vm_map, new_object, cur_entry->offset, 
-				cur_entry->start, cur_entry->end, 
-				cur_entry->protection, cur_entry->max_protection, 
-				MAP_COPY_ON_WRITE | MAP_PREFAULT);
-		vm_map_unlock(vm_map);
-
+		cow = map_flags_from_entry(entry->eflags);
+		error = vm_map_insert(vm_map, new_object, entry->offset, 
+				entry->start, entry->end, 
+				entry->protection, entry->max_protection,
+				cow);
 		if (error) {
-			printf("vm_map_insert error\n");
+			printf("Error: vm_map_insert failed with %d\n", error);
 			return error;
 		}
+
+
+		/* Restore the pages */
+		/* 
+		 * XXX Restoring vnode-backed pages softlocks the system.
+		 * Every single window freezes (without crashing though).
+		 */
+		if (new_object && entry->type != OBJT_VNODE)
+			data_restore(vmspace, new_object, entry);
+
 	}
 	
-	return error;
+	return 0;
 }
