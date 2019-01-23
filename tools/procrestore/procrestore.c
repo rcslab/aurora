@@ -12,10 +12,11 @@ int main(int argc, char* argv[]) {
 	int slsmm_fd, *file_fds;
 	int nfds;
 	int error;
+	int type;
 	struct restore_param param;
 
-	if (argc < 3) {
-		printf("Usage: procdump <PID> <filenames...>\n");
+	if (argc < 4) {
+		printf("Usage: procdump <PID> <type> <filenames...>\n");
 		return 0;
 	}
 
@@ -28,20 +29,29 @@ int main(int argc, char* argv[]) {
 		exit(1); 
 	}
 
-	nfds = argc - 2;
+	nfds = argc - 3;
 	file_fds = malloc(sizeof(int) * nfds);
-	for (int i = 0; i < nfds; i ++) {
-		file_fds[i] = open(argv[i+2], O_RDONLY);
-		if (!file_fds[i]) {
-			printf("ERROR: Checkpoint file not opened\n");
-			exit(1); 
+	if (argv[2][0] == '0') {
+		type = SLSMM_FD_FILE;
+		for (int i = 0; i < nfds; i ++) {
+			file_fds[i] = open(argv[i+3], O_RDONLY);
+			if (!file_fds[i]) {
+				printf("ERROR: Checkpoint file not opened\n");
+				exit(1); 
+			}
 		}
+	} else if (argv[2][0] == '1') {
+		type = SLSMM_FD_MEM;
+		for (int i = 0; i < nfds; i ++) {
+			file_fds[i] = strtol(argv[i+3], &argv[i+3], 10);
+		}	
 	}
 
 	param = (struct restore_param) { 
 		.pid = pid, 
 		.nfds = nfds,
 		.fds = file_fds, 
+		.fd_type = type,
 	};
 
 	ioctl(slsmm_fd, SLSMM_RESTORE, &param);

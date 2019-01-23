@@ -41,7 +41,7 @@ MALLOC_DEFINE(M_SLSMM, "slsmm", "S L S M M");
 
 
 static int
-slsmm_dump(struct proc *p, int fd, int mode)
+slsmm_dump(struct proc *p, struct dump_param *param, int mode)
 {
 	int error = 0;
 	struct thread_info *thread_infos = NULL;
@@ -118,27 +118,29 @@ slsmm_dump(struct proc *p, int fd, int mode)
 
 	nanotime(&t_resumed);
 
-	error = fd_write(&dump->proc, sizeof(struct proc_info), fd);
+	if (param->fd_type == SLSMM_FD_MEM) param->fd = new_md();
+
+	error = fd_write(&dump->proc, sizeof(struct proc_info), param->fd, param->fd_type);
 	if (error) {
 		printf("Error: Writing process info dump failed with code %d\n", error);
 		goto slsmm_dump_cleanup;
 	}
 
-	error = fd_write(thread_infos, sizeof(struct thread_info) * p->p_numthreads, fd);
+
+	error = fd_write(thread_infos, sizeof(struct thread_info) * p->p_numthreads, param->fd, param->fd_type);
 	if (error) {
 		printf("Error: Writing thread info dump failed with code %d\n", error);
 		goto slsmm_dump_cleanup;
 	}
 
-	error = vmspace_dump(dump, fd, objects, mode);
+	error = vmspace_dump(dump, objects, param, mode);
 	if (error) {
 		printf("Error: vmspace_dump failed with error code %d\n", error);
 		goto slsmm_dump_cleanup;
 	}
 	nanotime(&t_flush_disk);
 
-
-	uprintf("suspend %ldns\n", t_suspend_complete.tv_nsec-t_suspend.tv_nsec);
+	uprintf("suspend		%ldns\n", t_suspend_complete.tv_nsec-t_suspend.tv_nsec);
 	uprintf("proc_ckpt	%ldns\n", t_proc_ckpt.tv_nsec-t_suspend_complete.tv_nsec);
 	uprintf("vmspace		%ldns\n", t_vmspace.tv_nsec-t_proc_ckpt.tv_nsec);
 	uprintf("total_suspend	%ldns\n", t_resumed.tv_nsec-t_suspend.tv_nsec); 
@@ -153,8 +155,9 @@ slsmm_dump_cleanup:
 
 
 static int
-slsmm_restore(struct proc *p, int nfds, int *fds)
+slsmm_restore(struct proc *p, struct restore_param *param)
 {
+	printf("restore\n");
 	struct dump *dump; 
 	int error = 0;
 
@@ -162,7 +165,7 @@ slsmm_restore(struct proc *p, int nfds, int *fds)
 	if (error)
 		goto slsmm_restore_cleanup;
 
-	dump = compose_dump(nfds, fds);
+	dump = compose_dump(param);
 	if (!dump)
 		return -1;
 
@@ -241,16 +244,15 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data,
 	 */
 	switch (cmd) {
 		case FULL_DUMP:
-			error = slsmm_dump(p, dparam->fd, SLSMM_CKPT_FULL);
+			error = slsmm_dump(p, dparam, SLSMM_CKPT_FULL);
 			break;
 
 		case DELTA_DUMP:
-			error = slsmm_dump(p, dparam->fd, SLSMM_CKPT_DELTA);
+			error = slsmm_dump(p, dparam, SLSMM_CKPT_DELTA);
 			break;
 
 		case SLSMM_RESTORE:
-
-			error = slsmm_restore(p, rparam->nfds, rparam->fds);
+			error = slsmm_restore(p, rparam);
 			break;
 	}
 
@@ -273,9 +275,11 @@ SLSMMHandler(struct module *inModule, int inEvent, void *inArg) {
 		case MOD_LOAD:
 			printf("Loaded\n");
 			slsmm_dev = make_dev(&slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "slsmm");
+			md_init();
 			break;
 		case MOD_UNLOAD:
 			printf("Unloaded\n");
+			md_clear();
 			destroy_dev(slsmm_dev);
 			break;
 		default:

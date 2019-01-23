@@ -2,6 +2,8 @@ export_syms
 machine
 x86
 
+kmod/vnode_if*.h
+
 tests/array/array
 tests/compute/compute
 tests/mmap/mmap

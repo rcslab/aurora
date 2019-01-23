@@ -40,7 +40,8 @@
 struct dump *alloc_dump() {
 	struct dump *dump = NULL;
 	dump = malloc(sizeof(struct dump), M_SLSMM, M_NOWAIT);
-	if (dump == NULL) return NULL;
+	if (dump == NULL) 
+		return NULL;
 	dump->threads = NULL;
 	dump->memory.entries = NULL;
 
@@ -52,8 +53,10 @@ void free_dump(struct dump *dump) {
 	char *filename;
 	int i;
 
-	if (!dump) return;
-	if (dump->threads) free(dump->threads, M_SLSMM);
+	if (!dump) 
+		return;
+	if (dump->threads) 
+		free(dump->threads, M_SLSMM);
 
 	entries = dump->memory.entries;
 	if (entries) {
@@ -68,7 +71,7 @@ void free_dump(struct dump *dump) {
 }
 
 int
-load_dump(struct dump *dump, int fd)
+load_dump(struct dump *dump, int fd, int fd_type)
 {
 	int error = 0;
 	size_t size;
@@ -79,9 +82,11 @@ load_dump(struct dump *dump, int fd)
 	int already_there;
 	struct vm_map_entry_info *cur_entry;
 
+	if (fd_type == SLSMM_FD_MEM) 
+		md_reset(fd);
 
 	// load proc info
-	error = fd_read(&dump->proc, sizeof(struct proc_info), fd);
+	error = fd_read(&dump->proc, sizeof(struct proc_info), fd, fd_type);
 	if (error) {
 		printf("Error: cannot read proc_info\n");
 		return error;
@@ -98,7 +103,7 @@ load_dump(struct dump *dump, int fd)
 		printf("Error: cannot allocate thread_info\n");
 		return ENOMEM;
 	}
-	error = fd_read(dump->threads, size, fd);
+	error = fd_read(dump->threads, size, fd, fd_type);
 	if (error) {
 		printf("Error: cannot read thread_info\n");
 		return error;
@@ -110,7 +115,7 @@ load_dump(struct dump *dump, int fd)
 		}
 
 	// load vmspace
-	error = fd_read(&dump->memory.vmspace, sizeof(struct vmspace_info), fd);
+	error = fd_read(&dump->memory.vmspace, sizeof(struct vmspace_info), fd, fd_type);
 	if (error) {
 		printf("Error: cannot read vmspace\n");
 		return error;
@@ -131,7 +136,7 @@ load_dump(struct dump *dump, int fd)
 	for (int i = 0; i < dump->memory.vmspace.nentries; i++) {
 		cur_entry = &dump->memory.entries[i];
 
-		error = fd_read(cur_entry, sizeof(struct vm_map_entry_info), fd);
+		error = fd_read(cur_entry, sizeof(struct vm_map_entry_info), fd, fd_type);
 		if (error) 
 			return error;
 
@@ -151,16 +156,17 @@ load_dump(struct dump *dump, int fd)
 		}
 
 
-		error = fd_read(cur_entry->filename, cur_entry->filename_len, fd);
+		error = fd_read(cur_entry->filename, cur_entry->filename_len, fd, fd_type);
 		if (error)
 			return error;
 
 		for (;;) {
 
-			error = fd_read(&vaddr, sizeof(vm_offset_t), fd);
+			error = fd_read(&vaddr, sizeof(vm_offset_t), fd, fd_type);
 			if (error) 
 				return error;
-			if (vaddr == ULONG_MAX) break;
+			if (vaddr == ULONG_MAX) 
+				break;
 
 			/* 
 			 * We assume that asking for a page-size chunk will 
@@ -179,7 +185,7 @@ load_dump(struct dump *dump, int fd)
 
 			new_entry->vaddr = vaddr;
 			new_entry->data = hashpage;
-			error = fd_read(hashpage, PAGE_SIZE, fd);
+			error = fd_read(hashpage, PAGE_SIZE, fd, fd_type);
 			if (error) {
 				printf("Error: reading data failed\n");
 				free(new_entry, M_SLSMM);
@@ -217,7 +223,7 @@ load_dump(struct dump *dump, int fd)
 
 
 struct dump *
-compose_dump(int nfds, int *fds)
+compose_dump(struct restore_param *param)
 {
 	struct dump *dump = alloc_dump();
 	struct dump *currdump = alloc_dump();
@@ -231,7 +237,7 @@ compose_dump(int nfds, int *fds)
 	/*
 	 * The only dump that we actually care about, the rest 
 	 */
-	error = load_dump(dump, fds[nfds-1]);
+	error = load_dump(dump, param->fds[param->nfds-1], param->fd_type);
 	if (error) {
 		printf("Error: cannot load dumps\n");
 		goto error;
@@ -241,9 +247,9 @@ compose_dump(int nfds, int *fds)
 	 * We are constantly loading dumps because we only need the side-effect
 	 * of this action - populating the address space.
 	 */
-	for (int i = 0; i < nfds - 1; i++) {
+	for (int i = 0; i < param->nfds - 1; i++) {
 		/* Memory leak (the thread/entry arrays), will be fixed when we flesh out alloc_dump()*/
-		error = load_dump(currdump, fds[i]);
+		error = load_dump(currdump, param->fds[i], param->fd_type);
 
 		/*
 		 * XXX Inelegant, but the whole dump struct allocation procedure
@@ -271,7 +277,7 @@ error:
 
 /* give a list of objects and dump it to a given fd */
 int
-vmspace_dump(struct dump *dump, int fd, vm_object_t *objects, long mode) 
+vmspace_dump(struct dump *dump, vm_object_t *objects, struct dump_param *param, long mode) 
 {
 	vm_page_t page;
 	vm_pindex_t poffset;
@@ -283,7 +289,7 @@ vmspace_dump(struct dump *dump, int fd, vm_object_t *objects, long mode)
 	/* Shorthands */
 	entries = dump->memory.entries;
 
-	error = fd_write(&dump->memory.vmspace, sizeof(struct vmspace_info), fd);
+	error = fd_write(&dump->memory.vmspace, sizeof(struct vmspace_info), param->fd, param->fd_type);
 	if (error)
 		return error;
 
@@ -297,17 +303,16 @@ vmspace_dump(struct dump *dump, int fd, vm_object_t *objects, long mode)
 		}
 
 
-		error = fd_write(cur_entry, sizeof(struct vm_map_entry_info), fd);
+		error = fd_write(cur_entry, sizeof(struct vm_map_entry_info), param->fd, param->fd_type);
 		if (error)
 			return error;
-
 
 		if (objects[i] == NULL) 
 			continue;
 
 		
 		if (cur_entry->filename) {
-			error = fd_write(cur_entry->filename, cur_entry->filename_len, fd);
+			error = fd_write(cur_entry->filename, cur_entry->filename_len, param->fd, param->fd_type);
 			if (error) {
 				printf("Error: Could not write filename\n");
 				return error;
@@ -330,7 +335,7 @@ vmspace_dump(struct dump *dump, int fd, vm_object_t *objects, long mode)
 			 * data pair to disk.
 			 */
 			vaddr_data = IDX_TO_VADDR(page->pindex, cur_entry->start, cur_entry->offset);
-			error = fd_write(&vaddr_data, sizeof(vm_offset_t), fd);
+			error = fd_write(&vaddr_data, sizeof(vm_offset_t), param->fd, param->fd_type);
 			if (error)
 				return error;
 
@@ -343,7 +348,7 @@ vmspace_dump(struct dump *dump, int fd, vm_object_t *objects, long mode)
 				return error;
 			}
 
-			error = fd_write((void*) vaddr, PAGE_SIZE, fd);
+			error = fd_write((void*) vaddr, PAGE_SIZE, param->fd, param->fd_type);
 			if (error)
 				return error;
 
@@ -353,7 +358,7 @@ vmspace_dump(struct dump *dump, int fd, vm_object_t *objects, long mode)
 
 		/* Sentinel value that denotes there are no more pages */
 		poffset = ULONG_MAX;
-		error = fd_write(&poffset, sizeof(vm_offset_t), fd);
+		error = fd_write(&poffset, sizeof(vm_offset_t), param->fd, param->fd_type);
 		if (error)
 			return error;
 

@@ -23,20 +23,25 @@
 struct dump_param {
 	int	fd;
 	int	pid;
+	int	fd_type;
 };
 
 struct restore_param {
-	int pid;
-	int nfds;
-	int *fds;
+	int	pid;
+	int	nfds;
+	int	*fds;
+	int	fd_type;
 };
 
 
-#define FULL_DUMP		_IOW('d', 1, struct dump_param)
-#define DELTA_DUMP		_IOW('d', 2, struct dump_param)
+#define FULL_DUMP	_IOWR('d', 1, struct dump_param)
+#define DELTA_DUMP	_IOWR('d', 2, struct dump_param)
 #define SLSMM_RESTORE	_IOW('r', 1, struct restore_param)
 
 #define SLSMM_CKPT_FULL		0
 #define SLSMM_CKPT_DELTA	1
+
+#define SLSMM_FD_FILE	0
+#define SLSMM_FD_MEM	1
 
 #endif
