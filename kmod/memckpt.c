@@ -26,6 +26,7 @@
 #include "_slsmm.h"
 #include "slsmm.h"
 #include "fileio.h"
+#include "path.h"
 
 
 /* Map a user memory area to kernelspace. */
@@ -54,16 +55,13 @@ vmspace_checkpoint(struct vmspace *vmspace, struct memckpt_info *dump, vm_object
 	struct vm_map_entry *entry;
 	struct vm_map_entry_info *entries; 
 	struct vm_map_entry_info *cur_entry;
-	char *freebuf = NULL, *filepath;
-	char *retbuf = "error";
+	char *filepath;
 	size_t filepath_len;
 	struct vnode *vp;
 	vm_object_t obj;
 	int error = 0;
 	int i; 
 
-
-	/* Shorthands */
 
 	entries = dump->entries;
 	vm_map = &vmspace->vm_map;
@@ -105,6 +103,7 @@ vmspace_checkpoint(struct vmspace *vmspace, struct memckpt_info *dump, vm_object
 		 * that are backed by objects.
 		 */
 		cur_entry->size = ULONG_MAX;
+        cur_entry->resident_page_count = UINT_MAX;
 		cur_entry->file_offset = ULONG_MAX;
 		cur_entry->type = OBJT_DEAD;
 
@@ -124,6 +123,7 @@ vmspace_checkpoint(struct vmspace *vmspace, struct memckpt_info *dump, vm_object
 			cur_entry->current_object = obj;
 
 			cur_entry->size = obj->size;
+            cur_entry->resident_page_count = obj->resident_page_count;
 			cur_entry->type= obj->type;
 
 			/*
@@ -131,43 +131,14 @@ vmspace_checkpoint(struct vmspace *vmspace, struct memckpt_info *dump, vm_object
 			 * to find out how to map.
 			 */
 			if (cur_entry->type == OBJT_VNODE) {
-				/* 
-				 * Get the filename. Fun fact: The .handle field in the 
-				 * vm_object is actually the backing vnode for OBJT_VNODE 
-				 */
 				vp = (struct vnode *) obj->handle;
 				
-				/* XXX Verify this is enough */
-				/*
-				 * XXX We are passing the current thread to the cache lookup
-				 * function, not the one being checkpointed. 
-				 * This makes sense because we want to use its own credentials.
-				 * We have to make sure that security checks are the only
-				 * reason we need the thread.
-				 */
-
-				/* XXX Move allocation to dump.c */ 
-				filepath = malloc(PATH_MAX, M_SLSMM, M_NOWAIT);
-				if (!filepath) {
-					error = ENOMEM;
-					goto out;
-				}
-
-				error = vn_fullpath(curthread, vp, &retbuf, &freebuf);
+				error = vnode_to_filename(vp, &filepath, &filepath_len);
 				if (error) {
-					printf("vn_path_to_global_path: error %d\n", error);	
-					free(filepath, M_SLSMM);
-					goto out;
+					printf("vnode_to_filename failed with code %d\n", error);
+					return error;
+
 				}
-
-				filepath_len = strnlen(retbuf, PATH_MAX);
-				strncpy(filepath, retbuf, filepath_len);
-				filepath[filepath_len++] = '\0';
-
-
-				/* Allocation done in vn_fullpath() */
-				free(freebuf, M_TEMP);
-
 
 				/* FIXME Probably wrong, offset is probably in the object */
 				cur_entry->file_offset = 0;
@@ -216,9 +187,8 @@ vmspace_checkpoint(struct vmspace *vmspace, struct memckpt_info *dump, vm_object
 			pmap_remove(vm_map->pmap, entry->start, entry->end);
 		}
 	}
-out:
 
-	return error;
+	return 0;
 }
 
 /* 
@@ -239,7 +209,6 @@ static vm_object_t
 vm_object_restore(struct vm_map_entry_info *entry, int *flags, 
 					boolean_t *writecounted)
 {
-	struct nameidata backing_file;
 	vm_object_t new_object = NULL;
 	struct vnode *vp;
 	int error;
@@ -269,39 +238,16 @@ vm_object_restore(struct vm_map_entry_info *entry, int *flags,
 		return vm_object_allocate(OBJT_DEFAULT, entry->size);
 
 	case OBJT_VNODE:
-		/* The length field for the nameidata structure isn't used */
-		NDINIT(&backing_file, LOOKUP, FOLLOW, UIO_SYSSPACE, 
-				entry->filename, curthread);
 
-		/* 
-		 * XXX If an "old" checkpoint
-		 * is used (e.g. one that was taken in a 
-		 * previous boot cycle) then this call locks
-		 * the system and we get a "sleeping thread" panic.
-		 *
-		 * The panic also happens when the file to be used is
-		 * over NFS, I suppose because lookups are much slower
-		 * compared to local filesystems. 
-		 *
-		 * The probable cause of the deadlock is the thread lock,
-		 * judging from the locks that the ast routine takes (the
-		 * offending call is ast() while trying namei()). However,
-		 * we have to make sure that this is the case, and, if so,
-		 * maybe fetch the vnodes before beginning the restore 
-		 * process.
-		 */
-
-		/* XXX Is letting go of the lock OK?*/
 		PROC_UNLOCK(curthread->td_proc);
-		error = namei(&backing_file);
+        error = filename_to_vnode(entry->filename, &vp);
 		PROC_LOCK(curthread->td_proc);
+        if (error) {
+            printf("Error: filename_to_vnode failed with %d\n", error);
+            return NULL;
+        }
 
-		if (error) {
-			printf("Error: namei failed with error %d\n", error);
-			return NULL;
-		}
 
-		vp = backing_file.ni_vp;
 
 		/* 
 		 * XXX vm_mmap_vnode() has a ton of useful checks, but
@@ -346,8 +292,7 @@ data_restore(struct vmspace *vmspace, vm_object_t object,
 
 	/* 
 	 * Traverse _everything_. This can be obviously be 
-	 * improved upon by using the higher (middle,
-	 * since the higher are basically unused) instead of the lower bits 
+	 * improved upon by using the higher bits 
 	 * of an address when hashing, and also using more buckets.
 	 */
 
@@ -374,7 +319,6 @@ data_restore(struct vmspace *vmspace, vm_object_t object,
 
 			pmap_enter(vmspace_pmap(vmspace), vaddr, new_page, 
 					entry->protection, VM_PROT_READ, 0);
-				
 		}
 
 	}
@@ -385,7 +329,7 @@ data_restore(struct vmspace *vmspace, vm_object_t object,
  * Work backwards from the entry flags to find out what
  * flags exactly we need to pass to vm_map_insert. Normally
  * we'd just create the entry directly, but the methods we
- * need are static.
+ * need are static. TODO: Find out what exactly we need
  */
 static int
 map_flags_from_entry(vm_eflags_t flags)

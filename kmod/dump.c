@@ -1,11 +1,3 @@
-#include "_slsmm.h"
-#include "cpuckpt.h"
-#include "dump.h"
-#include "fileio.h"
-#include "hash.h"
-#include "memckpt.h"
-#include "slsmm.h"
-
 #include <sys/types.h>
 
 #include <sys/conf.h>
@@ -36,6 +28,14 @@
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
+#include "_slsmm.h"
+#include "cpuckpt.h"
+#include "dump.h"
+#include "fileio.h"
+#include "hash.h"
+#include "memckpt.h"
+#include "slsmm.h"
+
 
 struct dump *alloc_dump() {
 	struct dump *dump = NULL;
@@ -44,12 +44,17 @@ struct dump *alloc_dump() {
 		return NULL;
 	dump->threads = NULL;
 	dump->memory.entries = NULL;
+    dump->filedesc.infos = NULL;
+    dump->filedesc.cdir = NULL;
+    dump->filedesc.rdir = NULL;
+    dump->magic = SLS_DUMP_MAGIC;
 
 	return dump;
 }
 
 void free_dump(struct dump *dump) {
 	struct vm_map_entry_info *entries;
+    struct file_info *file_infos;
 	char *filename;
 	int i;
 
@@ -67,81 +72,188 @@ void free_dump(struct dump *dump) {
 		}
 		free(entries, M_SLSMM);
 	}
+
+    if (dump->filedesc.cdir)
+        free(dump->filedesc.cdir, M_SLSMM);
+    if (dump->filedesc.rdir)
+        free(dump->filedesc.rdir, M_SLSMM);
+
+    file_infos = dump->filedesc.infos;
+    if (file_infos) {
+        for (i = 0; i < dump->filedesc.num_files; i++) {
+            filename = file_infos[i].filename;
+            if (filename)
+                free(filename, M_SLSMM);
+        }
+        free(file_infos, M_SLSMM);
+    }
+
 	free(dump, M_SLSMM);
 }
 
+/* 
+ * XXX In case of failure we leak memory left and right, fix that. Not important
+ * right now, though, since if something breaks here we have probably messed up
+ * something important in the code, and we need to reboot anyway.
+ *
+ * Alternatively, we can refactor so that all allocation happens in one place.
+ * We need a global checkpoint size for that at the beginning of the checkpoint,
+ * which I believe is completely feasible. We should do that later, though.
+ */
 int
-load_dump(struct dump *dump, int fd, int fd_type)
+load_dump(struct dump *dump, struct sls_desc desc)
 {
 	int error = 0;
-	size_t size;
 	void *hashpage;
 	vm_offset_t vaddr;
 	struct dump_page *page_entry, *new_entry; 
 	struct page_tailq *page_bucket;
 	int already_there;
 	struct vm_map_entry_info *cur_entry;
+    struct thread_info *threads;
+    struct vm_map_entry_info *entries;
+	struct file_info *files;
+	size_t thread_size, entry_size, file_size;
+	int len;
+	int i, j;
 
-	if (fd_type == SLSMM_FD_MEM) 
-		md_reset(fd);
+	if (desc.type == DESC_MD) 
+		md_reset(desc.index);
 
-	// load proc info
-	error = fd_read(&dump->proc, sizeof(struct proc_info), fd, fd_type);
+    /* Every static part of struct dump has its own magic, just for safety */ 
+	error = fd_read(dump, sizeof(struct dump), desc);
 	if (error) {
 		printf("Error: cannot read proc_info\n");
 		return error;
 	}
+
+    if (dump->magic != SLS_DUMP_MAGIC) {
+		printf("Error: SLS_DUMP_MAGIC %x does not match\n", dump->magic);
+		return -1;
+    }
+
 	if (dump->proc.magic != SLS_PROC_INFO_MAGIC) {
-		printf("Error: SLS_PROC_INFO_MAGIC not match\n");
+		printf("Error: SLS_PROC_INFO_MAGIC %x does not match\n", dump->proc.magic);
 		return -1;
 	}
 
-	// allocate thread info
-	size = sizeof(struct thread_info) * dump->proc.nthreads;
-	dump->threads = malloc(size, M_SLSMM, M_NOWAIT);
-	if (!dump->threads) {
-		printf("Error: cannot allocate thread_info\n");
-		return ENOMEM;
+	if (dump->filedesc.magic != SLS_FILEDESC_INFO_MAGIC) {
+		printf("SLS_FILEDESC_INFO_MAGIC %x does not match\n", dump->filedesc.magic);
+		return -1;
 	}
-	error = fd_read(dump->threads, size, fd, fd_type);
-	if (error) {
-		printf("Error: cannot read thread_info\n");
-		return error;
-	}
-	for (int i = 0; i < dump->proc.nthreads; i ++)
-		if (dump->threads[i].magic != SLS_THREAD_INFO_MAGIC) {
-			printf("Error: SLS_THREAD_INFO_MAGIC not match\n");
-			return -1;
-		}
 
-	// load vmspace
-	error = fd_read(&dump->memory.vmspace, sizeof(struct vmspace_info), fd, fd_type);
-	if (error) {
-		printf("Error: cannot read vmspace\n");
-		return error;
-	}
 	if (dump->memory.vmspace.magic != SLS_VMSPACE_INFO_MAGIC) {
-		printf("Error: SLS_VMSPACE_INFO_MAGIC not match\n");
+		printf("Error: SLS_VMSPACE_INFO_MAGIC does not match\n");
 		return -1;
 	}
 	
-	size = sizeof(struct vm_map_entry_info) * dump->memory.vmspace.nentries;
-	dump->memory.entries = malloc(size, M_SLSMM, M_NOWAIT);
+    /* Allocations for array-like elements of the dump and cdir/rdir */
+
+	thread_size = sizeof(struct thread_info) * dump->proc.nthreads;
+	threads = malloc(thread_size, M_SLSMM, M_NOWAIT);
+	if (!threads) {
+		printf("Error: cannot allocate thread_info\n");
+		return ENOMEM;
+	}
+    dump->threads = threads;
+
+	entry_size = sizeof(struct vm_map_entry_info) * dump->memory.vmspace.nentries;
+	entries = malloc(entry_size, M_SLSMM, M_NOWAIT);
 	if (!dump->memory.entries) {
 		printf("Error: cannot allocate entries\n");
 		return ENOMEM;
 	}
+    dump->memory.entries = entries;
+
+    file_size = sizeof(struct file_info) * dump->filedesc.num_files;
+	files = malloc(file_size, M_SLSMM, M_NOWAIT);
+	if (!files) {
+		printf("Allocation of file infos failed\n");
+		return ENOMEM;
+	}
+	dump->filedesc.infos = files;
+
+	dump->filedesc.cdir = malloc(dump->filedesc.cdir_len, M_SLSMM, M_NOWAIT);
+	dump->filedesc.rdir = malloc(dump->filedesc.rdir_len, M_SLSMM, M_NOWAIT);
+	if((!dump->filedesc.cdir && dump->filedesc.cdir_len) || 
+	   (!dump->filedesc.rdir && dump->filedesc.rdir_len)) {
+		printf("Error: Allocation for cdir/rdir failed\n");
+		return ENOMEM;
+	}
+
+    /* Read in arrays of objects */
+
+	error = fd_read(dump->threads, thread_size, desc);
+	if (error) {
+		printf("Error: cannot read thread_info\n");
+		return error;
+	}
+
+	for (i = 0; i < dump->proc.nthreads; i++) {
+		if (dump->threads[i].magic != SLS_THREAD_INFO_MAGIC) {
+			printf("Error: SLS_THREAD_INFO_MAGIC does not match\n");
+			return -1;
+		}
+    }
+
+	error = fd_read(dump->filedesc.infos, file_size, desc);
+    if (error) {
+        printf("Error: cannot read file_info\n");
+        return error;
+    }
+
+	for (i = 0; i < dump->filedesc.num_files; i++) {
+		if (dump->filedesc.infos[i].magic != SLS_FILE_INFO_MAGIC) {
+			printf("Error: SLS_FILE_INFO_MAGIC does not match\n");
+			return -1;
+		}
+    }
+
+    /* TODO: Split this up somehow */
+	for (i = 0; i < dump->filedesc.num_files; i++) {
+		len = files[i].filename_len;
+		files[i].filename = malloc(len, M_SLSMM, M_NOWAIT);
+        if (!files[i].filename) {
+            printf("Error: Could not allocate space for filename\n");
+            return ENOMEM;
+        }
+
+		error = fd_read(files[i].filename, len, desc);
+		if (error) {
+			printf("Error: cannot read filename\n");
+			return error;
+		}
+        printf("len %d\tfilename: %s\n", len, files[i].filename);
+	}
 
 
-	for (int i = 0; i < dump->memory.vmspace.nentries; i++) {
+	error = fd_read(dump->filedesc.cdir, dump->filedesc.cdir_len, desc);
+	if (error) {
+		printf("Error: cannot read filedesc.cdir\n");
+		return error;
+	}
+    printf("len %lu cdir: %s\n", dump->filedesc.cdir_len, dump->filedesc.cdir);
+
+	error = fd_read(dump->filedesc.rdir, dump->filedesc.rdir_len, desc);
+	if (error) {
+		printf("Error: cannot read filedesc.rdir\n");
+		return error;
+	}
+    printf("len %lu Rdir: %s\n", dump->filedesc.rdir_len, dump->filedesc.rdir);
+
+
+
+	for (i = 0; i < dump->memory.vmspace.nentries; i++) {
 		cur_entry = &dump->memory.entries[i];
 
-		error = fd_read(cur_entry, sizeof(struct vm_map_entry_info), fd, fd_type);
-		if (error) 
+		error = fd_read(cur_entry, sizeof(struct vm_map_entry_info), desc);
+		if (error) {
+			printf("Error: cannot read vm_map_entry_info\n");
 			return error;
+		}
 
 		if (cur_entry->magic != SLS_ENTRY_INFO_MAGIC) {
-			printf("Error: SLS_ENTRY_INFO_MAGIC not match\n");
+			printf("Error: SLS_ENTRY_INFO_MAGIC does not match\n");
 			return -1;
 		}
 
@@ -149,24 +261,28 @@ load_dump(struct dump *dump, int fd, int fd_type)
 			continue;
 		}
 
+        /* TODO: Move filenames in global file/string database */
 		cur_entry->filename = malloc(cur_entry->filename_len, M_SLSMM, M_NOWAIT);
-		/* XXX Clean up in an orderly fashion */
 		if(cur_entry->filename_len && !cur_entry->filename) {
-			printf("Error: Allocation for file name failed\n");
+			printf("Error: Allocation for filename failed\n");
+			return -1;
 		}
 
 
-		error = fd_read(cur_entry->filename, cur_entry->filename_len, fd, fd_type);
-		if (error)
+		error = fd_read(cur_entry->filename, cur_entry->filename_len, desc);
+		if (error) {
+			printf("Error: cannot read filename\n");
 			return error;
+		}
 
-		for (;;) {
+        /* TODO: Move _all_ pages to the end of the dump */
+		for (j = 0; j < cur_entry->resident_page_count; j++) {
 
-			error = fd_read(&vaddr, sizeof(vm_offset_t), fd, fd_type);
-			if (error) 
+			error = fd_read(&vaddr, sizeof(vm_offset_t), desc);
+			if (error) {
+				printf("Error: cannot vm_offset_t\n");
 				return error;
-			if (vaddr == ULONG_MAX) 
-				break;
+			}
 
 			/* 
 			 * We assume that asking for a page-size chunk will 
@@ -185,7 +301,7 @@ load_dump(struct dump *dump, int fd, int fd_type)
 
 			new_entry->vaddr = vaddr;
 			new_entry->data = hashpage;
-			error = fd_read(hashpage, PAGE_SIZE, fd, fd_type);
+			error = fd_read(hashpage, PAGE_SIZE, desc);
 			if (error) {
 				printf("Error: reading data failed\n");
 				free(new_entry, M_SLSMM);
@@ -213,31 +329,33 @@ load_dump(struct dump *dump, int fd, int fd_type)
 
 			if (!already_there)
 				LIST_INSERT_HEAD(page_bucket, new_entry, next);
-			
-
 		}
 	}
 
-	return error;
+
+	return 0;
 }
 
 
 struct dump *
-compose_dump(struct restore_param *param)
+compose_dump(struct sls_desc *descs, int ndescs)
 {
-	struct dump *dump = alloc_dump();
-	struct dump *currdump = alloc_dump();
+	struct dump *dump; 
+	struct dump *currdump; 
 	int error = 0;
+    struct sls_desc cur_desc;
 
+    dump = alloc_dump();
+    currdump = alloc_dump();
+    
 	if (!dump || !currdump) {
 		printf("Error: cannot allocate dump struct at slsmm_restore\n");
 		goto error;
 	}
 
-	/*
-	 * The only dump that we actually care about, the rest 
-	 */
-	error = load_dump(dump, param->fds[param->nfds-1], param->fd_type);
+	cur_desc = descs[ndescs - 1];
+
+	error = load_dump(dump, cur_desc);
 	if (error) {
 		printf("Error: cannot load dumps\n");
 		goto error;
@@ -247,9 +365,12 @@ compose_dump(struct restore_param *param)
 	 * We are constantly loading dumps because we only need the side-effect
 	 * of this action - populating the address space.
 	 */
-	for (int i = 0; i < param->nfds - 1; i++) {
+    /* XXX I think that's the wrong load order! */
+	for (int i = 0; i < ndescs - 1; i++) {
+        cur_desc = descs[i];
+
 		/* Memory leak (the thread/entry arrays), will be fixed when we flesh out alloc_dump()*/
-		error = load_dump(currdump, param->fds[i], param->fd_type);
+		error = load_dump(currdump, cur_desc);
 
 		/*
 		 * XXX Inelegant, but the whole dump struct allocation procedure
@@ -275,12 +396,11 @@ error:
 	return NULL;
 }
 
-/* give a list of objects and dump it to a given fd */
+
 int
-vmspace_dump(struct dump *dump, vm_object_t *objects, struct dump_param *param, long mode) 
+vmspace_dump(struct dump *dump, vm_object_t *objects, long mode, struct sls_desc desc) 
 {
 	vm_page_t page;
-	vm_pindex_t poffset;
 	vm_offset_t vaddr, vaddr_data;
 	struct vm_map_entry_info *entries, *cur_entry; 
 	int error = 0;
@@ -288,10 +408,6 @@ vmspace_dump(struct dump *dump, vm_object_t *objects, struct dump_param *param, 
 
 	/* Shorthands */
 	entries = dump->memory.entries;
-
-	error = fd_write(&dump->memory.vmspace, sizeof(struct vmspace_info), param->fd, param->fd_type);
-	if (error)
-		return error;
 
 	for (i = 0; i < dump->memory.vmspace.nentries; i++) {
 
@@ -303,18 +419,20 @@ vmspace_dump(struct dump *dump, vm_object_t *objects, struct dump_param *param, 
 		}
 
 
-		error = fd_write(cur_entry, sizeof(struct vm_map_entry_info), param->fd, param->fd_type);
-		if (error)
+		error = fd_write(cur_entry, sizeof(struct vm_map_entry_info), desc);
+		if (error) {
+            printf("Error: writing vm_map_entry_info failed\n");
 			return error;
+        }
 
 		if (objects[i] == NULL) 
 			continue;
 
 		
 		if (cur_entry->filename) {
-			error = fd_write(cur_entry->filename, cur_entry->filename_len, param->fd, param->fd_type);
-			if (error) {
-				printf("Error: Could not write filename\n");
+			error = fd_write(cur_entry->filename, cur_entry->filename_len, desc);
+		    if (error) {
+                printf("Error: Could not write filename\n");
 				return error;
 			}
 		}
@@ -330,14 +448,12 @@ vmspace_dump(struct dump *dump, vm_object_t *objects, struct dump_param *param, 
 				continue;
 			}
 
-			/* 
-			 * Map the page to the address space, and save a virtual address - 
-			 * data pair to disk.
-			 */
 			vaddr_data = IDX_TO_VADDR(page->pindex, cur_entry->start, cur_entry->offset);
-			error = fd_write(&vaddr_data, sizeof(vm_offset_t), param->fd, param->fd_type);
-			if (error)
+			error = fd_write(&vaddr_data, sizeof(vm_offset_t), desc);
+			if (error) {
+                printf("Error: writing vm_map_entry_info failed\n");
 				return error;
+            }
 
 			/* Never fails on amd64, check is here for futureproofing */
 			vaddr = userpage_map(page->phys_addr);
@@ -348,19 +464,13 @@ vmspace_dump(struct dump *dump, vm_object_t *objects, struct dump_param *param, 
 				return error;
 			}
 
-			error = fd_write((void*) vaddr, PAGE_SIZE, param->fd, param->fd_type);
+			error = fd_write((void*) vaddr, PAGE_SIZE, desc);
 			if (error)
 				return error;
 
 			userpage_unmap(vaddr);
 
         	}
-
-		/* Sentinel value that denotes there are no more pages */
-		poffset = ULONG_MAX;
-		error = fd_write(&poffset, sizeof(vm_offset_t), param->fd, param->fd_type);
-		if (error)
-			return error;
 
 		/* For delta dumps, deallocate the object to collapse the chain again. */
 		if (mode == DELTA_DUMP) {
@@ -369,4 +479,68 @@ vmspace_dump(struct dump *dump, vm_object_t *objects, struct dump_param *param, 
 	}
 
 	return 0;
+}
+
+int
+store_dump(struct dump *dump, struct sls_desc desc)
+{
+    int i;
+    int error = 0;
+    struct thread_info *thread_infos = NULL;
+    struct vm_map_entry_info *entries = NULL;
+    struct file_info *file_infos = NULL;
+    size_t cdir_len, rdir_len;
+    int numthreads, numentries, numfiles;
+
+    thread_infos = dump->threads;
+    entries = dump->memory.entries;
+    file_infos = dump->filedesc.infos;
+
+    numthreads = dump->proc.nthreads;
+    numentries = dump->memory.vmspace.nentries;
+    numfiles = dump->filedesc.num_files;
+
+
+    error = fd_write(dump, sizeof(struct dump), desc);
+    if (error != 0) {
+        printf("Error: Writing dump failed with code %d\n", error);
+        return error;
+    }
+
+    error = fd_write(thread_infos, sizeof(struct thread_info) * numthreads, desc);
+    if (error != 0) {
+        printf("Error: Writing thread info dump failed with code %d\n", error);
+        return error;
+    }
+
+    error = fd_write(file_infos, sizeof(struct file_info) * numfiles, desc);
+    if (error != 0) {
+        printf("Error: Writing file info dump failed with code %d\n", error);
+        return error;
+    }
+
+
+    for (i = 0; i < dump->filedesc.num_files; i++) {
+        error = fd_write(file_infos[i].filename, file_infos[i].filename_len, desc);
+        if (error) {
+            printf("Error: Writing filename failed with code %d\n", error);
+            return error;
+        }
+    }
+
+    cdir_len = dump->filedesc.cdir_len;
+    error = fd_write(dump->filedesc.cdir, cdir_len, desc);
+    if (error != 0) {
+        printf("Error: Writing cdir path failed with code %d\n", error);
+        return error;
+    }
+
+    rdir_len = dump->filedesc.rdir_len;
+    error = fd_write(dump->filedesc.rdir, rdir_len, desc);
+    if (error != 0) {
+        printf("Error: Writing cdir path failed with code %d\n", error);
+        return error;
+    }
+
+    return 0;
 }

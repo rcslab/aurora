@@ -13,15 +13,14 @@ int main(int argc, char* argv[]) {
 	int nfds;
 	int error;
 	int type;
+	int fd;
 	struct restore_param param;
+	char **fds;
 
-	if (argc < 4) {
-		printf("Usage: procdump <PID> <type> <filenames...>\n");
+	if (argc < 3) {
+		printf("Usage: procdump <type> <filenames...>\n");
 		return 0;
 	}
-
-	pid = strtol(argv[1], &argv[1], 10);
-	if (pid < 0) pid = getpid();
 
 	slsmm_fd = open("/dev/slsmm", O_RDWR);
 	if (!slsmm_fd) {
@@ -29,26 +28,39 @@ int main(int argc, char* argv[]) {
 		exit(1); 
 	}
 
-	nfds = argc - 3;
+
+	type = atoi(argv[1]);
+	if (type <= SLSMM_FD_INVALID_LOW || type >= SLSMM_FD_INVALID_HIGH) {
+		printf("ERROR: Invalid checkpointing type (1 - file, 2 - memory)\n");
+		exit(1);
+	}
+
+	/* The fds fds now an array of fds of size nfds */
+	nfds = argc - 2;
+	fds = &argv[2];
+
 	file_fds = malloc(sizeof(int) * nfds);
-	if (argv[2][0] == '0') {
-		type = SLSMM_FD_FILE;
-		for (int i = 0; i < nfds; i ++) {
-			file_fds[i] = open(argv[i+3], O_RDONLY);
-			if (!file_fds[i]) {
-				printf("ERROR: Checkpoint file not opened\n");
-				exit(1); 
+	for (int i = 0; i < nfds; i ++) {
+
+		if (type == SLSMM_FD_FILE) {
+			fd = open(fds[i], O_RDONLY);
+			if (fd < 0) {
+				perror("open");
+				exit(1);
 			}
 		}
-	} else if (argv[2][0] == '1') {
-		type = SLSMM_FD_MEM;
-		for (int i = 0; i < nfds; i ++) {
-			file_fds[i] = strtol(argv[i+3], &argv[i+3], 10);
-		}	
+		else {
+			fd = strtol(fds[i], &fds[i], 10);
+			if (!fd) {
+				printf("Error: Invalid mem descriptor %s\n", fds[i]);
+				exit(1);
+			}
+		}
+
+		file_fds[i] = fd;
 	}
 
 	param = (struct restore_param) { 
-		.pid = pid, 
 		.nfds = nfds,
 		.fds = file_fds, 
 		.fd_type = type,

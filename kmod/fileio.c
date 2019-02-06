@@ -10,23 +10,20 @@
 #include <sys/uio.h>
 
 int 
-fd_read(void* addr, size_t len, int d, int type)
+fd_read(void* addr, size_t len, struct sls_desc desc)
 {
-	if (type == SLSMM_FD_FILE)
-		return file_read(addr, len, d);
-	if (type == SLSMM_FD_MEM)
-		return mem_read(addr, len, d);
-	return -1;
+    int index = desc.index;
+    return (desc.type == DESC_FD) ? 
+        file_read(addr, len, index) : mem_read(addr, len, index);
 }
 
 int 
-fd_write(void* addr, size_t len, int d, int type)
+fd_write(void* addr, size_t len, struct sls_desc desc)
 {
-	if (type == SLSMM_FD_FILE)
-		return file_write(addr, len, d);
-	if (type == SLSMM_FD_MEM)
-		return mem_write(addr, len, d);
-	return -1;
+    int index = desc.index;
+    return (desc.type == DESC_FD) ? 
+        file_write(addr, len, index) : mem_write(addr, len, index);
+
 }
 
 int
@@ -261,4 +258,23 @@ md_reset(int md)
 	mds[md].block_offset = 0;
 	mds[md].inblock_offset = 0;
 	return 0;
+}
+
+struct sls_desc 
+create_desc(int index, int fd_type, bool restoring)
+{
+    int md; 
+    
+    md = restoring ? index : new_md();
+
+    if (fd_type == SLSMM_FD_MEM) 
+        return (struct sls_desc) {
+            .type = DESC_MD,
+            .index = md
+        };
+    else  
+        return (struct sls_desc) {
+            .type = DESC_FD,
+            .index = index
+        };
 }

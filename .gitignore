@@ -6,6 +6,7 @@ kmod/vnode_if*.h
 
 tests/array/array
 tests/compute/compute
+tests/fd/fd
 tests/mmap/mmap
 tests/multithread/multithread
 tests/print/print
@@ -13,9 +14,11 @@ tests/register/register
 tests/signal/signal
 tests/sleep/sleep
 
+
 tools/hexdump/slsmm_hexdump
 tools/procdump/procdump
 tools/procrestore/procrestore
+tools/stressdump/stressdump
 
 *.ko
 *.o
@@ -25,3 +28,6 @@ tools/procrestore/procrestore
 *.full
 *.core
 *.depend*
+*~*
+*garbage*
+.nfs*

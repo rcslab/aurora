@@ -27,7 +27,6 @@ struct dump_param {
 };
 
 struct restore_param {
-	int	pid;
 	int	nfds;
 	int	*fds;
 	int	fd_type;
@@ -41,7 +40,9 @@ struct restore_param {
 #define SLSMM_CKPT_FULL		0
 #define SLSMM_CKPT_DELTA	1
 
-#define SLSMM_FD_FILE	0
-#define SLSMM_FD_MEM	1
+#define SLSMM_FD_INVALID_LOW 	0
+#define SLSMM_FD_FILE	 	1
+#define SLSMM_FD_MEM	 	2
+#define SLSMM_FD_INVALID_HIGH 	3
 
 #endif

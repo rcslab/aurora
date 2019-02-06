@@ -95,13 +95,6 @@ proc_checkpoint(struct proc *p, struct proc_info *proc_info, struct thread_info 
 	proc_info->pid = p->p_pid;
 	proc_info->magic = SLS_PROC_INFO_MAGIC;
 
-	/*
-	 * TODO: Checkpoint file descriptors. Maybe check if a
-	 * file descriptor is a regular file before checkpointing? 
-	 * If it's a special file that corresponds to stuff we cannot
-	 * checkpoint, it is no use storing it.
-	 */
-
 	sigacts_copy(&proc_info->sigacts, p->p_sigacts);
 
 	threadno = 0;
@@ -128,14 +121,6 @@ proc_restore(struct proc *p, struct proc_info *proc_info, struct thread_info *th
 	int threadno;
 
 	/* TODO: Change PID if possible (or even feasible) */
-	/*
-	 * TODO: Change the number of threads in the process 
-	 * to match those of the checkpointed process 
-	 */
-	/*
-	 * TODO: Restore file descriptors. See proc_checkpoint for thoughts
-	 * on that.
-	 */
 
 	/*
 	 * We bcopy the exact way it's done in sigacts_copy().
@@ -154,7 +139,6 @@ proc_restore(struct proc *p, struct proc_info *proc_info, struct thread_info *th
 
 	for (threadno = 1; threadno < proc_info->nthreads; threadno++) {
 		thread_create(curthread, NULL, thread_restore, (void *) &thread_infos[threadno]);
-		//thread_create(curthread, NULL, initialize_thread_noop, NULL);
 	}
 
 	return 0;

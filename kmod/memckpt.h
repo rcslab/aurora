@@ -48,13 +48,8 @@ struct vm_map_entry_info {
 	vm_prot_t max_protection;
 
 	/* State of the object*/
-	/*
-	 * What _exactly_ is this? Can't we use the 
-	 * map entry's bounds? I suspect this size
-	 * has to do with the number of resident
-	 * pages, in which case it's wrong wrong wrong
-	 */
 	vm_pindex_t size;
+    int resident_page_count;
 	enum obj_type type;
 
 	/* Used for mmap'd pages */

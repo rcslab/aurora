@@ -1,0 +1,43 @@
+- Create compatibility layer. This includes:
+	- PID and TID shadowing for all relevant syscalls.
+	The only limitation we're going to have after that is
+	if an external process/thread is using one of the PIDs/TIDs
+	the restored process thinks it has.
+	- Intercepting file opens, so that we always have a 1-1
+	correspondence between fd's and names. 
+	- Intercepting remappings and unmappings. Right now if a process
+	unmaps an area and maps a new area on top of it, that 
+	new area is clean and we do not update the diff correctly.
+- Fix the dump inspector
+- Look into the imprecise restore of the register test
+- In general, verify that the restored benchmarks actually execute
+correctly
+- Look into why we can't find the pathname of objects in UFS (and only UFS???)
+- Refactor pathname lookup into a new function
+- Refactor the shadow object hack
+- Perfect the reconstruction of the address space, right now it's almost there
+but consecutive unmapped areas get merged
+- Test suite
+- Reason about what to do with swapping. I propose we turn it off for now 
+completely, and deal with it when we have the object store.
+
+------------------------------------------------------------------------
+Codify dump shape. Right now it's:
+
+- proc_info 
+- n * thread_info
+- filedesc_info
+- cdir (string)
+- rdir (string)
+- n * (struct file_info + filename (string))
+- vmspace_info
+- n * map entries:
+	- vm_map_entry_info
+	- 0-1: filename
+	- vm_offset_t
+	- n * PAGE
+	
+The thorny parts are the strings, as well as the actual data
+------------------------------------------------------------------------
+
+

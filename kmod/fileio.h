@@ -3,8 +3,21 @@
 
 #include <sys/types.h>
 
-int fd_read(void* addr, size_t len, int fd, int type);
-int fd_write(void* addr, size_t len, int fd, int type);
+enum descriptor_type {
+    DESC_FD,
+    DESC_MD,
+    DESCRIPTOR_SIZE,
+};
+
+struct sls_desc{
+    enum descriptor_type type; 
+    int index;
+};
+
+struct sls_desc create_desc(int fd, int fd_type, bool restoring);
+
+int fd_read(void* addr, size_t len, struct sls_desc desc);
+int fd_write(void* addr, size_t len, struct sls_desc desc);
 
 int file_read(void* addr, size_t len, int fd);
 int file_write(void* addr, size_t len, int fd);
