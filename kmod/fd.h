@@ -9,13 +9,13 @@
 #define SLS_FILE_INFO_MAGIC 0x736c7234
 struct file_info {
 	/* 
-	 * Let's hope the private data doesn't get used
-	 * for regular files, because we're not saving it.
-	 */
+	* Let's hope the private data doesn't get used
+	* for regular files, because we're not saving it.
+	*/
 	/*
-	 * XXX Merge with mmap stuff, there's 
-	 * duplication when doing vnode to filename conversions and back.
-	 */
+	* XXX Merge with mmap stuff, there's 
+	* duplication when doing vnode to filename conversions and back.
+	*/
 	int fd;
 	char *filename;
 	size_t filename_len;
@@ -25,11 +25,11 @@ struct file_info {
 
 	off_t offset;
 
-	
+
 	/* 
-	 * Let's not bother with this flag from the filedescent struct.
-	 * It's only about autoclosing on exec, and we don't really care right now 
-	 */
+	* Let's not bother with this flag from the filedescent struct.
+	* It's only about autoclosing on exec, and we don't really care right now 
+	*/
 	/* uint8_t fde_flags; */
 	int magic;
 };
@@ -41,8 +41,8 @@ struct filedesc_info {
 
 	char *rdir;
 	size_t rdir_len;
-    /* TODO jdir */
-	
+	/* TODO jdir */
+
 	u_short fd_cmask;
 	/* XXX Should these go to 1? */
 	int fd_refcnt;

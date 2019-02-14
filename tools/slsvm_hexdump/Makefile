@@ -1,5 +1,5 @@
 PROG = slsmm_hexdump
-SRCS = slsmm_hexdump.c
+SRCS = slsmm_hexdump.c sls_user.c
 MAN =
 
 CFLAGS += -I../../kmod

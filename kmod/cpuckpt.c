@@ -31,15 +31,15 @@ thread_checkpoint(struct thread *td, struct thread_info *thread_info)
 
 	error = proc_read_regs(td, &thread_info->regs);
 	if (error) {
-		thread_unlock(td);
-		printf("CPU reg dump error %d\n", error);
-		return 0;
+	    thread_unlock(td);
+	    printf("CPU reg dump error %d\n", error);
+	    return 0;
 	}
 
 	error = proc_read_fpregs(td, &thread_info->fpregs);
 	if (error) {
-		printf("CPU fpreg dump error %d\n", error);
-		return 0;
+	    printf("CPU fpreg dump error %d\n", error);
+	    return 0;
 	}
 
 	bcopy(&td->td_sigmask, &thread_info->sigmask, sizeof(sigset_t));
@@ -71,7 +71,7 @@ thread_restore(struct thread *td, void *thunk)
 	bcopy(&thread_info->oldsigmask, &td->td_oldsigmask, sizeof(sigset_t));
 
 	/*
-	 * Yeah, not a good idea (for now).
+	* Yeah, not a good idea (for now).
 	thread_info->tid = td->td_tid;
 	*/
 
@@ -99,10 +99,10 @@ proc_checkpoint(struct proc *p, struct proc_info *proc_info, struct thread_info 
 
 	threadno = 0;
 	FOREACH_THREAD_IN_PROC(p, td) {
-		thread_lock(td);
-		thread_checkpoint(td, &thread_infos[threadno]);
-		thread_unlock(td);
-		threadno++;
+	    thread_lock(td);
+	    thread_checkpoint(td, &thread_infos[threadno]);
+	    thread_unlock(td);
+	    threadno++;
 	}
 
 	return 0;
@@ -123,22 +123,24 @@ proc_restore(struct proc *p, struct proc_info *proc_info, struct thread_info *th
 	/* TODO: Change PID if possible (or even feasible) */
 
 	/*
-	 * We bcopy the exact way it's done in sigacts_copy().
-	 */
+	* We bcopy the exact way it's done in sigacts_copy().
+	*/
 	newsigacts = sigacts_alloc();
 	bcopy(&proc_info->sigacts, newsigacts, offsetof(struct sigacts, ps_refcnt));
 
 	oldsigacts = p->p_sigacts;
 	p->p_sigacts = newsigacts;
 	sigacts_free(oldsigacts);
-	
+
 	/* The first thread of the new process is this one. */
+	/*
 	thread_lock(curthread);
 	thread_restore(curthread, (void *) &thread_infos[0]);
 	thread_unlock(curthread);
+	*/
 
-	for (threadno = 1; threadno < proc_info->nthreads; threadno++) {
-		thread_create(curthread, NULL, thread_restore, (void *) &thread_infos[threadno]);
+	for (threadno = 0; threadno < proc_info->nthreads; threadno++) {
+	    thread_create(curthread, NULL, thread_restore, (void *) &thread_infos[threadno]);
 	}
 
 	return 0;

@@ -14,7 +14,7 @@ struct sls_desc{
     int index;
 };
 
-struct sls_desc create_desc(int fd, int fd_type, bool restoring);
+struct sls_desc create_desc(int fd, int fd_type, int restoring);
 
 int fd_read(void* addr, size_t len, struct sls_desc desc);
 int fd_write(void* addr, size_t len, struct sls_desc desc);

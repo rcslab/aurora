@@ -6,10 +6,9 @@
 
 int main() 
 {
-	volatile register uint64_t rax asm ("rax");
-	volatile register uint64_t rbx asm ("rbx");
-	volatile register uint64_t rcx asm ("rcx");
-	volatile register uint64_t rdx asm ("rdx");
+	volatile register uint64_t r13 asm ("r13");
+	volatile register uint64_t r14 asm ("r14");
+	volatile register uint64_t r15 asm ("r15");
 
 	/* XXX We cannot use these registers it seems.
 	volatile register uint16_t cs asm ("cs");
@@ -20,17 +19,14 @@ int main()
 	volatile register uint16_t ss asm ("ss");
 	*/
 
-	int i;
 	uint16_t fs;
 	
 	for (;;) {
-		rax = rbx = rcx = rdx = 0;
+		r13 = r14 = 0;
 
-		for (i = 0; i < CYCLES; i++) {
-			rax += 1;
-			rbx += 2;
-			rcx += 3;
-			rdx += 4;
+		for (r15 = 0; r15 < CYCLES; r15++) {
+			r13 += 1;
+			r14 += 2;
 		}
 
 		asm volatile ("mov %%fs, %0\n\t"
@@ -39,10 +35,7 @@ int main()
 
 
 		printf("fs %u\n", fs);
-		printf("rax %lu\trbx %lu\trax %lu\trdx %lu\t\n", rax, rbx, rcx, rdx);
-		/*
-		printf("cs %d\tds %d\tes %d\tfs %d\tgs %d\tss %d\t\n", cs, ds, es, fs, gs, ss);
-		*/
+		printf("r13 %lu\tr14 %lu\n", r13, r14);
 	}
 
 	return 0;

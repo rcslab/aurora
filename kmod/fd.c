@@ -41,8 +41,8 @@ file_checkpoint(struct file *file, struct file_info *info, int fd)
 
 	error = vnode_to_filename(file->f_vnode, &filename, &filename_len);
 	if (error) {
-		printf("error: vnode_to_filename failed with code %d\n", error);
-		return error;
+	    printf("error: vnode_to_filename failed with code %d\n", error);
+	    return error;
 	}
 
 	info->filename = filename;
@@ -67,34 +67,34 @@ file_restore(struct filedesc *filedesc, struct file_info *info)
 	struct nameidata backing_file;
 	struct file *file;
 	struct vnode *vp __unused;
-    int flags;
-    int cmode;
+	int flags;
+	int cmode;
 	int error = 0;
 
 	error = falloc_noinstall(curthread, &file);
 	if (error)
-		return error;
+	    return error;
 
 	PROC_UNLOCK(curthread->td_proc);
 	FILEDESC_XUNLOCK(filedesc);
 	NDINIT(&backing_file, LOOKUP, FOLLOW, UIO_SYSSPACE, info->filename, curthread);
 
-	flags = info->flag; 
-    cmode = VREAD | VWRITE | VAPPEND;
-    /* 
-     * XXX The cmode flags are hardcoded. This will be fixed when we add
-     * the interposition layer and will be able to 
-     * use the kern_openat() call instead of manually opening the vnode.
-     */
+	flags = info->flag;
+	cmode = VREAD | VWRITE | VAPPEND;
+	/*
+	* XXX The cmode flags are hardcoded. This will be fixed when we add
+	* the interposition layer and will be able to
+	* use the kern_openat() call instead of manually opening the vnode.
+	*/
 	error = vn_open(&backing_file, &flags, cmode, file);
-    NDFREE(&backing_file, NDF_ONLY_PNBUF);
+	NDFREE(&backing_file, NDF_ONLY_PNBUF);
 
 	FILEDESC_XLOCK(filedesc);
 	PROC_LOCK(curthread->td_proc);
 	if (error) {
-        printf("Error: vn_open failed with %d\n", error);
-        return error;
-    }
+	    printf("Error: vn_open failed with %d\n", error);
+	    return error;
+	}
 
 
 	file->f_flag = flags;
@@ -109,16 +109,16 @@ file_restore(struct filedesc *filedesc, struct file_info *info)
 	_finstall(filedesc, file, info->fd, 0, NULL);
 
 	if (file->f_ops == &badfileops) {
-		file->f_seqcount = 1;
-        	finit(file, (flags & FMASK) | (file->f_flag & FHASLOCK), 
-                	DTYPE_VNODE, file->f_vnode, &vnops);
+	    file->f_seqcount = 1;
+	    finit(file, (flags & FMASK) | (file->f_flag & FHASLOCK),
+		    DTYPE_VNODE, file->f_vnode, &vnops);
 	}
 
 	return 0;
 }
 
-int 
-fd_checkpoint(struct filedesc *filedesc, struct filedesc_info *filedesc_info) 
+int
+fd_checkpoint(struct filedesc *filedesc, struct filedesc_info *filedesc_info)
 {
 	int i;
 	char *cdir_path = NULL, *rdir_path = NULL;
@@ -140,20 +140,20 @@ fd_checkpoint(struct filedesc *filedesc, struct filedesc_info *filedesc_info)
 
 	error = vnode_to_filename(cdir, &cdir_path, &cdir_len);
 	if (error) {
-		printf("Error: cdir vnode_to_filename failed with code %d\n", error);
-		goto fd_checkpoint_error;
+	    printf("Error: cdir vnode_to_filename failed with code %d\n", error);
+	    goto fd_checkpoint_error;
 	} else {
-		printf("cdir name: %s\n", cdir_path);
+	    printf("cdir name: %s\n", cdir_path);
 	}
 	filedesc_info->cdir= cdir_path;
 	filedesc_info->cdir_len = cdir_len;
 
 	error = vnode_to_filename(rdir, &rdir_path, &rdir_len);
 	if (error) {
-		printf("Error: rdir vnode_to_filename failed with code %d\n", error);
-		goto fd_checkpoint_error;
+	    printf("Error: rdir vnode_to_filename failed with code %d\n", error);
+	    goto fd_checkpoint_error;
 	} else {
-		printf("rdir name: %s\n", rdir_path);
+	    printf("rdir name: %s\n", rdir_path);
 	}
 	filedesc_info->rdir= rdir_path;
 	filedesc_info->rdir_len = rdir_len;
@@ -161,25 +161,25 @@ fd_checkpoint(struct filedesc *filedesc, struct filedesc_info *filedesc_info)
 	filedesc_info->fd_cmask = filedesc->fd_cmask;
 	filedesc_info->num_files = 0;
 	for (i = 0; i <= filedesc->fd_lastfile; i++) {
-		if (!fdisused(filedesc, i)) {
-			printf("FD %d unused\n", i);
-			continue;
-		}
+	    if (!fdisused(filedesc, i)) {
+		printf("FD %d unused\n", i);
+		continue;
+	    }
 
-		fp = filedesc->fd_files->fdt_ofiles[i].fde_file;
+	    fp = filedesc->fd_files->fdt_ofiles[i].fde_file;
 
-		/* We only handle vnodes right now */
-		if (fp->f_type != DTYPE_VNODE || 
-		    fp->f_vnode->v_type != VREG) 
-		    continue;
+	    /* We only handle vnodes right now */
+	    if (fp->f_type != DTYPE_VNODE ||
+		    fp->f_vnode->v_type != VREG)
+		continue;
 
 
-		index = filedesc_info->num_files;
+	    index = filedesc_info->num_files;
 
-		if(!file_checkpoint(fp, &infos[index], i)) 
-		    filedesc_info->num_files++;
-		else 
-		    printf("file checkpointing for %d failed\n", i); 
+	    if(!file_checkpoint(fp, &infos[index], i))
+		filedesc_info->num_files++;
+	    else
+		printf("file checkpointing for %d failed\n", i);
 	}
 
 	vdrop(cdir);
@@ -187,7 +187,7 @@ fd_checkpoint(struct filedesc *filedesc, struct filedesc_info *filedesc_info)
 
 	FILEDESC_XUNLOCK(filedesc);
 
-    filedesc_info->magic = SLS_FILEDESC_INFO_MAGIC;
+	filedesc_info->magic = SLS_FILEDESC_INFO_MAGIC;
 
 	return 0;
 fd_checkpoint_error:
@@ -203,7 +203,7 @@ fd_checkpoint_error:
 	return error;
 }
 
-int 
+int
 fd_restore(struct filedesc *fdp, struct filedesc_info *info)
 {
 	struct vnode *cdir, *rdir;
@@ -216,14 +216,14 @@ fd_restore(struct filedesc *fdp, struct filedesc_info *info)
 
 	error = filename_to_vnode(info->cdir, &cdir);
 	if (error) {
-		printf("Error: filename_to_vnode failed with %d\n", error);
-		return error;
+	    printf("Error: filename_to_vnode failed with %d\n", error);
+	    return error;
 	}
 
 	error = filename_to_vnode(info->rdir, &rdir);
 	if (error) {
-		printf("Error: filename_to_vnode failed with %d\n", error);
-		return error;
+	    printf("Error: filename_to_vnode failed with %d\n", error);
+	    return error;
 	}
 
 	PROC_LOCK(curthread->td_proc);
@@ -248,7 +248,7 @@ fd_restore(struct filedesc *fdp, struct filedesc_info *info)
 	fdp->fd_cmask = info->fd_cmask;
 
 	for (i = 0; i < info->num_files; i++) {
-		file_restore(fdp, &infos[i]);
+	    file_restore(fdp, &infos[i]);
 	}
 
 	FILEDESC_XUNLOCK(fdp);

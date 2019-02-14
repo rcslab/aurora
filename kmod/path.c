@@ -35,23 +35,23 @@ vnode_to_filename(struct vnode *vp, char **path, size_t *len)
 
 	filename = malloc(PATH_MAX, M_SLSMM, M_NOWAIT);
 	if (filename == NULL) {
-		*path = NULL;
-		return ENOMEM;
+	    *path = NULL;
+	    return ENOMEM;
 	}
 
 	vref(vp);
 	error = vn_fullpath(curthread, vp, &retbuf, &freebuf);
 	vrele(vp);
 	if (error != 0) {
-		printf("vn_fullpath failed: error %d\n", error);
-		free(filename, M_SLSMM);
-		return error; 
+	    printf("vn_fullpath failed: error %d\n", error);
+	    free(filename, M_SLSMM);
+	    return error; 
 	}
 
 	/* 
-	 * If this seems weird, it's because that's how vn_fullpath is supposed
-	 * to work. 
-	 */
+	* If this seems weird, it's because that's how vn_fullpath is supposed
+	* to work. 
+	*/
 	filename_len = strnlen(retbuf, PATH_MAX);
 	strncpy(filename, retbuf, filename_len);
 	filename[filename_len++] = '\0';
@@ -59,7 +59,7 @@ vnode_to_filename(struct vnode *vp, char **path, size_t *len)
 
 	*path = filename;
 	*len = filename_len;
-    printf("Length: %lu, path: %s\n", *len, *path);
+	printf("Length: %lu, path: %s\n", *len, *path);
 
 	return 0;
 }
@@ -73,8 +73,8 @@ filename_to_vnode(char *path, struct vnode **vpp)
 	NDINIT(&backing_file, LOOKUP, FOLLOW, UIO_SYSSPACE, path, curthread);
 	error = namei(&backing_file);
 	if (error) {
-		printf("Error: namei for path failed with %d\n", error);
-		return error;
+	    printf("Error: namei for path failed with %d\n", error);
+	    return error;
 	}
 	*vpp = backing_file.ni_vp;
 

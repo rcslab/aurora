@@ -261,7 +261,7 @@ md_reset(int md)
 }
 
 struct sls_desc 
-create_desc(int index, int fd_type, bool restoring)
+create_desc(int index, int fd_type, int restoring)
 {
     int md; 
     
