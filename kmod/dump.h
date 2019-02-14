@@ -1,6 +1,8 @@
 #ifndef _DUMP_H_
 #define _DUMP_H_
 
+#include <sys/mman.h>
+
 #include "cpuckpt.h"
 #include "fd.h"
 #include "fileio.h"

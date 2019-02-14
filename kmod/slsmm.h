@@ -4,6 +4,7 @@
 #include <sys/types.h>
 
 #include <sys/ioccom.h>
+#include <sys/mman.h>
 #include <sys/module.h>
 #include <sys/param.h>
 #include <sys/pcpu.h>

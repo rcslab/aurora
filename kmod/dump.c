@@ -4,6 +4,7 @@
 #include <sys/kernel.h>
 #include <sys/limits.h>
 #include <sys/malloc.h>
+#include <sys/mman.h>
 #include <sys/module.h>
 #include <sys/param.h>
 #include <sys/pcpu.h>
@@ -155,20 +156,21 @@ load_dump(struct dump *dump, struct sls_desc desc)
 	file_size = sizeof(struct file_info) * dump->filedesc.num_files;
 	entry_size = sizeof(struct vm_map_entry_info) * dump->memory.vmspace.nentries;
 
+	printf("Thread size is %lu\n", thread_size);
 	threads = malloc(thread_size, M_SLSMM, M_NOWAIT);
-	if (threads != NULL) {
+	if (threads == NULL) {
 	    printf("Error: cannot allocate thread_info\n");
 	    return ENOMEM;
 	}
 
 	files = malloc(file_size, M_SLSMM, M_NOWAIT);
-	if (files != NULL) {
+	if (files == NULL) {
 	    printf("Allocation of file infos failed\n");
 	    return ENOMEM;
 	}
 
 	entries = malloc(entry_size, M_SLSMM, M_NOWAIT);
-	if (entries != NULL) {
+	if (entries == NULL) {
 	    printf("Error: cannot allocate entries\n");
 	    return ENOMEM;
 	}
@@ -497,6 +499,7 @@ store_dump(struct dump *dump, vm_object_t *objects, long mode, struct sls_desc d
 	    cur_entry = &entries[i];
 
 	    TAILQ_FOREACH(page, &objects[i]->memq, listq) {
+
 		/*
 		* XXX Does this check make sense? We _are_ getting pages
 		* from a valid object, after all, why would it have NULL

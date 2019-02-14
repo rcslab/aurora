@@ -279,7 +279,7 @@ vm_object_restore(struct vm_map_entry_info *entry, int *flags, boolean_t *writec
 	}
 }
 
-    static void
+static void
 data_restore(struct vmspace *vmspace, vm_object_t object, struct vm_map_entry_info *entry)
 {
 
@@ -309,7 +309,7 @@ data_restore(struct vmspace *vmspace, vm_object_t object, struct vm_map_entry_in
 		*/
 
 		offset = VADDR_TO_IDX(vaddr, entry->start, entry->offset);
-		new_page = vm_page_grab(object, offset, VM_ALLOC_NORMAL);
+		new_page = vm_page_alloc(object, offset, VM_ALLOC_NORMAL);
 
 		addr = userpage_map(new_page->phys_addr);
 		memcpy((void *) addr, (void *) page_entry->data, PAGE_SIZE);
@@ -427,6 +427,12 @@ vmspace_restore(struct proc *p, struct memckpt_info *dump)
 
 	    writecounted = FALSE;
 	    flags = 0;
+
+	    /*XXX HACK  */
+	    if (entry->type == OBJT_DEVICE) {
+		printf("12.0 objt device vm_object hack. Ignoring object.\n");
+		continue;
+	    }
 
 	    /*
 	    * We can have a new_object that is null, in fact this is how

@@ -326,6 +326,7 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data,
 	/* If the restore succeeded, this thread needs to die */
 	if (cmd == SLSMM_RESTORE && error == 0) {
 	    thread_link(td, p);
+	    printf("Restore successful, I guess?\n");
 	    kern_thr_exit(curthread);
 	}
 
