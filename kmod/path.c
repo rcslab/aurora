@@ -23,20 +23,48 @@
 
 #include "_slsmm.h"
 #include "path.h"
+#include "vnhash.h"
 
 int
 vnode_to_filename(struct vnode *vp, char **path, size_t *len)
 {
-	char *filename;
+	char *filename = NULL;
 	char *freebuf = NULL;
 	char *retbuf = "error";
 	int filename_len;
 	int error;
+	struct dump_filename *cached_filename = NULL;
+	struct dump_vnentry *cached_vnentry = NULL;
+	struct vnentry_tailq *vnentry_bucket;
+
+	*path = NULL;
+	*len = 0;
+
+	cached_filename = vnhash_find((void *) vp);
+	if (cached_filename != NULL) {
+	    //printf("PING\n");
+	    *len = cached_filename->len;
+	    *path = cached_filename->string;
+	    return 0;
+	}
+
+	cached_vnentry = malloc(sizeof(*cached_vnentry), M_SLSMM, M_NOWAIT);
+	if (cached_vnentry == NULL) {
+	    error = ENOMEM;
+	    goto vnode_to_filename_error; 
+	}
+
+	cached_filename = malloc(sizeof(*cached_filename), M_SLSMM, M_NOWAIT);
+	if (cached_filename == NULL) {
+	    error = ENOMEM;
+	    goto vnode_to_filename_error; 
+	}
+
 
 	filename = malloc(PATH_MAX, M_SLSMM, M_NOWAIT);
 	if (filename == NULL) {
-	    *path = NULL;
-	    return ENOMEM;
+	    error = ENOMEM;
+	    goto vnode_to_filename_error; 
 	}
 
 	vref(vp);
@@ -45,7 +73,7 @@ vnode_to_filename(struct vnode *vp, char **path, size_t *len)
 	if (error != 0) {
 	    printf("vn_fullpath failed: error %d\n", error);
 	    free(filename, M_SLSMM);
-	    return error; 
+	    goto vnode_to_filename_error; 
 	}
 
 	/* 
@@ -59,9 +87,28 @@ vnode_to_filename(struct vnode *vp, char **path, size_t *len)
 
 	*path = filename;
 	*len = filename_len;
-	printf("Length: %lu, path: %s\n", *len, *path);
+
+	/* Create new entry in the hash table and add it */
+	cached_filename->len = filename_len;
+	cached_filename->string = filename;
+
+	cached_vnentry->dump_filename = cached_filename;
+	cached_vnentry->vnode = (void *) vp;
+
+	vnentry_bucket = &slsnames[(u_long) vp & vnhashmask];
+	LIST_INSERT_HEAD(vnentry_bucket, cached_vnentry, next);
+
+	//printf("Length: %lu, path: %s\n", *len, *path);
 
 	return 0;
+
+vnode_to_filename_error:
+
+	free(filename, M_SLSMM);
+	free(cached_filename, M_SLSMM);
+	free(cached_vnentry, M_SLSMM);
+
+	return error;
 }
 
 int

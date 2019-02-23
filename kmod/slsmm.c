@@ -6,6 +6,7 @@
 #include "fileio.h"
 #include "hash.h"
 #include "fd.h"
+#include "vnhash.h"
 
 #include <sys/types.h>
 
@@ -87,6 +88,8 @@ slsmm_dump(struct proc *p, struct sls_desc desc, int mode)
 
 	nanotime(&t_suspend);
 
+	/* Suspend the process */
+	PROC_LOCK(p);
 	/*
 	* Send the signal before locking, otherwise
 	* the thread state flags don't get updated.
@@ -96,9 +99,9 @@ slsmm_dump(struct proc *p, struct sls_desc desc, int mode)
 	* by using a different kind of STOP (e.g. breakpoint).
 	*/
 	kern_psignal(p, SIGSTOP);
-
-	/* Suspend the process */
+	PROC_UNLOCK(p);
 	PROC_LOCK(p);
+
 
 	nanotime(&t_suspend_complete);
 
@@ -127,10 +130,10 @@ slsmm_dump(struct proc *p, struct sls_desc desc, int mode)
 	nanotime(&t_fd_ckpt);
 
 
-	PROC_UNLOCK(p);
 
 	/* Let the process execute ASAP */
 	kern_psignal(p, SIGCONT);
+	PROC_UNLOCK(p);
 
 	nanotime(&t_resumed);
 
@@ -179,7 +182,9 @@ slsmm_restore(struct proc *p, struct sls_desc *descs, int ndescs)
 	* XXX We don't actually need that, right? We're overwriting ourselves,
 	* so we definitely don't want to stop.
 	*/
+	PROC_LOCK(p);
 	kern_psignal(p, SIGSTOP);
+	PROC_UNLOCK(p);
 
 	PROC_LOCK(p);
 
@@ -189,7 +194,7 @@ slsmm_restore(struct proc *p, struct sls_desc *descs, int ndescs)
 	* we pop the frame pushed in when syscalling. We could create a trampoline
 	* or sth, but this is simpler.
 	*/
-	thread_unlink(curthread);
+	//thread_unlink(curthread);
 
 	error = proc_restore(p, &dump->proc, dump->threads);
 	if (error != 0) {
@@ -209,8 +214,8 @@ slsmm_restore(struct proc *p, struct sls_desc *descs, int ndescs)
 	    goto slsmm_restore_out;
 	}
 
-	PROC_UNLOCK(p);
 	kern_psignal(p, SIGCONT);
+	PROC_UNLOCK(p);
 
 
 	free_dump(dump);
@@ -222,7 +227,7 @@ slsmm_restore(struct proc *p, struct sls_desc *descs, int ndescs)
 }
 
 static int
-slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data,
+slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	int flag __unused, struct thread *td)
 {
 	int error = 0;
@@ -325,8 +330,17 @@ slsmm_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data,
 
 	/* If the restore succeeded, this thread needs to die */
 	if (cmd == SLSMM_RESTORE && error == 0) {
-	    thread_link(td, p);
+	    dev_relthread(dev, 1);
 	    printf("Restore successful, I guess?\n");
+	    /*
+	    //PROC_LOCK(p);
+
+	    //thread_link(curthread, p);
+	    pmap_activate(curthread);
+	    signotify(td);
+
+	    //PROC_UNLOCK(p);
+	    */
 	    kern_thr_exit(curthread);
 	}
 
@@ -344,16 +358,28 @@ SLSMMHandler(struct module *inModule, int inEvent, void *inArg) {
 	int error = 0;
 	switch (inEvent) {
 	    case MOD_LOAD:
+
+		error = setup_vnhash();
+		if (error != 0)
+		    return error;
+
 		printf("Loaded\n");
 		slsmm_dev = make_dev(&slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "slsmm");
 		md_init();
+
 		break;
+
 	    case MOD_UNLOAD:
+
 		printf("Unloaded\n");
 		md_clear();
 		destroy_dev(slsmm_dev);
+		cleanup_vnhash();
+
 		break;
+
 	    default:
+
 		error = EOPNOTSUPP;
 		break;
 	}

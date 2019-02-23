@@ -67,27 +67,14 @@ free_dump(struct dump *dump) {
 	    free(dump->threads, M_SLSMM);
 
 	entries = dump->memory.entries;
-	if (entries) {
-	    for (i = 0; i < dump->memory.vmspace.nentries; i++) {
-		filename = dump->memory.entries[i].filename;
-		if (filename)
-		    free(filename, M_SLSMM);
-	    }
+	if (entries)
 	    free(entries, M_SLSMM);
-	}
 
-	if (dump->filedesc.cdir)
-	    free(dump->filedesc.cdir, M_SLSMM);
-	if (dump->filedesc.rdir)
-	    free(dump->filedesc.rdir, M_SLSMM);
 
 	file_infos = dump->filedesc.infos;
 	if (file_infos) {
-	    for (i = 0; i < dump->filedesc.num_files; i++) {
+	    for (i = 0; i < dump->filedesc.num_files; i++)
 		filename = file_infos[i].filename;
-		if (filename)
-		    free(filename, M_SLSMM);
-	    }
 	    free(file_infos, M_SLSMM);
 	}
 

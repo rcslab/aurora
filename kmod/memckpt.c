@@ -18,6 +18,8 @@
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
+#include <vm/vm_pager.h>
+#include <vm/vm_param.h>
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
@@ -221,7 +223,7 @@ vm_object_restore(struct vm_map_entry_info *entry, int *flags, boolean_t *writec
 		    for (int i = 0; i < HACK_MAX_ENTRIES; i++) {
 			if (entry->backing_object == entry_id[i]) {
 			    old_object = entry_obj[i];
-			    break;	
+			    break;
 			}
 		    }
 
@@ -232,7 +234,6 @@ vm_object_restore(struct vm_map_entry_info *entry, int *flags, boolean_t *writec
 
 		    return old_object;
 		}
-
 
 		return vm_object_allocate(OBJT_DEFAULT, entry->size);
 
@@ -247,7 +248,6 @@ vm_object_restore(struct vm_map_entry_info *entry, int *flags, boolean_t *writec
 		}
 
 
-
 		/*
 		* XXX vm_mmap_vnode() has a ton of useful checks, but
 		* it seems like just grabbing the object also works.
@@ -259,6 +259,8 @@ vm_object_restore(struct vm_map_entry_info *entry, int *flags, boolean_t *writec
 		if (error) {
 		    printf("Error: vm_mmap_vnode failed with error %d\n", error);
 		}
+
+		vm_object_reference(new_object);
 
 		return new_object;
 	    case OBJT_PHYS:
@@ -280,13 +282,14 @@ vm_object_restore(struct vm_map_entry_info *entry, int *flags, boolean_t *writec
 }
 
 static void
-data_restore(struct vmspace *vmspace, vm_object_t object, struct vm_map_entry_info *entry)
+data_restore(struct vm_map *map, vm_object_t object, struct vm_map_entry_info *entry)
 {
 
 	struct dump_page *page_entry;
-	vm_offset_t vaddr, addr;
+	vm_offset_t vaddr, addr __unused;
 	vm_pindex_t offset;
 	vm_page_t new_page;
+	int error;
 
 	/*
 	* Traverse _everything_. This can be obviously be
@@ -294,7 +297,6 @@ data_restore(struct vmspace *vmspace, vm_object_t object, struct vm_map_entry_in
 	* of an address when hashing, and also using more buckets.
 	*/
 
-	VM_OBJECT_WLOCK(object);
 	for (int j = 0; j <= hashmask; j++) {
 	    LIST_FOREACH(page_entry, &slspages[j & hashmask], next) {
 		vaddr = page_entry->vaddr;
@@ -309,18 +311,45 @@ data_restore(struct vmspace *vmspace, vm_object_t object, struct vm_map_entry_in
 		*/
 
 		offset = VADDR_TO_IDX(vaddr, entry->start, entry->offset);
+
+		VM_OBJECT_WLOCK(object);
 		new_page = vm_page_alloc(object, offset, VM_ALLOC_NORMAL);
+
+		if (new_page == NULL) {
+		    printf("Error: vm_page_grab failed\n");
+		    continue;
+		}
+
+		/* XXX Checkpoint and restore page valid/dirty bits? */
+		/*
+		if (new_page->valid != VM_PAGE_BITS_ALL) {
+		    error = vm_pager_get_pages(object, &new_page, 1, NULL, NULL);
+		    if (error != VM_PAGER_OK)
+			panic("page could not be retrieved\n");
+
+		}
+		*/
+
+		new_page->valid = VM_PAGE_BITS_ALL;
+
+		VM_OBJECT_WUNLOCK(object);
 
 		addr = userpage_map(new_page->phys_addr);
 		memcpy((void *) addr, (void *) page_entry->data, PAGE_SIZE);
 		userpage_unmap(addr);
 
-		pmap_enter(vmspace_pmap(vmspace), vaddr, new_page,
+		error = pmap_enter(vm_map_pmap(map), vaddr, new_page,
 			entry->protection, VM_PROT_READ, 0);
+		if (error != 0) {
+		    printf("Error: pmap_enter failed\n");
+		}
+		
+		vm_page_xunbusy(new_page);
+
+
 	    }
 
 	}
-	VM_OBJECT_WUNLOCK(object);
 }
 
 /*
@@ -378,27 +407,29 @@ vmspace_restore(struct proc *p, struct memckpt_info *dump)
 	vm_map = &vmspace->vm_map;
 
 	/*
-	* XXX Reading should be done all at once, before starting restore,
-	* so that we are sure we have succeeded in reading all past state
-	* before going ahead with overwriting the process address space.
-	* Should be taken care of after making sure everything works. The
-	* same holds for the construction of the new vm_map.
-	*/
+	 * XXX Reading should be done all at once, before starting restore,
+	 * so that we are sure we have succeeded in reading all past state
+	 * before going ahead with overwriting the process address space.
+	 * Should be taken care of after making sure everything works. The
+	 * same holds for the construction of the new vm_map.
+	 */
 
 	/*
-	* Blow away the old address space, as done in exec_new_vmspace
-	*/
-
+	 * Blow away the old address space, as done in exec_new_vmspace
+	 */
+	/* XXX We have to look further into how to handle System V shmem */
+	/* XXX Only FreeBSD binaries for now*/
+	/* XXX vmspace_exec does _not_ work rn */
+	shmexit(vmspace);
 	pmap_remove_pages(vmspace_pmap(vmspace));
 	vm_map_remove(vm_map, vm_map_min(vm_map), vm_map_max(vm_map));
-
-	/* XXX We have to look further into how to handle System V shmem */
-	shmexit(vmspace);
-
-	/* If all pages were wired using mlockall(), undo that */
 	vm_map_lock(vm_map);
 	vm_map_modflags(vm_map, 0, MAP_WIREFUTURE);
 	vm_map_unlock(vm_map);
+
+	/* Refresh the values in case they changed above */
+	vmspace = p->p_vmspace;
+	vm_map = &vmspace->vm_map;
 
 
 	/* Copy vmspace state to the existing vmspace */
@@ -410,15 +441,17 @@ vmspace_restore(struct proc *p, struct memckpt_info *dump)
 	vmspace->vm_taddr = dump->vmspace.vm_daddr;
 	vmspace->vm_maxsaddr = dump->vmspace.vm_maxsaddr;
 
+
 	/* restore vm_map entries */
 	for (int i = 0; i < dump->vmspace.nentries; i++) {
 
+	    printf("object being restored:entry %d\n", i);
 	    /*
-	    * We assume no entry will span the whole virtual address space,
-	    * so ULONG_MAX is a sentinel value for when there is no object
-	    * backing an entry. We do not know why there are entries without
-	    * a backing object, to be honest.
-	    */
+	     * We assume no entry will span the whole virtual address space,
+	     * so ULONG_MAX is a sentinel value for when there is no object
+	     * backing an entry. We do not know why there are entries without
+	     * a backing object, to be honest.
+	     */
 
 	    entry = &dump->entries[i];
 
@@ -435,9 +468,9 @@ vmspace_restore(struct proc *p, struct memckpt_info *dump)
 	    }
 
 	    /*
-	    * We can have a new_object that is null, in fact this is how
-	    * we would normally create an anonymous mapping.
-	    */
+	     * We can have a new_object that is null, in fact this is how
+	     * we would normally create an anonymous mapping.
+	     */
 	    new_object = vm_object_restore(entry, &flags, &writecounted);
 
 	    /* XXX Shadow hack */
@@ -445,25 +478,24 @@ vmspace_restore(struct proc *p, struct memckpt_info *dump)
 
 
 	    cow = map_flags_from_entry(entry->eflags);
+	    vm_map_lock(vm_map);
 	    error = vm_map_insert(vm_map, new_object, entry->offset,
 		    entry->start, entry->end,
 		    entry->protection, entry->max_protection,
 		    cow);
+	    vm_map_unlock(vm_map);
 	    if (error) {
 		printf("Error: vm_map_insert failed with %d\n", error);
 		return error;
 	    }
 
-
-	    /* Restore the pages */
-	    /*
-	    * XXX Restoring vnode-backed pages softlocks the system.
-	    * Every single window freezes (without crashing though).
-	    */
-	    if (new_object && entry->type != OBJT_VNODE)
-		data_restore(vmspace, new_object, entry);
-
+	    
+	    if (new_object && new_object->type != OBJT_VNODE)
+		data_restore(vm_map, new_object, entry);
+	    printf("restored object: %d\n", i);
 	}
+	    
+
 
 	return 0;
 }

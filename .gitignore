@@ -7,6 +7,8 @@ kmod/vnode_if*.h
 tests/array/array
 tests/compute/compute
 tests/fd/fd
+tests/llist/llist
+tests/memory/memory
 tests/mmap/mmap
 tests/multithread/multithread
 tests/print/print

@@ -64,8 +64,10 @@ thread_restore(struct thread *td, void *thunk)
 	int error = 0;
 	struct thread_info *thread_info = (struct thread_info *) thunk;
 
+	PROC_LOCK(td->td_proc);
 	error = proc_write_regs(td, &thread_info->regs);
 	error = proc_write_fpregs(td, &thread_info->fpregs);
+	PROC_UNLOCK(td->td_proc);
 
 	bcopy(&thread_info->sigmask, &td->td_sigmask, sizeof(sigset_t));
 	bcopy(&thread_info->oldsigmask, &td->td_oldsigmask, sizeof(sigset_t));
@@ -90,12 +92,17 @@ proc_checkpoint(struct proc *p, struct proc_info *proc_info, struct thread_info 
 {
 	struct thread *td;
 	int threadno;
+	struct sigacts *sigacts;
 
 	proc_info->nthreads = p->p_numthreads;
 	proc_info->pid = p->p_pid;
 	proc_info->magic = SLS_PROC_INFO_MAGIC;
 
-	sigacts_copy(&proc_info->sigacts, p->p_sigacts);
+	sigacts = p->p_sigacts;
+
+	mtx_lock(&sigacts->ps_mtx);
+	bcopy(sigacts, &proc_info->sigacts, offsetof(struct sigacts, ps_refcnt));
+	mtx_unlock(&sigacts->ps_mtx);
 
 	threadno = 0;
 	FOREACH_THREAD_IN_PROC(p, td) {
@@ -139,9 +146,11 @@ proc_restore(struct proc *p, struct proc_info *proc_info, struct thread_info *th
 	thread_unlock(curthread);
 	*/
 
+	PROC_UNLOCK(p);
 	for (threadno = 0; threadno < proc_info->nthreads; threadno++) {
 	    thread_create(curthread, NULL, thread_restore, (void *) &thread_infos[threadno]);
 	}
+	PROC_LOCK(p);
 
 	return 0;
 }

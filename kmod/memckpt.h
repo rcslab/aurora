@@ -89,7 +89,6 @@ struct memckpt_info {
 	struct vm_map_entry_info *entries;
 };
 
-
 vm_offset_t userpage_map(vm_paddr_t phys_addr);
 void userpage_unmap(vm_offset_t vaddr);
 
