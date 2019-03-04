@@ -5,9 +5,9 @@
 
 #include "cpuckpt.h"
 #include "fd.h"
-#include "fileio.h"
 #include "memckpt.h"
 #include "slsmm.h"
+#include "backends/fileio.h"
 
 #define SLS_DUMP_MAGIC 0x736c7525
 struct dump {

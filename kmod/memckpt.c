@@ -27,8 +27,8 @@
 #include "memckpt.h"
 #include "_slsmm.h"
 #include "slsmm.h"
-#include "fileio.h"
 #include "path.h"
+#include "backends/fileio.h"
 
 
 /* Map a user memory area to kernelspace. */
@@ -182,7 +182,7 @@ vmspace_checkpoint(struct vmspace *vmspace, struct memckpt_info *dump, vm_object
 	    * since we are soon going into unmapped territory with this
 	    * (i.e. fork).
 	    */
-	    if (mode == DELTA_DUMP && objects[i]) {
+	    if (mode == SLSMM_CKPT_DELTA && objects[i]) {
 		vm_object_reference(entry->object.vm_object);
 		vm_object_shadow(&entry->object.vm_object, &entry->offset,
 			entry->end-entry->start);

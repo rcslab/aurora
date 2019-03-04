@@ -50,20 +50,12 @@ int main(int argc, char* argv[]) {
 		.fd = file_fd, 
 		.pid = pid, 
 		.fd_type = type,
+		.dump_mode = mode,
 	};
 
     for (i = 0; i < ITERATIONS; i++) {
         gettimeofday(&start, NULL);
-        switch (mode) {
-            
-            case SLSMM_CKPT_FULL:
-                ioctl(slsmm_fd, FULL_DUMP, &param);
-                break;
-
-            case SLSMM_CKPT_DELTA:
-                ioctl(slsmm_fd, DELTA_DUMP, &param);
-                break;
-        }
+	ioctl(slsmm_fd, SLSMM_DUMP, &param);
         gettimeofday(&end, NULL);
         duration = (1000 * 1000 * (end.tv_sec - start.tv_sec)) + 
                         (end.tv_usec - start.tv_usec);

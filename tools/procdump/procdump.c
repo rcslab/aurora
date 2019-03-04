@@ -16,19 +16,21 @@
 
 int main(int argc, char* argv[]) {
 	int pid;
-	int slsmm_fd, file_fd = 0;
+	int slsmm_fd;
 	int error;
 	int mode;
 	int type;
+	int async;
 	struct dump_param param;
 
-	if (argc != 4) {
-		printf("Usage: procdump <filename> <PID> <Mode>\n");
+	if (argc != 5) {
+		printf("Usage: procdump <filename> <PID> <Mode> <Sync=0/Async=1>\n");
 		return 0;
 	}
 
-	pid = strtol(argv[argc-2], &argv[argc-2], 10); 
-	mode = strtol(argv[argc-1], &argv[argc-1], 10); 
+	pid = strtol(argv[argc-3], &argv[argc-3], 10); 
+	mode = strtol(argv[argc-2], &argv[argc-2], 10); 
+	async = strtol(argv[argc-1], &argv[argc-1], 10); 
 	type = strcmp(argv[1], MEMDESC) ? 
 				SLSMM_FD_FILE : SLSMM_FD_MEM;
 
@@ -38,34 +40,34 @@ int main(int argc, char* argv[]) {
 		exit(1); 
 	}
 
-	if (type == SLSMM_FD_FILE) {
-		file_fd = open(argv[1], O_WRONLY | O_CREAT | O_APPEND | O_TRUNC);
-		if (!file_fd) {
-			printf("ERROR: Checkpoint file not opened\n");
-			exit(1); 
-		}
-	}
+
 
 	param = (struct dump_param) { 
-		.fd = file_fd, 
+		.name = argv[1],
+		.len = strnlen(argv[1], 1024),
 		.pid = pid, 
 		.fd_type = type,
+		.dump_mode = mode,
 	};
 
-	switch (mode) {
-		case SLSMM_CKPT_FULL:
-			ioctl(slsmm_fd, FULL_DUMP, &param);
-			break;
+	if (async) {
+	    ioctl(slsmm_fd, SLSMM_ASYNC_DUMP, &param);
+	    int flushed;
+	    do {
+		sleep(1);
+		ioctl(slsmm_fd, SLSMM_FLUSH_COUNT, &flushed);
+		printf("request id: %d, current: %d\n", param.request_id, flushed);
+	    } while (param.request_id != flushed);
 
-		case SLSMM_CKPT_DELTA:
-			ioctl(slsmm_fd, DELTA_DUMP, &param);
-			break;
-	}
 
+	} else
+	    ioctl(slsmm_fd, SLSMM_DUMP, &param);
+
+	/*
 	if (type == SLSMM_FD_MEM) 
-		printf("memory descriptor: %d\n", param.fd);
+	    printf("memory descriptor: %d\n", param.fd);
+	*/
 
-	close(file_fd);
 	close(slsmm_fd);
 
 	return 0;

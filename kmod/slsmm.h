@@ -22,9 +22,12 @@
 #include "hash.h"
 
 struct dump_param {
-	int	fd;
+	void	*name;
+	size_t	len;
 	int	pid;
 	int	fd_type;
+	int	dump_mode;
+	int	request_id;
 };
 
 struct restore_param {
@@ -34,9 +37,10 @@ struct restore_param {
 };
 
 
-#define FULL_DUMP	_IOWR('d', 1, struct dump_param)
-#define DELTA_DUMP	_IOWR('d', 2, struct dump_param)
-#define SLSMM_RESTORE	_IOW('r', 1, struct restore_param)
+#define SLSMM_DUMP		_IOWR('d', 1, struct dump_param)
+#define SLSMM_ASYNC_DUMP	_IOWR('d', 2, struct dump_param)
+#define SLSMM_FLUSH_COUNT	_IOR('d', 3, int)
+#define SLSMM_RESTORE		_IOW('r', 1, struct restore_param)
 
 #define SLSMM_CKPT_FULL		0
 #define SLSMM_CKPT_DELTA	1
@@ -44,6 +48,7 @@ struct restore_param {
 #define SLSMM_FD_INVALID_LOW 	0
 #define SLSMM_FD_FILE	 	1
 #define SLSMM_FD_MEM	 	2
-#define SLSMM_FD_INVALID_HIGH 	3
+#define SLSMM_FD_NVDIMM	 	3
+#define SLSMM_FD_INVALID_HIGH 	4
 
 #endif

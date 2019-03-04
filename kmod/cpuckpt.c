@@ -14,7 +14,6 @@
 #include <machine/sysarch.h>
 
 #include "cpuckpt.h"
-#include "fileio.h"
 #include "_slsmm.h"
 
 /*

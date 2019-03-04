@@ -3,16 +3,17 @@
 #include "dump.h"
 #include "memckpt.h"
 #include "slsmm.h"
-#include "fileio.h"
+#include "backends/fileio.h"
 #include "hash.h"
 #include "fd.h"
-#include "vnhash.h"
+#include "bufc.h"
 
 #include <sys/types.h>
 
 #include <sys/conf.h>
 #include <sys/filedesc.h>
 #include <sys/kernel.h>
+#include <sys/kthread.h>
 #include <sys/limits.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
@@ -145,12 +146,12 @@ slsmm_dump(struct proc *p, struct sls_desc desc, int mode)
 
 	nanotime(&t_flush_disk);
 
-	uprintf("suspend        %ldns\n", t_suspend_complete.tv_nsec-t_suspend.tv_nsec);
-	uprintf("proc_ckpt  %ldns\n", t_proc_ckpt.tv_nsec-t_suspend_complete.tv_nsec);
-	uprintf("fd_ckpt    %ldns\n", t_vmspace_ckpt.tv_nsec-t_proc_ckpt.tv_nsec);
-	uprintf("vmspace        %ldns\n", t_fd_ckpt.tv_nsec-t_vmspace_ckpt.tv_nsec);
-	uprintf("total_suspend  %ldns\n", t_resumed.tv_nsec-t_suspend.tv_nsec);
-	uprintf("flush_disk %ldns\n", t_flush_disk.tv_nsec-t_resumed.tv_nsec);
+	uprintf("suspend		%ldns\n", t_suspend_complete.tv_nsec-t_suspend.tv_nsec);
+	uprintf("proc_ckpt	%ldns\n", t_proc_ckpt.tv_nsec-t_suspend_complete.tv_nsec);
+	uprintf("fd_ckpt		%ldns\n", t_vmspace_ckpt.tv_nsec-t_proc_ckpt.tv_nsec);
+	uprintf("vmspace		%ldns\n", t_fd_ckpt.tv_nsec-t_vmspace_ckpt.tv_nsec);
+	uprintf("total_suspend	%ldns\n", t_resumed.tv_nsec-t_suspend.tv_nsec);
+	uprintf("flush_disk	%ldns\n", t_flush_disk.tv_nsec-t_resumed.tv_nsec);
 
     slsmm_dump_cleanup:
 	free(objects, M_SLSMM);
@@ -226,6 +227,11 @@ slsmm_restore(struct proc *p, struct sls_desc *descs, int ndescs)
 	return error;
 }
 
+/* TEMP ( +1 for possible extra \0 */
+static char sls_ckptname[1024 + 1];
+static chan_t *chan;
+static volatile int request_count, flush_count;
+
 static int
 slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	int flag __unused, struct thread *td)
@@ -236,6 +242,7 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	struct proc *p = NULL;
 	struct sls_desc *descs = NULL;
 	struct sls_desc desc;
+	void* chan_data;
 	int *fds = NULL;
 	int fd_type;
 	int ndescs;
@@ -258,40 +265,68 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	* In general, a nice optimization would be to use
 	* swapped out pages as part of out checkpoint.
 	*/
-	if (cmd == SLSMM_RESTORE) {
-	    rparam = (struct restore_param *) data;
-	    fd_type = rparam->fd_type;
-	    error = pget(curthread->td_proc->p_pid, PGET_WANTREAD, &p);
-
-	} else {
-	    dparam = (struct dump_param *) data;
-	    fd_type = dparam->fd_type;
-	    error = pget(dparam->pid, PGET_WANTREAD, &p);
-
-	}
-	if (error != 0) {
-	    printf("Error: pget failed with code %d\n", error);
-	    return error;
-	}
-
-	if (fd_type != SLSMM_FD_FILE && fd_type != SLSMM_FD_MEM) {
-	    printf("Error: Invalid checkpoint fd type %d\n", fd_type);
-	    error = EINVAL;
-	    goto slsmm_ioctl_out;
-	}
 
 	switch (cmd) {
-	    case FULL_DUMP:
-		desc = create_desc(dparam->fd, dparam->fd_type, false);
-		error = slsmm_dump(p, desc, SLSMM_CKPT_FULL);
+	    case SLSMM_DUMP:
+		dparam = (struct dump_param *) data;
+		error = copyin(dparam->name, sls_ckptname, MIN(dparam->len, 1024));
+		if (error != 0) {
+		    printf("Error: Copying name failed with %d\n", error);
+		    break;
+		}
+		sls_ckptname[dparam->len] = '\0';
+
+		error = pget(dparam->pid, PGET_WANTREAD, &p);
+		if (error != 0) {
+		    printf("Error: pget failed with %d\n", error);
+		    break;
+		} else {
+		    /* Only files for now */
+		    desc = create_desc((long) dparam->name, dparam->fd_type);
+		    if (desc.type == DESCRIPTOR_SIZE) { 
+			printf("Error: invalid descriptor\n");
+		    } else {
+			error = slsmm_dump(p, desc, dparam->dump_mode);
+		    }
+		    PRELE(p);
+		}
+
 		break;
 
-	    case DELTA_DUMP:
-		desc = create_desc(dparam->fd, dparam->fd_type, false);
-		error = slsmm_dump(p, desc, SLSMM_CKPT_DELTA);
+	    case SLSMM_ASYNC_DUMP:
+		dparam = (struct dump_param *) data;
+		error = copyin(dparam->name, sls_ckptname, MAX(dparam->len, 1024));
+		if (error != 0) {
+		    printf("Error: Copying name failed with %d\n", error);
+		    break;
+		}
+		sls_ckptname[dparam->len] = '\0';
+
+		request_count++;
+		dparam->request_id = request_count;
+		chan_data = malloc(sizeof(struct dump_param), M_SLSMM, M_NOWAIT);
+		memcpy(chan_data, dparam, sizeof(struct dump_param));
+		chan_send(chan, chan_data);
+		break;
+
+	    case SLSMM_FLUSH_COUNT:
+		*((int *) data) = flush_count;
 		break;
 
 	    case SLSMM_RESTORE:
+		rparam = (struct restore_param *) data;
+		fd_type = rparam->fd_type;
+		error = pget(curthread->td_proc->p_pid, PGET_WANTREAD, &p);
+		if (fd_type != SLSMM_FD_FILE && fd_type != SLSMM_FD_MEM) {
+		    printf("Error: Invalid checkpoint fd type %d\n", fd_type);
+		    error = EINVAL;
+		    goto slsmm_ioctl_out;
+		}
+		if (error != 0) {
+		    printf("Error: pget failed with code %d\n", error);
+		    return error;
+		}
+
 		fds = malloc(sizeof(int) * rparam->nfds, M_SLSMM, M_NOWAIT);
 		if (fds == 0) {
 		    printf("Error: Allocating fds failed\n");
@@ -315,33 +350,24 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		}
 
 		for (i = 0; i < ndescs; i++)
-		    descs[i] = create_desc(fds[i], rparam->fd_type, true);
+		    descs[i] = create_desc(fds[i], rparam->fd_type);
 
 		error = slsmm_restore(p, descs, ndescs);
+
+slsmm_ioctl_out:
+		free(descs, M_SLSMM);
+		free(fds, M_SLSMM);
+
+		/* Release the hold we got when looking up the proc structure */
+		PRELE(p);
+
+		/* If the restore succeeded, this thread needs to die */
+		if (error == 0) {
+		    thread_link(td, p);
+		    printf("Restore successful, I guess?\n");
+		    kern_thr_exit(curthread);
+		}
 		break;
-	}
-
-    slsmm_ioctl_out:
-	free(descs, M_SLSMM);
-	free(fds, M_SLSMM);
-
-	/* Release the hold we got when looking up the proc structure */
-	PRELE(p);
-
-	/* If the restore succeeded, this thread needs to die */
-	if (cmd == SLSMM_RESTORE && error == 0) {
-	    dev_relthread(dev, 1);
-	    printf("Restore successful, I guess?\n");
-	    /*
-	    //PROC_LOCK(p);
-
-	    //thread_link(curthread, p);
-	    pmap_activate(curthread);
-	    signotify(td);
-
-	    //PROC_UNLOCK(p);
-	    */
-	    kern_thr_exit(curthread);
 	}
 
 	return error;
@@ -354,42 +380,74 @@ static struct cdevsw slsmm_cdevsw = {
 static struct cdev *slsmm_dev;
 
 static int
-SLSMMHandler(struct module *inModule, int inEvent, void *inArg) {
-	int error = 0;
-	switch (inEvent) {
-	    case MOD_LOAD:
 
-		error = setup_vnhash();
-		if (error != 0)
-		    return error;
+chan_handler()
+{
+    struct dump_param *dparam = NULL;
+    struct sls_desc desc;
+    struct proc *p = NULL;
+    int error;
 
-		printf("Loaded\n");
-		slsmm_dev = make_dev(&slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "slsmm");
-		md_init();
+    for (;;) {
+	dparam = chan_recv(chan);
 
-		break;
-
-	    case MOD_UNLOAD:
-
-		printf("Unloaded\n");
-		md_clear();
-		destroy_dev(slsmm_dev);
-		cleanup_vnhash();
-
-		break;
-
-	    default:
-
-		error = EOPNOTSUPP;
-		break;
+	printf("request %d %d\n", dparam->pid, dparam->request_id);
+	error = pget(dparam->pid, PGET_WANTREAD, &p);
+	if (error != 0) {
+	    printf("Error: pget failed with %d\n", error);
+	    PRELE(p);
+	    free(dparam, M_SLSMM);
+	    continue;
 	}
-	return error;
+
+	printf("fd_type is %d\n", dparam->fd_type);
+	desc = create_desc((long) sls_ckptname, dparam->fd_type);
+	printf("descriptor type is %d\n", desc.type);
+	if (desc.type == DESCRIPTOR_SIZE) 
+	    printf("Invalid descriptor\n");
+	else
+	    error = slsmm_dump(p, desc, dparam->dump_mode);
+	PRELE(p);
+
+	flush_count ++;
+	printf("%d\n", flush_count);
+	free(dparam, M_SLSMM);
+    }
+}
+
+static int
+SLSMMHandler(struct module *inModule, int inEvent, void *inArg) {
+    int error = 0;
+    switch (inEvent) {
+	case MOD_LOAD:
+	    printf("Loaded\n");
+	    backends_init();
+	    chan = chan_init(64);
+	    request_count = 0;
+	    flush_count = 0;
+	    if (chan == NULL) {
+		uprintf("chan init failed\n");
+	    }
+	    else uprintf("%zx\n", chan->capacity);
+	    kproc_create((void (*)(void*)) chan_handler, NULL, NULL, 0, 0, "chan_handler"); 
+	    slsmm_dev = make_dev(&slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "slsmm");
+	    break;
+	case MOD_UNLOAD:
+	    printf("Unloaded\n");
+	    destroy_dev(slsmm_dev);
+	    backends_fini();
+	    break;
+	default:
+	    error = EOPNOTSUPP;
+	    break;
+    }
+    return error;
 }
 
 static moduledata_t moduleData = {
-	"slsmm",
-	SLSMMHandler,
-	NULL
+    "slsmm",
+    SLSMMHandler,
+    NULL
 };
 
 

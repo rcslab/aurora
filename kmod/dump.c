@@ -32,7 +32,7 @@
 #include "_slsmm.h"
 #include "cpuckpt.h"
 #include "dump.h"
-#include "fileio.h"
+#include "backends/fileio.h"
 #include "hash.h"
 #include "memckpt.h"
 #include "slsmm.h"
@@ -107,8 +107,10 @@ load_dump(struct dump *dump, struct sls_desc desc)
 	int len;
 	int i, j;
 
+	/* TEMP 
 	if (desc.type == DESC_MD)
 	    md_reset(desc.index);
+	*/
 
 	/* Every static part of struct dump has its own magic, just for safety */
 	error = fd_read(dump, sizeof(struct dump), desc);
@@ -522,7 +524,7 @@ store_dump(struct dump *dump, vm_object_t *objects, long mode, struct sls_desc d
 	    }
 
 	    /* For delta dumps, deallocate the object to collapse the chain again. */
-	    if (mode == DELTA_DUMP) {
+	    if (mode == SLSMM_CKPT_DELTA) {
 		vm_object_deallocate(objects[i]);
 	    }
 	}

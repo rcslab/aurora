@@ -1,107 +1,34 @@
-#include "fileio.h"
-#include "_slsmm.h"
-#include "slsmm.h"
+#include <sys/param.h>
 
+#include <sys/bio.h>
+#include <sys/buf.h>
+#include <sys/condvar.h>
+#include <sys/conf.h>
+#include <sys/fcntl.h>
+#include <sys/file.h>
+#include <sys/filedesc.h>
+#include <sys/kthread.h>
+#include <sys/limits.h>
 #include <sys/malloc.h>
+#include <sys/namei.h>
 #include <sys/param.h>
 #include <sys/pcpu.h>
 #include <sys/syscallsubr.h>
 #include <sys/systm.h>
+#include <sys/vnode.h>
 #include <sys/uio.h>
 
-int 
-fd_read(void* addr, size_t len, struct sls_desc desc)
-{
-    int index = desc.index;
-    return (desc.type == DESC_FD) ? 
-        file_read(addr, len, index) : mem_read(addr, len, index);
-}
+#include <vm/vm.h>
+#include <vm/pmap.h>
+#include <vm/vm_map.h>
+#include <vm/vm_page.h>
 
-int 
-fd_write(void* addr, size_t len, struct sls_desc desc)
-{
-    int index = desc.index;
-    return (desc.type == DESC_FD) ? 
-        file_write(addr, len, index) : mem_write(addr, len, index);
+#include <machine/atomic.h>
 
-}
-
-int
-file_read(void* addr, size_t len, int fd)
-{
-	int error = 0;
-
-	struct uio auio;
-	struct iovec aiov;
-	bzero(&auio, sizeof(struct uio));
-	bzero(&aiov, sizeof(struct iovec));
-
-	aiov.iov_base = (void*)addr;
-	aiov.iov_len = len;
-
-	auio.uio_iov = &aiov;
-	auio.uio_offset = 0;
-	auio.uio_segflg = UIO_SYSSPACE;
-	auio.uio_rw = UIO_READ;
-	auio.uio_iovcnt = 1;
-	auio.uio_resid = len;
-	auio.uio_td = curthread;
-
-	error = kern_readv(curthread, fd, &auio);
-	if (error) {
-		printf("Error: kern_readv failed with code %d\n", error);
-	}
-
-	return error;
-}
-
-int
-file_write(void* addr, size_t len, int fd)
-{
-	int error = 0;
-
-	struct uio auio;
-	struct iovec aiov;
-	bzero(&auio, sizeof(struct uio));
-	bzero(&aiov, sizeof(struct iovec));
-
-	aiov.iov_base = (void*)addr;
-	aiov.iov_len = len;
-
-	auio.uio_iov = &aiov;
-	auio.uio_offset = 0;
-	auio.uio_segflg = UIO_SYSSPACE;
-	auio.uio_rw = UIO_WRITE;
-	auio.uio_iovcnt = 1;
-	auio.uio_resid = len;
-	auio.uio_td = curthread;
-
-	error = kern_writev(curthread, fd, &auio);
-	if (error) {
-		printf("Error: kern_writev failed with code %d\n", error);
-	}
-
-	return error;
-}
-
-int
-write_buf(uint8_t *buf, void *src, size_t *offset, size_t size, size_t cap) {
-	if (*offset + size > cap) {
-		printf("Exceed buffer size\n");
-		return -1;
-	}
-	memcpy(buf+*offset, src, size);
-	*offset += size;
-	return 0;
-}
-
-uint8_t *mem_buff;
-size_t mem_buff_size;
-size_t mem_buff_offset;
-
-struct memory_descriptor *mds;
-size_t md_size;
-size_t md_offset;
+#include "fileio.h"
+#include "../memckpt.h"
+#include "../_slsmm.h"
+#include "../slsmm.h"
 
 
 static int
@@ -121,7 +48,7 @@ double_array_size(void** array, size_t cur_size)
 }
 
 int
-md_init() 
+md_init()
 {
 	mem_buff = malloc(MEM_BUFF_INIT_SIZE, M_SLSMM, M_NOWAIT);
 	if (mem_buff == NULL)
@@ -154,9 +81,9 @@ new_block(int md)
 
 	if (mds[md].block_inited + 1 > mds[md].block_size) {
 		// double block list size
-		error = double_array_size((void*)&(mds[md].block), 
-				mds[md].block_size * sizeof(uint8_t *)); 
-		if (error) 
+		error = double_array_size((void*)&(mds[md].block),
+				mds[md].block_size * sizeof(uint8_t *));
+		if (error)
 			return error;
 		mds[md].block_size *= 2;
 	}
@@ -164,7 +91,7 @@ new_block(int md)
 	if (mem_buff_offset + MEM_BLOCK_SIZE > mem_buff_size) {
 		// double buffer size
 		error = double_array_size((void*)&mem_buff, mem_buff_size);
-		if (error) 
+		if (error)
 			return error;
 		mem_buff_size *= 2;
 	}
@@ -177,7 +104,7 @@ new_block(int md)
 }
 
 static int
-mem_buff_io(void* arr, size_t len, int md, int mode) 
+mem_buff_io(void* arr, size_t len, int md, int mode)
 {
 	int error = 0;
 	size_t arr_offset = 0;
@@ -201,7 +128,7 @@ mem_buff_io(void* arr, size_t len, int md, int mode)
 		if (mds[md].block_offset >= mds[md].block_inited) {
 			// assign a block to uninitialized block
 			error = new_block(md);
-			if (error) 
+			if (error)
 				return error;
 		}
 		
@@ -226,7 +153,7 @@ new_md()
 
 	if (md_offset + 1 > md_size) {
 		error = double_array_size((void*)&mds, md_size * sizeof(struct memory_descriptor));
-		if (error) 
+		if (error)
 			return error;
 		md_size *= 2;
 	}
@@ -240,13 +167,13 @@ new_md()
 	return md_offset ++;
 }
 
-int
-mem_read(void* dst, size_t len, int md) 
+static int
+mem_read(void* dst, size_t len, int md)
 {
 	return mem_buff_io(dst, len, md, 0);
 }
 
-int 
+static int
 mem_write(void* src, size_t len, int md)
 {
 	return mem_buff_io(src, len, md, 1);
@@ -260,21 +187,3 @@ md_reset(int md)
 	return 0;
 }
 
-struct sls_desc 
-create_desc(int index, int fd_type, int restoring)
-{
-    int md; 
-    
-    md = restoring ? index : new_md();
-
-    if (fd_type == SLSMM_FD_MEM) 
-        return (struct sls_desc) {
-            .type = DESC_MD,
-            .index = md
-        };
-    else  
-        return (struct sls_desc) {
-            .type = DESC_FD,
-            .index = index
-        };
-}

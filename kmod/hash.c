@@ -2,7 +2,7 @@
 #include "cpuckpt.h"
 #include "memckpt.h"
 #include "slsmm.h"
-#include "fileio.h"
+#include "backends/fileio.h"
 
 #include <sys/types.h>
 
