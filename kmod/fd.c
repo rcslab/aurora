@@ -62,22 +62,25 @@ file_checkpoint(struct file *file, struct file_info *info, int fd)
 
 /* Roughly follow the kern_openat syscall */
 static int
-file_restore(struct filedesc *filedesc, struct file_info *info)
+file_restore(struct proc *p, struct filedesc *filedesc, struct file_info *info)
 {
 	struct nameidata backing_file;
 	struct file *file;
 	struct vnode *vp __unused;
+	struct thread *td;
 	int flags;
 	int cmode;
 	int error = 0;
 
-	error = falloc_noinstall(curthread, &file);
+	td = TAILQ_FIRST(&p->p_threads);
+
+	error = falloc_noinstall(td, &file);
 	if (error)
 	    return error;
 
-	PROC_UNLOCK(curthread->td_proc);
+	PROC_UNLOCK(p);
 	FILEDESC_XUNLOCK(filedesc);
-	NDINIT(&backing_file, LOOKUP, FOLLOW, UIO_SYSSPACE, info->filename, curthread);
+	NDINIT(&backing_file, LOOKUP, FOLLOW, UIO_SYSSPACE, info->filename, td);
 
 	flags = info->flag;
 	cmode = VREAD | VWRITE | VAPPEND;
@@ -90,7 +93,7 @@ file_restore(struct filedesc *filedesc, struct file_info *info)
 	NDFREE(&backing_file, NDF_ONLY_PNBUF);
 
 	FILEDESC_XLOCK(filedesc);
-	PROC_LOCK(curthread->td_proc);
+	PROC_LOCK(p);
 	if (error) {
 	    printf("Error: vn_open failed with %d\n", error);
 	    return error;
@@ -105,7 +108,7 @@ file_restore(struct filedesc *filedesc, struct file_info *info)
 	VOP_UNLOCK(backing_file.ni_vp, 0);
 
 	/* Flags arg is zero because we don't care about close on exec rn */
-	fdused(curthread->td_proc->p_fd, info->fd);
+	fdused(p->p_fd, info->fd);
 	_finstall(filedesc, file, info->fd, 0, NULL);
 
 	if (file->f_ops == &badfileops) {
@@ -142,8 +145,6 @@ fd_checkpoint(struct filedesc *filedesc, struct filedesc_info *filedesc_info)
 	if (error) {
 	    printf("Error: cdir vnode_to_filename failed with code %d\n", error);
 	    goto fd_checkpoint_error;
-	} else {
-	    printf("cdir name: %s\n", cdir_path);
 	}
 	filedesc_info->cdir= cdir_path;
 	filedesc_info->cdir_len = cdir_len;
@@ -152,8 +153,6 @@ fd_checkpoint(struct filedesc *filedesc, struct filedesc_info *filedesc_info)
 	if (error) {
 	    printf("Error: rdir vnode_to_filename failed with code %d\n", error);
 	    goto fd_checkpoint_error;
-	} else {
-	    printf("rdir name: %s\n", rdir_path);
 	}
 	filedesc_info->rdir= rdir_path;
 	filedesc_info->rdir_len = rdir_len;
@@ -204,15 +203,20 @@ fd_checkpoint_error:
 }
 
 int
-fd_restore(struct filedesc *fdp, struct filedesc_info *info)
+fd_restore(struct proc *p, struct filedesc_info *info)
 {
 	struct vnode *cdir, *rdir;
 	struct vnode *old_cdir, *old_rdir;
 	int error = 0;
 	int i;
 	struct file_info *infos = info->infos;
+	struct thread *td; 
+	struct filedesc *fdp;
 
-	PROC_UNLOCK(curthread->td_proc);
+	td = TAILQ_FIRST(&p->p_threads);
+	fdp = p->p_fd;
+	
+	PROC_UNLOCK(p);
 
 	error = filename_to_vnode(info->cdir, &cdir);
 	if (error) {
@@ -226,10 +230,10 @@ fd_restore(struct filedesc *fdp, struct filedesc_info *info)
 	    return error;
 	}
 
-	PROC_LOCK(curthread->td_proc);
+	PROC_LOCK(p);
 
-	fdunshare(curthread);
-	fdcloseexec(curthread);
+	fdunshare(td);
+	fdcloseexec(td);
 
 	FILEDESC_XLOCK(fdp);
 
@@ -248,7 +252,7 @@ fd_restore(struct filedesc *fdp, struct filedesc_info *info)
 	fdp->fd_cmask = info->fd_cmask;
 
 	for (i = 0; i < info->num_files; i++) {
-	    file_restore(fdp, &infos[i]);
+	    file_restore(p, fdp, &infos[i]);
 	}
 
 	FILEDESC_XUNLOCK(fdp);

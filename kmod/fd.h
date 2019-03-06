@@ -56,6 +56,6 @@ struct filedesc_info {
 };
 
 int fd_checkpoint(struct filedesc *filedesc, struct filedesc_info *filedesc_info);
-int fd_restore(struct filedesc *fdp, struct filedesc_info *info);
+int fd_restore(struct proc *p, struct filedesc_info *info);
 
 #endif

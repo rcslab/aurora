@@ -20,7 +20,7 @@ tests/sleep/sleep
 tools/hexdump/slsmm_hexdump
 tools/procdump/procdump
 tools/procrestore/procrestore
-tools/stressdump/stressdump
+tools/dumpcompose/dumpcompose
 
 *.ko
 *.o

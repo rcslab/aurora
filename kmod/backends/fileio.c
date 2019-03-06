@@ -2,6 +2,7 @@
 
 #include <sys/bio.h>
 #include <sys/buf.h>
+#include <sys/capsicum.h>
 #include <sys/condvar.h>
 #include <sys/conf.h>
 #include <sys/fcntl.h>
@@ -14,6 +15,7 @@
 #include <sys/param.h>
 #include <sys/pcpu.h>
 #include <sys/syscallsubr.h>
+#include <sys/stat.h>
 #include <sys/systm.h>
 #include <sys/vnode.h>
 #include <sys/uio.h>
@@ -33,14 +35,12 @@
 #include "nvdimm.h"
 #include "worker.h"
 
-
-
 /*
  * XXX We need to take a hard look at what a descriptor actually is,
  * rn this thing has a lot of baggage
  */
 struct sls_desc
-create_desc(long index, int type)
+create_desc(void *index, int type)
 {
     int error;
     int fd;
@@ -50,12 +50,12 @@ create_desc(long index, int type)
     case SLSMM_FD_FILE:
 	printf("Name: %s\n", (char *) index);
 	error = kern_openat(curthread, AT_FDCWD, (char *) index, UIO_SYSSPACE,
-	    O_RDWR, O_CREAT | O_TRUNC);
+	    O_RDWR | O_CREAT, S_IRWXU);
 	if (error != 0) {
 	    printf("kern_openat failed with %d\n", error);
 	    return (struct sls_desc) {
 		.type = DESCRIPTOR_SIZE,
-		.desc = index, 
+		.desc = 0, 
 	    };
 	}
 
@@ -77,7 +77,7 @@ create_desc(long index, int type)
 
     case SLSMM_FD_NVDIMM:
         return (struct sls_desc) {
-            .type = DESC_NVDIMM,
+            .type = DESC_OSD,
             .index = nvdimm,
         };
 
@@ -98,7 +98,7 @@ destroy_desc(struct sls_desc desc)
 	kern_close(curthread, desc.desc);
 	return;
 
-    case DESC_NVDIMM:
+    case DESC_OSD:
 	return;
 
     default:
@@ -115,11 +115,11 @@ fd_read(void* addr, size_t len, struct sls_desc desc)
 	return file_read(addr, len, desc.desc);
 
     /*
-    case DESC_MD:
+    case DESC_MEM:
 	return mem_read(addr, len, index);
     */
 
-    case DESC_NVDIMM:
+    case DESC_OSD:
 	return nvdimm_read(addr, len, (vm_offset_t) desc.index);
 
     default:
@@ -140,12 +140,34 @@ fd_write(void* addr, size_t len, struct sls_desc desc)
 	return mem_write(addr, len, index);
     */
 
-    case DESC_NVDIMM:
+    case DESC_OSD:
 	return nvdimm_write(addr, len, (vm_offset_t) desc.index);
 
     default:
 	printf("fd_write: invalid desc with type %d\n", desc.type);
 	return EINVAL;
+    }
+}
+
+void 
+fd_dump(struct vm_map_entry_info *entries, vm_object_t *objects, 
+	size_t numentries, struct sls_desc desc)
+{
+    switch (desc.type) {
+    case DESC_FD:
+	return file_dump(entries, objects, numentries, desc.desc);
+
+    /*
+    case DESC_MD:
+	return mem_write(addr, len, index);
+    */
+
+    case DESC_OSD:
+	return nvdimm_dump(entries, objects, numentries, desc.index);
+
+    default:
+	printf("fd_write: invalid desc with type %d\n", desc.type);
+	return;
     }
 }
 
@@ -190,4 +212,3 @@ backends_fini(void)
 	}
 
 }
-

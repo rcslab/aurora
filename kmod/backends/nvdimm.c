@@ -21,12 +21,14 @@
 #include <vm/vm.h>
 #include <vm/pmap.h>
 #include <vm/vm_map.h>
+#include <vm/vm_object.h>
 #include <vm/vm_page.h>
 
 #include <machine/atomic.h>
 
 #include "fileio.h"
 #include "nvdimm.h"
+#include "worker.h"
 #include "../memckpt.h"
 #include "../_slsmm.h"
 #include "../slsmm.h"
@@ -118,4 +120,94 @@ nvdimm_write(void *addr, size_t len, vm_offset_t offset)
     bcopy(addr, nvdimm, len);
 
     return 0;
+}
+
+void
+nvdimm_dump(struct vm_map_entry_info *entries, vm_object_t *objects, 
+	    size_t numentries, void *addr)
+{
+	int worker_index;
+	vm_page_t page;
+	vm_offset_t vaddr_data;
+	struct sls_worker *worker;
+	struct vm_map_entry_info *entry;
+	int i;
+
+	/*
+	 * XXX Turn into a workers_activate function
+	 */
+	/* Wake up the threads */
+	for (i = 0; i < WORKER_THREADS; i++) {
+	    worker = &sls_workers[i];
+	    worker->work_offset = 0;
+	    mtx_lock(&worker->work_mtx);
+	    cv_signal(&worker->work_cv);
+	    mtx_unlock(&worker->work_mtx);
+	}
+
+	/*
+	 * XXX Turn into a workers_activate function
+	 */
+	/* Wake up the threads */
+	for (i = 0; i < WORKER_THREADS; i++) {
+	    worker = &sls_workers[i];
+	    worker->work_offset = 0;
+	    mtx_lock(&worker->work_mtx);
+	    cv_signal(&worker->work_cv);
+	    mtx_unlock(&worker->work_mtx);
+	}
+
+
+	worker_index = 0;
+	worker = &sls_workers[worker_index];
+	for (i = 0; i < numentries; i++) {
+
+	    if (objects[i] == NULL)
+		continue;
+
+	    entry = &entries[i];
+
+	    TAILQ_FOREACH(page, &objects[i]->memq, listq) {
+
+		/*
+		* XXX Does this check make sense? We _are_ getting pages
+		* from a valid object, after all, why would it have NULL
+		* pointers in its list?
+		*/
+		if (!page) {
+		    printf("ERROR: vm_page_t page is NULL");
+		    continue;
+		}
+
+		vaddr_data = IDX_TO_VADDR(page->pindex, entry->start, entry->offset);
+
+		/* XXX Race condition if we modify the page before the worker reads it */
+		worker->work_page = page;
+		while (atomic_cmpset_ptr(&worker->work_offset, 0, vaddr_data) == 0)
+		    /* Keep trying */; 
+
+		worker_index = (worker_index + 1) % WORKER_THREADS;
+		worker = &sls_workers[worker_index];
+
+	    }
+
+	    /* For delta dumps, deallocate the object to collapse the chain again. */
+	}
+
+	/* Tell the worker threads to stop */
+	for (i = 0; i < WORKER_THREADS; i++) {
+		/* Stop using atomics */
+		worker = &sls_workers[i];
+		while (atomic_cmpset_ptr(&worker->work_offset, 0, SLS_POISON))
+		    /* Keep trying */; 
+	}
+
+	/* Wait until they all do */
+	for (i = 0; i < WORKER_THREADS; i++) {
+	    /* If even one of them is awake, try again from the beginning */
+	    worker = &sls_workers[i];
+	    if (!TD_IS_SLEEPING(worker->work_td))
+		    i = 0;
+	}
+
 }

@@ -3,24 +3,68 @@
 #include <sys/ioctl.h>
 
 #include <fcntl.h>
+#include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
-int main(int argc, char* argv[]) {
-	int pid;
-	int slsmm_fd, *file_fds;
-	int nfds;
-	int error;
-	int type;
-	int fd;
-	struct restore_param param;
-	char **fds;
+static struct option longopts[] = {
+	{ "format", required_argument, NULL, 'f' },
+	{ NULL, no_argument, NULL, 0 },
+};
+void
+usage(void)
+{
+    printf("Usage: procrestore [<-f | --format> <file | memory | osd>] <filename> \n");
+}
 
-	if (argc < 3) {
-		printf("Usage: procdump <type> <filenames...>\n");
+int main(int argc, char* argv[]) {
+	int slsmm_fd;
+	int error;
+	int mode;
+	int type;
+	int opt;
+	char *filename;
+	struct restore_param param;
+
+	printf("Warning: Only files can be used for restoring right now\n");
+	param = (struct restore_param) { 
+		.name = NULL,
+		.len = 0,
+		.pid = getpid(),
+		.fd_type = SLSMM_FD_FILE,
+	};
+
+	while ((opt = getopt_long(argc, argv, "f:", longopts, NULL)) != -1) {
+	    switch (opt) {
+
+	    case 'f':
+		if (strcmp(optarg, "file") == 0)
+		    param.fd_type = SLSMM_FD_FILE; 
+		else if (strcmp(optarg, "memory") == 0)
+		    param.fd_type = SLSMM_FD_MEM; 
+		else if (strcmp(optarg, "osd") == 0)
+		    param.fd_type = SLSMM_FD_NVDIMM; 
+		else 
+		    printf("Invalid output type, defaulting to file\n");
+		break;
+
+	    default:
+		usage();
 		return 0;
+	    }
 	}
+
+	if (optind == argc - 1) {
+	    filename = argv[optind];
+	    param.name = filename;
+	    param.len = strnlen(filename, 1024);
+	} else {
+	    usage();
+	    return 0;
+	}
+
 
 	slsmm_fd = open("/dev/slsmm", O_RDWR);
 	if (!slsmm_fd) {
@@ -28,45 +72,10 @@ int main(int argc, char* argv[]) {
 		exit(1); 
 	}
 
-
-	type = atoi(argv[1]);
-	if (type <= SLSMM_FD_INVALID_LOW || type >= SLSMM_FD_INVALID_HIGH) {
-		printf("ERROR: Invalid checkpointing type (1 - file, 2 - memory)\n");
-		exit(1);
-	}
-
-	/* The fds fds now an array of fds of size nfds */
-	nfds = argc - 2;
-	fds = &argv[2];
-
-	file_fds = malloc(sizeof(int) * nfds);
-	for (int i = 0; i < nfds; i ++) {
-
-		if (type == SLSMM_FD_FILE) {
-			fd = open(fds[i], O_RDONLY);
-			if (fd < 0) {
-				perror("open");
-				exit(1);
-			}
-		}
-		else {
-			fd = strtol(fds[i], &fds[i], 10);
-			if (!fd) {
-				printf("Error: Invalid mem descriptor %s\n", fds[i]);
-				exit(1);
-			}
-		}
-
-		file_fds[i] = fd;
-	}
-
-	param = (struct restore_param) { 
-		.nfds = nfds,
-		.fds = file_fds, 
-		.fd_type = type,
-	};
-
 	ioctl(slsmm_fd, SLSMM_RESTORE, &param);
 
+	close(slsmm_fd);
+
 	return 0;
+
 }

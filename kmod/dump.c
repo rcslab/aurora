@@ -106,6 +106,7 @@ load_dump(struct dump *dump, struct sls_desc desc)
 	size_t thread_size, entry_size, file_size;
 	int len;
 	int i, j;
+	int cnt = 0, cnt2 = 0;
 
 	/* TEMP 
 	if (desc.type == DESC_MD)
@@ -322,12 +323,17 @@ load_dump(struct dump *dump, struct sls_desc desc)
 		    }
 		}
 
-		if (!already_there)
+		cnt++;
+		if (!already_there) {
 		    LIST_INSERT_HEAD(page_bucket, new_entry, next);
+		    cnt2++;
+		}
 	    }
 	}
 
 
+	printf("cnt = %d\n", cnt);
+	printf("cnt2 = %d\n", cnt2);
 	return 0;
 }
 
@@ -397,8 +403,6 @@ store_dump(struct dump *dump, vm_object_t *objects, long mode, struct sls_desc d
 {
 	int i;
 	int error = 0;
-	vm_page_t page;
-	vm_offset_t vaddr, vaddr_data;
 	struct vm_map_entry_info *entries, *cur_entry;
 	struct thread_info *thread_infos;
 	struct file_info *file_infos;
@@ -425,6 +429,7 @@ store_dump(struct dump *dump, vm_object_t *objects, long mode, struct sls_desc d
 	    printf("Error: Writing dump failed with code %d\n", error);
 	    return error;
 	}
+
 	error = fd_write(thread_infos, sizeof(struct thread_info) * numthreads, desc);
 	if (error != 0) {
 	    printf("Error: Writing thread info dump failed with code %d\n", error);
@@ -480,54 +485,13 @@ store_dump(struct dump *dump, vm_object_t *objects, long mode, struct sls_desc d
 	    }
 	}
 
-	for (i = 0; i < numentries; i++) {
+	/* XXX error handling */
+	fd_dump(entries, objects, numentries, desc);
 
-	    if (objects[i] == NULL)
-		continue;
-
-	    cur_entry = &entries[i];
-
-	    TAILQ_FOREACH(page, &objects[i]->memq, listq) {
-
-		/*
-		* XXX Does this check make sense? We _are_ getting pages
-		* from a valid object, after all, why would it have NULL
-		* pointers in its list?
-		*/
-		if (!page) {
-		    printf("ERROR: vm_page_t page is NULL");
-		    continue;
-		}
-
-		vaddr_data = IDX_TO_VADDR(page->pindex, cur_entry->start, cur_entry->offset);
-		error = fd_write(&vaddr_data, sizeof(vm_offset_t), desc);
-		if (error != 0) {
-		    printf("Error: writing vm_map_entry_info failed\n");
-		    return error;
-		}
-
-		/* Never fails on amd64, check is here for futureproofing */
-		vaddr = userpage_map(page->phys_addr);
-		if ((void *) vaddr == NULL) {
-		    printf("Mapping page failed\n");
-		    /* EINVAL seems the most appropriate */
-		    error = -EINVAL;
-		    return error;
-		}
-
-		error = fd_write((void*) vaddr, PAGE_SIZE, desc);
-		if (error != 0)
-		    return error;
-
-		userpage_unmap(vaddr);
-
-	    }
-
-	    /* For delta dumps, deallocate the object to collapse the chain again. */
-	    if (mode == SLSMM_CKPT_DELTA) {
+	/* For delta dumps, deallocate the object to collapse the chain again. */
+	for (i = 0; i < numentries; i++)
+	    if (mode == SLSMM_CKPT_DELTA)
 		vm_object_deallocate(objects[i]);
-	    }
-	}
 
 	return 0;
 }

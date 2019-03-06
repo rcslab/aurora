@@ -51,5 +51,7 @@ int nvdimm_open(void);
 void nvdimm_close(void);
 int nvdimm_read(void *addr, size_t len, vm_offset_t offset);
 int nvdimm_write(void *addr, size_t len, vm_offset_t offset);
+void nvdimm_dump(struct vm_map_entry_info *entries, vm_object_t *objects, 
+		    size_t numentries, void *addr);
 
 #endif /* _NVDIMM_H_ */
