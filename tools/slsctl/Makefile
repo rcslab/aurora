@@ -1,6 +1,6 @@
-PROG = procdump
-SRCS = procdump.c 
-MAN =
+PROG= slsctl
+SRCS= slsctl.c
+MAN=
 
 
 LDADD= -lsls

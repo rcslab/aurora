@@ -18,8 +18,7 @@ tests/sleep/sleep
 
 
 tools/slsdb/slsdb
-tools/procdump/procdump
-tools/procrestore/procrestore
+tools/slsctl/slsctl
 tools/dumpcompose/dumpcompose
 
 *.a
