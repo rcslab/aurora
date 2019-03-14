@@ -1,3 +1,3 @@
-SUBDIR = kmod tests tools
+SUBDIR = libsls kmod tests tools
 
 .include <bsd.subdir.mk>

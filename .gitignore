@@ -17,13 +17,15 @@ tests/signal/signal
 tests/sleep/sleep
 
 
-tools/hexdump/slsmm_hexdump
+tools/slsdb/slsdb
 tools/procdump/procdump
 tools/procrestore/procrestore
 tools/dumpcompose/dumpcompose
 
+*.a
 *.ko
 *.o
+*.po
 *.x
 .*.swp
 *.debug

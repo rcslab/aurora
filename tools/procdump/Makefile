@@ -1,6 +1,10 @@
 PROG = procdump
 SRCS = procdump.c 
 MAN =
-CFLAGS = -I../../kmod
+
+
+LDADD= -lsls
+LDFLAGS= -L../../libsls
+CFLAGS= -I../../include
 
 .include <bsd.prog.mk>

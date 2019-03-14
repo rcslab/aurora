@@ -1,5 +1,5 @@
-#include "slsmm.h"
 
+#include <sys/types.h>
 #include <sys/ioctl.h>
 
 #include <fcntl.h>
@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include <sls.h>
 
 static struct option longopts[] = {
 	{ "async", no_argument, NULL, 'a' },
@@ -20,10 +22,11 @@ static struct option longopts[] = {
 void
 usage(void)
 {
-    printf("Usage: procdump <-p|--pid> <PID> [<-f | --format> <file <filename> | memory | osd>] [--delta] [--async]\n");
+    printf("Usage: procdump [-p <PID>] [<-f <file <filename> | memory | osd>] [--delta] [--async]\n");
 }
 
-int main(int argc, char* argv[]) {
+int
+main(int argc, char* argv[]) {
 	int pid;
 	int slsmm_fd;
 	int error;
@@ -50,27 +53,26 @@ int main(int argc, char* argv[]) {
 	    case 'a':
 		param.async = SLSMM_CKPT_ASYNC;
 		break;
-
 	    case 'd':
 		param.dump_mode = SLSMM_CKPT_DELTA;
 		break;
-
 	    case 'f':
-		if (strcmp(optarg, "file") == 0)
+		if (strcmp(optarg, "file") == 0) {
 		    param.fd_type = SLSMM_FD_FILE; 
-		else if (strcmp(optarg, "memory") == 0)
+		} else if (strcmp(optarg, "memory") == 0) {
 		    param.fd_type = SLSMM_FD_MEM; 
-		else if (strcmp(optarg, "osd") == 0)
+		} else if (strcmp(optarg, "osd") == 0) {
 		    param.fd_type = SLSMM_FD_NVDIMM; 
-		else 
-		    printf("Invalid output type, defaulting to file\n");
+		} else {
+		    printf("Invalid output type\n");
+		    usage();
+		    return 1;
+		}
 		break;
-
 	    case 'p':
 		pid_set = 1;
 		param.pid = strtol(optarg, NULL, 10);
 		break;
-
 	    default:
 		usage();
 		return 0;
@@ -99,15 +101,8 @@ int main(int argc, char* argv[]) {
 	}
 
 
-	slsmm_fd = open("/dev/slsmm", O_RDWR);
-	if (!slsmm_fd) {
-		printf("ERROR: SLS device file not opened\n");
-		exit(1); 
-	}
-
-	ioctl(slsmm_fd, SLSMM_DUMP, &param);
-
-	close(slsmm_fd);
+	if (sls_dump(&param) < 0)
+	    return 1;
 
 	return 0;
 

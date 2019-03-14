@@ -1,4 +1,3 @@
-#include "slsmm.h"
 
 #include <sys/ioctl.h>
 
@@ -9,17 +8,21 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <sls.h>
+
 static struct option longopts[] = {
 	{ "format", required_argument, NULL, 'f' },
 	{ NULL, no_argument, NULL, 0 },
 };
+
 void
 usage(void)
 {
-    printf("Usage: procrestore [<-f <filename> | --format> <file | memory | osd>] \n");
+	printf("Usage: procrestore [-f <file | memory | osd>] [FILENAME] \n");
 }
 
-int main(int argc, char* argv[]) {
+int
+main(int argc, char* argv[]) {
 	int slsmm_fd;
 	int error;
 	int mode;
@@ -38,18 +41,19 @@ int main(int argc, char* argv[]) {
 
 	while ((opt = getopt_long(argc, argv, "f:", longopts, NULL)) != -1) {
 	    switch (opt) {
-
 	    case 'f':
-		if (strcmp(optarg, "file") == 0)
+		if (strcmp(optarg, "file") == 0) {
 		    param.fd_type = SLSMM_FD_FILE; 
-		else if (strcmp(optarg, "memory") == 0)
+		} else if (strcmp(optarg, "memory") == 0) {
 		    param.fd_type = SLSMM_FD_MEM; 
-		else if (strcmp(optarg, "osd") == 0)
+		} else if (strcmp(optarg, "osd") == 0) {
 		    param.fd_type = SLSMM_FD_NVDIMM; 
-		else 
-		    printf("Invalid output type, defaulting to file\n");
+		} else {
+		    printf("Invalid output type\n");
+		    usage();
+		    return 0;
+		}
 		break;
-
 	    default:
 		usage();
 		return 0;
@@ -70,16 +74,8 @@ int main(int argc, char* argv[]) {
 	    return 0;
 	}
 
-
-	slsmm_fd = open("/dev/slsmm", O_RDWR);
-	if (!slsmm_fd) {
-		printf("ERROR: SLS device file not opened\n");
-		exit(1); 
-	}
-
-	ioctl(slsmm_fd, SLSMM_RESTORE, &param);
-
-	close(slsmm_fd);
+	if (sls_restore(&param) < 0)
+	    return 1;
 
 	return 0;
 
