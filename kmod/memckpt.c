@@ -2,6 +2,7 @@
 
 #include <machine/param.h>
 
+#include <sys/conf.h>
 #include <sys/fcntl.h>
 #include <sys/limits.h>
 #include <sys/mman.h>
@@ -10,6 +11,7 @@
 #include <sys/proc.h>
 #include <sys/rwlock.h>
 #include <sys/shm.h>
+#include <sys/sysent.h>
 #include <sys/vnode.h>
 
 #include <vm/pmap.h>
@@ -30,6 +32,8 @@
 #include "path.h"
 #include "backends/fileio.h"
 
+/* Hack for supporting the hpet0 counter */
+static struct cdev *sls_hpet0 = NULL;
 
 /* Map a user memory area to kernelspace. */
 vm_offset_t
@@ -47,37 +51,145 @@ userpage_unmap(vm_offset_t vaddr)
 }
 
 
+static void 
+print_object_chain(vm_object_t obj)
+{
+	vm_object_t o;
+	vm_object_t parent;
+
+	printf("Obj ref : %d\t shadow : %d\t res %d\n", 
+		obj->ref_count, obj->shadow_count, obj->resident_page_count);
+
+	if (obj->backing_object != NULL) {
+	    parent = obj->backing_object;
+	    printf("Parent ref : %d\t shadow : %d\t res : %d\n", 
+		    parent->ref_count, parent->shadow_count, parent->resident_page_count);
+	} else {
+	    printf("No backing object\n");
+	}
+
+	o = obj;
+	while(o != NULL) {
+	    printf("%p ", o);
+	    o = o->backing_object;
+	    if (o != NULL)
+		printf(" -> ");
+	}
+	printf("\n\n");
+
+}
+
+/*
+ * XXX In the future, get _all_ objects, do not compact. Right now, 
+ * we basically flatten the object tree. This makes sense in that 
+ * we only checkpoint one process, so the only logical relation
+ * between objects is that of an anonymous object backed by 
+ * a vnode. 
+ *
+ * Of course this assumes that a) there are no _illogical_ relations,
+ * i.e. having a non-leaf object directly exposed. It also causes 
+ * performance penalties if there are weird complex mappings in such
+ * a way that two objects have a data-heavy common ancestor. Right
+ * now, its pages would be copied twice.
+ */
+static int 
+vm_object_checkpoint(struct proc *p, vm_object_t obj, struct vm_object_info **obj_info)
+{
+	vm_object_t o;
+	struct vm_object_info *cur_obj;
+	char *filepath;
+	size_t filepath_len;
+	struct vnode *vp;
+	int error;
+
+	cur_obj = malloc(sizeof(*cur_obj), M_SLSMM, M_NOWAIT);
+	if (cur_obj == NULL)
+	    return ENOMEM;
+
+	cur_obj->size = obj->size;
+	cur_obj->type = obj->type;
+	cur_obj->id = (vm_offset_t) obj;
+	cur_obj->backer = 0;
+	cur_obj->backer_off = obj->backing_object_offset;
+	cur_obj->filename_len = 0;
+	cur_obj->filename = NULL;
+	cur_obj->magic = SLS_OBJECT_INFO_MAGIC;
+
+	for (o = obj->backing_object; o != NULL && o->type == OBJT_DEFAULT; o = o->backing_object) {
+	    cur_obj->backer_off += o->backing_object_offset;
+	}
+
+	/* Only care about non-anonymous objects */
+	if (o != NULL) {
+	    cur_obj->backer = (vm_offset_t) o;
+	} else
+	    cur_obj->backer_off = 0;
+
+	/*
+	* Used for mmap'd files - we are using the filename
+	* to find out how to map.
+	*/
+	if (obj->type == OBJT_VNODE) {
+	    vp = (struct vnode *) obj->handle;
+
+	    PROC_UNLOCK(p);
+	    error = vnode_to_filename(vp, &filepath, &filepath_len);
+	    PROC_LOCK(p);
+	    if (error) {
+		printf("vnode_to_filename failed with code %d\n", error);
+		free(cur_obj, M_SLSMM);
+		return error;
+	    }
+
+	    cur_obj->filename_len = filepath_len;
+	    cur_obj->filename = filepath;
+
+	} else if (obj->type == OBJT_DEVICE) {
+	    /* 
+	     * XXX There seems to be _no_way_  to get the name from the device. 
+	     * Without the interposition layer, this hack seems to be the 
+	     * only way to go. 
+	     */
+	    sls_hpet0 = (struct cdev *) obj->handle;
+	} 
+
+	*obj_info = cur_obj;
+
+	return 0;
+}
+
 /* insert a shadow object to each vm_object in a vmspace,
  * return the list of original vm_object and vm_entry for dump
  */
 int
-vmspace_checkpoint(struct vmspace *vmspace, struct memckpt_info *dump, vm_object_t *objects, long mode)
+vmspace_checkpoint(struct proc *p, struct memckpt_info *dump, 
+	vm_object_t *objects, long mode)
 {
 	vm_map_t vm_map;
+	struct vmspace *vmspace;
 	struct vm_map_entry *entry;
 	struct vm_map_entry_info *entries;
 	struct vm_map_entry_info *cur_entry;
-	char *filepath;
-	size_t filepath_len;
-	struct vnode *vp;
 	vm_object_t obj;
-	int error = 0;
+	int pid;
 	int i;
 
+	pid = p->p_pid;
+	vmspace = p->p_vmspace;
 
 	entries = dump->entries;
 	vm_map = &vmspace->vm_map;
 
 	dump->vmspace = (struct vmspace_info) {
 	    .magic = SLS_VMSPACE_INFO_MAGIC,
-		.vm_swrss = vmspace->vm_swrss,
-		.vm_tsize = vmspace->vm_tsize,
-		.vm_dsize = vmspace->vm_dsize,
-		.vm_ssize = vmspace->vm_ssize,
-		.vm_taddr = vmspace->vm_taddr,
-		.vm_daddr = vmspace->vm_daddr,
-		.vm_maxsaddr = vmspace->vm_maxsaddr,
-		.nentries = vm_map->nentries,
+	    .vm_swrss = vmspace->vm_swrss,
+	    .vm_tsize = vmspace->vm_tsize,
+	    .vm_dsize = vmspace->vm_dsize,
+	    .vm_ssize = vmspace->vm_ssize,
+	    .vm_taddr = vmspace->vm_taddr,
+	    .vm_daddr = vmspace->vm_daddr,
+	    .vm_maxsaddr = vmspace->vm_maxsaddr,
+	    .nentries = vm_map->nentries,
 	};
 
 	for (entry = vm_map->header.next, i = 0; entry != &vm_map->header;
@@ -86,11 +198,6 @@ vmspace_checkpoint(struct vmspace *vmspace, struct memckpt_info *dump, vm_object
 	    cur_entry = &entries[i];
 	    cur_entry->magic = SLS_ENTRY_INFO_MAGIC;
 
-	    /*
-	    * Grab vm_object. Write sentinel values in the fields
-	    * related to the object associated with the entry, to be
-	    * overwritten with valid data if such an object exists;
-	    */
 
 	    /* Grab vm_entry info. */
 	    cur_entry->start = entry->start;
@@ -99,148 +206,83 @@ vmspace_checkpoint(struct vmspace *vmspace, struct memckpt_info *dump, vm_object
 	    cur_entry->eflags = entry->eflags;
 	    cur_entry->protection = entry->protection;
 	    cur_entry->max_protection = entry->max_protection;
-
-	    /*
-	    * Sentinel values, will be overwritten for entries
-	    * that are backed by objects.
-	    */
-	    cur_entry->size = ULONG_MAX;
-	    cur_entry->resident_page_count = UINT_MAX;
-	    cur_entry->file_offset = ULONG_MAX;
-	    cur_entry->type = OBJT_DEAD;
-
-	    cur_entry->file_offset = 0;
-	    cur_entry->filename_len = 0;
-	    cur_entry->filename = NULL;
-
-	    cur_entry->is_shadow = false;
-	    cur_entry->backing_offset = 0;
-	    cur_entry->backing_object =  NULL;
-	    cur_entry->current_object =  NULL;
-
+	    cur_entry->obj_info = NULL;
 
 	    obj = objects[i] = entry->object.vm_object;
-	    if (obj) {
-		/* XXX Shadow hack */
-		cur_entry->current_object = obj;
+	    if (obj == NULL)
+		continue;
 
-		cur_entry->size = obj->size;
-		cur_entry->resident_page_count = obj->resident_page_count;
-		cur_entry->type= obj->type;
+	    vm_object_checkpoint(p, obj, &cur_entry->obj_info);
 
-		/*
-		* Used for mmap'd files - we are using the filename
-		* to find out how to map.
-		*/
-		if (cur_entry->type == OBJT_VNODE) {
-		    vp = (struct vnode *) obj->handle;
+	    /* We only save the pages of anonymous objects */
+	    if (obj->type != OBJT_DEFAULT)
+		continue;
 
-		    error = vnode_to_filename(vp, &filepath, &filepath_len);
-		    if (error) {
-			printf("vnode_to_filename failed with code %d\n", error);
-			return error;
+	    if (mode == SLSMM_CKPT_FULL) {
+		/* Roll ckpt'd process' info into struct */
 
-		    }
-
-		    /* FIXME Probably wrong, offset is probably in the object */
-		    cur_entry->file_offset = 0;
-
-
-		    cur_entry->filename_len = filepath_len;
-		    cur_entry->filename = filepath;
-		} else if (obj->backing_object != NULL) {
-		    /* Always OBJT_DEFAULT (look at vm_object_shadow())*/
-
-		    cur_entry->is_shadow = true;
-		    cur_entry->backing_offset =
-			obj->backing_object_offset;
-		    cur_entry->backing_object = obj->backing_object;
+		if (pid_checkpointed[pid] == 1) {
+		    //vm_object_reference(entry->object.vm_object);
+		    //vm_object_collapse(entry->object.vm_object->backing_object);
+		    vm_object_deallocate(entry->object.vm_object->backing_object);
 
 		}
 
-
-	    }
-
-
-	    /*
-	    * If in delta mode, we are playing tricks with object chains.
-	    * After we get an object, we should be doing the following
-	    * to the address space:
-	    *
-	    * Let A the original object (fully checkpointed). We create
-	    * shadow B at checkpoint time, which at delta checkpoint time
-	    * will hold all pages modified since the last checkpoint. We should
-	    * save only B's pages, then flush them back to A. Normally this is
-	    * done by creating a shadow of B, then dumping the data of B and
-	    * freeing it. By freeing it, the chain collapses
-	    *
-	    * We also remove all mappings from the pmap, so that the new shadow
-	    * has to read the data from its backing object.
-	    *
-	    * XXX Actually verify that this is what the code below does, would
-	    * be great to have a way to print the chain at any given time,
-	    * since we are soon going into unmapped territory with this
-	    * (i.e. fork).
-	    */
-	    if (mode == SLSMM_CKPT_DELTA && objects[i]) {
 		vm_object_reference(entry->object.vm_object);
 		vm_object_shadow(&entry->object.vm_object, &entry->offset,
 			entry->end-entry->start);
-		pmap_remove(vm_map->pmap, entry->start, entry->end);
+
+
+	    } else if (mode == SLSMM_CKPT_DELTA) {
+		/* XXX Build the dump part properly */
+		vm_object_reference(entry->object.vm_object);
+		vm_object_shadow(&entry->object.vm_object, &entry->offset,
+			entry->end-entry->start);
 	    }
+
+	    /* Always remove the mappings, so that the process rereads them */
+	    pmap_remove(vm_map->pmap, entry->start, entry->end);
 	}
 
 	return 0;
 }
 
-/*
- * XXX Shadowing hack for vmspace_restore, defined here in order not to not
- * put pressure on the stack. If this works, replace with a hashtable.
- */
-#define HACK_MAX_ENTRIES 128
-/* Linear search to find the proper index */
-vm_object_t entry_id[HACK_MAX_ENTRIES];
-/* Use the index here ot get the object to be shadowed */
-vm_object_t entry_obj[HACK_MAX_ENTRIES];
-/* (Assume shadows always get retrieved after the original object) */
-
-
-
 
 static vm_object_t
-vm_object_restore(struct vm_map_entry_info *entry, int *flags, boolean_t *writecounted)
+vm_object_restore(struct proc *p, struct vm_map_entry_info *entry, vm_object_t backer,
+		    int *flags, boolean_t *writecounted)
 {
+	struct vm_object_info *obj_info;
 	vm_object_t new_object = NULL;
+	vm_offset_t offset;
+	struct cdevsw *dsw;
 	struct vnode *vp;
+	int ref;
 	int error;
+	struct thread *td;
 
-	switch (entry->type) {
+	/* Needed for restoring physical pages */
+	td = TAILQ_FIRST(&p->p_threads);
+
+	obj_info = entry->obj_info;
+	switch (obj_info->type) {
 	    case OBJT_DEFAULT:
 
-		/* XXX Shadow hack */
-		if (entry->is_shadow) {
-		    vm_object_t old_object = NULL;
-		    for (int i = 0; i < HACK_MAX_ENTRIES; i++) {
-			if (entry->backing_object == entry_id[i]) {
-			    old_object = entry_obj[i];
-			    break;
-			}
-		    }
-
-
-		    vm_offset_t offset = entry->backing_offset;
-		    int len = entry->end - entry->start;
-		    vm_object_shadow(&old_object, &offset, len);
-
-		    return old_object;
+		/* This object is shadowing another object we just created */
+		if (backer != NULL) {
+		    offset = obj_info->backer_off;
+		    /* Watch out, backer is local to this function */
+		    vm_object_reference(backer);
+		    vm_object_shadow(&backer, &offset, obj_info->size);
+		    return backer;
 		}
 
-		return vm_object_allocate(OBJT_DEFAULT, entry->size);
+		return vm_object_allocate(OBJT_DEFAULT, obj_info->size);
 
 	    case OBJT_VNODE:
 
 		PROC_UNLOCK(curthread->td_proc);
-		error = filename_to_vnode(entry->filename, &vp);
+		error = filename_to_vnode(obj_info->filename, &vp);
 		PROC_LOCK(curthread->td_proc);
 		if (error) {
 		    printf("Error: filename_to_vnode failed with %d\n", error);
@@ -263,20 +305,52 @@ vm_object_restore(struct vm_map_entry_info *entry, int *flags, boolean_t *writec
 		vm_object_reference(new_object);
 
 		return new_object;
+
 	    case OBJT_PHYS:
-		/*
-		* XXX Actually mimic the linker and use physical pages
-		*/
-		return vm_object_allocate(OBJT_DEFAULT, entry->size);
+		/* Map a shared page */
+		new_object = p->p_sysent->sv_shared_page_obj;
+		if (new_object != NULL) {
+			vm_object_reference(new_object);
+		}
+
+		printf("Physical object returned: %p\n", new_object);
+
+		return new_object;
+
+	    case OBJT_DEVICE:
+		/* 
+		* XXX This is a precarious operation, since few devices can
+		* be unmapped and remapped on a whim. Still, /dev/hpet0 should
+		* work, since it does not really interact with processes, but 
+		* exposes CPU-specific counters. Since hpet0 is used by glibc,
+		* it's important that we support it.
+ 		*/
+		dsw = dev_refthread(sls_hpet0, &ref);
+		if (dsw == NULL) {
+		    panic("Device restoration failed\n");
+		}
+
+		error = vm_mmap_cdev(td, entry->end - entry->start,
+			entry->protection, &entry->max_protection,
+			flags, sls_hpet0, dsw, &entry->offset,
+			&new_object);
+		if (error) {
+		    printf("Error: vm_mmap_vnode failed with error %d\n", error);
+		}
+
+		dev_relthread(sls_hpet0, ref);
+
+		return new_object;
 
 	    case OBJT_DEAD:
-		/* Guard entry */
-		if (entry->size == ULONG_MAX)
+		printf("Warning: Dead object found\n");
+		/* Guard obj_info */
+		if (obj_info->size == ULONG_MAX)
 		    return NULL;
 
 		/* FALLTHROUGH */
 	    default:
-		printf("Error: Invalid vm_object type %d\n", entry->type);
+		printf("Error: Invalid vm_object type %d\n", obj_info->type);
 		return new_object;
 	}
 }
@@ -388,31 +462,53 @@ map_flags_from_entry(vm_eflags_t flags)
 	return cow;
 }
 
+static int
+find_obj_id(struct vm_map_entry_info *entries, int numentries, vm_offset_t id)
+{
+    int i;
+    struct vm_object_info *obj_info;
+
+    for (i = 0; i < numentries; i++) {
+	obj_info = entries[i].obj_info;
+	if (obj_info == NULL) 
+	    continue;
+	    
+	printf("Entry %d ID is %lx\n", i, obj_info->id);
+	if (obj_info->id == id)
+	    return i;
+    }
+
+    return -1;
+}
+
 int
 vmspace_restore(struct proc *p, struct memckpt_info *dump)
 {
 	struct vmspace *vmspace;
 	struct vm_map *vm_map;
 	struct vm_map_entry_info *entry;
+	struct vm_object_info *obj_info;
 	vm_object_t new_object;
 	//vm_offset_t addr;
 	int error = 0;
 	int cow;
 	boolean_t writecounted;
 	int flags;
+	int numentries;
+	vm_object_t *objects;
+	vm_object_t backer;
+	int i, index;
 
 
 	/* Shorthands */
 	vmspace = p->p_vmspace;
 	vm_map = &vmspace->vm_map;
+	numentries = dump->vmspace.nentries;
 
-	/*
-	 * XXX Reading should be done all at once, before starting restore,
-	 * so that we are sure we have succeeded in reading all past state
-	 * before going ahead with overwriting the process address space.
-	 * Should be taken care of after making sure everything works. The
-	 * same holds for the construction of the new vm_map.
-	 */
+	/* The newly created objects */
+	objects = malloc(sizeof(*objects) * numentries, M_SLSMM, M_NOWAIT);
+	if (objects == NULL)
+	    return ENOMEM;
 
 	/*
 	 * Blow away the old address space, as done in exec_new_vmspace
@@ -443,54 +539,83 @@ vmspace_restore(struct proc *p, struct memckpt_info *dump)
 
 
 	/* restore vm_map entries */
-	for (int i = 0; i < dump->vmspace.nentries; i++) {
+	for (i = 0; i < numentries; i++) {
 
 	    printf("object being restored:entry %d\n", i);
-	    /*
-	     * We assume no entry will span the whole virtual address space,
-	     * so ULONG_MAX is a sentinel value for when there is no object
-	     * backing an entry. We do not know why there are entries without
-	     * a backing object, to be honest.
-	     */
 
 	    entry = &dump->entries[i];
+	    obj_info = entry->obj_info;
 
-	    /* XXX Shadow hack */
-	    entry_id[i] = entry->current_object;
+	    if (obj_info == NULL) {
+		cow = map_flags_from_entry(entry->eflags);
+		PROC_UNLOCK(p);
+		vm_map_lock(vm_map);
+		error = vm_map_insert(vm_map, NULL, 0, 
+					entry->start, entry->end,
+					entry->protection, entry->max_protection,
+					cow);
+		vm_map_unlock(vm_map);
+		PROC_LOCK(p);
+		if (error != KERN_SUCCESS) {
+		    printf("Error: vm_map_insert failed with %d\n", 
+						    vm_mmap_to_errno(error));
+		    return error;
+		}
 
-	    writecounted = FALSE;
-	    flags = 0;
+		continue;
+	    }
 
-	    /*XXX HACK  */
-	    if (entry->type == OBJT_DEVICE) {
+	    /* XXX HACK  */
+	    /*
+	    if (obj_info->type == OBJT_DEVICE) {
 		printf("12.0 objt device vm_object hack. Ignoring object.\n");
 		continue;
 	    }
+	    */
+
+	    /* 
+	     * XXX We assume that the backer has already been restored. 
+	     * We can relax that by postponing the restoration of this object
+	     * until the backer is in place.
+	     */
+	    backer = NULL;
+	    if (obj_info->backer != 0) {
+		index = find_obj_id(dump->entries, numentries, obj_info->backer);
+		if (index != -1)
+		    backer = objects[index];
+		else
+		    printf("ERROR: Backer object for entry %d not found", i);
+
+		if (index > i)
+		    printf("ERROR: Backer not restored yet, crash imminent\n");
+	    }
+
 
 	    /*
 	     * We can have a new_object that is null, in fact this is how
 	     * we would normally create an anonymous mapping.
 	     */
-	    new_object = vm_object_restore(entry, &flags, &writecounted);
-
-	    /* XXX Shadow hack */
-	    entry_obj[i] = new_object;
-
+	    writecounted = FALSE;
+	    flags = 0;
+	    new_object = vm_object_restore(p, entry, backer, &flags, &writecounted);
+	    objects[i] = new_object;
 
 	    cow = map_flags_from_entry(entry->eflags);
+	    PROC_UNLOCK(p);
 	    vm_map_lock(vm_map);
 	    error = vm_map_insert(vm_map, new_object, entry->offset,
 		    entry->start, entry->end,
 		    entry->protection, entry->max_protection,
 		    cow);
 	    vm_map_unlock(vm_map);
-	    if (error) {
-		printf("Error: vm_map_insert failed with %d\n", error);
-		return error;
+	    PROC_LOCK(p);
+	    if (error != KERN_SUCCESS) {
+		printf("Error: vm_map_insert failed with %d\n", vm_mmap_to_errno(error));
+		return vm_mmap_to_errno(error);
 	    }
 
 	    
-	    if (new_object && new_object->type != OBJT_VNODE)
+	    if (new_object && new_object->type == OBJT_DEFAULT)
 		data_restore(vm_map, new_object, entry);
 	    printf("restored object: %d\n", i);
 	}

@@ -1,5 +1,6 @@
 #include "bufc.h"
 #include "_slsmm.h"
+#include "backends/worker.h"
 
 chan_t*
 chan_init(size_t capacity)
@@ -25,6 +26,19 @@ chan_init(size_t capacity)
     cv_init(&chan->r_cv, "chan r_cv"); 
     mtx_init(&chan->mu, "chan mutex", NULL, MTX_DEF);
     return chan;
+}
+
+void
+chan_fini(chan_t *chan)
+{
+
+    mtx_destroy(&chan->mu);
+    cv_destroy(&chan->r_cv);
+    cv_destroy(&chan->w_cv);
+
+    free(chan->data, M_SLSMM);
+    free(chan, M_SLSMM);
+
 }
 
 void 
@@ -56,6 +70,10 @@ chan_recv(chan_t* chan)
     while (chan->size == 0) {
 	chan->r_wait ++;
 	cv_wait(&chan->r_cv, &chan->mu);
+	if (time_to_die == 1) {
+	    mtx_unlock(&chan->mu);
+	    return NULL;
+	}
 	chan->r_wait --;
     }
 

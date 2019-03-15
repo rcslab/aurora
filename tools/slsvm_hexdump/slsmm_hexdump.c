@@ -121,7 +121,7 @@ static void print_entry_info(struct vm_map_entry_info *entry) {
 	printf("start:	%016lx	end:	%016lx\n", entry->start, entry->end);
 	printf("offset:	%016lx	eflags:	%d\n", entry->offset, entry->eflags);
 	printf("prot:	%02hhx	max_prot:	%02hhx	size %lx\n", 
-			entry->protection, entry->max_protection, entry->size);
+			entry->protection, entry->max_protection, entry->end - entry->start);
 }	
 
 

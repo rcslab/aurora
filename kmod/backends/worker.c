@@ -30,9 +30,12 @@
 #include "../memckpt.h"
 #include "../_slsmm.h"
 #include "../slsmm.h"
+#include "nvdimm.h"
 
+/* XXX turns out these belong exclusively to the OSD */
 
 struct sls_worker sls_workers[WORKER_THREADS];
+extern int time_to_die;
 
 static
 void sls_writed(void *arg)
@@ -45,58 +48,61 @@ void sls_writed(void *arg)
     struct mtx *mtx;
     struct cv *cv;
     struct thread *td;
-    vm_offset_t *offp;
-    struct sls_desc desc;
+    vm_offset_t index;
+    struct dump_page *dump_page;
+    vm_offset_t vaddr_data;
 
     worker = (struct sls_worker *) arg;
     mtx = &worker->work_mtx;
     cv = &worker->work_cv;
     id = worker->work_id;
+    index = worker->work_index;
     td = worker->work_td;
-    offp = &worker->work_offset;
-    desc = worker->work_desc;
 
-    /* XXX Check if we need to exit */ 
-    for (;;) {
+    while (time_to_die == 0) {
 	mtx_lock(mtx);
-	cv_wait_unlock(cv, mtx);
-	for (;;) {
-	    vaddr = atomic_readandclear_ptr(offp);
-	    if (vaddr != 0) {
 
-		/* XXX FENCES */
-		page = worker->work_page;
+	while ((dump_page = LIST_FIRST(&worker->work_list)) == NULL)
+	    cv_wait(cv, mtx);
 
-		if (vaddr == SLS_POISON) {
-		    destroy_desc(desc);
-		    break; 
-		}
+	LIST_REMOVE(dump_page, next);
+	page = dump_page->page;
+	vaddr_data = dump_page->vaddr;
 
-		error = fd_write(&vaddr, sizeof(vm_offset_t), desc);
-		if (error != 0) {
-		    printf("Error: writing vm_map_entry_info failed\n");
-		    continue;
-		}
-
-		/* Never fails on amd64, check is here for futureproofing */
-		vaddr = userpage_map(page->phys_addr);
-		if ((void *) vaddr == NULL) {
-		    printf("Mapping page failed\n");
-		    continue;
-		}
-
-		error = fd_write((void*) vaddr, PAGE_SIZE, desc);
-		if (error != 0) {
-		    printf("Error: write failed with %d\n", error);
-		    continue;
-		}
-
-		userpage_unmap(vaddr);
-	    }
+	error = nvdimm_write(&vaddr_data, sizeof(vm_offset_t), index);
+	if (error != 0) {
+	    printf("Error: writing vm_map_entry_info failed\n");
+	    continue;
 	}
-	printf("Worker %ld done with writing\n", id);
+
+	vaddr = userpage_map(page->phys_addr);
+	if ((void *) vaddr == NULL) {
+	    printf("Mapping page failed\n");
+	    continue;
+	}
+
+	/* XXX Account for superpages */
+	error = nvdimm_write((void*) vaddr, PAGE_SIZE, index);
+	if (error != 0) {
+	    printf("Error: write failed with %d\n", error);
+	    continue;
+	}
+	worker->work_index += PAGE_SIZE;
+
+	userpage_unmap(vaddr);
+	worker->cnt++;
+
+	free(dump_page, M_SLSMM);
+	mtx_unlock(mtx);
     }
 
+    worker->work_id = -1;
+
+    mtx_lock(mtx);
+    cv_signal(cv);
+    mtx_unlock(mtx);
+
+    printf("Exiting.\n");
     kthread_exit();
 }
 
@@ -122,11 +128,17 @@ sls_workers_init(void)
     for (i = 0; i < WORKER_THREADS; i++) {
 	worker = &sls_workers[i];
 
+	printf("Initializing list\n");
+	LIST_INIT(&worker->work_list);
+	printf("List initialized\n");
 	cv_init(&worker->work_cv, "slsworkercv");
 	mtx_init(&worker->work_mtx, "slsworkedmtx", NULL, MTX_DEF);
-	worker->work_offset = 0;
 	worker->work_id = i;
+	worker->cnt = 0;
 
+	/* Since we're using the OSD as an array, space workers equally */
+	worker->work_index = (vm_offset_t) nvdimm + i * (nvdimm_size / WORKER_THREADS);
+	printf("worker index is %lx\n", worker->work_index);
 
 	error = kthread_add((void(*)(void *)) sls_writed, (void *) worker,
 	      NULL, &worker->work_td, 0, 0, "slsworkerd%d", i);
@@ -142,13 +154,31 @@ sls_workers_init(void)
 void
 sls_workers_destroy(void)
 {
+    int i;
+    struct mtx *mtx;
+    struct cv *cv;
+
+    for (i = 0; i < WORKER_THREADS; i++) {
+	mtx = &sls_workers->work_mtx;
+	cv = &sls_workers->work_cv;
+
+	mtx_lock(mtx);
+	if (sls_workers[i].work_id >=  0) {
+	    printf("Sleeping.\n");
+	    cv_wait(cv, mtx);
+	}
+	printf("Continuing.\n");
+
+	mtx_unlock(mtx);
+
+	cv_destroy(cv);
+	mtx_destroy(mtx);
+
+    }
+    
     /* 
      * XXX Implement proper locking to eliminate
      * races between loads/unloads and dumps/restores
-     */
-
-    /*
-     * XXX destroy threads somehow
      */
 }
 

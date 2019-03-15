@@ -1,10 +1,11 @@
 #include "_slsmm.h"
-#include "cpuckpt.h"
+
 #include "dump.h"
 #include "memckpt.h"
 #include "slsmm.h"
 #include "backends/desc.h"
 #include "backends/fileio.h"
+#include "backends/worker.h"
 #include "hash.h"
 #include "fd.h"
 #include "bufc.h"
@@ -14,6 +15,8 @@
 
 #include <sys/capsicum.h>
 #include <sys/conf.h>
+#include <sys/fcntl.h>
+#include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/kernel.h>
 #include <sys/kthread.h>
@@ -28,9 +31,11 @@
 #include <sys/rwlock.h>
 #include <sys/shm.h>
 #include <sys/signalvar.h>
+#include <sys/stat.h>
 #include <sys/systm.h>
 #include <sys/syscallsubr.h>
 #include <sys/time.h>
+#include <sys/uio.h>
 
 #include <machine/param.h>
 #include <machine/reg.h>
@@ -46,6 +51,13 @@
 
 MALLOC_DEFINE(M_SLSMM, "slsmm", "S L S M M");
 
+int pid_checkpointed[SLS_MAX_PID];
+vm_object_t pid_shadows[SLS_MAX_PID];
+int time_to_die;
+
+/* XXX Temporary benchmarking code */
+long  sls_log[9][SLS_LOG_ENTRIES];
+int sls_log_counter = 0;
 
 static int
 slsmm_dump(struct proc *p, struct sls_desc desc, int mode)
@@ -57,8 +69,10 @@ slsmm_dump(struct proc *p, struct sls_desc desc, int mode)
 	struct dump *dump;
 	vm_object_t *objects;
 	vm_map_t vm_map = &p->p_vmspace->vm_map;
-	struct timespec t_suspend, t_suspend_complete, t_proc_ckpt,
-			t_fd_ckpt, t_vmspace_ckpt, t_resumed, t_flush_disk;
+	struct timespec tstart, tsuspend, tproc,
+			tfd, tmem, tresume, tflush;
+	int threads_still_running;
+	struct thread *td;
 
 	/*
 	* XXX Find a better way to do allocations, we cannot keep doing it
@@ -90,21 +104,37 @@ slsmm_dump(struct proc *p, struct sls_desc desc, int mode)
 	dump->filedesc.infos = file_infos;
 
 
-	nanotime(&t_suspend);
+	nanotime(&tstart);
 
 	/* Suspend the process */
 	PROC_LOCK(p);
 	/*
-	* Send the signal before locking, otherwise
-	* the thread state flags don't get updated.
-	*
 	* This causes the process to get detached from
 	* its terminal, unfortunately. We can solve this
 	* by using a different kind of STOP (e.g. breakpoint).
 	*/
 	kern_psignal(p, SIGSTOP);
+	PROC_UNLOCK(p);
 
-	nanotime(&t_suspend_complete);
+
+	threads_still_running = 1;
+	while (threads_still_running == 1) {
+	    threads_still_running = 0;
+	    PROC_LOCK(p);
+	    TAILQ_FOREACH(td, &p->p_threads, td_plist) {
+		if (TD_IS_RUNNING(td)) {
+		    threads_still_running = 1;
+		    break;
+		}
+	    }
+	    PROC_UNLOCK(p);
+
+	    pause_sbt("slsrun", SBT_1MS, 0 , C_HARDCLOCK | C_CATCH);
+	}
+
+	PROC_LOCK(p);
+
+	nanotime(&tsuspend);
 
 	/* Dump the process states */
 	error = proc_checkpoint(p, &dump->proc, thread_infos);
@@ -112,48 +142,62 @@ slsmm_dump(struct proc *p, struct sls_desc desc, int mode)
 	    printf("Error: proc_checkpoint failed with error code %d\n", error);
 	    goto slsmm_dump_cleanup;
 	}
-	nanotime(&t_proc_ckpt);
+	nanotime(&tproc);
 
 	/* Prepare the vmspace for dump */
-	error = vmspace_checkpoint(p->p_vmspace, &dump->memory, objects, mode);
+	error = vmspace_checkpoint(p, &dump->memory, objects, mode);
 	if (error != 0) {
 	    printf("Error: vmspace_checkpoint failed with error code %d\n", error);
 	    goto slsmm_dump_cleanup;
 	}
-	nanotime(&t_vmspace_ckpt);
+	nanotime(&tmem);
 
-	error = fd_checkpoint(p->p_fd, &dump->filedesc);
+	error = fd_checkpoint(p, &dump->filedesc);
 	if (error != 0) {
 	    printf("Error: fd_checkpoint failed with error code %d\n", error);
 	    goto slsmm_dump_cleanup;
 	}
-	nanotime(&t_fd_ckpt);
+	nanotime(&tfd);
 
 	/* Let the process execute ASAP */
 	kern_psignal(p, SIGCONT);
 	PROC_UNLOCK(p);
 
-	nanotime(&t_resumed);
+	nanotime(&tresume);
 
-	error = store_dump(dump, objects, mode, desc);
+	error = store_dump(p, dump, objects, mode, desc);
 	if (error != 0) {
 	    printf("Error: dumping dump to descriptor failed with %d\n", error);
 	    goto slsmm_dump_cleanup;
 	}
 
-	nanotime(&t_flush_disk);
+	pid_checkpointed[p->p_pid] = 1;
 
-	uprintf("suspend		%ldns\n", t_suspend_complete.tv_nsec-t_suspend.tv_nsec);
-	uprintf("proc_ckpt	%ldns\n", t_proc_ckpt.tv_nsec-t_suspend_complete.tv_nsec);
-	uprintf("fd_ckpt		%ldns\n", t_vmspace_ckpt.tv_nsec-t_proc_ckpt.tv_nsec);
-	uprintf("vmspace		%ldns\n", t_fd_ckpt.tv_nsec-t_vmspace_ckpt.tv_nsec);
-	uprintf("total_suspend	%ldns\n", t_resumed.tv_nsec-t_suspend.tv_nsec);
-	uprintf("flush_disk	%ldns\n", t_flush_disk.tv_nsec-t_resumed.tv_nsec);
+	nanotime(&tflush);
+
+	/*
+	printf("suspend		%ldns\n",  tonano(tsuspend) - tonano(tstart));
+	printf("proc_ckpt	%ldns\n", tonano(tproc) - tonano(tsuspend));
+	printf("vmspace	\t%ldns\n", tonano(tmem) - tonano(tproc));
+	printf("fd		%ldns\n", tonano(tfd) - tonano(tmem));
+	printf("total_suspend	%ldns\n", tonano(tresume) - tonano(tfd));
+	printf("flush_disk	%ldns\n", tonano(tflush) - tonano(tresume));
+	*/
+
+	sls_log[0][sls_log_counter] = tonano(tsuspend) - tonano(tstart);
+	sls_log[1][sls_log_counter] = tonano(tproc) - tonano(tsuspend);
+	sls_log[2][sls_log_counter] = tonano(tmem) - tonano(tproc);
+	sls_log[3][sls_log_counter] = tonano(tfd) - tonano(tmem);
+	sls_log[4][sls_log_counter] = tonano(tresume) - tonano(tfd);
+	sls_log[5][sls_log_counter] = tonano(tflush) - tonano(tresume);
+
+
 
     slsmm_dump_cleanup:
 	destroy_desc(desc);
 	free(objects, M_SLSMM);
 	free_dump(dump);
+
 
 	return error;
 }
@@ -206,6 +250,7 @@ struct sls_restored_args {
     int fd_type;
 };
 
+/* XXX Check for leaks */
 static void
 sls_restored(struct sls_restored_args *args)
 {
@@ -219,22 +264,23 @@ sls_restored(struct sls_restored_args *args)
 	kthread_exit();
 
     p = args->p;
-    desc = create_desc(args->filename, args->fd_type);
-    //free(args, M_SLSMM);
+    /* XXX Error handling */
+    desc = create_desc((long) args->filename, args->fd_type);
 
     dump = alloc_dump();
     if (dump == NULL) {
-	/* XXX error handling */
 	printf("Error: dump not created\n");
+	goto restored_out;
     }
     load_dump(dump, desc);
-    destroy_desc(desc);
-
 	
     error = slsmm_restore(p, dump);
     if (error != 0)
 	printf("Error: slsmm_restore failed with %d\n", error);
 
+restored_out:
+    free(args, M_SLSMM);
+    destroy_desc(desc);
     free_dump(dump);
     cleanup_hashtable();
     PRELE(p);
@@ -264,6 +310,7 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	int fd_type;
 	int ndescs;
 	struct dump *dump = NULL;
+	int i;
 
 	/*
 	* Get a hold of the process to be
@@ -334,8 +381,7 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 
 
 		/* Now we are at the sync path */
-		/* XXX Only files for now */
-		desc = create_desc(dparam->name, dparam->fd_type);
+		desc = create_desc((long) dparam->name, dparam->fd_type);
 		if (desc.type == DESCRIPTOR_SIZE) { 
 		    printf("Error: invalid descriptor\n");
 		    error = EINVAL;
@@ -358,7 +404,6 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 
 	    /* Only works for restoring the current process */
 	    case SLSMM_RESTORE:
-		/* XXX Merge first steps with SLSMM_DUMP, it's the same model */
 		rparam = (struct restore_param *) data;
 		fd_type = rparam->fd_type;
 
@@ -371,25 +416,27 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		error = pget(rparam->pid, PGET_WANTREAD, &p);
 		if (error != 0) {
 		    printf("Error: pget failed with %d\n", error);
-		    break;
+		    return EINVAL;
 		}
 
 
 		snap_name_len = MIN(rparam->len, 1024);
 		snap_name = malloc(snap_name_len, M_SLSMM, M_NOWAIT);
 		if (snap_name == NULL) {
-		    /* XXX error handling */
+		    printf("Error: allocating snapshot name failed\n");
+		    PRELE(p);
+		    return ENOMEM;
 		}
 		
 		error = copyin(rparam->name, snap_name, snap_name_len);
 		if (error != 0) {
 		    printf("Error: Copying name failed with %d\n", error);
-		    /* XXX error handling */
-		    break;
+		    free(snap_name, M_SLSMM);
+		    PRELE(p);
+		    return error;
 		}
 		snap_name[snap_name_len] = '\0';
 
-		/* XXX Settle on sync/async version (probably async) */
 		restored_args = malloc(sizeof(*restored_args), M_SLSMM, M_NOWAIT);
 		if (restored_args == NULL) {
 		    printf("Error: Allocating restored_args failed\n");
@@ -410,9 +457,22 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 
 		break;
 
-	    /* XXX fix up so that it works with files */
-	    /* XXX fix up so that it works with all descriptors */
+	    /*
+	     * XXX fix up so that it works with all descriptors, this will be how
+	     * we import from / export to the OSD and memory.
+	     */
 	    case SLSMM_COMPOSE:
+		cparam = (struct compose_param *) data;
+
+		/* XXX Only user-provided fds can be used for now */
+		if (cparam->fd_type != SLSMM_FD_FD || cparam->outfd_type != SLSMM_FD_FD)
+		    return EINVAL;
+
+		/* XXX error handling */
+		fds = malloc(sizeof(*fds) * cparam->nfds, M_SLSMM, M_NOWAIT);
+		if (fds == NULL) {
+		    return ENOMEM;
+		}
 
 		error = copyin(cparam->fds, fds, sizeof(int) * cparam->nfds);
 		if (error != 0) {
@@ -428,15 +488,27 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		    goto slsmm_compose_out;
 		}
 
-		/* XXX initialize descriptors from fds */
+		/* XXX error handling */
+		for (i = 0; i < ndescs; i++) {
+		    descs[i] = create_desc((long) fds[i], cparam->fd_type);
+		}
 
+		desc = create_desc((long) cparam->outfd, cparam->outfd_type);
+
+		error = setup_hashtable();
+		/* error handling */
 		dump = compose_dump(descs, ndescs);
+		/* XXX wrong error handling */
 		if (!dump)
 		    goto slsmm_compose_out;
 
-		/* Pipe result to output */
+		/* XXX error handling */
+		/* XXX Change the mode code */
+		error = store_dump(NULL, dump, NULL, SLSMM_CKPT_FULL, desc);
+
 
 slsmm_compose_out:
+		cleanup_hashtable();
 		free_dump(dump);
 		free(descs, M_SLSMM);
 		free(fds, M_SLSMM);
@@ -453,20 +525,36 @@ static struct cdevsw slsmm_cdevsw = {
 };
 static struct cdev *slsmm_dev;
 
+
+/*
+ * XXX Async is temporarily our benchmarking call,
+ * we can split these later.
+ */
 static int
 chan_handler()
 {
+    const int interval = 1000;
+    const int iterations = 10;
     struct sls_chan_args *chan_args= NULL;
+    struct timespec start, end, total;
     struct sls_desc desc;
     struct proc *p = NULL;
+    int msec;
     int error;
     int request_id;
     int dump_mode;
     char *filename;
     int fd_type;
+    int i;
 
-    for (;;) {
+    while (time_to_die == 0) {
+	error = 0;
+
 	chan_args = chan_recv(chan);
+	if (time_to_die != 0) {
+	    free(chan_args, M_SLSMM);
+	    break;
+	}
 
 	p = chan_args->p;
 	dump_mode = chan_args->dump_mode;
@@ -474,31 +562,113 @@ chan_handler()
 	filename = chan_args->filename;
 	fd_type = chan_args->fd_type;
 
-	printf("request %d\n", request_id);
+	printf("Starting benchmarking...\n");
 
-	printf("fd_type is %d\n", fd_type);
-	desc = create_desc(filename, fd_type);
-	printf("descriptor type is %d\n", desc.type);
-	if (desc.type == DESCRIPTOR_SIZE) 
+	printf("Filename: %s\n", filename);
+	desc = create_desc((long) filename, fd_type);
+	if (desc.type == DESCRIPTOR_SIZE) {
 	    printf("Invalid descriptor\n");
-	else
-	    error = slsmm_dump(p, desc, dump_mode);
+	    PRELE(p);
+	    free(chan_args, M_SLSMM);
+	    continue;
+	} else {
+	    for (i = 0; i < iterations; i++) {
+		nanotime(&start);
+
+		sls_log_counter = i;
+		sls_log[7][sls_log_counter] = 0;
+		error = slsmm_dump(p, desc, dump_mode);
+		if(error != 0) {
+		    printf("dump failed with %d\n", error);
+		    break;
+		}
+
+		nanotime(&end);
+
+		sls_log[6][sls_log_counter] = tonano(end) - tonano(start);
+		/* 
+		 * Each iteration of this loop is 100ms regardless
+		 * of the time it took to checkpoint. If it wook
+		 * more than 100ms, then don't sleep at all, but
+		 * this should be rare enough.
+		 */
+		msec = (tonano(end) - tonano(start)) / (1000 * 1000); 
+		if (msec < interval) {
+		    pause("sls", (hz * (interval - msec)) / 1000);
+		}
+
+		nanotime(&total);
+	    }
+	}
 
 	PRELE(p);
 
-	flush_count ++;
-	printf("%d\n", flush_count);
+	/* If the error is not 0, we messed up somewhere in the loop */
+	if (error == 0)
+	    error = kern_openat(curthread, AT_FDCWD, "/tmp/sls_benchmark", 
+				UIO_SYSSPACE, 
+				O_RDWR | O_CREAT | O_TRUNC, 
+				S_IRWXU | S_IRWXG | S_IRWXO);
+	if (error != 0) {
+	    printf("Could not log results, error %d", error);
+	    free(chan_args, M_SLSMM);
+	    continue;
+	}
+
+	int logfd = curthread->td_retval[0];
+
+	char buffer[1024];
+
+	for (i = 0; i < iterations; i++) {
+	    for (int j = 0; j < 9; j++) {
+		struct uio auio;
+		struct iovec aiov;
+
+		snprintf(buffer, 1024, "%u,%lu\n", j, sls_log[j][i]);
+
+		aiov.iov_base = buffer;
+		aiov.iov_len = strnlen(buffer, 1024);
+		auio.uio_iov = &aiov;
+		auio.uio_iovcnt = 1;
+		auio.uio_resid = strnlen(buffer, 1024);
+		auio.uio_segflg = UIO_SYSSPACE;
+
+		error = kern_writev(curthread, logfd, &auio);
+		if (error)
+		    printf("Writing to file failed with %d\n", error);
+	    }
+
+	}
+	kern_close(curthread, logfd);
+
+	printf("Benchmarking done.\n");
+
+
+	flush_count++;
+	free(chan_args->filename, M_SLSMM);
 	free(chan_args, M_SLSMM);
     }
+
+
+    chan_fini(chan);
+    kproc_exit(0);
+
 }
+
 
 static int
 SLSMMHandler(struct module *inModule, int inEvent, void *inArg) {
     int error = 0;
+    int i;
+    
     switch (inEvent) {
 	case MOD_LOAD:
-	    printf("Loaded\n");
+	    printf("SLS Loaded.\n");
+	    time_to_die = 0;
 	    backends_init();
+
+	    for (i = 0; i < SLS_MAX_PID; i++)
+		pid_checkpointed[i] = 0;
 
 	    error = setup_vnhash();
 	    if (error != 0)
@@ -520,9 +690,14 @@ SLSMMHandler(struct module *inModule, int inEvent, void *inArg) {
 
 	case MOD_UNLOAD:
 
+	    time_to_die = 1;
 
-	    printf("Unloaded\n");
+	    printf("SLS Unloaded.\n");
 	    destroy_dev(slsmm_dev);
+
+	    mtx_lock(&chan->mu);
+	    cv_signal(&chan->r_cv);
+	    mtx_unlock(&chan->mu);
 
 	    cleanup_vnhash();
 	    backends_fini();

@@ -20,7 +20,7 @@ static struct option longopts[] = {
 void
 usage(void)
 {
-    printf("Usage: procdump <-p|--pid> <PID> [<-f | --format> <file | memory | osd>] [--delta] [--async] <filename> \n");
+    printf("Usage: procdump <-p|--pid> <PID> [<-f | --format> <file <filename> | memory | osd>] [--delta] [--async]\n");
 }
 
 int main(int argc, char* argv[]) {
@@ -83,10 +83,17 @@ int main(int argc, char* argv[]) {
 	}
 
 	if (optind == argc - 1) {
+	    if (param.fd_type != SLSMM_FD_FILE) {
+		usage();
+		return 0;
+	    }
+
 	    filename = argv[optind];
 	    param.name = filename;
 	    param.len = strnlen(filename, 1024);
-	} else {
+
+	    truncate(filename, 0);
+	} else if (param.fd_type == SLSMM_FD_FILE) {
 	    usage();
 	    return 0;
 	}

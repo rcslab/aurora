@@ -69,6 +69,7 @@ file_write(void* addr, size_t len, int fd)
 	struct uio auio;
 	struct iovec aiov;
 
+
 	bzero(&auio, sizeof(struct uio));
 	bzero(&aiov, sizeof(struct iovec));
 
@@ -85,8 +86,10 @@ file_write(void* addr, size_t len, int fd)
 
 	error = kern_writev(curthread, fd, &auio);
 	if (error) {
-		printf("Error: kern_readv failed with code %d\n", error);
+		printf("Error: kern_writev failed with code %d\n", error);
 	}
+	sls_log[7][sls_log_counter] += len;		
+
 	return error;
 }
 
@@ -99,55 +102,61 @@ file_dump(struct vm_map_entry_info *entries, vm_object_t *objects,
 	struct vm_map_entry_info *entry;
 	int i;
 	int error;
-	int cnt = 0;
+	vm_object_t obj;
+	vm_offset_t offset;
 
 	for (i = 0; i < numentries; i++) {
 
-	    if (objects[i] == NULL)
-		continue;
-	
 	    entry = &entries[i];
+	    offset = entry->offset;
 	
-	    TAILQ_FOREACH(page, &objects[i]->memq, listq) {
-	
-		/*
-		* XXX Does this check make sense? We _are_ getting pages
-		* from a valid object, after all, why would it have NULL
-		* pointers in its list?
-		*/
-		if (!page) {
-		    printf("ERROR: vm_page_t page is NULL");
-		    continue;
+	    obj = objects[i];
+	    while (obj != NULL) {
+		if (obj->type != OBJT_DEFAULT)
+		    break;
+
+		TAILQ_FOREACH(page, &obj->memq, listq) {
+	    
+		    /*
+		    * XXX Does this check make sense? We _are_ getting pages
+		    * from a valid object, after all, why would it have NULL
+		    * pointers in its list?
+		    */
+		    if (!page) {
+			printf("ERROR: vm_page_t page is NULL");
+			continue;
+		    }
+		    
+		    vaddr_data = IDX_TO_VADDR(page->pindex, entry->start, offset);
+		    error = file_write(&vaddr_data, sizeof(vm_offset_t), fd);
+		    if (error != 0) {
+			printf("Error: writing vm_map_entry_info failed\n");
+			return;
+			//return error;
+		    }
+		    
+		    /* Never fails on amd64, check is here for futureproofing */
+		    vaddr = userpage_map(page->phys_addr);
+		    if ((void *) vaddr == NULL) {
+			printf("Mapping page failed\n");
+			/* EINVAL seems the most appropriate */
+			error = EINVAL;
+			return;
+			//return error;
+		    }
+		    
+		    /* XXX parallelize */
+		    error = file_write((void*) vaddr, PAGE_SIZE, fd);
+		    if (error != 0)
+			return;
+			//return error;
+		    
+		    userpage_unmap(vaddr);
 		}
-		
-		vaddr_data = IDX_TO_VADDR(page->pindex, entry->start, entry->offset);
-		error = file_write(&vaddr_data, sizeof(vm_offset_t), fd);
-		if (error != 0) {
-		    printf("Error: writing vm_map_entry_info failed\n");
-		    return;
-		    //return error;
-		}
-		
-		/* Never fails on amd64, check is here for futureproofing */
-		vaddr = userpage_map(page->phys_addr);
-		if ((void *) vaddr == NULL) {
-		    printf("Mapping page failed\n");
-		    /* EINVAL seems the most appropriate */
-		    error = EINVAL;
-		    return;
-		    //return error;
-		}
-		
-		/* XXX parallelize */
-		error = file_write((void*) vaddr, PAGE_SIZE, fd);
-		if (error != 0)
-		    return;
-		    //return error;
-		
-		cnt++;
-		userpage_unmap(vaddr);
+
+		offset += obj->backing_object_offset;
+		obj = obj->backing_object;
 	    }
 	}
-	printf("cnt = %d\n", cnt);
 	
 }

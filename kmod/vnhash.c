@@ -3,7 +3,6 @@
 #include "memckpt.h"
 #include "slsmm.h"
 #include "backends/fileio.h"
-#include "backends/fileio.h"
 #include "vnhash.h"
 
 #include <sys/types.h>

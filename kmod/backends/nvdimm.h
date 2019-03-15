@@ -36,6 +36,7 @@ struct SPA_mapping {
 };
 
 extern void *nvdimm;
+extern size_t nvdimm_size;
 
 #define NVDIMM_SLICE_SIZE (1024UL * 1024 * 1024 * 16)
 

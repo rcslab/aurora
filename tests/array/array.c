@@ -3,7 +3,9 @@
 #include <memory.h>
 #include <unistd.h>
 
-int arr[128];
+#define ARRAY_SIZE 8
+
+int arr[ARRAY_SIZE];
 
 int main() {
 	printf("%d\n", getpid());
@@ -11,7 +13,7 @@ int main() {
 	printf("%x\n", (unsigned int)arr);
 	for (int i = 0; i < 100; i ++) {
 		sleep(1);
-		printf("%d %x\n", i, arr[i%128]);
+		printf("%d %x\n", i, arr[i%ARRAY_SIZE]++);
 	}
 	return 0;
 }

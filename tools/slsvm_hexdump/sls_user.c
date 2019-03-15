@@ -6,7 +6,7 @@
 #include "../kmod/dump.h"
 #include "sls_user.h"
 
-struct slspage **pagelist;
+struct slspage *pagelist;
 
 /* If a memory allocation fails, we just bail */
 static void *
@@ -55,6 +55,7 @@ sls_load_dump(FILE *fp)
     struct thread_info *threads;
     struct file_info *files;
     struct vm_map_entry_info *entries;
+    struct vm_object_info *object;
     size_t numthreads, numfiles, numentries;
     struct slspage *page, *page_tail;
     uint64_t vaddr; 
@@ -102,6 +103,18 @@ sls_load_dump(FILE *fp)
     for (i = 0; i < numentries; i++) 
         assert(entries[i].magic == SLS_ENTRY_INFO_MAGIC); 
 
+    for (i = 0; i < numentries; i++) {
+	if (entries[i].obj_info == NULL)
+	    continue;
+	
+	object = malloc(sizeof(*object));
+	ret = fread(object, sizeof(*object), 1, fp);
+	assert(ret == 1);
+        assert(object->magic == SLS_OBJECT_INFO_MAGIC); 
+
+	entries[i].obj_info = object;
+    }
+
     /* XXX Unify string reading by having a central "database" */
     dump->filedesc.cdir = read_string(dump->filedesc.cdir_len, fp);
     dump->filedesc.rdir = read_string(dump->filedesc.rdir_len, fp);
@@ -111,45 +124,50 @@ sls_load_dump(FILE *fp)
     }
          
     for(i = 0; i < numentries; i++) {
-        if (entries[i].filename_len == 0)
+	object = entries[i].obj_info;
+	if (object == NULL)
+	    continue;
+
+        if (object->filename_len == 0)
             continue;
 
-        entries[i].filename = read_string(entries[i].filename_len, fp);
+        object->filename = read_string(object->filename_len, fp);
     }
+    return dump;
 
+    pagelist = NULL; 
+    for(;;) {
 
-    pagelist = malloc(sizeof(*pagelist) * numentries);
-    assert(pagelist != NULL);
+	ret = fscanf(fp, "%lu\n", &vaddr);
+	if (vaddr == ULONG_MAX)
+	    break;
 
-    for (i = 0; i < numentries; i++) {
-        for (j = 0; j < entries[i].resident_page_count; j++) {
+	page = malloc(sizeof(*page));
+	assert(page != 0);
 
-            page = malloc(sizeof(*page));
-            assert(page != 0);
-            
-            ret = fscanf(fp, "%lu\n", &page->vaddr);
-            /*
-            if (ret != 1) {
-                printf("fscanf failed at entry %d, page %d with %lu\n", i, j, ret);
-                exit(0);
-            }
+	page->vaddr = vaddr;
+	
+	/*
+	if (ret != 1) {
+	    printf("fscanf failed at entry %d, page %d with %lu\n", i, j, ret);
+	    exit(0);
+	}
 
-            */
-            ret = fread(&page->data, PAGE_SIZE, 1, fp);
-            if (ret != 1) {
-                printf("Reading page with address %lu failed\n", page->vaddr);
-                exit(0);
-            }
+	*/
+	ret = fread(&page->data, PAGE_SIZE, 1, fp);
+	if (ret != 1) {
+	    printf("Reading page with address %p failed with %lu\n", (void *) page->vaddr, ret);
+	    exit(0);
+	}
 
-            if (j == 0) 
-                pagelist[i] = page;
-            else
-                page_tail->next = page; 
+	if (pagelist == NULL)
+	    pagelist = page;
+	else
+	    page_tail->next = page; 
 
-            page_tail = page; 
-            page->next = NULL;
+	page_tail = page; 
+	page->next = NULL;
 
-        }
     }
 
     return dump;

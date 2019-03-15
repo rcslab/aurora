@@ -19,7 +19,7 @@ struct sls_desc{
     };
 };
 
-struct sls_desc create_desc(void *index, int type);
+struct sls_desc create_desc(long index, int type);
 void destroy_desc(struct sls_desc desc);
 
 #endif /* _DESC_H_ */

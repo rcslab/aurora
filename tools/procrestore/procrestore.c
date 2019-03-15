@@ -16,7 +16,7 @@ static struct option longopts[] = {
 void
 usage(void)
 {
-    printf("Usage: procrestore [<-f | --format> <file | memory | osd>] <filename> \n");
+    printf("Usage: procrestore [<-f <filename> | --format> <file | memory | osd>] \n");
 }
 
 int main(int argc, char* argv[]) {
@@ -57,10 +57,15 @@ int main(int argc, char* argv[]) {
 	}
 
 	if (optind == argc - 1) {
+	    if (param.fd_type != SLSMM_FD_FILE) {
+		usage();
+		return 0;
+	    }
+
 	    filename = argv[optind];
 	    param.name = filename;
 	    param.len = strnlen(filename, 1024);
-	} else {
+	} else if (param.fd_type == SLSMM_FD_FILE) {
 	    usage();
 	    return 0;
 	}

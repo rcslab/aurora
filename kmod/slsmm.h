@@ -41,9 +41,9 @@ struct restore_param {
 struct compose_param {
 	int	nfds;
 	int	*fds;
-	int	fd_type_in;
+	int	fd_type;
 	int	outfd;
-	int	fd_type_out;
+	int	outfd_type;
 };
 
 
@@ -62,6 +62,7 @@ struct compose_param {
 #define SLSMM_FD_FILE	 	1
 #define SLSMM_FD_MEM	 	2
 #define SLSMM_FD_NVDIMM	 	3
-#define SLSMM_FD_INVALID_HIGH 	4
+#define SLSMM_FD_FD	 	4
+#define SLSMM_FD_INVALID_HIGH 	5
 
 #endif

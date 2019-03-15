@@ -35,6 +35,26 @@ struct vmspace_info {
 	 */
 };
 
+#define SLS_OBJECT_INFO_MAGIC 0x7aaa7303
+struct vm_object_info {
+	vm_pindex_t size;
+    
+	enum obj_type type;
+
+	/* Used for mmap'd pages */
+	size_t filename_len;
+	char *filename;
+
+	vm_offset_t id;
+
+	/* Used for objects that are shadows of others */
+	vm_offset_t backer;
+	vm_ooffset_t backer_off;
+
+	/* XXX Bookkeeping for swapped out pages? */
+	int magic;
+};
+
 #define SLS_ENTRY_INFO_MAGIC 0x736c7304
 /* State of a vm_map_entry and its backing object */
 struct vm_map_entry_info {
@@ -47,36 +67,9 @@ struct vm_map_entry_info {
 	vm_prot_t protection;
 	vm_prot_t max_protection;
 
-	/* State of the object*/
-	vm_pindex_t size;
-    int resident_page_count;
-	enum obj_type type;
-
-	/* Used for mmap'd pages */
-	size_t filename_len;
-	size_t file_offset;
-	char *filename;
-
-	/* Used for object that are shadows of others */
-	boolean_t is_shadow;
-	vm_ooffset_t backing_offset;
-	/* 
-	 * XXX Wow that's inelegant, but it's also as simple as it goes.
-	 * We keep the address of the vm_object at checkpoint time, so that
-	 * we know which object to create the shadow from at restore time.
-	 *
-	 * Also, what's the right type to store addresses? void * implies
-	 * we are going to use it as a pointer, vm_offset_t is not used 
-	 * outside the VM subsystem.
-	 */
-	vm_object_t current_object;
-	vm_object_t backing_object;
-	
-
-
-
-	/* XXX Bookkeeping for swapped out pages? */
+	struct vm_object_info *obj_info;
 };
+
 
 #define SLS_MEMCKPT_INFO_MAGIC 0x736c730a
 struct memckpt_info {
@@ -92,8 +85,25 @@ struct memckpt_info {
 vm_offset_t userpage_map(vm_paddr_t phys_addr);
 void userpage_unmap(vm_offset_t vaddr);
 
-int vmspace_checkpoint(struct vmspace *vms, struct memckpt_info *dump, 
+int vmspace_checkpoint(struct proc *p, struct memckpt_info *dump, 
 		vm_object_t *objects, long mode);
 int vmspace_restore(struct proc *p, struct memckpt_info *dump);
+
+/* 
+ * XXX HACK. Properly implement full and delta dumps, as discussed. 
+ * - Full dumps: Create a child object from each object, and associate it
+ *   with the entry. Keep the old object, and get each page from it. Next
+ *   time we checkpoint, collapse the objects, and do the same thing.
+ * - Delta dumps: Same thing, create a child object and associate it with
+ *   the entry. In the next delta dump, create a grandchild, associate it
+ *   with the entry, dump the child's contents, _and_then_ merge.
+ *
+ *   Mixing full and delta dumps is not advised.
+ */
+
+#define SLS_MAX_PID 65536
+
+extern int pid_checkpointed[SLS_MAX_PID];
+extern vm_object_t pid_shadows[SLS_MAX_PID];
 
 #endif

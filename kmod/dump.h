@@ -20,7 +20,7 @@ struct dump {
 
 
 int load_dump(struct dump *dump, struct sls_desc desc);
-int store_dump(struct dump *dump, vm_object_t *objects,
+int store_dump(struct proc *p, struct dump *dump, vm_object_t *objects,
                     long mode, struct sls_desc desc);
 
 struct dump *compose_dump(struct sls_desc *descs, int ndescs);

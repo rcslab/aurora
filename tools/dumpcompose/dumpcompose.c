@@ -47,7 +47,7 @@ int main(int argc, char* argv[]) {
 	nfds = argc - 4;
 
 	if (type == SLSMM_FD_FILE) {
-		outfd = open(outfilename, O_RDONLY);
+		outfd = open(outfilename, O_RDWR | O_CREAT | O_TRUNC);
 		if (outfd < 0) {
 			perror("open");
 			exit(1);
@@ -75,12 +75,13 @@ int main(int argc, char* argv[]) {
 		fds[i] = fd;
 	}
 
+	/* XXX allow other types */
 	param = (struct compose_param) { 
 		.nfds = nfds,
 		.fds = fds, 
-		.fd_type_in = type,
-		.outfd = outtype,
-		.fd_type_out = outfd,
+		.fd_type = SLSMM_FD_FD,
+		.outfd = outfd,
+		.outfd_type = SLSMM_FD_FD,
 	};
 
 	ioctl(slsmm_fd, SLSMM_COMPOSE, &param);

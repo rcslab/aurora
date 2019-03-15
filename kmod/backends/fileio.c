@@ -40,7 +40,7 @@
  * rn this thing has a lot of baggage
  */
 struct sls_desc
-create_desc(void *index, int type)
+create_desc(long index, int type)
 {
     int error;
     int fd;
@@ -48,7 +48,6 @@ create_desc(void *index, int type)
 
     switch (type) {
     case SLSMM_FD_FILE:
-	printf("Name: %s\n", (char *) index);
 	error = kern_openat(curthread, AT_FDCWD, (char *) index, UIO_SYSSPACE,
 	    O_RDWR | O_CREAT, S_IRWXU);
 	if (error != 0) {
@@ -76,9 +75,18 @@ create_desc(void *index, int type)
     */
 
     case SLSMM_FD_NVDIMM:
+	/* XXX Right now we treat the NVDIMM as a simple buffer */
+	nvdimm_offset = 0;
         return (struct sls_desc) {
             .type = DESC_OSD,
             .index = nvdimm,
+        };
+
+    /* XXX Problematic, we try to close it with desc_destroy() rn */
+    case SLSMM_FD_FD:
+        return (struct sls_desc) {
+            .type = DESC_FD,
+            .desc= index,
         };
 
     default:
@@ -171,7 +179,7 @@ fd_dump(struct vm_map_entry_info *entries, vm_object_t *objects,
     }
 }
 
-#define NAME_SIZE (64)
+
 /* 
  * XXX Make it so that calls for a specific backend succeed iff the backend was
  * initialized successfully. 
@@ -181,17 +189,27 @@ backends_init(void)
 {
 	int error;
 
+	//md_init();
+	
+	error = nvdimm_open();
+	if (error != 0) {
+	    printf("Warning: nvdimm not opened due to error %d. ", error);
+	    printf("Defaulting to using RAM as NVDIMM\n");
+
+	    nvdimm = malloc(1024L * 1024 * 1024, M_SLSMM, M_WAITOK);
+	    if (nvdimm == NULL) {
+		printf("Allocation failed, DO NOT use the OSD\n");
+	    } else {
+		printf("'NVDIMM' space is %ld bytes large\n", 1024L * 1024 * 1024);
+		nvdimm_size = 1024L * 1024 * 1024;
+	    }
+	}
+
 	error = sls_workers_init();
 	if (error != 0) {
 	    printf("sls_workers_init failed with %d\n", error);
 	    return;
 	}
-
-	//md_init();
-
-	if (nvdimm_open() != 0)
-	    printf("Warning: nvdimm not opened due to error %d\n", error);
-
 }
 
 void
@@ -200,7 +218,6 @@ backends_fini(void)
 	struct sls_worker *worker;
 	int i;
 
-	nvdimm_close();
 
 	//md_clear();
 	
@@ -211,4 +228,12 @@ backends_fini(void)
 	    cv_destroy(&worker->work_cv);
 	}
 
+#ifdef FAKE_BACKEND
+	free(nvdimm, M_SLSMM);
+
+#else
+	nvdimm_close();
+
+#endif
 }
+

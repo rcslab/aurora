@@ -32,6 +32,8 @@ struct sls_chan_args {
 };
 
 chan_t* chan_init(size_t capacity);
+void chan_fini(chan_t *chan);
+
 void chan_send(chan_t* chan, void* data);
 void* chan_recv(chan_t* chan);
 

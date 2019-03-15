@@ -1,7 +1,10 @@
 #ifndef _HASH_H_
 #define _HASH_H_
 
+#include <sys/param.h>
 
+#include <vm/vm.h>
+#include <vm/vm_page.h>
 
 /*
  * Randomly pick 4Kbuckets
@@ -10,7 +13,10 @@
 
 struct dump_page {
 	vm_ooffset_t vaddr;
-	void *data;
+	union {
+	    vm_page_t page; 
+	    void *data;
+	};
 	LIST_ENTRY(dump_page) next;
 };
 

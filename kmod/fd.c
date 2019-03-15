@@ -33,13 +33,15 @@
 #include "copied_fd.h"
 
 static int
-file_checkpoint(struct file *file, struct file_info *info, int fd)
+file_checkpoint(struct proc *p, struct file *file, struct file_info *info, int fd)
 {
 	int error;
 	char *filename = NULL;
 	size_t filename_len = 0;
 
+	PROC_UNLOCK(p);
 	error = vnode_to_filename(file->f_vnode, &filename, &filename_len);
+	PROC_LOCK(p);
 	if (error) {
 	    printf("error: vnode_to_filename failed with code %d\n", error);
 	    return error;
@@ -121,7 +123,7 @@ file_restore(struct proc *p, struct filedesc *filedesc, struct file_info *info)
 }
 
 int
-fd_checkpoint(struct filedesc *filedesc, struct filedesc_info *filedesc_info)
+fd_checkpoint(struct proc *p, struct filedesc_info *filedesc_info)
 {
 	int i;
 	char *cdir_path = NULL, *rdir_path = NULL;
@@ -131,6 +133,9 @@ fd_checkpoint(struct filedesc *filedesc, struct filedesc_info *filedesc_info)
 	struct vnode *cdir, *rdir;
 	struct file *fp;
 	int index;
+	struct filedesc *filedesc;
+
+	filedesc = p->p_fd;
 
 	cdir = filedesc->fd_cdir;
 	rdir = filedesc->fd_rdir;
@@ -141,7 +146,9 @@ fd_checkpoint(struct filedesc *filedesc, struct filedesc_info *filedesc_info)
 	infos = filedesc_info->infos;
 	FILEDESC_XLOCK(filedesc);
 
+	PROC_UNLOCK(p);
 	error = vnode_to_filename(cdir, &cdir_path, &cdir_len);
+	PROC_LOCK(p);
 	if (error) {
 	    printf("Error: cdir vnode_to_filename failed with code %d\n", error);
 	    goto fd_checkpoint_error;
@@ -149,7 +156,10 @@ fd_checkpoint(struct filedesc *filedesc, struct filedesc_info *filedesc_info)
 	filedesc_info->cdir= cdir_path;
 	filedesc_info->cdir_len = cdir_len;
 
+
+	PROC_UNLOCK(p);
 	error = vnode_to_filename(rdir, &rdir_path, &rdir_len);
+	PROC_LOCK(p);
 	if (error) {
 	    printf("Error: rdir vnode_to_filename failed with code %d\n", error);
 	    goto fd_checkpoint_error;
@@ -175,7 +185,7 @@ fd_checkpoint(struct filedesc *filedesc, struct filedesc_info *filedesc_info)
 
 	    index = filedesc_info->num_files;
 
-	    if(!file_checkpoint(fp, &infos[index], i))
+	    if(!file_checkpoint(p, fp, &infos[index], i))
 		filedesc_info->num_files++;
 	    else
 		printf("file checkpointing for %d failed\n", i);
@@ -187,6 +197,7 @@ fd_checkpoint(struct filedesc *filedesc, struct filedesc_info *filedesc_info)
 	FILEDESC_XUNLOCK(filedesc);
 
 	filedesc_info->magic = SLS_FILEDESC_INFO_MAGIC;
+
 
 	return 0;
 fd_checkpoint_error:
@@ -232,6 +243,7 @@ fd_restore(struct proc *p, struct filedesc_info *info)
 
 	PROC_LOCK(p);
 
+	/* XXX Keep stdin/stdout/stderr open? */
 	fdunshare(td);
 	fdcloseexec(td);
 
@@ -251,6 +263,7 @@ fd_restore(struct proc *p, struct filedesc_info *info)
 
 	fdp->fd_cmask = info->fd_cmask;
 
+	/* XXX close previous files */
 	for (i = 0; i < info->num_files; i++) {
 	    file_restore(p, fdp, &infos[i]);
 	}
