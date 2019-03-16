@@ -95,7 +95,7 @@ file_write(void* addr, size_t len, int fd)
 
 void
 file_dump(struct vm_map_entry_info *entries, vm_object_t *objects, 
-	    	size_t numentries, int fd)
+	    	size_t numentries, int fd, int mode)
 {
 	vm_page_t page;
 	vm_offset_t vaddr, vaddr_data;
@@ -153,6 +153,9 @@ file_dump(struct vm_map_entry_info *entries, vm_object_t *objects,
 		    
 		    userpage_unmap(vaddr);
 		}
+
+		if (mode == SLSMM_CKPT_DELTA)
+		    break;
 
 		offset += obj->backing_object_offset;
 		obj = obj->backing_object;

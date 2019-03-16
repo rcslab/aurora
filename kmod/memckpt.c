@@ -218,27 +218,12 @@ vmspace_checkpoint(struct proc *p, struct memckpt_info *dump,
 	    if (obj->type != OBJT_DEFAULT)
 		continue;
 
-	    if (mode == SLSMM_CKPT_FULL) {
-		/* Roll ckpt'd process' info into struct */
-
-		if (pid_checkpointed[pid] == 1) {
-		    //vm_object_reference(entry->object.vm_object);
-		    //vm_object_collapse(entry->object.vm_object->backing_object);
-		    vm_object_deallocate(entry->object.vm_object->backing_object);
-
-		}
-
-		vm_object_reference(entry->object.vm_object);
-		vm_object_shadow(&entry->object.vm_object, &entry->offset,
-			entry->end-entry->start);
 
 
-	    } else if (mode == SLSMM_CKPT_DELTA) {
-		/* XXX Build the dump part properly */
-		vm_object_reference(entry->object.vm_object);
-		vm_object_shadow(&entry->object.vm_object, &entry->offset,
-			entry->end-entry->start);
-	    }
+	    /* Common code for shadow and delta dumps */
+	    vm_object_reference(entry->object.vm_object);
+	    vm_object_shadow(&entry->object.vm_object, &entry->offset,
+		    entry->end-entry->start);
 
 	    /* Always remove the mappings, so that the process rereads them */
 	    pmap_remove(vm_map->pmap, entry->start, entry->end);
@@ -313,7 +298,6 @@ vm_object_restore(struct proc *p, struct vm_map_entry_info *entry, vm_object_t b
 			vm_object_reference(new_object);
 		}
 
-		printf("Physical object returned: %p\n", new_object);
 
 		return new_object;
 
@@ -473,7 +457,6 @@ find_obj_id(struct vm_map_entry_info *entries, int numentries, vm_offset_t id)
 	if (obj_info == NULL) 
 	    continue;
 	    
-	printf("Entry %d ID is %lx\n", i, obj_info->id);
 	if (obj_info->id == id)
 	    return i;
     }
@@ -541,7 +524,6 @@ vmspace_restore(struct proc *p, struct memckpt_info *dump)
 	/* restore vm_map entries */
 	for (i = 0; i < numentries; i++) {
 
-	    printf("object being restored:entry %d\n", i);
 
 	    entry = &dump->entries[i];
 	    obj_info = entry->obj_info;
@@ -617,10 +599,32 @@ vmspace_restore(struct proc *p, struct memckpt_info *dump)
 	    
 	    if (new_object && new_object->type == OBJT_DEFAULT)
 		data_restore(vm_map, new_object, entry);
-	    printf("restored object: %d\n", i);
 	}
 	    
 
+
+	return 0;
+}
+
+int
+vmspace_compact(struct proc *p)
+{
+	struct vm_map_entry *entry;
+	vm_object_t obj, obj_grandparent;
+	struct vmspace *vmspace;
+	struct vm_map *vm_map;
+
+	vmspace = p->p_vmspace;
+	vm_map = &vmspace->vm_map;
+
+	for (entry = vm_map->header.next; entry != &vm_map->header; entry = entry->next) {
+	    obj = entry->object.vm_object;
+	    if (obj == NULL || obj->type != OBJT_DEFAULT)
+		continue;
+
+	    obj_grandparent = obj->backing_object->backing_object;
+	    vm_object_deallocate(obj_grandparent);
+	}
 
 	return 0;
 }

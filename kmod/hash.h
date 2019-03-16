@@ -22,7 +22,6 @@ struct dump_page {
 
 LIST_HEAD(page_tailq, dump_page);
 
-
 extern struct page_tailq *slspages;
 
 /*

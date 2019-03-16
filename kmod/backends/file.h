@@ -12,6 +12,6 @@
 int file_read(void* addr, size_t len, int fd);
 int file_write(void* addr, size_t len, int fd);
 void file_dump(struct vm_map_entry_info *entries, vm_object_t *objects, 
-		    size_t numentries, int fd);
+		    size_t numentries, int fd, int mode);
 
 #endif /* _SLSFILE_H */

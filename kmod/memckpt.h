@@ -89,15 +89,10 @@ int vmspace_checkpoint(struct proc *p, struct memckpt_info *dump,
 		vm_object_t *objects, long mode);
 int vmspace_restore(struct proc *p, struct memckpt_info *dump);
 
+int vmspace_compact(struct proc *p);
+
 /* 
- * XXX HACK. Properly implement full and delta dumps, as discussed. 
- * - Full dumps: Create a child object from each object, and associate it
- *   with the entry. Keep the old object, and get each page from it. Next
- *   time we checkpoint, collapse the objects, and do the same thing.
- * - Delta dumps: Same thing, create a child object and associate it with
- *   the entry. In the next delta dump, create a grandchild, associate it
- *   with the entry, dump the child's contents, _and_then_ merge.
- *
+ * XXX HACK. Properly implement delta dumps, as discussed. 
  *   Mixing full and delta dumps is not advised.
  */
 

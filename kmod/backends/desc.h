@@ -6,6 +6,7 @@ enum descriptor_type {
     DESC_FD,
 //    DESC_MD,
     DESC_OSD,
+    DESC_FILE,
     DESCRIPTOR_SIZE,
 };
 
@@ -14,7 +15,7 @@ enum descriptor_type {
 struct sls_desc{
     enum descriptor_type type; 
     union {
-	void *index;
+	uintptr_t index;
 	int desc;
     };
 };

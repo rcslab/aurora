@@ -1,6 +1,16 @@
 #ifndef _NVDIMM_H_
 #define _NVDIMM_H_
 
+#include <sys/param.h>
+
+#include <sys/bio.h>
+
+#include <vm/vm.h>
+#include <vm/uma.h>
+#include <vm/vm_map.h>
+#include <vm/vm_page.h>
+
+#include "../memckpt.h"
 
 /* copied from the nvdimm driver */
 enum SPA_mapping_type {
@@ -50,9 +60,54 @@ nvdimm_slice(int index)
 
 int nvdimm_open(void);
 void nvdimm_close(void);
-int nvdimm_read(void *addr, size_t len, vm_offset_t offset);
-int nvdimm_write(void *addr, size_t len, vm_offset_t offset);
+int nvdimm_read(void *addr, size_t len, vm_offset_t *offset);
+int nvdimm_write(void *addr, size_t len, vm_offset_t *offset);
 void nvdimm_dump(struct vm_map_entry_info *entries, vm_object_t *objects, 
-		    size_t numentries, void *addr);
+		    size_t numentries, uintptr_t *addr, int mode);
+
+struct sls_pagedata {
+    vm_ooffset_t vaddr;
+    uintptr_t dest;
+    vm_page_t page;
+};
+
+#define PAGECHUNK_SIZE ((4096 / sizeof(struct sls_pagedata)) - 2)
+
+struct sls_pagechunk {
+    size_t size;
+    struct sls_pagedata pagedata[PAGECHUNK_SIZE];
+    LIST_ENTRY(sls_pagechunk) next;
+};
+
+LIST_HEAD(sls_chunkq, sls_pagechunk);
+
+
+
+/* 
+ * XXX Only one worker for now, the
+ * bookkeeping in nvdimm.c assumes
+ * this
+ */
+#define WORKER_THREADS (8)
+
+int sls_workers_init(void);
+void sls_workers_destroy(void);
+
+struct sls_worker {
+    char top_padding[128];
+
+    long work_id;
+    struct thread *work_td;
+    int work_in_progress;
+
+    struct sls_chunkq work_list;
+    struct mtx work_mtx;
+    struct cv work_cv;
+
+    char bot_padding[128];
+};
+
+extern struct sls_worker sls_workers[WORKER_THREADS];
+extern int time_to_die;
 
 #endif /* _NVDIMM_H_ */

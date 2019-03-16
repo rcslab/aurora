@@ -1,6 +1,8 @@
+#include <sys/param.h>
+
 #include "bufc.h"
 #include "_slsmm.h"
-#include "backends/worker.h"
+#include "backends/nvdimm.h"
 
 chan_t*
 chan_init(size_t capacity)

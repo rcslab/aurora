@@ -99,7 +99,7 @@ free_dump(struct dump *dump) {
  * which I believe is completely feasible. We should do that later, though.
  */
 int
-load_dump(struct dump *dump, struct sls_desc desc)
+load_dump(struct dump *dump, struct sls_desc *desc)
 {
 	int error = 0;
 	void *hashpage;
@@ -116,7 +116,6 @@ load_dump(struct dump *dump, struct sls_desc desc)
 	int numfiles, numthreads, numentries;
 	int len;
 	int i;
-	int cnt = 0, cnt2 = 0;
 
 	/* TEMP 
 	if (desc.type == DESC_MD)
@@ -328,7 +327,7 @@ load_dump(struct dump *dump, struct sls_desc desc)
 	    * give us a page-aligned chunk, which makes sense given
 	    * that we are probably getting it from a slab allocator.
 	    */
-	    new_entry = malloc(sizeof(*page_entry), M_SLSMM, M_NOWAIT);
+	    new_entry = malloc(sizeof(*new_entry), M_SLSMM, M_NOWAIT);
 	    hashpage = malloc(PAGE_SIZE, M_SLSMM, M_NOWAIT);
 
 	    if (!(hashpage && new_entry)) {
@@ -372,8 +371,6 @@ load_dump(struct dump *dump, struct sls_desc desc)
 	}
 
 
-	printf("cnt = %d\n", cnt);
-	printf("cnt2 = %d\n", cnt2);
 	return 0;
 }
 
@@ -384,7 +381,6 @@ compose_dump(struct sls_desc *descs, int ndescs)
 	struct dump *dump;
 	struct dump *currdump;
 	int error = 0;
-	struct sls_desc cur_desc;
 
 	dump = alloc_dump();
 	currdump = alloc_dump();
@@ -394,9 +390,8 @@ compose_dump(struct sls_desc *descs, int ndescs)
 	    goto error;
 	}
 
-	cur_desc = descs[ndescs - 1];
 
-	error = load_dump(dump, cur_desc);
+	error = load_dump(dump, &descs[ndescs - 1]);
 	if (error != 0) {
 	    printf("Error: cannot load dumps\n");
 	    goto error;
@@ -407,10 +402,9 @@ compose_dump(struct sls_desc *descs, int ndescs)
 	* of this action - populating the address space.
 	*/
 	for (int i = ndescs - 2; i >= 0; i--) {
-	    cur_desc = descs[i];
 
 	    /* Memory leak (the thread/entry arrays), will be fixed when we flesh out alloc_dump()*/
-	    error = load_dump(currdump, cur_desc);
+	    error = load_dump(currdump, &descs[i]);
 
 	    /*
 	    * XXX Inelegant, but the whole dump struct allocation procedure
@@ -437,7 +431,7 @@ error:
 }
 
 static void 
-store_pages(struct sls_desc desc)
+store_pages(struct sls_desc *desc)
 {
     int i;
     struct dump_page *entry;
@@ -452,7 +446,7 @@ store_pages(struct sls_desc desc)
 }
 
 int
-store_dump(struct proc *p, struct dump *dump, vm_object_t *objects, long mode, struct sls_desc desc)
+store_dump(struct proc *p, struct dump *dump, vm_object_t *objects, int mode, struct sls_desc *desc)
 {
 	int i;
 	int error = 0;
@@ -558,7 +552,7 @@ store_dump(struct proc *p, struct dump *dump, vm_object_t *objects, long mode, s
 
 	/* XXX error handling */
 	if (objects != NULL)
-	    fd_dump(entries, objects, numentries, desc);
+	    fd_dump(entries, objects, numentries, desc, mode);
 	else
 	    store_pages(desc);
 

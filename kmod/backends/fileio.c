@@ -33,7 +33,7 @@
 #include "../slsmm.h"
 #include "file.h"
 #include "nvdimm.h"
-#include "worker.h"
+
 
 /*
  * XXX We need to take a hard look at what a descriptor actually is,
@@ -60,7 +60,7 @@ create_desc(long index, int type)
 
 	fd = curthread->td_retval[0];
 	return (struct sls_desc) {
-	    .type = DESC_FD,
+	    .type = DESC_FILE,
 	    .desc = fd, 
 	};
 
@@ -75,11 +75,13 @@ create_desc(long index, int type)
     */
 
     case SLSMM_FD_NVDIMM:
-	/* XXX Right now we treat the NVDIMM as a simple buffer */
-	nvdimm_offset = 0;
+	/* 
+	 * Right now we treat the NVDIMM as a simple buffer, and
+	 * it always starts at the beginning of the nvdimm area.
+	 */
         return (struct sls_desc) {
             .type = DESC_OSD,
-            .index = nvdimm,
+            .index = (uintptr_t) nvdimm,
         };
 
     /* XXX Problematic, we try to close it with desc_destroy() rn */
@@ -93,7 +95,7 @@ create_desc(long index, int type)
 	printf("Invalid descriptor arguments\n");
 	return (struct sls_desc) {
 	    .type = DESCRIPTOR_SIZE,
-	    .index = NULL,
+	    .index = 0,
 	};
     }
 }
@@ -102,11 +104,14 @@ void
 destroy_desc(struct sls_desc desc)
 {
     switch(desc.type) {
-    case DESC_FD:
+    case DESC_FILE:
 	kern_close(curthread, desc.desc);
 	return;
 
     case DESC_OSD:
+	return;
+
+    case DESC_FD:
 	return;
 
     default:
@@ -116,11 +121,12 @@ destroy_desc(struct sls_desc desc)
 }
 
 int
-fd_read(void* addr, size_t len, struct sls_desc desc)
+fd_read(void* addr, size_t len, struct sls_desc *desc)
 {
-    switch (desc.type) {
+    switch (desc->type) {
+    case DESC_FILE:
     case DESC_FD:
-	return file_read(addr, len, desc.desc);
+	return file_read(addr, len, desc->desc);
 
     /*
     case DESC_MEM:
@@ -128,20 +134,23 @@ fd_read(void* addr, size_t len, struct sls_desc desc)
     */
 
     case DESC_OSD:
-	return nvdimm_read(addr, len, (vm_offset_t) desc.index);
+	nvdimm_read(addr, len, &desc->index);
+	desc->index += len;
+	return 0;
 
     default:
-	printf("fd_read: invalid desc with type %d\n", desc.type);
+	printf("fd_read: invalid desc with type %d\n", desc->type);
 	return EINVAL;
     }
 }
 
 int
-fd_write(void* addr, size_t len, struct sls_desc desc)
+fd_write(void* addr, size_t len, struct sls_desc *desc)
 {
-    switch (desc.type) {
+    switch (desc->type) {
+    case DESC_FILE:
     case DESC_FD:
-	return file_write(addr, len, desc.desc);
+	return file_write(addr, len, desc->desc);
 
     /*
     case DESC_MD:
@@ -149,21 +158,25 @@ fd_write(void* addr, size_t len, struct sls_desc desc)
     */
 
     case DESC_OSD:
-	return nvdimm_write(addr, len, (vm_offset_t) desc.index);
+	nvdimm_write(addr, len, &desc->index);
+	desc->index += len;
+	return 0;
 
     default:
-	printf("fd_write: invalid desc with type %d\n", desc.type);
+	printf("fd_write: invalid desc with type %d\n", desc->type);
 	return EINVAL;
     }
 }
 
 void 
 fd_dump(struct vm_map_entry_info *entries, vm_object_t *objects, 
-	size_t numentries, struct sls_desc desc)
+	size_t numentries, struct sls_desc *desc, int mode)
 {
-    switch (desc.type) {
+    switch (desc->type) {
+    case DESC_FILE:
     case DESC_FD:
-	return file_dump(entries, objects, numentries, desc.desc);
+	file_dump(entries, objects, numentries, desc->desc, mode);
+	return;
 
     /*
     case DESC_MD:
@@ -171,10 +184,11 @@ fd_dump(struct vm_map_entry_info *entries, vm_object_t *objects,
     */
 
     case DESC_OSD:
-	return nvdimm_dump(entries, objects, numentries, desc.index);
+	nvdimm_dump(entries, objects, numentries, &desc->index, mode);
+	return;
 
     default:
-	printf("fd_write: invalid desc with type %d\n", desc.type);
+	printf("fd_write: invalid desc with type %d\n", desc->type);
 	return;
     }
 }
@@ -228,12 +242,7 @@ backends_fini(void)
 	    cv_destroy(&worker->work_cv);
 	}
 
-#ifdef FAKE_BACKEND
-	free(nvdimm, M_SLSMM);
-
-#else
 	nvdimm_close();
 
-#endif
 }
 

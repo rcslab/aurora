@@ -5,7 +5,6 @@
 #include "slsmm.h"
 #include "backends/desc.h"
 #include "backends/fileio.h"
-#include "backends/worker.h"
 #include "hash.h"
 #include "fd.h"
 #include "bufc.h"
@@ -55,9 +54,12 @@ int pid_checkpointed[SLS_MAX_PID];
 vm_object_t pid_shadows[SLS_MAX_PID];
 int time_to_die;
 
+static struct cdev *slsmm_dev;
+
 /* XXX Temporary benchmarking code */
 long  sls_log[9][SLS_LOG_ENTRIES];
 int sls_log_counter = 0;
+
 
 static int
 slsmm_dump(struct proc *p, struct sls_desc desc, int mode)
@@ -165,11 +167,18 @@ slsmm_dump(struct proc *p, struct sls_desc desc, int mode)
 
 	nanotime(&tresume);
 
-	error = store_dump(p, dump, objects, mode, desc);
+	error = store_dump(p, dump, objects, mode, &desc);
 	if (error != 0) {
 	    printf("Error: dumping dump to descriptor failed with %d\n", error);
 	    goto slsmm_dump_cleanup;
 	}
+
+	/* 
+	 * For full dumps, collapse the chain here to avoid slowdowns while the
+	 * process is stopped
+	 */
+	if (mode == SLSMM_CKPT_FULL && pid_checkpointed[p->p_pid] == 1)
+	    vmspace_compact(p);
 
 	pid_checkpointed[p->p_pid] = 1;
 
@@ -272,7 +281,7 @@ sls_restored(struct sls_restored_args *args)
 	printf("Error: dump not created\n");
 	goto restored_out;
     }
-    load_dump(dump, desc);
+    load_dump(dump, &desc);
 	
     error = slsmm_restore(p, dump);
     if (error != 0)
@@ -285,6 +294,7 @@ restored_out:
     cleanup_hashtable();
     PRELE(p);
 
+    dev_relthread(slsmm_dev, 1);
     kthread_exit();
 }
 
@@ -504,7 +514,7 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 
 		/* XXX error handling */
 		/* XXX Change the mode code */
-		error = store_dump(NULL, dump, NULL, SLSMM_CKPT_FULL, desc);
+		error = store_dump(NULL, dump, NULL, SLSMM_CKPT_FULL, &desc);
 
 
 slsmm_compose_out:
@@ -523,7 +533,6 @@ static struct cdevsw slsmm_cdevsw = {
     .d_version = D_VERSION,
     .d_ioctl = slsmm_ioctl,
 };
-static struct cdev *slsmm_dev;
 
 
 /*
@@ -564,7 +573,6 @@ chan_handler()
 
 	printf("Starting benchmarking...\n");
 
-	printf("Filename: %s\n", filename);
 	desc = create_desc((long) filename, fd_type);
 	if (desc.type == DESCRIPTOR_SIZE) {
 	    printf("Invalid descriptor\n");
@@ -665,6 +673,8 @@ SLSMMHandler(struct module *inModule, int inEvent, void *inArg) {
 	case MOD_LOAD:
 	    printf("SLS Loaded.\n");
 	    time_to_die = 0;
+
+
 	    backends_init();
 
 	    for (i = 0; i < SLS_MAX_PID; i++)
@@ -701,6 +711,7 @@ SLSMMHandler(struct module *inModule, int inEvent, void *inArg) {
 
 	    cleanup_vnhash();
 	    backends_fini();
+
 	    break;
 	default:
 	    error = EOPNOTSUPP;
