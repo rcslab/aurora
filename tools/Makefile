@@ -1,3 +1,3 @@
-SUBDIR = dumpcompose slsctl slsdb
+SUBDIR = dumpcompose newosd slsctl slsdb
 
 .include <bsd.subdir.mk>

@@ -17,9 +17,10 @@ tests/signal/signal
 tests/sleep/sleep
 
 
-tools/slsdb/slsdb
-tools/slsctl/slsctl
 tools/dumpcompose/dumpcompose
+tools/newosd/newosd
+tools/slsctl/slsctl
+tools/slsdb/slsdb
 
 *.a
 *.ko
