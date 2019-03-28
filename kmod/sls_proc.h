@@ -19,27 +19,7 @@
 #include <vm/vm.h>
 #include <vm/vm_map.h>
 
-
-
-#define SLS_PROC_INFO_MAGIC 0x736c7301
-struct proc_info {
-	int magic;
-	size_t nthreads;
-	pid_t pid;
-	/* All fields valid except for the mutex */
-	struct sigacts sigacts;
-};
-
-#define SLS_THREAD_INFO_MAGIC 0x736c7302
-struct thread_info {
-	int magic;
-	struct reg regs;
-	struct fpreg fpregs;
-	lwpid_t tid;
-	sigset_t sigmask;
-	sigset_t oldsigmask;
-	uint64_t fs_base;
-};
+#include "sls_data.h"
 
 int proc_checkpoint(struct proc *p, struct proc_info *proc_info, struct thread_info *thread_infos);
 int proc_restore(struct proc *p, struct proc_info *proc_info, struct thread_info *thread_infos);

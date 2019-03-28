@@ -12,7 +12,7 @@
 #include "sls.h"
 
 int
-sls_dump(struct dump_param *param)
+sls_op(struct op_param *param)
 {
 	int status;
 	int fd;
@@ -23,7 +23,7 @@ sls_dump(struct dump_param *param)
 		return -1;
 	}
 
-	status = ioctl(fd, SLSMM_DUMP, param);
+	status = ioctl(fd, SLS_OP, param);
 	if (status < 0) {
 		fprintf(stderr, "ERROR: SLS dump ioctl failed: %m");
 	}
@@ -34,23 +34,24 @@ sls_dump(struct dump_param *param)
 }
 
 int
-sls_restore(struct restore_param *param)
+sls_slsp(struct slsp_param *param)
 {
 	int status;
 	int fd;
-    
+
 	fd = open("/dev/slsmm", O_RDWR);
 	if (fd < 0) {
 		fprintf(stderr, "ERROR: Could not open SLS device: %m");
 		return -1;
 	}
 
-	status = ioctl(fd, SLSMM_RESTORE, param);
+	status = ioctl(fd, SLS_SLSP, param);
 	if (status < 0) {
-		fprintf(stderr, "ERROR: SLS restore ioctl failed: %m");
+		fprintf(stderr, "ERROR: SLS dump ioctl failed: %m");
 	}
 
 	close(fd);
 
 	return status;
+
 }

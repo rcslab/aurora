@@ -3,11 +3,9 @@
 
 #include <sys/mman.h>
 
-#include "cpuckpt.h"
-#include "fd.h"
-#include "memckpt.h"
 #include "slsmm.h"
-#include "backends/fileio.h"
+#include "sls_data.h"
+#include "sls_process.h"
 
 #define SLS_DUMP_MAGIC 0x736c7525
 struct dump {
@@ -15,15 +13,21 @@ struct dump {
 	struct thread_info *threads;
 	struct memckpt_info memory;
 	struct filedesc_info filedesc;
-    int magic;
+	int magic;
 };
 
+struct sls_store_tgt {
+    int type;
+    union {
+	int fd;
+	struct sls_process *slsp;
+    };
+};
 
-int load_dump(struct dump *dump, struct sls_desc *desc);
-int store_dump(struct proc *p, struct dump *dump, vm_object_t *objects,
-                    int mode, struct sls_desc *desc);
-
-struct dump *compose_dump(struct sls_desc *descs, int ndescs);
+struct sls_process *load_dump(int fd);
+int store_dump(struct sls_process *slsp, int mode, vm_object_t *objects, int fd);
+int store_pages(struct vm_map_entry_info *entries, vm_object_t *objects, 
+	    	size_t numentries, struct sls_store_tgt tgt, int mode);
 
 int dump_clone(struct dump *dst, struct dump *src);
 int copy_dump_pages(struct dump *dst, struct dump *src);

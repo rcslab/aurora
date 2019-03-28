@@ -13,8 +13,8 @@
 #include <machine/reg.h>
 #include <machine/sysarch.h>
 
-#include "cpuckpt.h"
-#include "_slsmm.h"
+#include "slsmm.h"
+#include "sls_proc.h"
 
 /*
  * Get the state of all threads of the process. This function

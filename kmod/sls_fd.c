@@ -22,12 +22,10 @@
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
-
-#include "memckpt.h"
-#include "_slsmm.h"
 #include "slsmm.h"
 #include "path.h"
-#include "fd.h"
+#include "sls_data.h"
+#include "sls_fd.h"
 
 /* XXX Remove when we get the custom kernel */
 #include "copied_fd.h"

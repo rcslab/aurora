@@ -3,7 +3,7 @@
 
 #include "sls_ioctl.h"
 
-int sls_dump(struct dump_param *param);
-int sls_restore(struct restore_param *param);
+int sls_slsp(struct slsp_param *param);
+int sls_op(struct op_param *param);
 
 #endif

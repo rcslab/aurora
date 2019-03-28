@@ -1,5 +1,5 @@
 PROG= slsctl
-SRCS= slsctl.c
+SRCS= slsctl.c slsctl_op.c slsctl_slsp.c slsctl_period.c
 MAN=
 
 

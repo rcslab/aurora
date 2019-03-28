@@ -25,12 +25,11 @@
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
-
-#include "memckpt.h"
-#include "_slsmm.h"
 #include "slsmm.h"
 #include "path.h"
-#include "backends/fileio.h"
+#include "sls_mem.h"
+#include "sls_process.h"
+#include "sls_dump.h"
 
 /* Hack for supporting the hpet0 counter */
 static struct cdev *sls_hpet0 = NULL;
@@ -49,7 +48,6 @@ void
 userpage_unmap(vm_offset_t vaddr)
 {
 }
-
 
 static void 
 print_object_chain(vm_object_t obj)
@@ -115,7 +113,11 @@ vm_object_checkpoint(struct proc *p, vm_object_t obj, struct vm_object_info **ob
 	cur_obj->filename = NULL;
 	cur_obj->magic = SLS_OBJECT_INFO_MAGIC;
 
-	for (o = obj->backing_object; o != NULL && o->type == OBJT_DEFAULT; o = o->backing_object) {
+	/* Get the total backing offset for the deepest non-anonymous object */
+	for (o = obj->backing_object; o != NULL; o = o->backing_object) {
+	    if (o->type != OBJT_DEFAULT)
+		break;
+
 	    cur_obj->backer_off += o->backing_object_offset;
 	}
 
@@ -162,8 +164,7 @@ vm_object_checkpoint(struct proc *p, vm_object_t obj, struct vm_object_info **ob
  * return the list of original vm_object and vm_entry for dump
  */
 int
-vmspace_checkpoint(struct proc *p, struct memckpt_info *dump, 
-	vm_object_t *objects, long mode)
+vmspace_checkpoint(struct proc *p, struct memckpt_info *dump, long mode)
 {
 	vm_map_t vm_map;
 	struct vmspace *vmspace;
@@ -171,10 +172,8 @@ vmspace_checkpoint(struct proc *p, struct memckpt_info *dump,
 	struct vm_map_entry_info *entries;
 	struct vm_map_entry_info *cur_entry;
 	vm_object_t obj;
-	int pid;
 	int i;
 
-	pid = p->p_pid;
 	vmspace = p->p_vmspace;
 
 	entries = dump->entries;
@@ -208,25 +207,12 @@ vmspace_checkpoint(struct proc *p, struct memckpt_info *dump,
 	    cur_entry->max_protection = entry->max_protection;
 	    cur_entry->obj_info = NULL;
 
-	    obj = objects[i] = entry->object.vm_object;
+	    obj = entry->object.vm_object;
 	    if (obj == NULL)
 		continue;
 
 	    vm_object_checkpoint(p, obj, &cur_entry->obj_info);
 
-	    /* We only save the pages of anonymous objects */
-	    if (obj->type != OBJT_DEFAULT)
-		continue;
-
-
-
-	    /* Common code for shadow and delta dumps */
-	    vm_object_reference(entry->object.vm_object);
-	    vm_object_shadow(&entry->object.vm_object, &entry->offset,
-		    entry->end-entry->start);
-
-	    /* Always remove the mappings, so that the process rereads them */
-	    pmap_remove(vm_map->pmap, entry->start, entry->end);
 	}
 
 	return 0;
@@ -340,23 +326,20 @@ vm_object_restore(struct proc *p, struct vm_map_entry_info *entry, vm_object_t b
 }
 
 static void
-data_restore(struct vm_map *map, vm_object_t object, struct vm_map_entry_info *entry)
+data_restore(struct sls_process *slsp, struct vm_map *map, vm_object_t object, struct vm_map_entry_info *entry)
 {
 
 	struct dump_page *page_entry;
 	vm_offset_t vaddr, addr __unused;
+	u_long hashmask;
 	vm_pindex_t offset;
 	vm_page_t new_page;
 	int error;
 
-	/*
-	* Traverse _everything_. This can be obviously be
-	* improved upon by using the higher bits
-	* of an address when hashing, and also using more buckets.
-	*/
+	hashmask = slsp->slsp_hashmask;
 
 	for (int j = 0; j <= hashmask; j++) {
-	    LIST_FOREACH(page_entry, &slspages[j & hashmask], next) {
+	    LIST_FOREACH(page_entry, &slsp->slsp_pages[j & hashmask], next) {
 		vaddr = page_entry->vaddr;
 		if (vaddr < entry->start || vaddr >= entry->end)
 		    continue;
@@ -403,7 +386,6 @@ data_restore(struct vm_map *map, vm_object_t object, struct vm_map_entry_info *e
 		}
 		
 		vm_page_xunbusy(new_page);
-
 
 	    }
 
@@ -465,7 +447,7 @@ find_obj_id(struct vm_map_entry_info *entries, int numentries, vm_offset_t id)
 }
 
 int
-vmspace_restore(struct proc *p, struct memckpt_info *dump)
+vmspace_restore(struct proc *p, struct sls_process *slsp, struct memckpt_info *dump)
 {
 	struct vmspace *vmspace;
 	struct vm_map *vm_map;
@@ -524,7 +506,6 @@ vmspace_restore(struct proc *p, struct memckpt_info *dump)
 	/* restore vm_map entries */
 	for (i = 0; i < numentries; i++) {
 
-
 	    entry = &dump->entries[i];
 	    obj_info = entry->obj_info;
 
@@ -541,6 +522,7 @@ vmspace_restore(struct proc *p, struct memckpt_info *dump)
 		if (error != KERN_SUCCESS) {
 		    printf("Error: vm_map_insert failed with %d\n", 
 						    vm_mmap_to_errno(error));
+		    free(objects, M_SLSMM);
 		    return error;
 		}
 
@@ -593,38 +575,17 @@ vmspace_restore(struct proc *p, struct memckpt_info *dump)
 	    PROC_LOCK(p);
 	    if (error != KERN_SUCCESS) {
 		printf("Error: vm_map_insert failed with %d\n", vm_mmap_to_errno(error));
+		free(objects, M_SLSMM);
 		return vm_mmap_to_errno(error);
 	    }
 
 	    
 	    if (new_object && new_object->type == OBJT_DEFAULT)
-		data_restore(vm_map, new_object, entry);
+		data_restore(slsp, vm_map, new_object, entry);
 	}
 	    
 
-
-	return 0;
-}
-
-int
-vmspace_compact(struct proc *p)
-{
-	struct vm_map_entry *entry;
-	vm_object_t obj, obj_grandparent;
-	struct vmspace *vmspace;
-	struct vm_map *vm_map;
-
-	vmspace = p->p_vmspace;
-	vm_map = &vmspace->vm_map;
-
-	for (entry = vm_map->header.next; entry != &vm_map->header; entry = entry->next) {
-	    obj = entry->object.vm_object;
-	    if (obj == NULL || obj->type != OBJT_DEFAULT)
-		continue;
-
-	    obj_grandparent = obj->backing_object->backing_object;
-	    vm_object_deallocate(obj_grandparent);
-	}
+	free(objects, M_SLSMM);
 
 	return 0;
 }
