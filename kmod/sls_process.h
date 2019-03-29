@@ -26,6 +26,7 @@ struct sls_process {
     struct page_list *slsp_pages;
     u_long	    slsp_hashmask;
     int		    slsp_id;
+    size_t	    slsp_pagecount;
 //    struct proc	    *slsp_proc;
     struct dump	    *slsp_dump;
     TAILQ_ENTRY(sls_process) slsp_procs;
@@ -43,6 +44,7 @@ void slsp_fini_htable(struct sls_process *slsp);
 
 void slsp_list(void);
 void slsp_delete(int id);
+void slsp_delete_all(void);
 struct sls_process *slsp_find(int id);
 
 void slsp_addpage_noreplace(struct sls_process *slsp, struct dump_page *dump_page);

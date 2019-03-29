@@ -86,6 +86,7 @@ slsp_init(struct proc *p)
 
 	slsp->slsp_dump = alloc_dump();
 
+	slsp->slsp_pagecount = 0;
 	slsp_init_htable(slsp);
 
 
@@ -118,24 +119,27 @@ slsp_list(void)
 {
 	struct sls_process *slsp;
 
+	printf("|  Entry\t|    Name\t\t|    Size(KB)\t\t\n");
 	TAILQ_FOREACH(slsp, &sls_procs, slsp_procs) {
-	    printf("Entry %d: %s\n", slsp->slsp_id, slsp->slsp_name);
+	    printf("|   %d\t\t|    %s\t\t|       %ld\t\t\n", 
+		    slsp->slsp_id, slsp->slsp_name, slsp->slsp_pagecount * 4);
 	}
 }
 
 void
 slsp_delete(int id)
 {
-	struct sls_process *slsp;
+	struct sls_process *slsp = NULL;
 
 	TAILQ_FOREACH(slsp, &sls_procs, slsp_procs) {
 	    if (slsp->slsp_id == id) {
 		TAILQ_REMOVE(&sls_procs, slsp, slsp_procs);
-		slsp_fini(slsp);
-		return;
+		break;
 	    }
 	}
 
+	if (slsp != NULL)
+	    slsp_fini(slsp);
 }
 
 struct sls_process *
@@ -146,10 +150,25 @@ slsp_find(int id)
 	TAILQ_FOREACH(slsp, &sls_procs, slsp_procs) {
 	    if (slsp->slsp_id == id)
 		return slsp;
-	    printf("ID %d != %d\n", slsp->slsp_id, id);
 	}
 
 	return NULL;
+}
+
+void
+slsp_delete_all(void)
+{
+	struct sls_process *slsp, *prev = NULL;
+
+	TAILQ_FOREACH(slsp, &sls_procs, slsp_procs) {
+	    if (prev != NULL)
+		slsp_fini(prev);
+	    TAILQ_REMOVE(&sls_procs, slsp, slsp_procs);
+	    prev = slsp;
+	}
+
+	if (prev != NULL)
+	    slsp_fini(prev);
 }
 
 void
@@ -175,8 +194,10 @@ slsp_addpage_noreplace(struct sls_process *slsp, struct dump_page *new_entry)
 	    }
 	}
 
-	if (already_there == 0)
+	if (already_there == 0) {
 	    LIST_INSERT_HEAD(page_bucket, new_entry, next);
+	    slsp->slsp_pagecount++;
+	}
 }
 
 void
@@ -196,9 +217,11 @@ slsp_addpage_replace(struct sls_process *slsp, struct dump_page *new_entry)
 		LIST_REMOVE(page_entry, next);
 		free(page_entry->data, M_SLSMM);
 		free(page_entry, M_SLSMM);
+		slsp->slsp_pagecount--;
 		break;
 	    }
 	}
 
 	LIST_INSERT_HEAD(page_bucket, new_entry, next);
+	slsp->slsp_pagecount++;
 }

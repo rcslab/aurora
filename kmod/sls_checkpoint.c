@@ -240,7 +240,7 @@ sls_checkpointd(struct sls_op_args *args)
     int iter;
     int i;
 
-    /* XXX If continuous, register somewhere */
+    /* XXX Register somewhere */
 
     iter = args->iterations;
     for (i = 0; (iter == 0) || (i < iter); i++) {
@@ -252,7 +252,7 @@ sls_checkpointd(struct sls_op_args *args)
 	total_msec += msec_elapsed;
 	msec_left = args->interval - msec_elapsed;
 	if (msec_left > 0)
-	    pause("slscpt", SBT_1MS * msec_left);
+	    pause_sbt("slscpt", SBT_1MS * msec_left, 0, C_HARDCLOCK | C_CATCH);
     }
 
 
@@ -260,8 +260,9 @@ sls_checkpointd(struct sls_op_args *args)
 
     free(args->filename, M_SLSMM);
     free(args, M_SLSMM);
-    printf("Checkpointing (iterations: %d) for process %d done in %d msec.\n", 
-	    iter, args->p->p_pid, total_msec);
+    printf("Checkpointing (iterations: %d) for process %d done.\n", 
+	    iter, args->p->p_pid);
+    printf("Total time active: %d msec.\n", total_msec);
 
     kthread_exit();
 }
@@ -269,6 +270,7 @@ sls_checkpointd(struct sls_op_args *args)
 void
 sls_checkpoint_stop(struct proc *p)
 {
+    /* XXX Implement */
     return;
 }
 

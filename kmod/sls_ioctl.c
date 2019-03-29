@@ -257,7 +257,6 @@ static struct cdevsw slsmm_cdevsw = {
 
 static int
 SLSHandler(struct module *inModule, int inEvent, void *inArg) {
-    struct sls_process *slsp;
     int error = 0;
     
     switch (inEvent) {
@@ -279,12 +278,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 
 	    sls_metadata.slsm_exiting = 1;
 
-	    while(TAILQ_EMPTY(&sls_procs) != 0) {
-		slsp = TAILQ_FIRST(&sls_procs);
-		TAILQ_REMOVE(&sls_procs, slsp, slsp_procs);
-		slsp_fini(slsp);
-		free(slsp, M_SLSMM);
-	    }
+	    slsp_delete_all();
 
 	    destroy_dev(sls_metadata.slsm_cdev);
 

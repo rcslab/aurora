@@ -135,7 +135,8 @@ sls_restored(struct sls_op_args *args)
 sls_restored_out:
     PRELE(args->p);
 
-    slsp_fini(slsp);
+    if (args->fd_type == SLS_FD_FILE)
+	slsp_fini(slsp);
     free(args->filename, M_SLSMM);
     free(args, M_SLSMM);
 
