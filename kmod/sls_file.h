@@ -10,7 +10,7 @@
 
 int file_read(void* addr, size_t len, int fd);
 int file_write(void* addr, size_t len, int fd);
-int file_dump(struct vm_map_entry_info *entries, vm_object_t *objects, 
-		    size_t numentries, int fd, int mode);
+int file_pread(void* addr, size_t len, int fd, size_t off);
+int file_pwrite(void* addr, size_t len, int fd, size_t off);
 
 #endif /* _SLSFILE_H */

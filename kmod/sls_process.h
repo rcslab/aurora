@@ -1,53 +1,33 @@
 #ifndef _SLS_PROCESS_H_
 #define _SLS_PROCESS_H_
 
-#include <sys/proc.h>
+#include <sys/param.h>
 
-#include <vm/vm.h>
-#include <vm/vm_object.h>
-
-#define HASH_MAX (4 * 1024)
-
-struct dump_page {
-	vm_ooffset_t vaddr;
-	union {
-	    vm_page_t page; 
-	    void *data;
-	};
-	LIST_ENTRY(dump_page) next;
-};
-
-LIST_HEAD(page_list, dump_page);
-
+#include <sls_snapshot.h>
 
 struct sls_process {
-    struct mtx	    slsp_mtx;
-    char	    slsp_name[MAXCOMLEN + 1];
-    struct page_list *slsp_pages;
-    u_long	    slsp_hashmask;
-    int		    slsp_id;
-    size_t	    slsp_pagecount;
-//    struct proc	    *slsp_proc;
-    struct dump	    *slsp_dump;
-    TAILQ_ENTRY(sls_process) slsp_procs;
+    pid_t		    slsp_pid;
+    struct mtx		    slsp_mtx;
+    struct vmspace	    *slsp_vm;
+    int			    slsp_ckptd;
+    struct slss_list	    slsp_snaps;
+    vm_ooffset_t	    slsp_charge;
+    LIST_ENTRY(sls_process) slsp_procs;
 };
 
-TAILQ_HEAD(slsp_tailq, sls_process);
+LIST_HEAD(slsp_list, sls_process);
 
-extern struct slsp_tailq sls_procs;
-
-struct sls_process *slsp_init(struct proc *p);
+    
+struct sls_process *slsp_add(pid_t pid);
 void slsp_fini(struct sls_process *slsp);
+void slsp_del(pid_t pid);
+void slsp_delall(void);
 
-int slsp_init_htable(struct sls_process *slsp);
-void slsp_fini_htable(struct sls_process *slsp);
+struct sls_process *slsp_find(pid_t pid);
 
-void slsp_list(void);
-void slsp_delete(int id);
-void slsp_delete_all(void);
-struct sls_process *slsp_find(int id);
+int slsp_add_snap(pid_t pid, struct sls_snapshot *slss);
+int slsp_list_snap(pid_t pid);
+/* XXX Need a "merge hashtables" function */
+int slsp_list_compact(pid_t pid);
 
-void slsp_addpage_noreplace(struct sls_process *slsp, struct dump_page *dump_page);
-void slsp_addpage_replace(struct sls_process *slsp, struct dump_page *dump_page);
 #endif /* _SLS_PROCESS_H_ */
-

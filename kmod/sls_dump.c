@@ -35,7 +35,7 @@
 #include "sls_data.h"
 #include "sls_dump.h"
 #include "sls_ioctl.h"
-#include "sls_process.h"
+#include "sls_snapshot.h"
 #include "sls_file.h"
 
 
@@ -101,7 +101,7 @@ free_dump(struct dump *dump) {
  * right now, though, since if something breaks here we have probably messed up
  * something important in the code, and we need to reboot anyway.
  */
-struct sls_process *
+struct sls_snapshot *
 load_dump(int fd)
 {
 	int error = 0;
@@ -115,39 +115,39 @@ load_dump(int fd)
 	struct file_info *files;
 	struct vm_object_info *cur_obj;
 	size_t thread_size, entry_size, file_size;
-	struct sls_process *slsp;
+	struct sls_snapshot *slss;
 	int numfiles, numthreads, numentries;
 	int len;
 	int i;
 
-	slsp = slsp_init(NULL);
-	dump = slsp->slsp_dump;
+	slss = slss_init(NULL, SLS_CKPT_FULL);
+	dump = slss->slss_dump;
 
 	/* Every static part of struct dump has its own magic, just for safety */
 	error = file_read(dump, sizeof(struct dump), fd);
 	if (error != 0) {
 	    printf("Error: cannot read proc_info\n");
-	    return NULL;
+	    goto load_dump_error;
 	}
 
 	if (dump->magic != SLS_DUMP_MAGIC) {
 	    printf("Error: SLS_DUMP_MAGIC %x does not match\n", dump->magic);
-	    return NULL;
+	    goto load_dump_error;
 	}
 
 	if (dump->proc.magic != SLS_PROC_INFO_MAGIC) {
 	    printf("Error: SLS_PROC_INFO_MAGIC %x does not match\n", dump->proc.magic);
-	    return NULL;
+	    goto load_dump_error;
 	}
 
 	if (dump->filedesc.magic != SLS_FILEDESC_INFO_MAGIC) {
 	    printf("SLS_FILEDESC_INFO_MAGIC %x does not match\n", dump->filedesc.magic);
-	    return NULL;
+	    goto load_dump_error;
 	}
 
 	if (dump->memory.vmspace.magic != SLS_VMSPACE_INFO_MAGIC) {
 	    printf("Error: SLS_VMSPACE_INFO_MAGIC does not match\n");
-	    return NULL;
+	    goto load_dump_error;
 	}
 
 	/* Allocations for array-like elements of the dump and cdir/rdir */
@@ -175,39 +175,39 @@ load_dump(int fd)
 	error = file_read(dump->threads, thread_size, fd);
 	if (error != 0) {
 	    printf("Error: cannot read thread_info\n");
-	    return NULL;
+	    goto load_dump_error;
 	}
 
 	for (i = 0; i < numthreads; i++) {
 	    if (dump->threads[i].magic != SLS_THREAD_INFO_MAGIC) {
 		printf("Error: SLS_THREAD_INFO_MAGIC does not match\n");
-		return NULL;
+		goto load_dump_error;
 	    }
 	}
 
 	error = file_read(dump->filedesc.infos, file_size, fd);
 	if (error != 0) {
 	    printf("Error: cannot read file_info\n");
-	    return NULL;
+	    goto load_dump_error;
 	}
 
 	for (i = 0; i < numfiles; i++) {
 	    if (dump->filedesc.infos[i].magic != SLS_FILE_INFO_MAGIC) {
 		printf("Error: SLS_FILE_INFO_MAGIC does not match\n");
-		return NULL;
+		goto load_dump_error;
 	    }
 	}
 
 	error = file_read(entries, entry_size, fd);
 	if (error != 0) {
 	    printf("Error: cannot read vm_map_entry_info\n");
-	    return NULL;
+	    goto load_dump_error;
 	}
 
 	for (i = 0; i < numentries; i++) {
 	    if (dump->memory.entries[i].magic != SLS_ENTRY_INFO_MAGIC) {
 		printf("Error: SLS_ENTRY_INFO_MAGIC does not match\n");
-		return NULL;
+		goto load_dump_error;
 	    }
 	}
 
@@ -218,32 +218,32 @@ load_dump(int fd)
 
 	    cur_obj = malloc(sizeof(struct vm_object_info), M_SLSMM, M_WAITOK);
 	    if (cur_obj == NULL)
-		return NULL;
+		goto load_dump_error;
 
 	    entries[i].obj_info = cur_obj;
 
 	    error = file_read(cur_obj, sizeof(struct vm_object_info), fd);
 	    if (error != 0) {
 		printf("Error: cannot read vm_object_info\n");
-		return NULL;
+		goto load_dump_error;
 	    }
 
 	    if (cur_obj->magic != SLS_OBJECT_INFO_MAGIC) {
 		printf("Error: SLS_OBJECT_INFO_MAGIC does not match\n");
-		return NULL;
+		goto load_dump_error;
 	    }
 	}
 
 	error = file_read(dump->filedesc.cdir, dump->filedesc.cdir_len, fd);
 	if (error != 0) {
 	    printf("Error: cannot read filedesc.cdir\n");
-	    return NULL;
+	    goto load_dump_error;
 	}
 
 	error = file_read(dump->filedesc.rdir, dump->filedesc.rdir_len, fd);
 	if (error != 0) {
 	    printf("Error: cannot read filedesc.rdir\n");
-	    return NULL;
+	    goto load_dump_error;
 	}
 
 
@@ -255,7 +255,7 @@ load_dump(int fd)
 	    error = file_read(files[i].filename, len, fd);
 	    if (error != 0) {
 		printf("Error: cannot read filename\n");
-		return NULL;
+		goto load_dump_error;
 	    }
 	}
 
@@ -276,13 +276,13 @@ load_dump(int fd)
 	    cur_obj->filename = malloc(cur_obj->filename_len, M_SLSMM, M_WAITOK);
 	    if(cur_obj->filename == NULL) {
 		printf("Error: Allocation for filename failed\n");
-		return NULL;
+		goto load_dump_error;
 	    }
 
 	    error = file_read(cur_obj->filename, cur_obj->filename_len, fd);
 	    if (error != 0) {
 		printf("Error: cannot read filename\n");
-		return NULL;
+		goto load_dump_error;
 	    }
 
 	}
@@ -293,7 +293,7 @@ load_dump(int fd)
 	    error = file_read(&vaddr, sizeof(vm_offset_t), fd);
 	    if (error != 0) {
 		printf("Error: cannot vm_offset_t\n");
-		return NULL;
+		goto load_dump_error;
 	    }
 
 	    /* Sentinel value */
@@ -315,18 +315,24 @@ load_dump(int fd)
 		printf("Error: reading data failed\n");
 		free(new_entry, M_SLSMM);
 		free(hashpage, M_SLSMM);
-		return NULL;
+		goto load_dump_error;
 	    }
 
 	    /*
 	    * Add the new page to the hash table, if it already 
 	    * exists there don't replace it.
 	    */
-	    slsp_addpage_noreplace(slsp, new_entry);
+	    slss_addpage_noreplace(slss, new_entry);
 	}
 
 
-	return slsp;
+	return slss;
+
+
+load_dump_error:
+
+	slss_fini(slss);
+	return NULL;
 }
 
 
@@ -351,7 +357,7 @@ store_pages_file(vm_offset_t vaddr, vm_offset_t vaddr_data, int fd)
 
 static int
 store_pages_mem(vm_offset_t vaddr, vm_offset_t vaddr_data,
-	struct sls_process *slsp)
+	struct sls_snapshot *slss)
 {
 	struct dump_page *new_entry;
 	void *hashpage;
@@ -363,30 +369,29 @@ store_pages_mem(vm_offset_t vaddr, vm_offset_t vaddr_data,
 	new_entry->vaddr = vaddr;
 	new_entry->data = hashpage;
 
-	slsp_addpage_noreplace(slsp, new_entry);
+	slss_addpage_noreplace(slss, new_entry);
 
 	return 0;
 }
 
 int
-store_pages(struct vm_map_entry_info *entries, vm_object_t *objects, 
-	    	size_t numentries, struct sls_store_tgt tgt, int mode)
+store_pages(struct vmspace *vm, struct sls_store_tgt tgt, int mode)
 {
-	vm_offset_t vaddr, vaddr_data;
-	struct vm_map_entry_info *entry;
 	vm_offset_t sentinel = ULONG_MAX;
+	vm_offset_t vaddr, vaddr_data;
+	struct vm_map_entry *entry;
+	struct vm_map *map;
 	vm_offset_t offset;
 	vm_object_t obj;
 	vm_page_t page;
 	int error;
-	int i;
-
-	for (i = 0; i < numentries; i++) {
-
-	    entry = &entries[i];
-	    offset = entry->offset;
 	
-	    obj = objects[i];
+	map = &vm->vm_map;
+	for (entry = map->header.next; entry != &map->header; entry = entry->next) {
+
+	    offset = entry->offset;
+	    obj = entry->object.vm_object;
+
 	    while (obj != NULL) {
 		if (obj->type != OBJT_DEFAULT)
 		    break;
@@ -404,10 +409,10 @@ store_pages(struct vm_map_entry_info *entries, vm_object_t *objects,
 			return error;
 		    }
 
-		    if (tgt.type == SLS_FD_FILE)
+		    if (tgt.type == SLS_FILE)
 			error = store_pages_file(vaddr, vaddr_data, tgt.fd);
 		    else
-			error = store_pages_mem(vaddr, vaddr_data, tgt.slsp);
+			error = store_pages_mem(vaddr, vaddr_data, tgt.slss);
 		    
 		    userpage_unmap(vaddr_data);
 		}
@@ -420,7 +425,7 @@ store_pages(struct vm_map_entry_info *entries, vm_object_t *objects,
 	    }
 	}
 
-	if (tgt.type == SLS_FD_MEM)
+	if (tgt.type == SLS_MEM)
 	    return 0;
 
 	file_write(&sentinel, sizeof(sentinel), tgt.fd);
@@ -434,7 +439,7 @@ store_pages(struct vm_map_entry_info *entries, vm_object_t *objects,
 }
 
 int
-store_dump(struct sls_process *slsp, int mode, vm_object_t *objects, int fd)
+store_dump(struct sls_snapshot *slss, int mode, struct vmspace *vm, int fd)
 {
 	int i;
 	int error = 0;
@@ -447,7 +452,7 @@ store_dump(struct sls_process *slsp, int mode, vm_object_t *objects, int fd)
 	int numthreads, numentries, numfiles;
 	struct dump *dump;
 
-	dump = slsp->slsp_dump;
+	dump = slss->slss_dump;
 	thread_infos = dump->threads;
 	entries = dump->memory.entries;
 	file_infos = dump->filedesc.infos;
@@ -536,11 +541,11 @@ store_dump(struct sls_process *slsp, int mode, vm_object_t *objects, int fd)
 	}
 	
 	tgt = (struct sls_store_tgt) {
-	    .type = SLS_FD_FILE,
+	    .type = SLS_FILE,
 	    .fd	  = fd,
 	};
 
-	error = store_pages(entries, objects, numentries, tgt, mode);
+	error = store_pages(vm, tgt, mode);
 	if (error != 0) {
 	    printf("Error: Dumping pages failed with %d\n", error);
 	    return error;

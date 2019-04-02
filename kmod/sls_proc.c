@@ -21,7 +21,7 @@
  * takes and leaves the process locked.
  */
 static int
-thread_checkpoint(struct thread *td, struct thread_info *thread_info)
+thread_ckpt(struct thread *td, struct thread_info *thread_info)
 {
 	int error = 0;
 
@@ -55,10 +55,10 @@ thread_checkpoint(struct thread *td, struct thread_info *thread_info)
  * Set the state of all threads of the process. This function
  * takes and leaves the process locked. The thread_info struct pointer
  * is passed as a thunk to satisfy the signature of thread_create, to
- * which thread_restore is an argument.
+ * which thread_rest is an argument.
  */
 static int
-thread_restore(struct thread *td, void *thunk)
+thread_rest(struct thread *td, void *thunk)
 {
 	int error = 0;
 	struct thread_info *thread_info = (struct thread_info *) thunk;
@@ -87,7 +87,7 @@ thread_restore(struct thread *td, void *thunk)
  * like PIDs. This function takes and leaves the process locked.
  */
 int
-proc_checkpoint(struct proc *p, struct proc_info *proc_info, struct thread_info *thread_infos)
+proc_ckpt(struct proc *p, struct proc_info *proc_info, struct thread_info *thread_infos)
 {
 	struct thread *td;
 	int threadno;
@@ -106,7 +106,7 @@ proc_checkpoint(struct proc *p, struct proc_info *proc_info, struct thread_info 
 	threadno = 0;
 	FOREACH_THREAD_IN_PROC(p, td) {
 	    thread_lock(td);
-	    thread_checkpoint(td, &thread_infos[threadno]);
+	    thread_ckpt(td, &thread_infos[threadno]);
 	    thread_unlock(td);
 	    threadno++;
 	}
@@ -120,7 +120,7 @@ proc_checkpoint(struct proc *p, struct proc_info *proc_info, struct thread_info 
  * like PIDs. This function takes and leaves the process locked.
  */
 int
-proc_restore(struct proc *p, struct proc_info *proc_info, struct thread_info *thread_infos)
+proc_rest(struct proc *p, struct proc_info *proc_info, struct thread_info *thread_infos)
 {
 	struct sigacts *newsigacts, *oldsigacts;
 	struct thread *td __unused;
@@ -141,13 +141,13 @@ proc_restore(struct proc *p, struct proc_info *proc_info, struct thread_info *th
 	/* The first thread of the new process is this one. */
 	/*
 	thread_lock(curthread);
-	thread_restore(curthread, (void *) &thread_infos[0]);
+	thread_rest(curthread, (void *) &thread_infos[0]);
 	thread_unlock(curthread);
 	*/
 
 	PROC_UNLOCK(p);
 	for (threadno = 0; threadno < proc_info->nthreads; threadno++) {
-	    thread_create(curthread, NULL, thread_restore, (void *) &thread_infos[threadno]);
+	    thread_create(curthread, NULL, thread_rest, (void *) &thread_infos[threadno]);
 	}
 	PROC_LOCK(p);
 

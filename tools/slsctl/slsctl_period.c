@@ -30,7 +30,6 @@ ckptstart_usage(void)
 int
 ckptstart_main(int argc, char* argv[]) {
 	int pid;
-	int slsmm_fd;
 	int error;
 	int mode;
 	int type;
@@ -45,8 +44,8 @@ ckptstart_main(int argc, char* argv[]) {
 		.len = 0,
 		.pid = 0,
 		.op = SLS_CHECKPOINT,
-		.fd_type = SLS_FD_FILE,
-		.dump_mode = SLS_FULL,
+		.target = SLS_FILE,
+		.mode = SLS_FULL,
 		.period = 0,
 		.iterations = 0,
 	};
@@ -56,7 +55,7 @@ ckptstart_main(int argc, char* argv[]) {
 	while ((opt = getopt_long(argc, argv, "adf:mn:p:t:", ckptstart_longopts, NULL)) != -1) {
 	    switch (opt) {
 	    case 'd':
-		param.dump_mode = SLS_DELTA;
+		param.mode = SLS_DELTA;
 		break;
 	    case 'f':
 		if (type_set == 1) {
@@ -64,7 +63,7 @@ ckptstart_main(int argc, char* argv[]) {
 		    return 0;
 		}
 
-		param.fd_type = SLS_FD_FILE;
+		param.target = SLS_FILE;
 		param.name = optarg;
 		param.len = strnlen(optarg, 1024);
 		truncate(optarg, 0);
@@ -76,7 +75,7 @@ ckptstart_main(int argc, char* argv[]) {
 		    return 0;
 		}
 
-		param.fd_type = SLS_FD_MEM;
+		param.target = SLS_MEM;
 		type_set = 1;
 		break;
 	    case 'n':
@@ -132,7 +131,6 @@ ckptstop_usage(void)
 int
 ckptstop_main(int argc, char* argv[]) {
 	int pid;
-	int slsmm_fd;
 	int error;
 	int mode;
 	int type;
@@ -147,8 +145,8 @@ ckptstop_main(int argc, char* argv[]) {
 		.len = 0,
 		.pid = 0,
 		.op = SLS_CKPT_STOP,
-		.fd_type = SLS_FD_FILE,
-		.dump_mode = SLS_FULL,
+		.target = SLS_FILE,
+		.mode = SLS_FULL,
 		.period = 0,
 		.iterations = 0,
 	};

@@ -44,18 +44,17 @@
 
 #include "sls_op.h"
 #include "sls_dump.h"
-#include "sls_process.h"
-#include "sls_shadow.h"
+#include "sls_snapshot.h"
 
 
 
 static int
-sls_restore(struct proc *p, struct sls_process *slsp)
+sls_rest(struct proc *p, struct sls_snapshot *slss)
 {
 	struct dump *dump;
 	int error = 0;
 
-	dump = slsp->slsp_dump;
+	dump = slss->slss_dump;
 
 	/*
 	* XXX We don't actually need that, right? We're overwriting ourselves,
@@ -64,82 +63,48 @@ sls_restore(struct proc *p, struct sls_process *slsp)
 	PROC_LOCK(p);
 	kern_psignal(p, SIGSTOP);
 
-	error = proc_restore(p, &dump->proc, dump->threads);
+	error = proc_rest(p, &dump->proc, dump->threads);
 	if (error != 0) {
 	    printf("Error: reg_restore failed with error code %d\n", error);
-	    goto sls_restore_out;
+	    goto sls_rest_out;
 	}
 
-	error = vmspace_restore(p, slsp, &dump->memory);
+	error = vmspace_rest(p, slss, &dump->memory);
 	if (error != 0) {
 	    printf("Error: vmspace_restore failed with error code %d\n", error);
-	    goto sls_restore_out;
+	    goto sls_rest_out;
 	}
 
-	error = fd_restore(p, &dump->filedesc);
+	error = fd_rest(p, &dump->filedesc);
 	if (error != 0) {
 	    printf("Error: fd_restore failed with error code %d\n", error);
-	    goto sls_restore_out;
+	    goto sls_rest_out;
 	}
 
 	kern_psignal(p, SIGCONT);
 
-sls_restore_out:
+sls_rest_out:
 	PROC_UNLOCK(p);
 
 	return error;
 }
 
-static struct sls_process * 
-slsp_from_file(char *filename)
-{
-    struct sls_process *slsp;
-    int error;
-    int fd;
-
-    error = kern_openat(curthread, AT_FDCWD, filename, 
-	UIO_SYSSPACE, O_RDWR | O_CREAT, S_IRWXU);
-    fd = curthread->td_retval[0];
-    if (error != 0) {
-	printf("Error: Opening file failed with %d\n", error);
-	return NULL;
-    }
-
-    slsp = load_dump(fd);
-    kern_close(curthread, fd);
-
-    return slsp;
-}
-
-
 void
-sls_restored(struct sls_op_args *args)
+sls_restd(struct sls_op_args *args)
 {
-    struct sls_process *slsp = NULL;
     int error;
-
-    if (args->fd_type == SLS_FD_FILE)
-	slsp = slsp_from_file(args->filename);
-    else
-	slsp = slsp_find(args->id);
-    
-    printf("Arguments searched\n");
-    if (slsp == NULL)
-	goto sls_restored_out;
 	
-    error = sls_restore(args->p, slsp);
+    error = sls_rest(args->p, args->slss);
     if (error != 0)
-	printf("Error: sls_restore failed with %d\n", error);
-    printf("Restore done\n");
+	printf("Error: sls_rest failed with %d\n", error);
 
-sls_restored_out:
     PRELE(args->p);
 
-    if (args->fd_type == SLS_FD_FILE)
-	slsp_fini(slsp);
+    if (args->target == SLS_FILE)
+	slss_fini(args->slss);
     free(args->filename, M_SLSMM);
     free(args, M_SLSMM);
 
-    dev_relthread(sls_metadata.slsm_cdev, 1);
+    dev_relthread(slsm.slsm_cdev, 1);
     kthread_exit();
 }

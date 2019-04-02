@@ -10,18 +10,17 @@
 
 struct sls_op_args {
     struct proc *p;
-    int dump_mode;
-    union {
-	int id;
-	char *filename;
-    };
-    int fd_type;
+    int mode;
+    char *filename;
+    int id;
+    int target;
     int iterations;
     int interval;
+    struct sls_snapshot *slss;
 };
 
-void sls_checkpointd(struct sls_op_args *args);
-void sls_restored(struct sls_op_args *args);
-void sls_checkpoint_stop(struct proc *p);
+void sls_ckptd(struct sls_op_args *args);
+void sls_restd(struct sls_op_args *args);
+void sls_ckpt_stop(struct proc *p);
 
 #endif /* _SLS_OP_H_ */

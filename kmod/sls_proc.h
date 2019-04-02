@@ -21,7 +21,7 @@
 
 #include "sls_data.h"
 
-int proc_checkpoint(struct proc *p, struct proc_info *proc_info, struct thread_info *thread_infos);
-int proc_restore(struct proc *p, struct proc_info *proc_info, struct thread_info *thread_infos);
+int proc_ckpt(struct proc *p, struct proc_info *proc_info, struct thread_info *thread_infos);
+int proc_rest(struct proc *p, struct proc_info *proc_info, struct thread_info *thread_infos);
 
 #endif

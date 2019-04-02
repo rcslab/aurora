@@ -17,10 +17,10 @@ void
 usage(void)
 {
 	printf("Usage: slsctl <command> [command args]\n");
-	printf("       slsctl dump      -p <PID> <-f <filename> | -m>[-d]\n");
+	printf("       slsctl checkpoint      -p <PID> <-f <filename> | -m>[-d]\n");
 	printf("       slsctl restore   <-f <filename> | -m id>>\n");
-	printf("       slsctl plist\n");
-	printf("       slsctl pdel -d <id>\n");
+	printf("       slsctl snaplist\n");
+	printf("       slsctl snapdel -d <id>\n");
 	printf("       slsctl ckptstart -p pid -t <period> [-n iterations]<-f <filename> | -m>[-d]\n");
 	printf("       slsctl ckptstop -p pid\n");
 }
@@ -30,10 +30,10 @@ struct command {
 	void(*usage)();
 	int(*cmd)(int, char **);
 } commandtable[] = {
-	{ "dump",	&dump_usage,		&dump_main },
+	{ "checkpoint",	&checkpoint_usage,		&checkpoint_main },
 	{ "restore",	&restore_usage,		&restore_main },
-	{ "plist",	&plist_usage,		&plist_main},
-	{ "pdel",	&pdel_usage,		&pdel_main},
+	{ "snaplist",	&snaplist_usage,		&snaplist_main},
+	{ "snapdel",	&snapdel_usage,		&snapdel_main},
 	{ "ckptstart",	&ckptstart_usage,	&ckptstart_main},
 	{ "ckptstop",	&ckptstop_usage,	&ckptstop_main},
 	{ NULL,		NULL,			NULL }

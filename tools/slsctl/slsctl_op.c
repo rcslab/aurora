@@ -11,7 +11,7 @@
 
 #include <sls.h>
 
-static struct option dump_longopts[] = {
+static struct option checkpoint_longopts[] = {
 	{ "delta", no_argument, NULL, 'd' },
 	{ "file", required_argument, NULL, 'f' },
 	{ "memory", no_argument, NULL, 'm' },
@@ -20,20 +20,19 @@ static struct option dump_longopts[] = {
 };
 
 void
-dump_usage(void)
+checkpoint_usage(void)
 {
-    printf("Usage: slsctl dump [-p <PID>] <-f <filename> | -m> [--delta]\n");
+    printf("Usage: slsctl checkpoint [-p <PID>] <-f <filename> | -m> [--delta]\n");
 }
 
 int
-dump_main(int argc, char* argv[]) {
+checkpoint_main(int argc, char* argv[]) {
 	int pid;
-	int slsmm_fd;
 	int error;
 	int mode;
-	int type;
+	int target;
 	struct op_param param;
-	int type_set;
+	int target_set;
 	int pid_set;
 	int opt;
 	char *filename;
@@ -43,57 +42,57 @@ dump_main(int argc, char* argv[]) {
 		.len = 0,
 		.pid = 0,
 		.op = SLS_CHECKPOINT,
-		.fd_type = SLS_FD_FILE,
-		.dump_mode = SLS_FULL,
+		.target = SLS_FILE,
+		.mode = SLS_FULL,
 		.period = 0,
 		.iterations = 1,
 	};
 	pid_set = 0;
-	type_set = 0;
+	target_set = 0;
 
-	while ((opt = getopt_long(argc, argv, "adf:mp:", dump_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "adf:mp:", checkpoint_longopts, NULL)) != -1) {
 	    switch (opt) {
 	    case 'd':
-		param.dump_mode = SLS_DELTA;
+		param.mode = SLS_DELTA;
 		break;
 	    case 'f':
-		if (type_set == 1) {
-		    dump_usage();
+		if (target_set == 1) {
+		    checkpoint_usage();
 		    return 0;
 		}
 
-		param.fd_type = SLS_FD_FILE;
+		param.target = SLS_FILE;
 		param.name = optarg;
 		param.len = strnlen(optarg, 1024);
 		truncate(optarg, 0);
-		type_set = 1;
+		target_set = 1;
 		break;
 	    case 'm':
-		if (type_set == 1) {
-		    dump_usage();
+		if (target_set == 1) {
+		    checkpoint_usage();
 		    return 0;
 		}
 
-		param.fd_type = SLS_FD_MEM;
-		type_set = 1;
+		param.target = SLS_MEM;
+		target_set = 1;
 		break;
 	    case 'p':
 		pid_set = 1;
 		param.pid = strtol(optarg, NULL, 10);
 		break;
 	    default:
-		dump_usage();
+		checkpoint_usage();
 		return 0;
 	    }
 	}
 
 	if (pid_set == 0) {
-	    dump_usage();
+	    checkpoint_usage();
 	    return 0;
 	}
 
 	if (optind != argc) {
-	    dump_usage();
+	    checkpoint_usage();
 	    return 0;
 	}
 
@@ -119,12 +118,11 @@ restore_usage(void)
 
 int
 restore_main(int argc, char* argv[]) {
-	int slsmm_fd;
 	int error;
 	int mode;
-	int type;
+	int target;
 	int opt;
-	int type_set;
+	int target_set;
 	char *filename;
 	struct op_param param;
 
@@ -133,33 +131,33 @@ restore_main(int argc, char* argv[]) {
 		.len = 0,
 		.pid = getpid(),
 		.op = SLS_RESTORE,
-		.fd_type = SLS_FD_FILE,
-		.dump_mode = SLS_FULL,
+		.target = SLS_FILE,
+		.mode = SLS_FULL,
 		.period = 0,
 		.iterations = 0,
 	};
-	type_set = 0;
+	target_set = 0;
 
 	while ((opt = getopt_long(argc, argv, "f:m:", restore_longopts, NULL)) != -1) {
 	    switch (opt) {
 	    case 'f':
-		if (type_set == 1) {
+		if (target_set == 1) {
 		    restore_usage();
 		    return 0;
 		}
 
-		param.fd_type = SLS_FD_FILE;
+		param.target = SLS_FILE;
 		param.name = optarg;
 		param.len = strnlen(optarg, 1024);
 		break;
 
 	    case 'm':
-		if (type_set == 1) {
+		if (target_set == 1) {
 		    restore_usage();
 		    return 0;
 		}
 
-		param.fd_type = SLS_FD_MEM;
+		param.target = SLS_MEM;
 		param.id = strtol(optarg, NULL, 10);
 		break;
 

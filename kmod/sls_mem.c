@@ -28,7 +28,7 @@
 #include "slsmm.h"
 #include "path.h"
 #include "sls_mem.h"
-#include "sls_process.h"
+#include "sls_snapshot.h"
 #include "sls_dump.h"
 
 /* Hack for supporting the hpet0 counter */
@@ -49,34 +49,6 @@ userpage_unmap(vm_offset_t vaddr)
 {
 }
 
-static void 
-print_object_chain(vm_object_t obj)
-{
-	vm_object_t o;
-	vm_object_t parent;
-
-	printf("Obj ref : %d\t shadow : %d\t res %d\n", 
-		obj->ref_count, obj->shadow_count, obj->resident_page_count);
-
-	if (obj->backing_object != NULL) {
-	    parent = obj->backing_object;
-	    printf("Parent ref : %d\t shadow : %d\t res : %d\n", 
-		    parent->ref_count, parent->shadow_count, parent->resident_page_count);
-	} else {
-	    printf("No backing object\n");
-	}
-
-	o = obj;
-	while(o != NULL) {
-	    printf("%p ", o);
-	    o = o->backing_object;
-	    if (o != NULL)
-		printf(" -> ");
-	}
-	printf("\n\n");
-
-}
-
 /*
  * XXX In the future, get _all_ objects, do not compact. Right now, 
  * we basically flatten the object tree. This makes sense in that 
@@ -91,7 +63,7 @@ print_object_chain(vm_object_t obj)
  * now, its pages would be copied twice.
  */
 static int 
-vm_object_checkpoint(struct proc *p, vm_object_t obj, struct vm_object_info **obj_info)
+vm_object_ckpt(struct proc *p, vm_object_t obj, struct vm_object_info **obj_info)
 {
 	vm_object_t o;
 	struct vm_object_info *cur_obj;
@@ -164,7 +136,7 @@ vm_object_checkpoint(struct proc *p, vm_object_t obj, struct vm_object_info **ob
  * return the list of original vm_object and vm_entry for dump
  */
 int
-vmspace_checkpoint(struct proc *p, struct memckpt_info *dump, long mode)
+vmspace_ckpt(struct proc *p, struct memckpt_info *dump, long mode)
 {
 	vm_map_t vm_map;
 	struct vmspace *vmspace;
@@ -211,7 +183,7 @@ vmspace_checkpoint(struct proc *p, struct memckpt_info *dump, long mode)
 	    if (obj == NULL)
 		continue;
 
-	    vm_object_checkpoint(p, obj, &cur_entry->obj_info);
+	    vm_object_ckpt(p, obj, &cur_entry->obj_info);
 
 	}
 
@@ -220,7 +192,7 @@ vmspace_checkpoint(struct proc *p, struct memckpt_info *dump, long mode)
 
 
 static vm_object_t
-vm_object_restore(struct proc *p, struct vm_map_entry_info *entry, vm_object_t backer,
+vm_object_rest(struct proc *p, struct vm_map_entry_info *entry, vm_object_t backer,
 		    int *flags, boolean_t *writecounted)
 {
 	struct vm_object_info *obj_info;
@@ -326,7 +298,7 @@ vm_object_restore(struct proc *p, struct vm_map_entry_info *entry, vm_object_t b
 }
 
 static void
-data_restore(struct sls_process *slsp, struct vm_map *map, vm_object_t object, struct vm_map_entry_info *entry)
+data_rest(struct sls_snapshot *slss, struct vm_map *map, vm_object_t object, struct vm_map_entry_info *entry)
 {
 
 	struct dump_page *page_entry;
@@ -336,10 +308,10 @@ data_restore(struct sls_process *slsp, struct vm_map *map, vm_object_t object, s
 	vm_page_t new_page;
 	int error;
 
-	hashmask = slsp->slsp_hashmask;
+	hashmask = slss->slss_hashmask;
 
 	for (int j = 0; j <= hashmask; j++) {
-	    LIST_FOREACH(page_entry, &slsp->slsp_pages[j & hashmask], next) {
+	    LIST_FOREACH(page_entry, &slss->slss_pages[j & hashmask], next) {
 		vaddr = page_entry->vaddr;
 		if (vaddr < entry->start || vaddr >= entry->end)
 		    continue;
@@ -447,7 +419,7 @@ find_obj_id(struct vm_map_entry_info *entries, int numentries, vm_offset_t id)
 }
 
 int
-vmspace_restore(struct proc *p, struct sls_process *slsp, struct memckpt_info *dump)
+vmspace_rest(struct proc *p, struct sls_snapshot *slss, struct memckpt_info *dump)
 {
 	struct vmspace *vmspace;
 	struct vm_map *vm_map;
@@ -561,7 +533,7 @@ vmspace_restore(struct proc *p, struct sls_process *slsp, struct memckpt_info *d
 	     */
 	    writecounted = FALSE;
 	    flags = 0;
-	    new_object = vm_object_restore(p, entry, backer, &flags, &writecounted);
+	    new_object = vm_object_rest(p, entry, backer, &flags, &writecounted);
 	    objects[i] = new_object;
 
 	    cow = map_flags_from_entry(entry->eflags);
@@ -581,7 +553,7 @@ vmspace_restore(struct proc *p, struct sls_process *slsp, struct memckpt_info *d
 
 	    
 	    if (new_object && new_object->type == OBJT_DEFAULT)
-		data_restore(slsp, vm_map, new_object, entry);
+		data_rest(slss, vm_map, new_object, entry);
 	}
 	    
 

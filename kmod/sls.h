@@ -4,6 +4,9 @@
 #include <vm/vm.h>
 #include <vm/vm_object.h>
 
+#include "sls_snapshot.h"
+#include "sls_process.h"
+
 /* XXX Decouple ioctl values from internal values */
 #define SLS_CKPT_FULL	    0
 #define SLS_CKPT_DELTA	    1
@@ -14,18 +17,18 @@
 #define SLS_LOG_ENTRIES	    10000
 #define SLS_LOG_BUFFER	    1024
 
-/* XXX Put into a global per-checkpointed-process struct */
-
 struct sls_metadata {
-    long	    slsm_log[SLS_LOG_SLOTS][SLS_LOG_ENTRIES];
-    int		    slsm_ckptd[PID_MAX];
-    int		    slsm_log_counter;
-    int		    slsm_exiting;
-    int		    slsm_lastid;
-    struct cdev	    *slsm_cdev;
+    long		slsm_log[SLS_LOG_SLOTS][SLS_LOG_ENTRIES];
+    int			slsm_log_counter;
+    int			slsm_exiting;
+    int			slsm_lastid;
+    u_long		slsm_procmask;
+    struct slsp_list	*slsm_proctable;
+    struct slss_list	slsm_snaplist;
+    struct cdev		*slsm_cdev;
 };
 
-extern struct sls_metadata sls_metadata;
+extern struct sls_metadata slsm;
 
 inline long
 tonano(struct timespec tp)
@@ -38,13 +41,13 @@ tonano(struct timespec tp)
 inline void
 sls_log(int type, int value)
 {
-    sls_metadata.slsm_log[type][sls_metadata.slsm_log_counter] = value;
+    slsm.slsm_log[type][slsm.slsm_log_counter] = value;
 }
 
 inline int
 sls_module_exiting(void)
 {
-    return sls_metadata.slsm_exiting;
+    return slsm.slsm_exiting;
 }
 
 #endif /* _SLS_H_ */

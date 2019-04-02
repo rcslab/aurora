@@ -41,16 +41,37 @@
 
 #include "slsmm.h"
 #include "sls_op.h"
-#include "sls_process.h"
 #include "sls_ioctl.h"
+#include "sls_snapshot.h"
 
 #include "sls_dump.h"
 
 
 MALLOC_DEFINE(M_SLSMM, "slsmm", "SLSMM");
 
+struct sls_metadata slsm;
 
-struct sls_metadata sls_metadata;
+static struct sls_snapshot * 
+slss_from_file(char *filename)
+{
+    struct sls_snapshot *slss;
+    int error;
+    int fd;
+
+    error = kern_openat(curthread, AT_FDCWD, filename, 
+	UIO_SYSSPACE, O_RDWR | O_CREAT, S_IRWXU);
+    fd = curthread->td_retval[0];
+    if (error != 0) {
+	printf("Error: Opening file failed with %d\n", error);
+	return NULL;
+    }
+
+    slss = load_dump(fd);
+    kern_close(curthread, fd);
+
+    return slss;
+}
+
 
 static int
 slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
@@ -58,18 +79,19 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 {
 	struct op_param *oparam = NULL;
 	struct compose_param *cparam = NULL;
-	struct slsp_param *sparam = NULL;
+	struct snap_param *sparam = NULL;
 
 	struct sls_op_args *op_args;
+	struct sls_snapshot *slss;
 	struct proc *p = NULL;
 
 	char *snap_name = NULL;
 	size_t snap_name_len;
 
 	int *ids = NULL;
-	int dump_mode;
+	int mode;
 	int error = 0;
-	int fd_type;
+	int target;
 	int op;
 
 	switch (cmd) {
@@ -77,16 +99,16 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 
 		oparam = (struct op_param *) data;
 
-		fd_type = oparam->fd_type;
+		target = oparam->target;
 		op = oparam->op;
 
-		if (op != SLS_CHECKPOINT && oparam->dump_mode != SLS_FULL) {
+		if (op != SLS_CHECKPOINT && oparam->mode != SLS_FULL) {
 		    printf("Error: Dump mode flag only valid with checkpointing\n");
 		    return EINVAL;
 		}
 
-		if (fd_type != SLS_FD_MEM && fd_type != SLS_FD_FILE) {
-		    printf("Error: Invalid checkpoint fd type %d\n", fd_type);
+		if (target != SLS_MEM && target != SLS_FILE) {
+		    printf("Error: Invalid checkpoint fd type %d\n", target);
 		    return EINVAL;
 		}
 
@@ -112,13 +134,13 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		    */
 
 		/* Use kernel-internal constants for checkpointing mode */
-		if (oparam->dump_mode == SLS_FULL)
-		    dump_mode = SLS_CKPT_FULL;
+		if (oparam->mode == SLS_FULL)
+		    mode = SLS_CKPT_FULL;
 		else 
-		    dump_mode = SLS_CKPT_DELTA;
+		    mode = SLS_CKPT_DELTA;
 
 
-		if (fd_type == SLS_FD_FILE) {
+		if (target == SLS_FILE) {
 		    snap_name_len = MIN(oparam->len, PATH_MAX);
 		    snap_name = malloc(snap_name_len + 1, M_SLSMM, M_WAITOK);
 
@@ -135,20 +157,46 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 
 		op_args->filename = snap_name;
 		op_args->p = p;
-		op_args->fd_type = oparam->fd_type;
-		op_args->dump_mode = dump_mode;
+		op_args->target = oparam->target;
+		op_args->mode = mode;
 		op_args->iterations = oparam->iterations;
 		op_args->interval = oparam->period;
 
-		if (op == SLS_CHECKPOINT) {
-		    error = kthread_add((void(*)(void *)) sls_checkpointd, 
-			op_args, NULL, NULL, 0, 0, "sls_checkpointd");
-		} else if (op == SLS_RESTORE) {
-		    error = kthread_add((void(*)(void *)) sls_restored, 
-			op_args, p, NULL, 0, 0, "sls_restored");
+		if (target == SLS_MEM)
+		    op_args->id = oparam->id;
 
-		    kern_thr_exit(curthread);
+		if (op == SLS_CHECKPOINT) {
+		    error = kthread_add((void(*)(void *)) sls_ckptd, 
+			op_args, NULL, NULL, 0, 0, "sls_checkpointd");
+
+		    return error;
+		} 
+		
+
+		KASSERT(op == SLS_RESTORE, "operation is restore");
+		/* 
+		 * Eager check for the snapshot, because if we fail
+		 * during restoring we have already trashed this process
+		 * beyond repair.
+		 */
+		if (op_args->target == SLS_FILE)
+		    slss = slss_from_file(op_args->filename);
+		else
+		    slss = slss_find(op_args->id);
+
+		if (slss == NULL) {
+		    PRELE(op_args->p);
+		    free(op_args->filename, M_SLSMM);
+		    free(op_args, M_SLSMM);
+		    return EINVAL;
 		}
+
+		op_args->slss = slss;
+
+		error = kthread_add((void(*)(void *)) sls_restd, 
+		    op_args, p, NULL, 0, 0, "sls_restored");
+
+		kern_thr_exit(curthread);
 
 		return error;
 
@@ -175,16 +223,16 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 
 		return error;
 
-	    case SLS_SLSP:
-		sparam = (struct slsp_param *) data;
+	    case SLS_SNAP:
+		sparam = (struct snap_param *) data;
 
 		switch (sparam->op) {
-		case SLS_PLIST:
-		    slsp_list();
+		case SLS_SNAPLIST:
+		    slss_listall();
 		    return 0;
 
-		case SLS_PDEL:
-		    slsp_delete(sparam->id);
+		case SLS_SNAPDEL:
+		    slss_delete(sparam->id);
 		    return 0;
 
 		default:
@@ -228,7 +276,7 @@ log_results(int lognum)
 	for (i = 0; i < lognum; i++) {
 	    for (j = 0; j < 9; j++) {
 
-		snprintf(buf, 1024, "%u,%lu\n", j, sls_metadata.slsm_log[j][i]);
+		snprintf(buf, 1024, "%u,%lu\n", j, slsm.slsm_log[j][i]);
 
 		aiov.iov_base = buf;
 		aiov.iov_len = strnlen(buf, 1024);
@@ -261,26 +309,25 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
     
     switch (inEvent) {
 	case MOD_LOAD:
+	    slsm.slsm_exiting = 0;
+
+	    slsm.slsm_lastid = 0;
+	    slsm.slsm_cdev = 
+		make_dev(&slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "sls");
+
+	    LIST_INIT(&slsm.slsm_snaplist);
+	    slsm.slsm_proctable = hashinit(HASH_MAX, M_SLSMM, &slsm.slsm_procmask);
+
 	    printf("SLS Loaded.\n");
-	    sls_metadata.slsm_exiting = 0;
-
-	    TAILQ_INIT(&sls_procs);
-	    printf("Size of array: %lu\n", sizeof(sls_metadata.slsm_ckptd));
-	    bzero(sls_metadata.slsm_ckptd, sizeof(sls_metadata.slsm_ckptd));
-
-	    sls_metadata.slsm_lastid = 0;
-	    sls_metadata.slsm_cdev = 
-		make_dev(&slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "slsmm");
-
 	    break;
 
 	case MOD_UNLOAD:
 
-	    sls_metadata.slsm_exiting = 1;
+	    slsm.slsm_exiting = 1;
 
-	    slsp_delete_all();
+	    slsp_delall();
 
-	    destroy_dev(sls_metadata.slsm_cdev);
+	    destroy_dev(slsm.slsm_cdev);
 
 	    printf("SLS Unloaded.\n");
 	    break;
@@ -294,9 +341,9 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 
 
 static moduledata_t moduleData = {
-    "slsmm",
+    "sls",
     SLSHandler,
     NULL
 };
 
-DECLARE_MODULE(slsmm_kmod, moduleData, SI_SUB_DRIVERS, SI_ORDER_MIDDLE);
+DECLARE_MODULE(sls_kmod, moduleData, SI_SUB_DRIVERS, SI_ORDER_MIDDLE);

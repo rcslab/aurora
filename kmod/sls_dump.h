@@ -3,9 +3,11 @@
 
 #include <sys/mman.h>
 
+#include <vm/vm_map.h>
+
 #include "slsmm.h"
 #include "sls_data.h"
-#include "sls_process.h"
+#include "sls_snapshot.h"
 
 #define SLS_DUMP_MAGIC 0x736c7525
 struct dump {
@@ -20,14 +22,13 @@ struct sls_store_tgt {
     int type;
     union {
 	int fd;
-	struct sls_process *slsp;
+	struct sls_snapshot *slss;
     };
 };
 
-struct sls_process *load_dump(int fd);
-int store_dump(struct sls_process *slsp, int mode, vm_object_t *objects, int fd);
-int store_pages(struct vm_map_entry_info *entries, vm_object_t *objects, 
-	    	size_t numentries, struct sls_store_tgt tgt, int mode);
+struct sls_snapshot *load_dump(int fd);
+int store_dump(struct sls_snapshot *slss, int mode, struct vmspace *vm, int fd);
+int store_pages(struct vmspace *vm, struct sls_store_tgt tgt, int mode);
 
 int dump_clone(struct dump *dst, struct dump *src);
 int copy_dump_pages(struct dump *dst, struct dump *src);

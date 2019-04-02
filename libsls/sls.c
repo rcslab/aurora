@@ -17,7 +17,7 @@ sls_op(struct op_param *param)
 	int status;
 	int fd;
     
-	fd = open("/dev/slsmm", O_RDWR);
+	fd = open("/dev/sls", O_RDWR);
 	if (fd < 0) {
 		fprintf(stderr, "ERROR: Could not open SLS device: %m");
 		return -1;
@@ -25,7 +25,7 @@ sls_op(struct op_param *param)
 
 	status = ioctl(fd, SLS_OP, param);
 	if (status < 0) {
-		fprintf(stderr, "ERROR: SLS dump ioctl failed: %m");
+		fprintf(stderr, "ERROR: SLS op ioctl failed: %m");
 	}
 
 	close(fd);
@@ -34,20 +34,20 @@ sls_op(struct op_param *param)
 }
 
 int
-sls_slsp(struct slsp_param *param)
+sls_snap(struct snap_param *param)
 {
 	int status;
 	int fd;
 
-	fd = open("/dev/slsmm", O_RDWR);
+	fd = open("/dev/sls", O_RDWR);
 	if (fd < 0) {
 		fprintf(stderr, "ERROR: Could not open SLS device: %m");
 		return -1;
 	}
 
-	status = ioctl(fd, SLS_SLSP, param);
+	status = ioctl(fd, SLS_SNAP, param);
 	if (status < 0) {
-		fprintf(stderr, "ERROR: SLS dump ioctl failed: %m");
+		fprintf(stderr, "ERROR: SLS snap ioctl failed: %m");
 	}
 
 	close(fd);

@@ -8,7 +8,7 @@
 
 #include "sls_data.h"
 
-int fd_checkpoint(struct proc *p, struct filedesc_info *filedesc_info);
-int fd_restore(struct proc *p, struct filedesc_info *info);
+int fd_ckpt(struct proc *p, struct filedesc_info *filedesc_info);
+int fd_rest(struct proc *p, struct filedesc_info *info);
 
 #endif

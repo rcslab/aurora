@@ -5,7 +5,7 @@
 
 #include "sls.h"
 #include "sls_data.h"
-#include "sls_process.h"
+#include "sls_snapshot.h"
 
 /* XXX Move elsewhere, it's being used by multiple files */
 #define IDX_TO_VADDR(idx, entry_start, entry_offset) \
@@ -18,7 +18,7 @@
 vm_offset_t userpage_map(vm_paddr_t phys_addr);
 void userpage_unmap(vm_offset_t vaddr);
 
-int vmspace_checkpoint(struct proc *p, struct memckpt_info *dump, long mode);
-int vmspace_restore(struct proc *p, struct sls_process *slsp, struct memckpt_info *dump);
+int vmspace_ckpt(struct proc *p, struct memckpt_info *dump, long mode);
+int vmspace_rest(struct proc *p, struct sls_snapshot *slss, struct memckpt_info *dump);
 
 #endif

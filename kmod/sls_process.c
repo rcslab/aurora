@@ -32,196 +32,132 @@
 #include "slsmm.h"
 #include "sls_data.h"
 #include "sls_dump.h"
+#include "sls_snapshot.h"
 #include "sls_process.h"
 
-struct slsp_tailq sls_procs;
-
-int 
-slsp_init_htable(struct sls_process *slsp)
+static struct sls_process *
+slsp_init(pid_t pid)
 {
-	slsp->slsp_pages = hashinit(HASH_MAX, M_SLSMM, &slsp->slsp_hashmask);
-	if (slsp->slsp_pages == NULL)
-		return ENOMEM;
+    struct sls_process *procnew;
+    struct slsp_list *bucket;
 
-	return 0;
-}
+    printf("Creating slsp for %ld\n", (long) pid);
+    bucket = &slsm.slsm_proctable[pid & slsm.slsm_procmask];
 
-void
-slsp_fini_htable(struct sls_process *slsp)
-{
-	int i;
-	struct dump_page *cur_page;
-	struct page_list *cur_bucket;
-	int hashmask;
+    procnew = malloc(sizeof(*procnew), M_SLSMM, M_WAITOK);
+    procnew->slsp_pid = pid;
+    procnew->slsp_ckptd = 0;
+    procnew->slsp_vm = NULL;
+    procnew->slsp_charge = 0;
+    mtx_init(&procnew->slsp_mtx, "SLS Process", NULL, MTX_DEF);
+    LIST_INIT(&procnew->slsp_snaps);
+    
+    LIST_INSERT_HEAD(bucket, procnew, slsp_procs);
 
-	hashmask = slsp->slsp_hashmask;
-	for (i = 0; i <= hashmask; i++) {
-		cur_bucket = &slsp->slsp_pages[i];
-		while (!LIST_EMPTY(cur_bucket)) {
-			cur_page = LIST_FIRST(cur_bucket);
-			LIST_REMOVE(cur_page, next);
-			free(cur_page->data, M_SLSMM);
-			free(cur_page, M_SLSMM);
-		}
-	}
-
-	hashdestroy(slsp->slsp_pages, M_SLSMM, hashmask);
+    return procnew;
 }
 
 struct sls_process *
-slsp_init(struct proc *p)
+slsp_add(pid_t pid)
 {
-	struct sls_process *slsp;
-	
-	slsp = malloc(sizeof(*slsp), M_SLSMM, M_WAITOK);
-	slsp->slsp_id = sls_metadata.slsm_lastid++;
+    struct sls_process *slsp;
 
-	mtx_init(&slsp->slsp_mtx, "slspmtx", NULL, MTX_DEF);
-
-	//slsp->slsp_proc = p;
-	if (p != NULL) {
-	    strncpy(slsp->slsp_name, p->p_comm, MAXCOMLEN);
-	    //PHOLD(p);
-	}
-
-	slsp->slsp_dump = alloc_dump();
-
-	slsp->slsp_pagecount = 0;
-	slsp_init_htable(slsp);
-
-
+    slsp = slsp_find(pid);
+    if (slsp != NULL)
 	return slsp;
+
+
+    return slsp_init(pid);
 }
 
 void
 slsp_fini(struct sls_process *slsp)
 {
+    struct sls_snapshot *slss;
+    struct slss_list *slist;
 
-	if (slsp == NULL)
-	    return;
+    slist = &slsp->slsp_snaps;
+    while (!LIST_EMPTY(slist)) {
+	slss = LIST_FIRST(slist);
+	LIST_REMOVE(slss, slss_snaps);
+	LIST_REMOVE(slss, slss_procsnaps);
+	slss_fini(slss);
+    }
 
-	slsp_fini_htable(slsp);
+    if (slsp->slsp_vm != NULL)
+	vmspace_free(slsp->slsp_vm);
 
-	free_dump(slsp->slsp_dump);
-
-	/*
-	if (slsp->slsp_proc != NULL)
-	    PRELE(slsp->slsp_proc);
-	    */
-
-	mtx_destroy(&slsp->slsp_mtx);
-
-	free(slsp, M_SLSMM);
+    mtx_destroy(&slsp->slsp_mtx);
 }
 
 void
-slsp_list(void)
+slsp_del(pid_t pid)
 {
-	struct sls_process *slsp;
+    struct sls_process *slsp;
+    struct slsp_list *bucket;
 
-	printf("|  Entry\t|    Name\t\t|    Size(KB)\t\t\n");
-	TAILQ_FOREACH(slsp, &sls_procs, slsp_procs) {
-	    printf("|   %d\t\t|    %s\t\t|       %ld\t\t\n", 
-		    slsp->slsp_id, slsp->slsp_name, slsp->slsp_pagecount * 4);
-	}
-}
-
-void
-slsp_delete(int id)
-{
-	struct sls_process *slsp = NULL;
-
-	TAILQ_FOREACH(slsp, &sls_procs, slsp_procs) {
-	    if (slsp->slsp_id == id) {
-		TAILQ_REMOVE(&sls_procs, slsp, slsp_procs);
-		break;
-	    }
-	}
-
-	if (slsp != NULL)
+    bucket = &slsm.slsm_proctable[pid & slsm.slsm_procmask];
+    
+    LIST_FOREACH(slsp, bucket, slsp_procs) {
+	if (slsp->slsp_pid == pid) {
 	    slsp_fini(slsp);
+	    return;
+	}
+    }
+}
+
+
+static void
+slsp_list(void) {
+	u_long hashmask;
+	struct slsp_list *bucket;
+	struct sls_process *slsp;
+	int i;
+
+	hashmask = slsm.slsm_procmask;
+	for (i = 0; i <= hashmask; i++) {
+		bucket = &slsm.slsm_proctable[i];
+		LIST_FOREACH(slsp, bucket, slsp_procs) {
+			printf("Bucket %d, PID %ld\n", i, (long) slsp->slsp_pid);
+		}
+	}
+
 }
 
 struct sls_process *
-slsp_find(int id)
+slsp_find(pid_t pid)
 {
+    struct sls_process *slsp;
+    struct slsp_list *bucket;
+
+    bucket = &slsm.slsm_proctable[pid & slsm.slsm_procmask];
+
+    LIST_FOREACH(slsp, bucket, slsp_procs) {
+	if (slsp->slsp_pid == pid)
+	    return slsp;
+    }
+
+    return NULL;
+}
+
+void
+slsp_delall(void)
+{
+	u_long hashmask;
+	struct slsp_list *bucket;
 	struct sls_process *slsp;
+	int i;
 
-	TAILQ_FOREACH(slsp, &sls_procs, slsp_procs) {
-	    if (slsp->slsp_id == id)
-		return slsp;
+	hashmask = slsm.slsm_procmask;
+	for (i = 0; i <= hashmask; i++) {
+		bucket = &slsm.slsm_proctable[i];
+		while (!LIST_EMPTY(bucket)) {
+			slsp = LIST_FIRST(bucket);
+			printf("Removing snapshots of process %ld\n", (long) slsp->slsp_pid);
+			LIST_REMOVE(slsp, slsp_procs);
+			slsp_fini(slsp);
+		}
 	}
 
-	return NULL;
-}
-
-void
-slsp_delete_all(void)
-{
-	struct sls_process *slsp, *prev = NULL;
-
-	TAILQ_FOREACH(slsp, &sls_procs, slsp_procs) {
-	    if (prev != NULL)
-		slsp_fini(prev);
-	    TAILQ_REMOVE(&sls_procs, slsp, slsp_procs);
-	    prev = slsp;
-	}
-
-	if (prev != NULL)
-	    slsp_fini(prev);
-}
-
-void
-slsp_addpage_noreplace(struct sls_process *slsp, struct dump_page *new_entry)
-{
-	struct page_list *page_bucket;
-	struct dump_page *page_entry;
-	vm_offset_t vaddr;
-	int already_there;
-	u_long hashmask;
-
-	vaddr = new_entry->vaddr;
-	hashmask = slsp->slsp_hashmask;
-	page_bucket = &slsp->slsp_pages[vaddr & hashmask];
-
-	already_there = 0;
-	LIST_FOREACH(page_entry, page_bucket, next) {
-	    if(page_entry->vaddr == new_entry->vaddr) {
-		free(new_entry->data, M_SLSMM);
-		free(new_entry, M_SLSMM);
-		already_there = 1;
-		break;
-	    }
-	}
-
-	if (already_there == 0) {
-	    LIST_INSERT_HEAD(page_bucket, new_entry, next);
-	    slsp->slsp_pagecount++;
-	}
-}
-
-void
-slsp_addpage_replace(struct sls_process *slsp, struct dump_page *new_entry)
-{
-	struct page_list *page_bucket;
-	struct dump_page *page_entry;
-	vm_offset_t vaddr;
-	u_long hashmask;
-
-	vaddr = new_entry->vaddr;
-	hashmask = slsp->slsp_hashmask;
-	page_bucket = &slsp->slsp_pages[vaddr & hashmask];
-
-	LIST_FOREACH(page_entry, page_bucket, next) {
-	    if(page_entry->vaddr == new_entry->vaddr) {
-		LIST_REMOVE(page_entry, next);
-		free(page_entry->data, M_SLSMM);
-		free(page_entry, M_SLSMM);
-		slsp->slsp_pagecount--;
-		break;
-	    }
-	}
-
-	LIST_INSERT_HEAD(page_bucket, new_entry, next);
-	slsp->slsp_pagecount++;
+	hashdestroy(slsm.slsm_proctable, M_SLSMM, slsm.slsm_procmask);
 }

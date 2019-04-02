@@ -31,7 +31,7 @@
 #include "copied_fd.h"
 
 static int
-file_checkpoint(struct proc *p, struct file *file, struct file_info *info, int fd)
+file_ckpt(struct proc *p, struct file *file, struct file_info *info, int fd)
 {
 	int error;
 	char *filename = NULL;
@@ -62,7 +62,7 @@ file_checkpoint(struct proc *p, struct file *file, struct file_info *info, int f
 
 /* Roughly follow the kern_openat syscall */
 static int
-file_restore(struct proc *p, struct filedesc *filedesc, struct file_info *info)
+file_rest(struct proc *p, struct filedesc *filedesc, struct file_info *info)
 {
 	struct nameidata backing_file;
 	struct file *file;
@@ -121,7 +121,7 @@ file_restore(struct proc *p, struct filedesc *filedesc, struct file_info *info)
 }
 
 int
-fd_checkpoint(struct proc *p, struct filedesc_info *filedesc_info)
+fd_ckpt(struct proc *p, struct filedesc_info *filedesc_info)
 {
 	int i;
 	char *cdir_path = NULL, *rdir_path = NULL;
@@ -149,7 +149,7 @@ fd_checkpoint(struct proc *p, struct filedesc_info *filedesc_info)
 	PROC_LOCK(p);
 	if (error) {
 	    printf("Error: cdir vnode_to_filename failed with code %d\n", error);
-	    goto fd_checkpoint_error;
+	    goto fd_ckpt_error;
 	}
 	filedesc_info->cdir= cdir_path;
 	filedesc_info->cdir_len = cdir_len;
@@ -160,7 +160,7 @@ fd_checkpoint(struct proc *p, struct filedesc_info *filedesc_info)
 	PROC_LOCK(p);
 	if (error) {
 	    printf("Error: rdir vnode_to_filename failed with code %d\n", error);
-	    goto fd_checkpoint_error;
+	    goto fd_ckpt_error;
 	}
 	filedesc_info->rdir= rdir_path;
 	filedesc_info->rdir_len = rdir_len;
@@ -183,7 +183,7 @@ fd_checkpoint(struct proc *p, struct filedesc_info *filedesc_info)
 
 	    index = filedesc_info->num_files;
 
-	    if(!file_checkpoint(p, fp, &infos[index], i))
+	    if(!file_ckpt(p, fp, &infos[index], i))
 		filedesc_info->num_files++;
 	    else
 		printf("file checkpointing for %d failed\n", i);
@@ -198,7 +198,7 @@ fd_checkpoint(struct proc *p, struct filedesc_info *filedesc_info)
 
 
 	return 0;
-fd_checkpoint_error:
+fd_ckpt_error:
 
 	vdrop(cdir);
 	vdrop(rdir);
@@ -212,7 +212,7 @@ fd_checkpoint_error:
 }
 
 int
-fd_restore(struct proc *p, struct filedesc_info *info)
+fd_rest(struct proc *p, struct filedesc_info *info)
 {
 	struct vnode *cdir, *rdir;
 	struct vnode *old_cdir, *old_rdir;
@@ -263,7 +263,7 @@ fd_restore(struct proc *p, struct filedesc_info *info)
 
 	/* XXX close previous files */
 	for (i = 0; i < info->num_files; i++) {
-	    file_restore(p, fdp, &infos[i]);
+	    file_rest(p, fdp, &infos[i]);
 	}
 
 	FILEDESC_XUNLOCK(fdp);
