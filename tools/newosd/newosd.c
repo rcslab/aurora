@@ -2,6 +2,7 @@
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/disk.h>
 
 #include <fcntl.h>
 #include <getopt.h>
@@ -17,38 +18,37 @@
 static int fd;
 static uint32_t bsize = 0;
 static uint64_t size = 0;
-static struct slsosd sb;
+struct slsosd *sb;
 
 int
 write_sb()
 {
 	int status;
+	sb = (struct slsosd *)calloc(1, bsize);
 
-	memset(&sb, 0, sizeof(sb));
+	sb->osd_magic = SLSOSD_MAGIC;
+	sb->osd_majver = SLSOSD_MAJOR_VERSION;
+	sb->osd_minver = SLSOSD_MINOR_VERSION;
 
-	sb.osd_magic = SLSOSD_MAGIC;
-	sb.osd_majver = SLSOSD_MAJOR_VERSION;
-	sb.osd_minver = SLSOSD_MINOR_VERSION;
-
-	uuid_create(&sb.osd_uuid, &status);
+	uuid_create(&sb->osd_uuid, &status);
 	if (status != uuid_s_ok) {
 		fprintf(stderr, "Failed to generate a UUID\n");
 		return -1;
 	}
 
-	sb.osd_bsize = bsize;
-	sb.osd_asize = bsize;
-	sb.osd_size = size / bsize;
+	sb->osd_bsize = bsize;
+	sb->osd_asize = bsize;
+	sb->osd_size = size / bsize;
 
 	/*
 	 * Reserve 0.1% of blocks for inodes
 	 */
-	sb.osd_numinodes = sb.osd_size / 1000;
+	sb->osd_numinodes = sb->osd_size / 1000;
 	/*
 	 * Number of available blocks is the total number of blocks
 	 * minus the blocks reserved for superblock and free bitmap.
 	 */
-	sb.osd_numblks = sb.osd_size - 1;
+	sb->osd_numblks = sb->osd_size - 1;
 	/*
 	 * First block is the superblock, second is the allocation bitmap.  
 	 * Allocation bitmap contains one byte per block and contains a byte
@@ -57,15 +57,15 @@ write_sb()
 	 * to manage allocation of both the inodes and the disk blocks.  The 
 	 * file system needs to start at the correct offset on the disk.
 	 */
-	sb.osd_allocoff.ptr_offset = bsize;
-	sb.osd_inodeoff.ptr_offset = bsize*2 + ((sb.osd_size + bsize - 1)/bsize)*bsize;
-	sb.osd_firstblk.ptr_offset = sb.osd_inodeoff.ptr_offset + sb.osd_numinodes*bsize;
+	sb->osd_allocoff.ptr_offset = bsize;
+	sb->osd_inodeoff.ptr_offset = bsize*2 + ((sb->osd_size + bsize - 1)/bsize)*bsize;
+	sb->osd_firstblk.ptr_offset = sb->osd_inodeoff.ptr_offset + sb->osd_numinodes*bsize;
 	// Adjust the number of free blocks;
-	sb.osd_numblks = sb.osd_size - sb.osd_firstblk.ptr_offset/bsize;
+	sb->osd_numblks = sb->osd_size - sb->osd_firstblk.ptr_offset/bsize;
 
-	status = pwrite(fd, &sb, sizeof(sb), 0);
+	status = pwrite(fd, sb, bsize, 0);
 	if (status < 0) {
-		perror("pwrite");
+		perror("pwritesb");
 		return -1;
 	}
 
@@ -77,13 +77,13 @@ write_bitmap()
 {
 	int status;
 	char zeroblk[bsize];
-	uint64_t bmapsize = ((sb.osd_size + bsize - 1)/bsize);
+	uint64_t bmapsize = ((sb->osd_size + bsize - 1)/bsize);
 
 	memset(&zeroblk, 0, bsize);
 
 	for (uint64_t i = 0; i < bmapsize; i++) {
 		status = pwrite(fd, &zeroblk, bsize,
-		    sb.osd_allocoff.ptr_offset + i*bsize);
+		    sb->osd_allocoff.ptr_offset + i*bsize);
 		if (status < 0) {
 			perror("pwrite");
 			return -1;
@@ -97,7 +97,7 @@ int
 main(int argc, const char *argv[])
 {
 	int status;
-	struct stat sb;
+	struct stat st;
 
 	if (argc != 2) {
 		printf("Usage: %s DEVICE\n", argv[0]);
@@ -110,18 +110,43 @@ main(int argc, const char *argv[])
 		exit(1);
 	}
 
-	status = fstat(fd, &sb);
+	status = fstat(fd, &st);
 	if (status < 0) {
 		perror("lstat");
 		exit(1);
 	}
 
-	if (!bsize || bsize < sb.st_blksize) {
-		bsize = sb.st_blksize;
+	if (!bsize || bsize < st.st_blksize) {
+		bsize = st.st_blksize;
 	}
 
-	if (!size || size < sb.st_size) {
-		size = sb.st_size;
+	if (S_ISCHR(st.st_mode)) {
+		int sectorsize;
+		off_t disksize;
+
+		if (ioctl(fd, DIOCGSECTORSIZE, &sectorsize) < 0) {
+			perror("ioctl(DIOCGSECTORSIZE)");
+			exit(1);
+		}
+
+		if (ioctl(fd, DIOCGMEDIASIZE, &disksize) < 0) {
+			perror("ioctl(DIOGCGMEDIASIZE)");
+			exit(1);
+		}
+
+		if (bsize == 0) {
+			bsize = sectorsize;
+		}
+		if (!size || size < disksize) {
+			size = disksize;
+		}
+	} else if (S_ISREG(st.st_mode)) {
+		if (!size || size < st.st_size) {
+			size = st.st_size;
+		}
+	} else {
+		fprintf(stderr, "You can only create an OSD on a device or file\n");
+		exit(1);
 	}
 
 	printf("Disk Size %luGiB\n", size / (1024*1024*1024));
