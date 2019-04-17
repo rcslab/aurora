@@ -49,6 +49,8 @@ slsp_init(pid_t pid)
     procnew->slsp_ckptd = 0;
     procnew->slsp_vm = NULL;
     procnew->slsp_charge = 0;
+    procnew->slsp_active = 0;
+    procnew->slsp_epoch = 0;
     mtx_init(&procnew->slsp_mtx, "SLS Process", NULL, MTX_DEF);
     LIST_INIT(&procnew->slsp_snaps);
     
@@ -148,6 +150,10 @@ slsp_delall(void)
 	struct sls_process *slsp;
 	int i;
 
+	/* If we never completed initialization, abort*/
+	if (slsm.slsm_proctable == NULL)
+	    return;
+
 	hashmask = slsm.slsm_procmask;
 	for (i = 0; i <= hashmask; i++) {
 		bucket = &slsm.slsm_proctable[i];
@@ -159,5 +165,4 @@ slsp_delall(void)
 		}
 	}
 
-	hashdestroy(slsm.slsm_proctable, M_SLSMM, slsm.slsm_procmask);
 }

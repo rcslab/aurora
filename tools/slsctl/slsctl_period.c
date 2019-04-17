@@ -134,24 +134,19 @@ ckptstop_main(int argc, char* argv[]) {
 	int error;
 	int mode;
 	int type;
-	struct op_param param;
+	struct proc_param param;
 	int type_set;
 	int pid_set;
+	int ret;
 	int opt;
 	char *filename;
 
-	param = (struct op_param) { 
-		.name = NULL,
-		.len = 0,
+	param = (struct proc_param) { 
+		.op = SLS_PROCSTOP,
 		.pid = 0,
-		.op = SLS_CKPT_STOP,
-		.target = SLS_FILE,
-		.mode = SLS_FULL,
-		.period = 0,
-		.iterations = 0,
+		.ret = &ret,
 	};
 	pid_set = 0;
-	type_set = 0;
 
 	while ((opt = getopt_long(argc, argv, "p:", ckptstop_longopts, NULL)) != -1) {
 	    switch (opt) {
@@ -176,7 +171,7 @@ ckptstop_main(int argc, char* argv[]) {
 	}
 
 
-	if (sls_op(&param) < 0)
+	if (sls_proc(&param) < 0)
 	    return 1;
 
 	return 0;

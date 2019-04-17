@@ -5,5 +5,6 @@
 
 int sls_snap(struct snap_param *param);
 int sls_op(struct op_param *param);
+int sls_proc(struct proc_param *param);
 
 #endif

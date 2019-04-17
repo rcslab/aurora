@@ -337,18 +337,18 @@ load_dump_error:
 
 
 static int
-store_pages_file(vm_offset_t vaddr, vm_offset_t vaddr_data, int fd)
+store_pages_file(struct iovec *iov, size_t iovlen, void *vaddrs, int fd)
 {
 	int error; 
 
-	error = file_write(&vaddr, sizeof(vm_offset_t), fd);
+	error = file_write(vaddrs, sizeof(vm_offset_t) * iovlen, fd);
 	if (error != 0) {
 	    printf("Error: writing vm_map_entry_info failed\n");
 	    return error;
 	}
 	
 	/* XXX parallelize the uio, handle superpages */
-	error = file_write((void*) vaddr_data, PAGE_SIZE, fd);
+	error = file_writev(iov, iovlen, fd);
 	if (error != 0)
 	    return error;
 
@@ -374,17 +374,34 @@ store_pages_mem(vm_offset_t vaddr, vm_offset_t vaddr_data,
 	return 0;
 }
 
+static long long total = 0;
 int
 store_pages(struct vmspace *vm, struct sls_store_tgt tgt, int mode)
 {
 	vm_offset_t sentinel = ULONG_MAX;
 	vm_offset_t vaddr, vaddr_data;
+	vm_paddr_t pagerun_start_phys;
 	struct vm_map_entry *entry;
 	struct vm_map *map;
 	vm_offset_t offset;
 	vm_object_t obj;
 	vm_page_t page;
 	int error;
+	struct iovec *iov;
+	vm_offset_t *vaddrs; 
+	struct timespec ts, te;
+	size_t iovlen;
+	vm_offset_t pagerun_start, pagerun_len;
+	size_t curpage_size;
+	int i;
+
+	iov = malloc(sizeof(*iov) * UIO_MAXIOV, M_SLSMM, M_WAITOK);
+	vaddrs = malloc(sizeof(*vaddrs) * UIO_MAXIOV, M_SLSMM, M_WAITOK);
+	iovlen = 0;
+	curpage_size = 0;
+	pagerun_start = 0;
+	pagerun_start_phys = 0;
+	pagerun_len = 0;
 	
 	map = &vm->vm_map;
 	for (entry = map->header.next; entry != &map->header; entry = entry->next) {
@@ -401,20 +418,63 @@ store_pages(struct vmspace *vm, struct sls_store_tgt tgt, int mode)
 		    KASSERT(page != NULL, "page is NULL\n");
 		    
 		    vaddr = IDX_TO_VADDR(page->pindex, entry->start, offset);
+		    curpage_size = 1 << (page->order - 1);
 		    
-		    /* Never fails on amd64, check is here for futureproofing */
-		    vaddr_data = userpage_map(page->phys_addr);
-		    if ((void *) vaddr_data == NULL) {
-			printf("Mapping page failed\n");
-			return error;
+		    if (vaddr == pagerun_start + pagerun_len && 
+			page->phys_addr == pagerun_start_phys + pagerun_len &&
+			pagerun_len < 16 * 1024 * 1024) {
+
+			pagerun_len += curpage_size;
+			continue;
 		    }
 
-		    if (tgt.type == SLS_FILE)
-			error = store_pages_file(vaddr, vaddr_data, tgt.fd);
-		    else
-			error = store_pages_mem(vaddr, vaddr_data, tgt.slss);
+		    if (pagerun_start == 0) {
+			pagerun_start_phys = page->phys_addr;
+			pagerun_start = vaddr;
+			pagerun_len = curpage_size;
+			continue;
+		    }
+
 		    
-		    userpage_unmap(vaddr_data);
+		    /* Never fails on amd64, check is here for futureproofing */
+		    vaddr_data = userpage_map(pagerun_start_phys, pagerun_len);
+		    if ((void *) vaddr_data == NULL) {
+			printf("Mapping page failed\n");
+			free(iov, M_SLSMM);
+			free(vaddrs, M_SLSMM);
+			return ENOMEM;
+		    }
+
+		    vaddrs[iovlen] = vaddr;
+		    iov[iovlen].iov_base = (void *) vaddr_data;
+		    iov[iovlen].iov_len = pagerun_len;
+		    iovlen += 1;
+
+		    if (iovlen == 128) {
+			nanotime(&ts);
+			error = store_pages_file(iov, iovlen, vaddrs, tgt.fd);
+			if (error != 0) {
+			    for (i = 0; i < iovlen; i++)
+				userpage_unmap((vm_offset_t) iov[i].iov_base);
+
+			    free(iov, M_SLSMM);
+			    free(vaddrs, M_SLSMM);
+			    printf("store_pages_file failed with %d\n", error);
+			    return error;
+			}
+			nanotime(&te);
+			total += tonano(te) - tonano(ts);
+
+
+			for (i = 0; i < iovlen; i++)
+			    userpage_unmap((vm_offset_t) iov[i].iov_base);
+
+			iovlen = 0;
+		    }
+		    
+		    pagerun_start = vaddr;
+		    pagerun_start_phys = page->phys_addr;
+		    pagerun_len = curpage_size;
 		}
 
 		if (mode == SLS_CKPT_DELTA)
@@ -425,8 +485,37 @@ store_pages(struct vmspace *vm, struct sls_store_tgt tgt, int mode)
 	    }
 	}
 
+	vaddr_data = userpage_map(pagerun_start_phys, pagerun_len);
+	if ((void *) vaddr_data == NULL) {
+	    printf("Mapping page failed\n");
+	    free(iov, M_SLSMM);
+	    free(vaddrs, M_SLSMM);
+	    return ENOMEM;
+	}
+
+	vaddrs[iovlen] = pagerun_start;
+	iov[iovlen].iov_base = (void *) vaddr_data;
+	iov[iovlen].iov_len = pagerun_len;
+	iovlen += 1;
+
+	/* Store any leftover pages */
+	error = store_pages_file(iov, iovlen, vaddrs, tgt.fd);
+	for (i = 0; i < iovlen; i++)
+	    userpage_unmap((vm_offset_t) iov[i].iov_base);
+
+
+	free(iov, M_SLSMM);
+	free(vaddrs, M_SLSMM);
+
+	if (error != 0) {
+	    printf("store_pages_file failed with %d\n", error);
+	    return error;
+	}
+
 	if (tgt.type == SLS_MEM)
 	    return 0;
+
+	printf("Total page file writing time: %lld\n", total);
 
 	file_write(&sentinel, sizeof(sentinel), tgt.fd);
 	if (error != 0) {
@@ -553,3 +642,4 @@ store_dump(struct sls_snapshot *slss, int mode, struct vmspace *vm, int fd)
 
 	return 0;
 }
+

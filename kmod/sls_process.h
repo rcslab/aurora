@@ -10,6 +10,8 @@ struct sls_process {
     struct mtx		    slsp_mtx;
     struct vmspace	    *slsp_vm;
     int			    slsp_ckptd;
+    uint64_t		    slsp_epoch;	 /* ID of current checkpoint */
+    uint64_t		    slsp_active; /* Status of continuous checkpoint (can be set from userspace) */
     struct slss_list	    slsp_snaps;
     vm_ooffset_t	    slsp_charge;
     LIST_ENTRY(sls_process) slsp_procs;

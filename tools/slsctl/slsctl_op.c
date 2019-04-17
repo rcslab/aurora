@@ -15,6 +15,7 @@ static struct option checkpoint_longopts[] = {
 	{ "delta", no_argument, NULL, 'd' },
 	{ "file", required_argument, NULL, 'f' },
 	{ "memory", no_argument, NULL, 'm' },
+	{ "osd", no_argument, NULL, 'o' },
 	{ "pid", required_argument, NULL, 'p' },
 	{ NULL, no_argument, NULL, 0 },
 };
@@ -50,7 +51,7 @@ checkpoint_main(int argc, char* argv[]) {
 	pid_set = 0;
 	target_set = 0;
 
-	while ((opt = getopt_long(argc, argv, "adf:mp:", checkpoint_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "adf:mop:", checkpoint_longopts, NULL)) != -1) {
 	    switch (opt) {
 	    case 'd':
 		param.mode = SLS_DELTA;
@@ -76,6 +77,12 @@ checkpoint_main(int argc, char* argv[]) {
 		param.target = SLS_MEM;
 		target_set = 1;
 		break;
+
+	    case 'o':
+		param.target = SLS_OSD;
+		target_set = 1;
+		break;
+
 	    case 'p':
 		pid_set = 1;
 		param.pid = strtol(optarg, NULL, 10);
@@ -84,6 +91,11 @@ checkpoint_main(int argc, char* argv[]) {
 		checkpoint_usage();
 		return 0;
 	    }
+	}
+
+	if (target_set == 0) {
+	    checkpoint_usage();
+	    return 0;
 	}
 
 	if (pid_set == 0) {

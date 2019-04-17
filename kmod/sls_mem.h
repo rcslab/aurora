@@ -15,7 +15,7 @@
 
 #define SLS_VMSPACE_INFO_MAGIC 0x736c7303
 
-vm_offset_t userpage_map(vm_paddr_t phys_addr);
+vm_offset_t userpage_map(vm_paddr_t phys_addr, size_t order);
 void userpage_unmap(vm_offset_t vaddr);
 
 int vmspace_ckpt(struct proc *p, struct memckpt_info *dump, long mode);

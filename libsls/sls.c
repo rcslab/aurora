@@ -55,3 +55,27 @@ sls_snap(struct snap_param *param)
 	return status;
 
 }
+
+
+int
+sls_proc(struct proc_param *param)
+{
+	int status;
+	int fd;
+
+	fd = open("/dev/sls", O_RDWR);
+	if (fd < 0) {
+		fprintf(stderr, "ERROR: Could not open SLS device: %m");
+		return -1;
+	}
+
+	status = ioctl(fd, SLS_PROC, param);
+	if (status < 0) {
+		fprintf(stderr, "ERROR: SLS proc ioctl failed: %m");
+	}
+
+	close(fd);
+
+	return status;
+
+}

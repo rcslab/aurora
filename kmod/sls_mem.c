@@ -36,9 +36,9 @@ static struct cdev *sls_hpet0 = NULL;
 
 /* Map a user memory area to kernelspace. */
 vm_offset_t
-userpage_map(vm_paddr_t phys_addr)
+userpage_map(vm_paddr_t phys_addr, size_t order)
 {
-	return pmap_map(NULL, phys_addr, phys_addr + PAGE_SIZE,
+	return pmap_map(NULL, phys_addr, phys_addr + (1 << (order - 1)),
 		VM_PROT_READ | VM_PROT_WRITE);
 }
 
@@ -347,7 +347,7 @@ data_rest(struct sls_snapshot *slss, struct vm_map *map, vm_object_t object, str
 
 		VM_OBJECT_WUNLOCK(object);
 
-		addr = userpage_map(new_page->phys_addr);
+		addr = userpage_map(new_page->phys_addr, PAGE_SHIFT + 1);
 		memcpy((void *) addr, (void *) page_entry->data, PAGE_SIZE);
 		userpage_unmap(addr);
 

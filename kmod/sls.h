@@ -1,13 +1,22 @@
 #ifndef _SLS_H_
 #define _SLS_H_
 
+#include <sys/param.h>
+
+#include <sys/fcntl.h>
+#include <sys/stat.h>
+#include <sys/syscallsubr.h>
+#include <sys/vnode.h>
+
 #include <vm/vm.h>
 #include <vm/vm_object.h>
 
 #include "sls_snapshot.h"
 #include "sls_process.h"
+#include "sls_osd.h"
 
-/* XXX Decouple ioctl values from internal values */
+#define BITS_PER_BYTE 8
+
 #define SLS_CKPT_FULL	    0
 #define SLS_CKPT_DELTA	    1
 
@@ -26,6 +35,10 @@ struct sls_metadata {
     struct slsp_list	*slsm_proctable;
     struct slss_list	slsm_snaplist;
     struct cdev		*slsm_cdev;
+    /* OSD Related members */
+    struct vnode	*slsm_osdvp;
+    struct slsosd	*slsm_osd;
+    struct osd_mbmp	*slsm_mbmp;
 };
 
 extern struct sls_metadata slsm;
@@ -48,6 +61,25 @@ inline int
 sls_module_exiting(void)
 {
     return slsm.slsm_exiting;
+}
+
+/* XXX Ugly hack until we find out why VOP_WRITE is crashing on us */
+extern int osdfd;
+/* HACK */
+inline void 
+sls_osdhack()
+{
+	int error;
+	char *osdname = "/dev/stripe/st0";
+
+	error = kern_openat(curthread, AT_FDCWD, osdname,
+	    UIO_SYSSPACE, O_RDWR | O_DIRECT, S_IRWXU);
+	if (error != 0) {
+	    printf("Error: Hardcoded OSD %s could not be opened. Continuing.\n", osdname);
+
+	}
+
+	osdfd = curthread->td_retval[0];
 }
 
 #endif /* _SLS_H_ */

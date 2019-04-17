@@ -26,6 +26,7 @@
 #include <sys/syscallsubr.h>
 #include <sys/time.h>
 #include <sys/uio.h>
+#include <sys/vnode.h>
 
 #include <machine/param.h>
 #include <machine/reg.h>
@@ -43,6 +44,8 @@
 #include "sls_op.h"
 #include "sls_ioctl.h"
 #include "sls_snapshot.h"
+#include "sls_mosd.h"
+#include "path.h"
 
 #include "sls_dump.h"
 
@@ -80,9 +83,11 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	struct op_param *oparam = NULL;
 	struct compose_param *cparam = NULL;
 	struct snap_param *sparam = NULL;
+	struct proc_param *pparam = NULL;
 
 	struct sls_op_args *op_args;
 	struct sls_snapshot *slss;
+	struct sls_process *slsp;
 	struct proc *p = NULL;
 
 	char *snap_name = NULL;
@@ -107,7 +112,7 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		    return EINVAL;
 		}
 
-		if (target != SLS_MEM && target != SLS_FILE) {
+		if (target != SLS_MEM && target != SLS_FILE && target != SLS_OSD) {
 		    printf("Error: Invalid checkpoint fd type %d\n", target);
 		    return EINVAL;
 		}
@@ -238,6 +243,26 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		default:
 		    return EINVAL;
 		}
+
+	    case SLS_PROC:
+		pparam = (struct proc_param *) data;
+
+		/* XXX What happens if it's invalid? */
+		slsp = slsp_add(pparam->pid);
+
+		switch (pparam->op) {
+		case SLS_PROCSTAT:
+		    error = copyout(&slsp->slsp_active, pparam->ret, sizeof(*pparam->ret));
+		    return error;
+
+		case SLS_PROCSTOP:
+		    mtx_lock(&slsp->slsp_mtx);
+		    slsp->slsp_active = 0;
+		    mtx_unlock(&slsp->slsp_mtx);
+		    return 0;
+
+		}
+		
 	}
 
 	return EINVAL;
@@ -306,28 +331,77 @@ static struct cdevsw slsmm_cdevsw = {
 static int
 SLSHandler(struct module *inModule, int inEvent, void *inArg) {
     int error = 0;
+    struct vnode *vp = NULL;
     
     switch (inEvent) {
 	case MOD_LOAD:
-	    slsm.slsm_exiting = 0;
+	    bzero(&slsm, sizeof(slsm));
 
-	    slsm.slsm_lastid = 0;
+
+	    sls_osdhack();
+	    /* TEMP */
+	    /*
+	    error = filename_to_vnode("/root/nvd0", &vp);
+	    if (error != 0) {
+		printf("Error: Could not find OSD\n");
+		return error;
+	    }
+
+	    slsm.slsm_osdvp = vp;
+	    printf("Pointer is %p\n", vp);
+	    */
+	    slsm.slsm_osd = slsosd_import(vp);
+	    if (slsm.slsm_osd == NULL) {
+		bzero(&slsm, sizeof(slsm));
+		printf("Loading OSD failed\n");
+	    } else {
+
+		slsm.slsm_mbmp = mbmp_import(slsm.slsm_osd);
+		if (slsm.slsm_mbmp == NULL) {
+		    printf("Importing bitmap failed\n");
+		    free(slsm.slsm_osd, M_SLSMM);
+		    bzero(&slsm, sizeof(slsm));
+		    return EINVAL;
+		}
+	    }
+
+	    slsm.slsm_proctable = hashinit(HASH_MAX, M_SLSMM, &slsm.slsm_procmask);
+	    LIST_INIT(&slsm.slsm_snaplist);
+
 	    slsm.slsm_cdev = 
 		make_dev(&slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "sls");
-
-	    LIST_INIT(&slsm.slsm_snaplist);
-	    slsm.slsm_proctable = hashinit(HASH_MAX, M_SLSMM, &slsm.slsm_procmask);
-
 	    printf("SLS Loaded.\n");
 	    break;
 
+	/*
+	 * XXX Don't export OSD right now, we
+	 * don't care since we're going to create
+	 * proper mount/unmount code anyway and
+	 * pull it out of here.
+	 */
 	case MOD_UNLOAD:
 
 	    slsm.slsm_exiting = 1;
 
+	    if (slsm.slsm_cdev != NULL)
+		destroy_dev(slsm.slsm_cdev);
+
 	    slsp_delall();
 
-	    destroy_dev(slsm.slsm_cdev);
+	    if (slsm.slsm_proctable != NULL)
+		hashdestroy(slsm.slsm_proctable, M_SLSMM, slsm.slsm_procmask);
+
+	    if (slsm.slsm_osdvp != NULL) {
+		VOP_CLOSE(slsm.slsm_osdvp, FREAD | FWRITE | O_NONBLOCK,
+			curthread->td_proc->p_ucred, curthread);
+		if (VOP_ISLOCKED(slsm.slsm_osdvp)) 
+		    VOP_UNLOCK(slsm.slsm_osdvp, LK_RELEASE);
+	    }
+
+	    if (slsm.slsm_osd != NULL) {
+		mbmp_free(slsm.slsm_mbmp);
+		free(slsm.slsm_osd, M_SLSMM);
+	    }
 
 	    printf("SLS Unloaded.\n");
 	    break;

@@ -57,11 +57,11 @@ write_sb()
 	 * to manage allocation of both the inodes and the disk blocks.  The 
 	 * file system needs to start at the correct offset on the disk.
 	 */
-	sb->osd_allocoff.ptr_offset = bsize;
-	sb->osd_inodeoff.ptr_offset = bsize*2 + ((sb->osd_size + bsize - 1)/bsize)*bsize;
-	sb->osd_firstblk.ptr_offset = sb->osd_inodeoff.ptr_offset + sb->osd_numinodes*bsize;
+	sb->osd_allocoff.ptr_offset = 1;
+	sb->osd_inodeoff.ptr_offset = 2 + ((sb->osd_size + bsize - 1)/bsize);
+	sb->osd_firstblk.ptr_offset = sb->osd_inodeoff.ptr_offset + sb->osd_numinodes;
 	// Adjust the number of free blocks;
-	sb->osd_numblks = sb->osd_size - sb->osd_firstblk.ptr_offset/bsize;
+	sb->osd_numblks = sb->osd_size - sb->osd_firstblk.ptr_offset;
 
 	status = pwrite(fd, sb, bsize, 0);
 	if (status < 0) {
@@ -83,7 +83,7 @@ write_bitmap()
 
 	for (uint64_t i = 0; i < bmapsize; i++) {
 		status = pwrite(fd, &zeroblk, bsize,
-		    sb->osd_allocoff.ptr_offset + i*bsize);
+		    (sb->osd_allocoff.ptr_offset + i)*bsize);
 		if (status < 0) {
 			perror("pwrite");
 			return -1;
