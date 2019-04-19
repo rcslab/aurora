@@ -28,6 +28,7 @@
 #include <sys/uio.h>
 #include <sys/vnode.h>
 
+#include <machine/atomic.h>
 #include <machine/param.h>
 #include <machine/reg.h>
 
@@ -256,9 +257,8 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		    return error;
 
 		case SLS_PROCSTOP:
-		    mtx_lock(&slsp->slsp_mtx);
 		    slsp->slsp_active = 0;
-		    mtx_unlock(&slsp->slsp_mtx);
+		    atomic_set_int(&slsp->slsp_active, 0);
 		    return 0;
 
 		}

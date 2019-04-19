@@ -48,7 +48,6 @@ vnode_to_filename(struct vnode *vp, char **path, size_t *len)
 	vrele(vp);
 	if (error != 0) {
 	    printf("vn_fullpath failed: error %d\n", error);
-	    free(filename, M_SLSMM);
 	    goto vnode_to_filename_error; 
 	}
 

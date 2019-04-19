@@ -51,7 +51,6 @@ slsp_init(pid_t pid)
     procnew->slsp_charge = 0;
     procnew->slsp_active = 0;
     procnew->slsp_epoch = 0;
-    mtx_init(&procnew->slsp_mtx, "SLS Process", NULL, MTX_DEF);
     LIST_INIT(&procnew->slsp_snaps);
     
     LIST_INSERT_HEAD(bucket, procnew, slsp_procs);
@@ -89,7 +88,6 @@ slsp_fini(struct sls_process *slsp)
     if (slsp->slsp_vm != NULL)
 	vmspace_free(slsp->slsp_vm);
 
-    mtx_destroy(&slsp->slsp_mtx);
 }
 
 void

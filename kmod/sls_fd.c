@@ -169,7 +169,6 @@ fd_ckpt(struct proc *p, struct filedesc_info *filedesc_info)
 	filedesc_info->num_files = 0;
 	for (i = 0; i <= filedesc->fd_lastfile; i++) {
 	    if (!fdisused(filedesc, i)) {
-		printf("FD %d unused\n", i);
 		continue;
 	    }
 
@@ -185,8 +184,10 @@ fd_ckpt(struct proc *p, struct filedesc_info *filedesc_info)
 
 	    if(!file_ckpt(p, fp, &infos[index], i))
 		filedesc_info->num_files++;
+	    /*
 	    else
 		printf("file checkpointing for %d failed\n", i);
+	    */
 	}
 
 	vdrop(cdir);

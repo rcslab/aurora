@@ -25,6 +25,7 @@
 #include <sys/time.h>
 #include <sys/uio.h>
 
+#include <machine/atomic.h>
 #include <machine/param.h>
 #include <machine/reg.h>
 
@@ -289,18 +290,14 @@ sls_ckptd(struct sls_op_args *args)
 
     slsp = slsp_add(args->p->p_pid);
 
-    mtx_lock(&slsp->slsp_mtx);
-    slsp->slsp_active = 1;	
-    mtx_unlock(&slsp->slsp_mtx);
+    atomic_set_int(&slsp->slsp_active, 1);
 
     /* XXX Look at possible race conditions more closely */
 
     iter = args->iterations;
     for (i = 0; (iter == 0) || (i < iter); i++) {
-	mtx_lock(&slsp->slsp_mtx);
 
-	if (slsp->slsp_active == 0) {
-	    mtx_unlock(&slsp->slsp_mtx);
+	if (atomic_load_int(&slsp->slsp_active) == 0) {
 	    break;
 	}
 
@@ -309,7 +306,6 @@ sls_ckptd(struct sls_op_args *args)
 	nanotime(&tend);
 
 	slsp->slsp_epoch += 1;
-	mtx_unlock(&slsp->slsp_mtx);
 
 	msec_elapsed = (tonano(tend) - tonano(tstart)) / (1000 * 1000);
 	total_msec += msec_elapsed;
@@ -318,9 +314,7 @@ sls_ckptd(struct sls_op_args *args)
 	    pause_sbt("slscpt", SBT_1MS * msec_left, 0, C_HARDCLOCK | C_CATCH);
     }
 
-    mtx_lock(&slsp->slsp_mtx);
-    slsp->slsp_active = 0;
-    mtx_unlock(&slsp->slsp_mtx);
+    atomic_set_int(&slsp->slsp_active, 0);
 
     PRELE(args->p);
 
