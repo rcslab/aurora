@@ -15,16 +15,25 @@
 #include "sls_process.h"
 #include "sls_osd.h"
 
-#define BITS_PER_BYTE 8
 
 #define SLS_CKPT_FULL	    0
 #define SLS_CKPT_DELTA	    1
 
 
 /* Benchmarking structures XXX improve/streamline somehow */
-#define SLS_LOG_SLOTS	    9
-#define SLS_LOG_ENTRIES	    10000
+#define SLSLOG_PROC	    0
+#define SLSLOG_MEM	    1
+#define SLSLOG_FILE	    2
+#define SLSLOG_FORK	    3
+#define SLSLOG_COMPACT	    4
+#define SLSLOG_CKPT	    5
+#define SLSLOG_DUMP	    6
+#define SLS_LOG_SLOTS	    7
+#define SLS_LOG_ENTRIES	    (1024 * 128)
 #define SLS_LOG_BUFFER	    1024
+
+
+extern size_t sls_contig_limit;
 
 struct sls_metadata {
     long		slsm_log[SLS_LOG_SLOTS][SLS_LOG_ENTRIES];
@@ -57,6 +66,13 @@ sls_log(int type, int value)
     slsm.slsm_log[type][slsm.slsm_log_counter] = value;
 }
 
+inline void
+sls_log_new(void)
+{
+    slsm.slsm_log_counter++;
+}
+
+
 inline int
 sls_module_exiting(void)
 {
@@ -70,7 +86,7 @@ inline void
 sls_osdhack()
 {
 	int error;
-	char *osdname = "/dev/stripe/st0";
+	char *osdname = "/root/st0";
 
 	error = kern_openat(curthread, AT_FDCWD, osdname,
 	    UIO_SYSSPACE, O_RDWR | O_DIRECT, S_IRWXU);
@@ -81,6 +97,20 @@ sls_osdhack()
 
 	osdfd = curthread->td_retval[0];
 }
+
+#define SLS_DEBUG
+
+#ifdef SLS_DEBUG
+#define SLS_DBG(fmt, ...) do {			    \
+    printf("(%s: Line %d) ", __FILE__, __LINE__);   \
+    printf(fmt, ##__VA_ARGS__);			    \
+    } while (0) 
+#define sls_tmp(fmt, ...) printf(fmt, ##__VA_ARGS__)
+#else
+#define SLS_DBG(fmt, ...) 
+#define sls_tmp(fmt, ...) panic("debug printf not removed")
+#endif /* SLS_DEBUG */
+
 
 #endif /* _SLS_H_ */
 

@@ -24,7 +24,7 @@ static struct option ckptstart_longopts[] = {
 void
 ckptstart_usage(void)
 {
-    printf("Usage: slsctl ckptstart -p pid -t <period> [-n iterations]<-f <filename> | -m>[-d]\n");
+    printf("Usage: slsctl ckptstart -p pid -t <period> [-n iterations]<-f <filename> | -m | -o>[-d]\n");
 }
 
 int
@@ -52,7 +52,7 @@ ckptstart_main(int argc, char* argv[]) {
 	pid_set = 0;
 	type_set = 0;
 
-	while ((opt = getopt_long(argc, argv, "adf:mn:p:t:", ckptstart_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "adf:mn:op:t:", ckptstart_longopts, NULL)) != -1) {
 	    switch (opt) {
 	    case 'd':
 		param.mode = SLS_DELTA;
@@ -80,6 +80,15 @@ ckptstart_main(int argc, char* argv[]) {
 		break;
 	    case 'n':
 		param.iterations = strtol(optarg, NULL, 10);
+		break;
+	    case 'o':
+		if (type_set == 1) {
+		    ckptstart_usage();
+		    return 0;
+		}
+		param.target = SLS_OSD;
+
+		type_set = 1;
 		break;
 	    case 'p':
 		pid_set = 1;

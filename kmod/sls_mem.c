@@ -36,9 +36,9 @@ static struct cdev *sls_hpet0 = NULL;
 
 /* Map a user memory area to kernelspace. */
 vm_offset_t
-userpage_map(vm_paddr_t phys_addr, size_t order)
+userpage_map(vm_paddr_t phys_addr, size_t len)
 {
-	return pmap_map(NULL, phys_addr, phys_addr + (1 << (order - 1)),
+	return pmap_map(NULL, phys_addr, phys_addr + len,
 		VM_PROT_READ | VM_PROT_WRITE);
 }
 
@@ -67,9 +67,8 @@ vm_object_ckpt(struct proc *p, vm_object_t obj, struct vm_object_info **obj_info
 {
 	vm_object_t o;
 	struct vm_object_info *cur_obj;
-	char *filepath;
-	size_t filepath_len;
 	struct vnode *vp;
+	struct sbuf *sb;
 	int error;
 
 	cur_obj = malloc(sizeof(*cur_obj), M_SLSMM, M_NOWAIT);
@@ -81,8 +80,7 @@ vm_object_ckpt(struct proc *p, vm_object_t obj, struct vm_object_info **obj_info
 	cur_obj->id = (vm_offset_t) obj;
 	cur_obj->backer = 0;
 	cur_obj->backer_off = obj->backing_object_offset;
-	cur_obj->filename_len = 0;
-	cur_obj->filename = NULL;
+	cur_obj->path = NULL;
 	cur_obj->magic = SLS_OBJECT_INFO_MAGIC;
 
 	/* Get the total backing offset for the deepest non-anonymous object */
@@ -107,16 +105,15 @@ vm_object_ckpt(struct proc *p, vm_object_t obj, struct vm_object_info **obj_info
 	    vp = (struct vnode *) obj->handle;
 
 	    PROC_UNLOCK(p);
-	    error = vnode_to_filename(vp, &filepath, &filepath_len);
+	    error = sls_vn_to_path(vp, &sb);
 	    PROC_LOCK(p);
 	    if (error) {
-		printf("vnode_to_filename failed with code %d\n", error);
 		free(cur_obj, M_SLSMM);
+		*obj_info = NULL;
 		return error;
 	    }
 
-	    cur_obj->filename_len = filepath_len;
-	    cur_obj->filename = filepath;
+	    cur_obj->path = sb; 
 
 	} else if (obj->type == OBJT_DEVICE) {
 	    /* 
@@ -225,10 +222,10 @@ vm_object_rest(struct proc *p, struct vm_map_entry_info *entry, vm_object_t back
 	    case OBJT_VNODE:
 
 		PROC_UNLOCK(curthread->td_proc);
-		error = filename_to_vnode(obj_info->filename, &vp);
+		error = sls_path_to_vn(obj_info->path, &vp);
 		PROC_LOCK(curthread->td_proc);
 		if (error) {
-		    printf("Error: filename_to_vnode failed with %d\n", error);
+		    printf("Error: sls_path_to_vn failed with %d\n", error);
 		    return NULL;
 		}
 
@@ -347,7 +344,7 @@ data_rest(struct sls_snapshot *slss, struct vm_map *map, vm_object_t object, str
 
 		VM_OBJECT_WUNLOCK(object);
 
-		addr = userpage_map(new_page->phys_addr, PAGE_SHIFT + 1);
+		addr = userpage_map(new_page->phys_addr, PAGE_SIZE);
 		memcpy((void *) addr, (void *) page_entry->data, PAGE_SIZE);
 		userpage_unmap(addr);
 

@@ -1,7 +1,7 @@
 #ifndef _PATH_H_
 #define _PATH_H_
 
-int vnode_to_filename(struct vnode *vp, char **path, size_t *len);
-int filename_to_vnode(char *path, struct vnode **vp);
+int sls_path_to_vn(struct sbuf *sb, struct vnode **vpp);
+int sls_vn_to_path(struct vnode *vp, struct sbuf **sb);
 
 #endif /* _PATH_H_ */

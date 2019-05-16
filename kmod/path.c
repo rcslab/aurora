@@ -9,6 +9,7 @@
 #include <sys/param.h>
 #include <sys/proc.h>
 #include <sys/rwlock.h>
+#include <sys/sbuf.h>
 #include <sys/shm.h>
 #include <sys/vnode.h>
 
@@ -26,64 +27,66 @@
 #include "path.h"
 
 int
-vnode_to_filename(struct vnode *vp, char **path, size_t *len)
+sls_vn_to_path(struct vnode *vp, struct sbuf **sbp)
 {
-	char *filename = NULL;
 	char *freebuf = NULL;
 	char *retbuf = "error";
-	int filename_len;
+	struct sbuf *sb;
+	int len;
 	int error;
 
-	*path = NULL;
-	*len = 0;
-
-	filename = malloc(PATH_MAX, M_SLSMM, M_NOWAIT);
-	if (filename == NULL) {
-	    error = ENOMEM;
-	    goto vnode_to_filename_error; 
-	}
+	sb = sbuf_new_auto();
+	if (sb == NULL)
+	    return ENOMEM;
 
 	vref(vp);
 	error = vn_fullpath(curthread, vp, &retbuf, &freebuf);
 	vrele(vp);
-	if (error != 0) {
-	    printf("vn_fullpath failed: error %d\n", error);
+	if (error != 0)
 	    goto vnode_to_filename_error; 
-	}
 
-	/* 
-	* If this seems weird, it's because that's how vn_fullpath is supposed
-	* to work. 
-	*/
-	filename_len = strnlen(retbuf, PATH_MAX);
-	strncpy(filename, retbuf, filename_len);
-	filename[filename_len++] = '\0';
+	len = strnlen(retbuf, PATH_MAX);
+	error = sbuf_bcpy(sb, retbuf, len);
+	if (error != 0)
+	    goto vnode_to_filename_error;
+
+	error = sbuf_bcat(sb, "\0", 1);
+	if (error != 0)
+	    goto vnode_to_filename_error;
+
+	error = sbuf_finish(sb);
+	if (error != 0)
+	    goto vnode_to_filename_error;
+
+	*sbp = sb;
+
 	free(freebuf, M_TEMP);
-
-	*path = filename;
-	*len = filename_len;
 
 	return 0;
 
 vnode_to_filename_error:
 
-	free(filename, M_SLSMM);
+	sbuf_delete(sb);
+	free(freebuf, M_TEMP);
 
 	return error;
 }
 
 int
-filename_to_vnode(char *path, struct vnode **vpp)
+sls_path_to_vn(struct sbuf *sb, struct vnode **vpp)
 {
 	struct nameidata backing_file;
+	char *path;
 	int error;
+
+	path = sbuf_data(sb);
+	printf("path: %s\n", path);
 
 	NDINIT(&backing_file, LOOKUP, FOLLOW, UIO_SYSSPACE, path, curthread);
 	error = namei(&backing_file);
-	if (error) {
-	    printf("Error: namei for path failed with %d\n", error);
+	if (error != 0)
 	    return error;
-	}
+
 	*vpp = backing_file.ni_vp;
 
 	/* It's a no-op I think, since we don't pass SAVENAME */

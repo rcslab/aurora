@@ -91,7 +91,6 @@ file_write(void* addr, size_t len, int fd)
 	if (error) {
 		printf("Error: kern_writev failed with code %d\n", error);
 	}
-	sls_log(7, len);
 
 	return error;
 }
@@ -124,7 +123,6 @@ file_writev(struct iovec *iov, size_t iovlen, int fd)
 	if (error) {
 		printf("Error: kern_writev failed with code %d\n", error);
 	}
-	sls_log(7, size);
 
 	return error;
 }

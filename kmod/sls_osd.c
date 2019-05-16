@@ -50,7 +50,6 @@ static int times_called = 0;
 /* Fuck it, start right after the super*/
 uint64_t curblk = 1;
 
-static long long total = 0;
 /* 
  * TODO: Connect the pages full of vaddr to the mino 
  * (this is where we weld the abstractions we discussed).
@@ -107,6 +106,10 @@ store_pages_osd(struct osd_mbmp *mbmp, struct iovec *iov, size_t iovlen, void *v
 
 	/* 8MB transfers */
 	blkrange = 4096;
+
+	/* Wrap around */
+	if (curblk > 100 * 2 * 1024 * 1024)
+	    curblk = 1024;
 
 	block = curblk;
 	curblk += blkrange;
@@ -167,7 +170,6 @@ osd_store(struct osd_mino *mino, struct vmspace *vm, int mode)
 	vm_paddr_t pagerun_start_phys;
 	struct iovec *iov;
 	vm_offset_t *vaddrs; 
-	struct timespec ts, te;
 	size_t iovlen;
 	vm_offset_t pagerun_start, pagerun_len;
 	size_t curpage_size;
@@ -211,7 +213,7 @@ osd_store(struct osd_mino *mino, struct vmspace *vm, int mode)
 		     */
 		    if (vaddr == pagerun_start + pagerun_len && 
 			page->phys_addr == pagerun_start_phys + pagerun_len &&
-			pagerun_len < 16 * 1024 * 1024) {
+			pagerun_len < 2 * 1024 * 1024) {
 
 			pagerun_len += curpage_size;
 			continue;
@@ -249,7 +251,6 @@ osd_store(struct osd_mino *mino, struct vmspace *vm, int mode)
 		     * of them in the IO vector.
 		     */
 		    if (iovlen == 128) {
-			nanotime(&ts);
 			/*
 			store_pages_osd(mino->mino_mbmp, iov, iovlen, vaddrs);
 			*/
@@ -257,8 +258,6 @@ osd_store(struct osd_mino *mino, struct vmspace *vm, int mode)
 			for (int i = 0; i < iovlen; i++)
 				curblk += (iov[i].iov_len / mino->mino_mbmp->mbmp_osd->osd_bsize);
 			osd_pwritev(NULL, b, iov, iovlen);
-			nanotime(&te);
-			total += tonano(te) - tonano(ts);
 
 			for (i = 0; i < iovlen; i++)
 			    userpage_unmap((vm_offset_t) iov[i].iov_base);
@@ -305,8 +304,6 @@ osd_store(struct osd_mino *mino, struct vmspace *vm, int mode)
 
 	free(iov, M_SLSMM);
 	free(vaddrs, M_SLSMM);
-
-	printf("Total page file writing time: %lld\n", total);
 	
 	return 0;
 
@@ -320,11 +317,12 @@ osd_dump(struct sls_snapshot *slss, struct vmspace *vm, int mode)
 	struct vm_map_entry_info *entries;
 	struct thread_info *thread_infos;
 	struct file_info *file_infos;
-	size_t cdir_len, rdir_len;
 	struct vm_object_info *cur_obj;
 	int numthreads, numentries, numfiles;
 	struct dump *dump;
 	struct osd_mino *mino;
+	char *path;
+	size_t len;
 
 	/* HACK */
 	size_sent = 0;
@@ -368,22 +366,29 @@ osd_dump(struct sls_snapshot *slss, struct vmspace *vm, int mode)
 	    osd_fillmino(mino, cur_obj, sizeof(*cur_obj), SLSREC_MEMOBJT);
 	}
 
-	cdir_len = dump->filedesc.cdir_len;
-	rdir_len = dump->filedesc.rdir_len;
+	path = sbuf_data(dump->filedesc.cdir);
+	len = sbuf_len(dump->filedesc.cdir);
+	osd_fillmino(mino, path, len, SLSREC_FILENAME);
 
-	osd_fillmino(mino, dump->filedesc.cdir, cdir_len, SLSREC_FILENAME);
-	osd_fillmino(mino, dump->filedesc.rdir, rdir_len, SLSREC_FILENAME);
+	path = sbuf_data(dump->filedesc.rdir);
+	len = sbuf_len(dump->filedesc.rdir);
+	osd_fillmino(mino, path, len, SLSREC_FILENAME);
 
-	for (i = 0; i < numfiles; i++)
-	    osd_fillmino(mino, file_infos[i].filename, 
-		    file_infos[i].filename_len, SLSREC_FILENAME);
+
+	for (i = 0; i < numfiles; i++) {
+	    path = sbuf_data(file_infos[i].path);
+	    len = sbuf_len(file_infos[i].path);
+	    osd_fillmino(mino, path, len, SLSREC_FILENAME);
+	}
 
 	for (i = 0; i < numentries; i++) {
 	    cur_obj = entries[i].obj_info;
 
-	    if (cur_obj != NULL && cur_obj->filename != NULL) 
-		osd_fillmino(mino, cur_obj->filename, 
-		    cur_obj->filename_len, SLSREC_FILENAME);
+	    if (cur_obj != NULL && cur_obj->path != NULL) {
+		path = sbuf_data(cur_obj->path);
+		len = sbuf_len(cur_obj->path);
+		osd_fillmino(mino, path, len, SLSREC_FILENAME);
+	    }
 	}
 
 	error = osd_store(mino, vm, mode);

@@ -72,7 +72,7 @@ slss_init(struct proc *p, int mode)
 {
 	struct sls_snapshot *slss;
 	
-	slss = malloc(sizeof(*slss), M_SLSMM, M_WAITOK);
+	slss = malloc(sizeof(*slss), M_SLSMM, M_WAITOK | M_ZERO);
 	slss->slss_id = slsm.slsm_lastid++;
 
 	mtx_init(&slss->slss_mtx, "slssmtx", NULL, MTX_DEF);
@@ -82,7 +82,10 @@ slss_init(struct proc *p, int mode)
 
 	slss->slss_dump = alloc_dump();
 
-	slss->slss_pid = p->p_pid;
+	if (p != NULL)
+	    slss->slss_pid = p->p_pid;
+	else 
+	    slss->slss_pid = 0;
 	slss->slss_pagecount = 0;
 	slss->slss_mode = mode;
 	slss_init_htable(slss);

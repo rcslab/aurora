@@ -26,9 +26,8 @@ struct sls_store_tgt {
     };
 };
 
-struct sls_snapshot *load_dump(int fd);
-int store_dump(struct sls_snapshot *slss, int mode, struct vmspace *vm, int fd);
-int store_pages(struct vmspace *vm, struct sls_store_tgt tgt, int mode);
+struct sls_snapshot *sls_load(int fd);
+int sls_store(struct sls_snapshot *slss, int mode, struct vmspace *vm, int fd);
 
 int dump_clone(struct dump *dst, struct dump *src);
 int copy_dump_pages(struct dump *dst, struct dump *src);

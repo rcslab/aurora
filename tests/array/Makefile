@@ -1,6 +1,6 @@
 PROG = array
 SRCS = array.c
-CFLAGS += 
+CFLAGS +=
 MAN = 
 
 .include <bsd.prog.mk>

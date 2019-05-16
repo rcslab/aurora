@@ -48,6 +48,9 @@
 #include "sls_snapshot.h"
 #include "sls_mosd.h"
 
+extern int should_be_running;
+extern int current_pid;
+
 static void
 sls_ckpt_dump_init(struct proc *p, struct dump *dump)
 {
@@ -93,6 +96,7 @@ sls_stop_proc(struct proc *p)
 	threads_still_running = 1;
 	while (threads_still_running == 1) {
 	    threads_still_running = 0;
+	    //printf("(%d)\t\tWaiting\n", p->p_pid);
 	    PROC_LOCK(p);
 	    TAILQ_FOREACH(td, &p->p_threads, td_plist) {
 		if (TD_IS_RUNNING(td)) {
@@ -112,27 +116,37 @@ static int
 sls_ckpt(struct proc *p, int mode, struct dump *dump)
 {
 	int error = 0;
+	struct timespec tstart, tend;
 
 	/* Dump the process state */
 	PROC_LOCK(p);
 
+	nanotime(&tstart);
 	error = proc_ckpt(p, &dump->proc, dump->threads);
 	if (error != 0) {
 	    printf("Error: proc_ckpt failed with error code %d\n", error);
 	    goto sls_ckpt_out;
 	}
+	nanotime(&tend);
+	sls_log(SLSLOG_PROC, tonano(tend) - tonano(tstart));
 
+	nanotime(&tstart);
 	error = vmspace_ckpt(p, &dump->memory, mode);
 	if (error != 0) {
 	    printf("Error: vmspace_ckpt failed with error code %d\n", error);
 	    goto sls_ckpt_out;
 	}
+	nanotime(&tend);
+	sls_log(SLSLOG_MEM, tonano(tend) - tonano(tstart));
 
+	nanotime(&tstart);
 	error = fd_ckpt(p, &dump->filedesc);
 	if (error != 0) {
 	    printf("Error: fd_ckpt failed with error code %d\n", error);
 	    goto sls_ckpt_out;
 	}
+	nanotime(&tend);
+	sls_log(SLSLOG_FILE, tonano(tend) - tonano(tstart));
 
 	PROC_UNLOCK(p);
 sls_ckpt_out:
@@ -153,7 +167,7 @@ sls_ckpt_tofile(struct sls_snapshot *slss, struct vmspace *vm,
     if (error != 0)
 	return error;
 
-    error = store_dump(slss, mode, vm, fd);
+    error = sls_store(slss, mode, vm, fd);
     if (error != 0) {
 	printf("Error: dumping dump to descriptor failed with %d\n", error);
     }
@@ -163,18 +177,12 @@ sls_ckpt_tofile(struct sls_snapshot *slss, struct vmspace *vm,
     return error;
 }
 
-/* Dirty hack for breaking down checkpoint time */
-#define SLS_SHADOW_TIME slsm.slsm_log[0][0]
-#define SLS_CKPT_TIME slsm.slsm_log[1][0]
-#define SLS_DUMP_TIME slsm.slsm_log[2][0]
-#define SLS_COMPACT_TIME slsm.slsm_log[3][0]
-
 static
 void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
 {
-    vm_ooffset_t fork_charge, old_charge;
+    vm_ooffset_t fork_charge, new_charge;
     struct timespec tstart, tend;
-    struct vmspace *old_vm;
+    struct vmspace *new_vm;
     struct sls_snapshot *slss;
     struct proc *p;
     int error;
@@ -183,10 +191,13 @@ void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
     p = args->p;
     mode = args->mode;
 
+    /* XXX Change signature, we're not creating stray snapshots anymore */
     slss = sls_ckpt_slss(p, mode);
+    SLS_DBG("Snapshot created\n");
 
     /* This causes the process to get detached from its terminal.*/
     sls_stop_proc(p);
+    SLS_DBG("Process stopped\n");
 
     nanotime(&tstart);
     error = sls_ckpt(p, mode, slss->slss_dump);
@@ -195,31 +206,44 @@ void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
 	return;
     }
     nanotime(&tend);
-    SLS_CKPT_TIME += (tonano(tend) - tonano(tstart)) / (1000 * 1000);
+    sls_log(SLSLOG_CKPT, tonano(tend) - tonano(tstart));
 
 
+    /* XXX Create new option for deep deltas */
+    /*
     old_vm = slsp->slsp_vm;
     old_charge = slsp->slsp_charge;
+    */
 
     fork_charge = 0;
 
     nanotime(&tstart);
-    slsp->slsp_vm = vmspace_fork(p->p_vmspace, &fork_charge);
-    nanotime(&tend);
-    SLS_SHADOW_TIME += (tonano(tend) - tonano(tstart)) / (1000 * 1000);
+    new_vm = vmspace_fork(p->p_vmspace, &fork_charge);
 
-    slsp->slsp_charge = fork_charge;
-    if (slsp->slsp_vm== NULL) {
+    new_charge = fork_charge;
+    /* XXX Code only valid for deep deltas, uncomment when ready */
+    /*
+    if (slsp->slsp_vm == NULL) {
 	printf("Error: Shadowing vmspace failed\n");
 	slss_fini(slss);
 	return;
     }
+    */
 
     if (swap_reserve_by_cred(fork_charge, proc0.p_ucred) == 0) {
 	printf("Error: Could not reserve swap space\n");
 	vmspace_free(slsp->slsp_vm);
 	return;
     }
+    SLS_DBG("New vmspace created\n");
+
+    if (slsp->slsp_ckptd == 0) {
+	slsp->slsp_vm = new_vm;
+	slsp->slsp_charge = new_charge;
+    }
+
+    nanotime(&tend);
+    sls_log(SLSLOG_FORK, tonano(tend) - tonano(tstart));
 
     /* Let the process execute ASAP */
     PROC_LOCK(p);
@@ -228,9 +252,10 @@ void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
 
     if (slsp->slsp_ckptd == 1 && mode == SLS_CKPT_FULL) {
 	nanotime(&tstart);
-	vmspace_free(old_vm);
+	vmspace_free(new_vm);
 	nanotime(&tend);
-	SLS_COMPACT_TIME += (tonano(tend) - tonano(tstart)) / (1000 * 1000);
+	sls_log(SLSLOG_COMPACT, tonano(tend) - tonano(tstart));
+	SLS_DBG("Full compaction complete\n");
     }
 
     nanotime(&tstart);
@@ -240,15 +265,18 @@ void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
 
 	sls_ckpt_tofile(slss, slsp->slsp_vm, mode, args->filename);
 	slss_fini(slss);
+	SLS_DBG("Dumped to file\n");
 	break;
 
     case SLS_MEM:
 	LIST_INSERT_HEAD(&slsm.slsm_snaplist, slss, slss_snaps);
 	LIST_INSERT_HEAD(&slsp->slsp_snaps, slss, slss_procsnaps);
+	SLS_DBG("Dumped to memory\n");
 	break;
 
     case SLS_OSD:
 	osd_dump(slss, slsp->slsp_vm, mode);
+	SLS_DBG("Dumped to OSD\n");
 	break;
 
     default:
@@ -256,19 +284,76 @@ void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
 
     }
     nanotime(&tend);
-    SLS_DUMP_TIME += (tonano(tend) - tonano(tstart)) / (1000 * 1000);
+    sls_log(SLSLOG_DUMP, tonano(tend) - tonano(tstart));
+
 
     if (slsp->slsp_ckptd == 1 && mode == SLS_CKPT_DELTA) {
 	nanotime(&tstart);
-	vmspace_free(old_vm);
+	vmspace_free(new_vm);
 	nanotime(&tend);
-	SLS_COMPACT_TIME += (tonano(tend) - tonano(tstart)) / (1000 * 1000);
+	sls_log(SLSLOG_COMPACT, tonano(tend) - tonano(tstart));
+	SLS_DBG("Delta compaction complete\n");
     }
 
     slsp->slsp_ckptd = 1;
 
 }
 
+static char *sls_log_names[] = {"PROC", "MEM", "FILE", "FORK", "COMPACT", "CKPT", "DUMP"};
+/*
+ * XXX To be refactored later when benchmarking
+ */
+static int
+log_results(void)
+{
+	int error;
+	int logfd;
+	char *buf;
+	int i, j;
+	struct uio auio;
+	struct iovec aiov;
+
+	buf = malloc(SLS_LOG_BUFFER * sizeof(*buf), M_SLSMM, M_NOWAIT);
+	if (buf == NULL)
+	    return ENOMEM;
+
+	error = kern_openat(curthread, AT_FDCWD, "/tmp/sls_benchmark", 
+			    UIO_SYSSPACE, 
+			    O_RDWR | O_CREAT | O_TRUNC, 
+			    S_IRWXU | S_IRWXG | S_IRWXO);
+	if (error != 0) {
+	    printf("Could not log results, error %d", error);
+	    free(buf, M_SLSMM);
+	    return error;
+	}
+
+	logfd = curthread->td_retval[0];
+
+	for (i = 0; i < slsm.slsm_log_counter; i++) {
+	    for (j = 0; j < SLS_LOG_SLOTS; j++) {
+
+		snprintf(buf, 1024, "SLSLOG_%s,%lu\n", sls_log_names[j], slsm.slsm_log[j][i]);
+
+		aiov.iov_base = buf;
+		aiov.iov_len = strnlen(buf, 1024);
+		auio.uio_iov = &aiov;
+		auio.uio_iovcnt = 1;
+		auio.uio_resid = strnlen(buf, 1024);
+		auio.uio_segflg = UIO_SYSSPACE;
+
+		error = kern_writev(curthread, logfd, &auio);
+		if (error != 0)
+		    printf("Writing to file failed with %d\n", error);
+	    }
+
+	}
+
+	kern_close(curthread, logfd);
+	free(buf, M_SLSMM);
+
+	slsm.slsm_log_counter = 0;
+	return 0;
+}
 
 void
 sls_ckptd(struct sls_op_args *args)
@@ -276,56 +361,56 @@ sls_ckptd(struct sls_op_args *args)
     struct timespec tstart, tend;
     struct sls_process *slsp;
     long msec_elapsed, msec_left;
-    long total_msec = 0;
     int iter;
     int i;
 
     /* HACK */
     sls_osdhack();
 
-    SLS_SHADOW_TIME = 0;
-    SLS_CKPT_TIME = 0;
-    SLS_DUMP_TIME = 0;
-    SLS_COMPACT_TIME = 0;
-
     slsp = slsp_add(args->p->p_pid);
 
-    atomic_set_int(&slsp->slsp_active, 1);
+    atomic_store_int(&slsp->slsp_active, 1);
+    atomic_store_int(&should_be_running,  1);
 
-    /* XXX Look at possible race conditions more closely */
+    SLS_DBG("Process active\n");
 
     iter = args->iterations;
     for (i = 0; (iter == 0) || (i < iter); i++) {
 
-	if (atomic_load_int(&slsp->slsp_active) == 0) {
+	if (atomic_load_int(&slsp->slsp_active) == 0)
 	    break;
-	}
+
+    	if(atomic_load_int(&should_be_running) == 0)
+	    break;
 
 	nanotime(&tstart);
 	sls_ckpt_one(args, slsp);
 	nanotime(&tend);
+	SLS_DBG("Checkpointed process once\n");
 
 	slsp->slsp_epoch += 1;
 
 	msec_elapsed = (tonano(tend) - tonano(tstart)) / (1000 * 1000);
-	total_msec += msec_elapsed;
 	msec_left = args->interval - msec_elapsed;
 	if (msec_left > 0)
 	    pause_sbt("slscpt", SBT_1MS * msec_left, 0, C_HARDCLOCK | C_CATCH);
+
+	SLS_DBG("Woke up\n");
+	sls_log_new();
     }
 
-    atomic_set_int(&slsp->slsp_active, 0);
+    SLS_DBG("Stopped checkpointing\n");
+    //atomic_set_int(&slsp->slsp_active, 0);
 
     PRELE(args->p);
+    log_results();
 
     printf("ckpting (iterations: %d) for process %d done.\n", 
 	    iter, args->p->p_pid);
-    printf("Total time needed: %ld msec.\n", total_msec);
-    printf("Total time needed for checkpoints: %ld msec.\n", SLS_CKPT_TIME);
-    printf("Total time needed for shadowing: %ld msec.\n", SLS_SHADOW_TIME);
-    printf("Total time needed for dumping: %ld msec.\n", SLS_DUMP_TIME);
     free(args->filename, M_SLSMM);
     free(args, M_SLSMM);
+    atomic_store_int(&current_pid, 0);
+    atomic_store_int(&should_be_running, 0);
 
     kthread_exit();
 }

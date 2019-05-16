@@ -3,6 +3,7 @@
 
 #include <sys/pcpu.h>
 #include <sys/proc.h>
+#include <sys/sbuf.h>
 
 #include <machine/param.h>
 #include <machine/pcb.h>
@@ -11,6 +12,13 @@
 #include <vm/pmap.h>
 #include <vm/vm.h>
 #include <vm/vm_map.h>
+
+struct sls_string {
+	size_t str_len;
+	char *str_data;
+};
+
+extern const struct sls_string nullstr; 
 
 #define SLS_PROC_INFO_MAGIC 0x736c7301
 struct proc_info {
@@ -56,9 +64,7 @@ struct vm_object_info {
     
 	enum obj_type type;
 
-	/* Used for mmap'd pages */
-	size_t filename_len;
-	char *filename;
+	struct sbuf *path; 
 
 	vm_offset_t id;
 
@@ -108,8 +114,7 @@ struct file_info {
 	* duplication when doing vnode to filename conversions and back.
 	*/
 	int fd;
-	char *filename;
-	size_t filename_len;
+	struct sbuf *path;
 
 	short type;
 	u_int flag;
@@ -127,11 +132,9 @@ struct file_info {
 
 #define SLS_FILEDESC_INFO_MAGIC 0x736c7233
 struct filedesc_info {
-	char *cdir;
-	size_t cdir_len;
 
-	char *rdir;
-	size_t rdir_len;
+	struct sbuf *cdir;
+	struct sbuf *rdir;
 	/* TODO jdir */
 
 	u_short fd_cmask;

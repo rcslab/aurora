@@ -54,6 +54,8 @@
 MALLOC_DEFINE(M_SLSMM, "slsmm", "SLSMM");
 
 struct sls_metadata slsm;
+int current_pid = 0;
+int should_be_running = 0;
 
 static struct sls_snapshot * 
 slss_from_file(char *filename)
@@ -70,7 +72,7 @@ slss_from_file(char *filename)
 	return NULL;
     }
 
-    slss = load_dump(fd);
+    slss = sls_load(fd);
     kern_close(curthread, fd);
 
     return slss;
@@ -100,10 +102,20 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	int target;
 	int op;
 
+	int alright; 
 	switch (cmd) {
 	    case SLS_OP:
-
 		oparam = (struct op_param *) data;
+
+	 	alright = atomic_load_int(&current_pid);
+		    /* Abominable hack */
+		if (alright == 0 || alright == oparam->pid) {
+			if (atomic_cmpset_int(&current_pid, alright, oparam->pid) == 0)
+				return EINVAL;
+		} else {
+			return EINVAL;
+		}
+
 
 		target = oparam->target;
 		op = oparam->op;
@@ -172,6 +184,7 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		    op_args->id = oparam->id;
 
 		if (op == SLS_CHECKPOINT) {
+		current_pid = oparam->pid;
 		    error = kthread_add((void(*)(void *)) sls_ckptd, 
 			op_args, NULL, NULL, 0, 0, "sls_checkpointd");
 
@@ -249,7 +262,9 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		pparam = (struct proc_param *) data;
 
 		/* XXX What happens if it's invalid? */
-		slsp = slsp_add(pparam->pid);
+		slsp = slsp_find(pparam->pid);
+		if (slsp == NULL)
+		    return EINVAL;
 
 		switch (pparam->op) {
 		case SLS_PROCSTAT:
@@ -257,8 +272,8 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		    return error;
 
 		case SLS_PROCSTOP:
-		    slsp->slsp_active = 0;
-		    atomic_set_int(&slsp->slsp_active, 0);
+		    atomic_store_int(&should_be_running, 0);
+		    atomic_store_int(&slsp->slsp_active, 0);
 		    return 0;
 
 		}
@@ -269,59 +284,6 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 }
 
 
-/*
- * XXX To be refactored later when benchmarking
- */
-static int
-log_results(int lognum)
-{
-	int error;
-	int logfd;
-	char *buf;
-	int i, j;
-	struct uio auio;
-	struct iovec aiov;
-
-	buf = malloc(SLS_LOG_BUFFER * sizeof(*buf), M_SLSMM, M_NOWAIT);
-	if (buf == NULL)
-	    return ENOMEM;
-
-	error = kern_openat(curthread, AT_FDCWD, "/tmp/sls_benchmark", 
-			    UIO_SYSSPACE, 
-			    O_RDWR | O_CREAT | O_TRUNC, 
-			    S_IRWXU | S_IRWXG | S_IRWXO);
-	if (error != 0) {
-	    printf("Could not log results, error %d", error);
-	    free(buf, M_SLSMM);
-	    return error;
-	}
-
-	logfd = curthread->td_retval[0];
-
-	for (i = 0; i < lognum; i++) {
-	    for (j = 0; j < 9; j++) {
-
-		snprintf(buf, 1024, "%u,%lu\n", j, slsm.slsm_log[j][i]);
-
-		aiov.iov_base = buf;
-		aiov.iov_len = strnlen(buf, 1024);
-		auio.uio_iov = &aiov;
-		auio.uio_iovcnt = 1;
-		auio.uio_resid = strnlen(buf, 1024);
-		auio.uio_segflg = UIO_SYSSPACE;
-
-		error = kern_writev(curthread, logfd, &auio);
-		if (error != 0)
-		    printf("Writing to file failed with %d\n", error);
-	    }
-
-	}
-
-	kern_close(curthread, logfd);
-	free(buf, M_SLSMM);
-
-	return 0;
-}
 
 static struct cdevsw slsmm_cdevsw = {
     .d_version = D_VERSION,
@@ -336,7 +298,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
     switch (inEvent) {
 	case MOD_LOAD:
 	    bzero(&slsm, sizeof(slsm));
-
 
 	    sls_osdhack();
 	    /* TEMP */
@@ -370,6 +331,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 
 	    slsm.slsm_cdev = 
 		make_dev(&slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "sls");
+
 	    printf("SLS Loaded.\n");
 	    break;
 

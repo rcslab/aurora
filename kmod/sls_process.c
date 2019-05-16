@@ -35,6 +35,7 @@
 #include "sls_snapshot.h"
 #include "sls_process.h"
 
+
 static struct sls_process *
 slsp_init(pid_t pid)
 {
@@ -54,6 +55,7 @@ slsp_init(pid_t pid)
     LIST_INIT(&procnew->slsp_snaps);
     
     LIST_INSERT_HEAD(bucket, procnew, slsp_procs);
+    printf("Returning the slsp\n");
 
     return procnew;
 }
@@ -62,6 +64,8 @@ struct sls_process *
 slsp_add(pid_t pid)
 {
     struct sls_process *slsp;
+
+
 
     slsp = slsp_find(pid);
     if (slsp != NULL)
