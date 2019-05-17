@@ -28,16 +28,6 @@ struct compose_param {
 	int	*id;
 };
 
-/*
- * SLS In-Memory Dump Operation
- *
- * An operation that acts on the dumps that exist in memory.
- */
-struct snap_param {
-	int	    op;		    /* Operation code (list, delete, etc.) */
-	int	    id;		    /* ID of dump (if applicable) */
-};
-
 struct proc_param {
 	int	    op;		    /* Operation code (status, stop, etc.) */
 	pid_t	    pid;	    /* PID of process */
@@ -46,8 +36,6 @@ struct proc_param {
 
 #define SLS_OP			_IOWR('d', 1, struct op_param)
 #define SLS_FLUSH_COUNT		_IOR('d', 3, int)
-#define SLS_COMPOSE		_IOWR('d', 5, struct compose_param)
-#define SLS_SNAP		_IOWR('d', 6, struct snap_param)
 #define SLS_PROC		_IOWR('d', 7, struct proc_param)
 
 /* 
@@ -61,12 +49,6 @@ struct proc_param {
 #define SLS_CHECKPOINT		0   /* Checkpoint (One-off) */
 #define SLS_RESTORE		1   /* Restore */
 #define SLS_CKPT_STOP		2   /* Stop periodic checkpointing */
-
-/*
- * Opcodes for SLS_SLSS
- */
-#define SLS_SNAPLIST		0   /* List all active in-memory dumps */
-#define SLS_SNAPDEL		1   /* Delete dump by ID if it exists */
 
 /*
  * Opcodes for SLS_SLSP

@@ -4,6 +4,7 @@
 
 #include <fcntl.h>
 #include <getopt.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -138,30 +139,15 @@ ckptstop_usage(void)
 }
 
 int
-ckptstop_main(int argc, char* argv[]) {
-	int pid;
-	int error;
-	int mode;
-	int type;
-	struct proc_param param;
-	int type_set;
-	int pid_set;
-	int ret;
+ckptstop_main(int argc, char* argv[])
+{
+	int pid = -1;
 	int opt;
-	char *filename;
-
-	param = (struct proc_param) { 
-		.op = SLS_PROCSTOP,
-		.pid = 0,
-		.ret = &ret,
-	};
-	pid_set = 0;
 
 	while ((opt = getopt_long(argc, argv, "p:", ckptstop_longopts, NULL)) != -1) {
 	    switch (opt) {
 	    case 'p':
-		pid_set = 1;
-		param.pid = strtol(optarg, NULL, 10);
+		pid = strtol(optarg, NULL, 10);
 		break;
 	    default:
 		ckptstop_usage();
@@ -169,20 +155,13 @@ ckptstop_main(int argc, char* argv[]) {
 	    }
 	}
 
-	if (pid_set == 0) {
+	if (optind != argc || pid == -1) {
 	    ckptstop_usage();
 	    return 0;
 	}
 
-	if (optind != argc) {
-	    ckptstop_usage();
-	    return 0;
-	}
-
-
-	if (sls_proc(&param) < 0)
+	if (sls_detach(pid) < 0)
 	    return 1;
 
 	return 0;
-
 }

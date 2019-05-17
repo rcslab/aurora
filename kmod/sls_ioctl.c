@@ -84,8 +84,6 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	int flag __unused, struct thread *td)
 {
 	struct op_param *oparam = NULL;
-	struct compose_param *cparam = NULL;
-	struct snap_param *sparam = NULL;
 	struct proc_param *pparam = NULL;
 
 	struct sls_op_args *op_args;
@@ -96,7 +94,6 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	char *snap_name = NULL;
 	size_t snap_name_len;
 
-	int *ids = NULL;
 	int mode;
 	int error = 0;
 	int target;
@@ -218,45 +215,6 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		kern_thr_exit(curthread);
 
 		return error;
-
-
-	    case SLS_COMPOSE:
-		cparam = (struct compose_param *) data;
-
-		ids = malloc(sizeof(*ids) * cparam->nid, M_SLSMM, M_WAITOK);
-		error = copyin(cparam->id, ids, sizeof(*ids) * cparam->nid);
-		if (error != 0) {
-		    printf("Error: Copying fds failed with %d \n", error);
-		    free(ids, M_SLSMM);
-		    return error;
-		}
-
-		/* 
-		 * XXX Merge page hash tables between snapshots, 
-		 * keep the oldest one. Free the rest.
-		 */
-
-		printf("Warning: Not implemented yet, is a no-op\n");
-
-		free(ids, M_SLSMM);
-
-		return error;
-
-	    case SLS_SNAP:
-		sparam = (struct snap_param *) data;
-
-		switch (sparam->op) {
-		case SLS_SNAPLIST:
-		    slss_listall();
-		    return 0;
-
-		case SLS_SNAPDEL:
-		    slss_delete(sparam->id);
-		    return 0;
-
-		default:
-		    return EINVAL;
-		}
 
 	    case SLS_PROC:
 		pparam = (struct proc_param *) data;

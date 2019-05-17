@@ -2,14 +2,9 @@
 #include <sys/types.h>
 #include <sys/ioctl.h>
 
-#include <fcntl.h>
-#include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-
-#include <sls.h>
 
 #include "slsctl.h"
 
@@ -19,8 +14,6 @@ usage(void)
 	printf("Usage: slsctl <command> [command args]\n");
 	printf("       slsctl checkpoint      -p <PID> <-f <filename> | -m>[-d]\n");
 	printf("       slsctl restore   <-f <filename> | -m id>>\n");
-	printf("       slsctl snaplist\n");
-	printf("       slsctl snapdel -d <id>\n");
 	printf("       slsctl ckptstart -p pid -t <period> [-n iterations]<-f <filename> | -m>[-d]\n");
 	printf("       slsctl ckptstop -p pid\n");
 }
@@ -32,8 +25,6 @@ struct command {
 } commandtable[] = {
 	{ "checkpoint",	&checkpoint_usage,		&checkpoint_main },
 	{ "restore",	&restore_usage,		&restore_main },
-	{ "snaplist",	&snaplist_usage,		&snaplist_main},
-	{ "snapdel",	&snapdel_usage,		&snapdel_main},
 	{ "ckptstart",	&ckptstart_usage,	&ckptstart_main},
 	{ "ckptstop",	&ckptstop_usage,	&ckptstop_main},
 	{ NULL,		NULL,			NULL }

@@ -1,6 +1,6 @@
 
 LIB= sls
-SRCS = sls.c
+SRCS = sls.c sls_private.c
 MAN =
 CFLAGS = -I../include
 

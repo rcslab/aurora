@@ -1,0 +1,47 @@
+.Dd May 17, 2019
+.Dt LIBSLS 3
+.Os Aurora Single-Level Store
+.Sh NAME
+.Nm libsls
+.Nd Aurora Single-Level Store Library
+.Sh LIBRARY
+.Lb libsls
+.Sh SYNOPSIS
+.In sls/sls.h
+.Sh DESCRIPTION
+.Sh FUNCTION OVERVIEW
+.Bl -tag -width "01234567890123456789"
+.It Sy "Function              Description"
+.It Fn sls_attach
+Enable persistent mode by attaching to a process.
+.It Fn sls_detach
+Disable persistent mode by detaching from a process.
+.It Fn sls_suspend
+Suspend a process to the persistent store.
+.It Fn sls_resume
+Resume a process from the persistent store.
+.It Fn sls_getattr
+Get SLS process attributes.
+.It Fn sls_setattr
+Set SLS process attributes.
+.It Fn sls_getckptid
+Get current checkpoint generation number.  This is a monotonically increasing 
+number of the last persistent checkpoint.
+.It Fn sls_enter
+Enable persistent mode on the current process
+.It Fn sls_exit
+Disable persistent mode on the current process
+.It Fn sls_ffork
+Write a checkpoint to the file descriptor.  On resume the process can 
+distinguish itself.
+.It Fn sls_stat
+Read metadata of an SLS stream.
+.It Fn sls_barrier
+Wait for the current process state to be stored to disk or transmitted to a 
+remote node.
+.El
+.Sh RETURN VALUES
+.Sh AUTHORS
+.Nm libsls
+was written by the Reliable Computer Systems group at the University of 
+Waterloo.

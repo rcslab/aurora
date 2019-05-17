@@ -4,78 +4,105 @@
 
 #include <fcntl.h>
 #include <getopt.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-#include "sls.h"
+#include <sls.h>
+
+#include "sls_private.h"
 
 int
-sls_op(struct op_param *param)
+sls_attach(int pid, const struct sls_attr *attr)
 {
-	int status;
-	int fd;
-    
-	fd = open("/dev/sls", O_RDWR);
-	if (fd < 0) {
-		fprintf(stderr, "ERROR: Could not open SLS device: %m");
-		return -1;
-	}
-
-	status = ioctl(fd, SLS_OP, param);
-	if (status < 0) {
-		fprintf(stderr, "ERROR: SLS op ioctl failed: %m");
-	}
-
-	close(fd);
-
-	return status;
 }
 
 int
-sls_snap(struct snap_param *param)
+sls_detach(int pid)
 {
-	int status;
-	int fd;
+    int ret;
+    struct proc_param param;
 
-	fd = open("/dev/sls", O_RDWR);
-	if (fd < 0) {
-		fprintf(stderr, "ERROR: Could not open SLS device: %m");
-		return -1;
-	}
+    param.op = SLS_PROCSTOP;
+    param.pid = pid;
+    param.ret = &ret;
 
-	status = ioctl(fd, SLS_SNAP, param);
-	if (status < 0) {
-		fprintf(stderr, "ERROR: SLS snap ioctl failed: %m");
-	}
+    if (sls_proc(&param) < 0) {
+	return -1;
+    }
 
-	close(fd);
-
-	return status;
-
+    return 0;
 }
-
 
 int
-sls_proc(struct proc_param *param)
+sls_suspend(int pid)
 {
-	int status;
-	int fd;
+}
 
-	fd = open("/dev/sls", O_RDWR);
-	if (fd < 0) {
-		fprintf(stderr, "ERROR: Could not open SLS device: %m");
-		return -1;
-	}
+int
+sls_resume(int pid)
+{
+}
 
-	status = ioctl(fd, SLS_PROC, param);
-	if (status < 0) {
-		fprintf(stderr, "ERROR: SLS proc ioctl failed: %m");
-	}
+int
+sls_getattr(int pid, struct sls_attr *attr)
+{
+}
 
-	close(fd);
+int
+sls_setattr(int pid, const struct sls_attr *attr)
+{
+}
 
-	return status;
+uint64_t
+sls_getckptid(int pid)
+{
+}
+
+int
+sls_enter()
+{
+    return sls_attach(getpid(), NULL);
+}
+
+int
+sls_exit()
+{
+    return sls_detach(getpid());
+}
+
+bool
+sls_persistent()
+{
+    struct sls_attr attr;
+
+    if (sls_getattr(getpid(), &attr) < 0)
+	return false;
+    else
+	return true;
+}
+
+int
+sls_ffork(int fd)
+{
 
 }
+int
+sls_stat(int streamid, struct sls_stat *st)
+{
+}
+
+int
+sls_barrier(int streamid)
+{
+    uint64_t ckptid = sls_getckptid(getpid());
+
+    while (ckptid == sls_getckptid(getpid())) {
+	usleep(1000);
+    }
+
+    return 0;
+}
+
