@@ -47,32 +47,6 @@
 #include "sls_dump.h"
 #include "sls_mosd.h"
 
-
-static struct dump * 
-sls_ckpt_dump(struct proc *p)
-{
-	struct dump *dump;
-	struct thread_info *thread_infos = NULL;
-	struct vm_map_entry_info *entries = NULL;
-	struct file_info *file_infos = NULL;
-	size_t numentries, numthreads, numfiles;
-
-	numthreads = p->p_numthreads;
-	numentries = p->p_vmspace->vm_map.nentries;
-	numfiles = p->p_fd->fd_files->fdt_nfiles;
-
-	dump = alloc_dump();
-	thread_infos = malloc(sizeof(*thread_infos) * numthreads, M_SLSMM, M_WAITOK);
-	entries = malloc(sizeof(*entries) * numentries, M_SLSMM, M_WAITOK);
-	file_infos = malloc(sizeof(*file_infos) * numfiles, M_SLSMM, M_WAITOK);
-
-	dump->threads = thread_infos;
-	dump->memory.entries = entries;
-	dump->filedesc.infos = file_infos;
-
-	return dump;
-}
-
 static void
 sls_stop_proc(struct proc *p)
 {
@@ -86,7 +60,6 @@ sls_stop_proc(struct proc *p)
 	threads_still_running = 1;
 	while (threads_still_running == 1) {
 	    threads_still_running = 0;
-	    //printf("(%d)\t\tWaiting\n", p->p_pid);
 	    PROC_LOCK(p);
 	    TAILQ_FOREACH(td, &p->p_threads, td_plist) {
 		if (TD_IS_RUNNING(td)) {
@@ -103,7 +76,7 @@ sls_stop_proc(struct proc *p)
 
 
 static int
-sls_ckpt(struct proc *p, int mode, struct dump *dump)
+sls_ckpt(struct proc *p, int mode, struct sls_process *slsp)
 {
 	int error = 0;
 	struct timespec tstart, tend;
@@ -112,31 +85,32 @@ sls_ckpt(struct proc *p, int mode, struct dump *dump)
 	PROC_LOCK(p);
 
 	nanotime(&tstart);
-	error = proc_ckpt(p, &dump->proc, dump->threads);
+	error = proc_ckpt(p, slsp->slsp_ckptbuf);
 	if (error != 0) {
-	    printf("Error: proc_ckpt failed with error code %d\n", error);
+	    SLS_DBG("Error: proc_ckpt failed with error code %d\n", error);
 	    goto sls_ckpt_out;
 	}
 	nanotime(&tend);
 	sls_log(SLSLOG_PROC, tonano(tend) - tonano(tstart));
 
 	nanotime(&tstart);
-	error = vmspace_ckpt(p, &dump->memory, mode);
+	error = fd_ckpt(p, slsp->slsp_ckptbuf);
 	if (error != 0) {
-	    printf("Error: vmspace_ckpt failed with error code %d\n", error);
+	    SLS_DBG("Error: fd_ckpt failed with error code %d\n", error);
+	    goto sls_ckpt_out;
+	}
+	nanotime(&tend);
+	sls_log(SLSLOG_FILE, tonano(tend) - tonano(tstart));
+
+	nanotime(&tstart);
+	error = vmspace_ckpt(p, slsp->slsp_ckptbuf, mode);
+	if (error != 0) {
+	    SLS_DBG("Error: vmspace_ckpt failed with error code %d\n", error);
 	    goto sls_ckpt_out;
 	}
 	nanotime(&tend);
 	sls_log(SLSLOG_MEM, tonano(tend) - tonano(tstart));
 
-	nanotime(&tstart);
-	error = fd_ckpt(p, &dump->filedesc);
-	if (error != 0) {
-	    printf("Error: fd_ckpt failed with error code %d\n", error);
-	    goto sls_ckpt_out;
-	}
-	nanotime(&tend);
-	sls_log(SLSLOG_FILE, tonano(tend) - tonano(tstart));
 
 	PROC_UNLOCK(p);
 sls_ckpt_out:
@@ -145,8 +119,7 @@ sls_ckpt_out:
 }
 
 static int 
-sls_ckpt_tofile(struct dump *dump, struct vmspace *vm, 
-	int mode, char *filename)
+sls_ckpt_tofile(struct sls_process *slsp, int mode, char *filename)
 {
     int fd;
     int error;
@@ -157,7 +130,7 @@ sls_ckpt_tofile(struct dump *dump, struct vmspace *vm,
     if (error != 0)
 	return error;
 
-    error = sls_store(dump, mode, vm, fd);
+    error = sls_store(slsp, mode, fd);
     if (error != 0) {
 	printf("Error: dumping dump to descriptor failed with %d\n", error);
     }
@@ -173,15 +146,12 @@ void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
     vm_ooffset_t fork_charge, new_charge;
     struct timespec tstart, tend;
     struct vmspace *new_vm;
-    struct dump *dump;
     struct proc *p;
-    int error;
+    int error = 0;
     int mode;
 
     p = args->p;
     mode = args->mode;
-
-    dump = sls_ckpt_dump(p);
 
     SLS_DBG("Dump created\n");
 
@@ -190,11 +160,17 @@ void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
     SLS_DBG("Process stopped\n");
 
     nanotime(&tstart);
-    error = sls_ckpt(p, mode, dump);
+    error = sls_ckpt(p, mode, slsp);
     if(error != 0) {
-	free_dump(dump);
+	SLS_DBG("Checkpointing failed\n");
+
+	PROC_LOCK(p);
+	kern_psignal(p, SIGCONT);
+	PROC_UNLOCK(p);
+
 	return;
     }
+
     nanotime(&tend);
     sls_log(SLSLOG_CKPT, tonano(tend) - tonano(tstart));
 
@@ -253,8 +229,8 @@ void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
     switch (args->target) {
     case SLS_FILE:
 
-	sls_ckpt_tofile(dump, slsp->slsp_vm, mode, args->filename);
-	free_dump(dump);
+	sls_ckpt_tofile(slsp, mode, args->filename);
+	/* XXX Free the sbuf after that */
 	SLS_DBG("Dumped to file\n");
 	break;
 
@@ -345,7 +321,7 @@ sls_ckptd(struct sls_op_args *args)
     int i;
 
     /* HACK */
-    sls_osdhack();
+    //sls_osdhack();
 
     slsp = slsp_add(args->p->p_pid);
 

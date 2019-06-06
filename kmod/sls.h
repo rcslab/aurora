@@ -78,8 +78,9 @@ sls_module_exiting(void)
 }
 
 /* XXX Ugly hack until we find out why VOP_WRITE is crashing on us */
-extern int osdfd;
+//extern int osdfd;
 /* HACK */
+/*
 inline void 
 sls_osdhack()
 {
@@ -95,6 +96,7 @@ sls_osdhack()
 
 	osdfd = curthread->td_retval[0];
 }
+*/
 
 #define SLS_DEBUG
 

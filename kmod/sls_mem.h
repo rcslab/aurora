@@ -3,6 +3,8 @@
 
 #include <sys/types.h>
 
+#include <sys/sbuf.h>
+
 #include "sls.h"
 #include "sls_data.h"
 #include "sls_dump.h"
@@ -18,7 +20,7 @@
 vm_offset_t userpage_map(vm_paddr_t phys_addr, size_t order);
 void userpage_unmap(vm_offset_t vaddr);
 
-int vmspace_ckpt(struct proc *p, struct memckpt_info *dump, long mode);
-int vmspace_rest(struct proc *p, struct dump *dump);
+int vmspace_ckpt(struct proc *p, struct sbuf *sb, long mode);
+int vmspace_rest(struct proc *p, struct memckpt_info memckpt, struct sls_pagetable ptable);
 
 #endif

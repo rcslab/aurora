@@ -30,6 +30,7 @@
 #include "sls.h"
 #include "sls_file.h"
 #include "sls_mem.h"
+#include "imported_sls.h"
 
 /* TEMP */
 uint64_t size_sent = 0;
@@ -37,7 +38,72 @@ uint64_t size_sent = 0;
 char zeroblk[PAGE_SIZE];
 
 int
-file_read(void* addr, size_t len, int fd)
+sls_file_read(void* addr, size_t len, struct file *fp)
+{
+	int error = 0;
+
+	struct uio auio;
+	struct iovec aiov;
+	bzero(&auio, sizeof(struct uio));
+	bzero(&aiov, sizeof(struct iovec));
+
+	aiov.iov_base = (void*)addr;
+	aiov.iov_len = len;
+
+	auio.uio_iov = &aiov;
+	auio.uio_offset = 0;
+	auio.uio_segflg = UIO_SYSSPACE;
+	auio.uio_rw = UIO_READ;
+	auio.uio_iovcnt = 1;
+	auio.uio_resid = len;
+	auio.uio_td = curthread;
+
+	/* 
+	 * XXX The fd argument is bogus, but it's not needed
+	 * except for ktrace. Both dofileread() and dofilewrite()
+	 * can be split so that the fd-agnostic part can be called
+	 * on its own.
+	 *
+	 * Also, dofileread/dofilewrite are static, so we "import" them
+	 * by including them in the imports file.
+	 */
+	error = dofileread(curthread, 0, fp, &auio, (off_t) -1, 0);
+	if (error != 0)
+	    SLS_DBG("Error: dofileread failed with code %d\n", error);
+
+	return error;
+}
+
+int
+sls_file_write(void* addr, size_t len, struct file *fp)
+{
+	int error = 0;
+	struct uio auio;
+	struct iovec aiov;
+
+
+	bzero(&auio, sizeof(struct uio));
+	bzero(&aiov, sizeof(struct iovec));
+
+	aiov.iov_base = (void*)addr;
+	aiov.iov_len = len;
+
+	auio.uio_iov = &aiov;
+	auio.uio_offset = 0;
+	auio.uio_segflg = UIO_SYSSPACE;
+	auio.uio_rw = UIO_WRITE;
+	auio.uio_iovcnt = 1;
+	auio.uio_resid = len;
+	auio.uio_td = curthread;
+
+	error = dofilewrite(curthread, 0, fp, &auio, (off_t) -1, 0);
+	if (error != 0)
+	    SLS_DBG("Error: kern_writev failed with code %d\n", error);
+
+	return error;
+}
+int
+sls_fd_read(void* addr, size_t len, int fd)
 {
 	int error = 0;
 
@@ -58,15 +124,14 @@ file_read(void* addr, size_t len, int fd)
 	auio.uio_td = curthread;
 
 	error = kern_readv(curthread, fd, &auio);
-	if (error) {
-		printf("Error: kern_readv failed with code %d\n", error);
-	}
+	if (error != 0)
+	    SLS_DBG("Error: kern_readv failed with code %d\n", error);
 
 	return error;
 }
 
 int
-file_write(void* addr, size_t len, int fd)
+sls_fd_write(void* addr, size_t len, int fd)
 {
 	int error = 0;
 	struct uio auio;
@@ -88,9 +153,8 @@ file_write(void* addr, size_t len, int fd)
 	auio.uio_td = curthread;
 
 	error = kern_writev(curthread, fd, &auio);
-	if (error) {
-		printf("Error: kern_writev failed with code %d\n", error);
-	}
+	if (error != 0)
+	    SLS_DBG("Error: kern_writev failed with code %d\n", error);
 
 	return error;
 }
@@ -164,7 +228,9 @@ osd_preadv_aligned(struct osd_mbmp *mbmp, uint64_t block,
 	auio.uio_td = curthread;
 
 	/* HACK */
-	return kern_preadv(curthread, osdfd, &auio, block * blksize);
+	/* XXX */
+	return 0;
+	//return kern_preadv(curthread, osdfd, &auio, block * blksize);
 	//error = VOP_READ(mbmp->mbmp_osdvp, &auio, IO_NODELOCKED | IO_DIRECT, curthread->td_proc->p_ucred);
 }
 
@@ -267,7 +333,9 @@ osd_pwritev_aligned(struct osd_mbmp *mbmp, uint64_t block,
 	size_sent += len;
 
 	/* HACK */
-	return kern_pwritev(curthread, osdfd, &auio, block * blksize);
+	return 0;
+	/* XXX */
+	//return kern_pwritev(curthread, osdfd, &auio, block * blksize);
 	//error = VOP_WRITE(mbmp->mbmp_osdvp, &auio, IO_NODELOCKED | IO_DIRECT, curthread->td_proc->p_ucred);
 }
 

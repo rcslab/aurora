@@ -36,100 +36,32 @@
 #include "sls_dump.h"
 #include "sls_ioctl.h"
 #include "sls_file.h"
+#include "sls_path.h"
 
 /* XXX Will become a sysctl value */
 size_t sls_contig_limit = 2 * 1024 * 1024;
 
 #define SLS_MSG_END ULONG_MAX
 
-static int
-sls_store_path(struct sbuf *sb, int fd) 
-{
-    int error;
-    char *path;
-    size_t len;
-
-    path = sbuf_data(sb);
-    len = sbuf_len(sb);
-    if (len < 0)
-	return -1;
-
-    error = file_write(&len, sizeof(len), fd);
-    if (error != 0)
-	return error;
-
-    error = file_write(path, len, fd);
-    if (error != 0)
-	return error;
-
-    return 0;
-}
-
-static int
-sls_load_path(struct sbuf **sbp, int fd) 
-{
-    int error;
-    size_t len;
-    char *path = NULL;
-    struct sbuf *sb = NULL;
-
-    error = file_read(&len, sizeof(len), fd);
-    if (error != 0)
-	return error;
-
-    path = malloc(len + 1, M_SLSMM, M_WAITOK);
-    error = file_read(path, len, fd);
-    if (error != 0)
-	goto load_path_error;
-    path[len++] = '\0';
-
-    sb = sbuf_new_auto();
-    if (sb == NULL)
-	goto load_path_error;
-
-    error = sbuf_bcpy(sb, path, len);
-    if (error != 0)
-	goto load_path_error;
-
-    error = sbuf_finish(sb);
-    if (error != 0)
-	goto load_path_error;
-
-    *sbp = sb;
-
-    return 0;
-
-load_path_error:
-
-    if (sb != NULL)
-	sbuf_delete(sb);
-
-    free(path, M_SLSMM);
-    *sbp = NULL;
-    return error;
-
-}
-
-
 static int 
-dump_init_htable(struct dump *dump)
+htable_init(struct sls_pagetable *ptable)
 {
-	dump->pages = hashinit(HASH_MAX, M_SLSMM, &dump->hashmask);
-	if (dump->pages == NULL)
+	ptable->pages = hashinit(HASH_MAX, M_SLSMM, &ptable->hashmask);
+	if (ptable->pages == NULL)
 		return ENOMEM;
 
 	return 0;
 }
 
 static void
-dump_fini_htable(struct dump *dump)
+htable_fini(struct sls_pagetable *ptable)
 {
 	int i;
 	struct dump_page *cur_page;
 	struct page_list *cur_bucket;
 
-	for (i = 0; i <= dump->hashmask; i++) {
-		cur_bucket = &dump->pages[i];
+	for (i = 0; i <= ptable->hashmask; i++) {
+		cur_bucket = &ptable->pages[i];
 		while (!LIST_EMPTY(cur_bucket)) {
 			cur_page = LIST_FIRST(cur_bucket);
 			LIST_REMOVE(cur_page, next);
@@ -138,81 +70,12 @@ dump_fini_htable(struct dump *dump)
 		}
 	}
 
-	hashdestroy(dump->pages, M_SLSMM, dump->hashmask);
+	hashdestroy(ptable->pages, M_SLSMM, ptable->hashmask);
 }
 
-struct dump *
-alloc_dump()
-{
-	struct dump *dump;
-	int error;
-
-	dump = malloc(sizeof(struct dump), M_SLSMM, M_WAITOK | M_ZERO);
-	dump->magic = SLS_DUMP_MAGIC;
-	error = dump_init_htable(dump);
-	if (error != 0) {
-	    free(dump, M_SLSMM);
-	    return NULL;
-	}
-
-	return dump;
-}
 
 void
-free_dump(struct dump *dump)
-{
-	struct vm_map_entry_info *entries;
-	struct file_info *file_infos;
-	struct vm_object_info *obj_info;
-	int i;
-
-	if (dump == NULL)
-	    return;
-
-	dump_fini_htable(dump);
-
-	if (dump->threads != NULL)
-	    free(dump->threads, M_SLSMM);
-
-	entries = dump->memory.entries;
-	if (entries) {
-	    for (i = 0; i < dump->memory.vmspace.nentries; i++) {
-		obj_info = entries[i].obj_info;
-		if (obj_info != NULL) {
-		    if (obj_info->path != NULL)
-			sbuf_delete(obj_info->path);
-		    obj_info->path = NULL;
-		}
-		free(obj_info, M_SLSMM);
-	    }
-	    free(entries, M_SLSMM);
-	}
-
-
-	if (dump->filedesc.cdir != NULL) 
-	    sbuf_delete(dump->filedesc.cdir);
-	dump->filedesc.cdir = NULL;
-
-	if (dump->filedesc.rdir != NULL) 
-	    sbuf_delete(dump->filedesc.rdir);
-	dump->filedesc.rdir = NULL;
-
-	file_infos = dump->filedesc.infos;
-	if (file_infos != 0) {
-	    for (i = 0; i < dump->filedesc.num_files; i++) {
-		if (file_infos[i].path != NULL) 
-		    sbuf_delete(file_infos[i].path);
-		file_infos[i].path = NULL;
-	    }
-
-	    free(file_infos, M_SLSMM);
-	}
-
-	free(dump, M_SLSMM);
-}
-
-void
-addpage_noreplace(struct dump *dump, struct dump_page *new_entry)
+addpage_noreplace(struct sls_pagetable *ptable, struct dump_page *new_entry)
 {
 	struct page_list *page_bucket;
 	struct dump_page *page_entry;
@@ -220,7 +83,7 @@ addpage_noreplace(struct dump *dump, struct dump_page *new_entry)
 	int already_there;
 
 	vaddr = new_entry->vaddr;
-	page_bucket = &dump->pages[vaddr & dump->hashmask];
+	page_bucket = &ptable->pages[vaddr & ptable->hashmask];
 
 	already_there = 0;
 	LIST_FOREACH(page_entry, page_bucket, next) {
@@ -235,156 +98,285 @@ addpage_noreplace(struct dump *dump, struct dump_page *new_entry)
 	if (already_there == 0)
 	    LIST_INSERT_HEAD(page_bucket, new_entry, next);
 }
-struct dump *
-sls_load(int fd)
+
+/* Functions that load parts of the state. */
+int 
+sls_load_cpustate(struct proc_info *proc_info, struct thread_info **thread_infos, struct file *fp)
 {
-	int error = 0;
-	void *hashpage;
-	vm_offset_t vaddr;
-	struct dump_page *new_entry;
-	struct dump *dump;
-	struct thread_info *threads;
-	struct vm_map_entry_info *entries;
-	struct file_info *files;
-	struct vm_object_info *cur_obj;
-	size_t thread_size, entry_size, file_size;
-	int numfiles, numthreads, numentries;
-	size_t size;
-	int i;
+	int numthreads;
+	size_t thread_size;
+	struct thread_info *td_info = NULL;
+	int error, i;
 
-	dump = alloc_dump();
-
-	error = file_read(dump, sizeof(struct dump), fd);
+	error = sls_file_read(proc_info, sizeof(*proc_info), fp);
 	if (error != 0)
-	    goto sls_load_error;
+	    goto sls_load_cpustate_error;
 
-	if (dump->magic != SLS_DUMP_MAGIC) {
+	if (proc_info->magic != SLS_PROC_INFO_MAGIC) {
 	    SLS_DBG("magic mismatch\n");
-	    goto sls_load_error;
+	    error = EINVAL;
+	    goto sls_load_cpustate_error;
 	}
 
-	if (dump->proc.magic != SLS_PROC_INFO_MAGIC) {
-	    SLS_DBG("magic mismatch\n");
-	    goto sls_load_error;
+	/* Allocate and read threads */
+	numthreads = proc_info->nthreads;
+	thread_size = sizeof(struct thread_info) * numthreads; 
+	td_info = malloc(thread_size, M_SLSMM, M_WAITOK);
+
+	error = sls_file_read(td_info, thread_size, fp);
+	if (error != 0)
+	    goto sls_load_cpustate_error;
+
+	for (i = 0; i < numthreads; i++) {
+	    if (td_info[i].magic != SLS_THREAD_INFO_MAGIC) {
+		SLS_DBG("magic mismatch\n");
+		error = EINVAL;
+		goto sls_load_cpustate_error;
+	    }
 	}
 
-	if (dump->filedesc.magic != SLS_FILEDESC_INFO_MAGIC) {
+	*thread_infos = td_info;
+
+	return 0;
+
+sls_load_cpustate_error:
+
+	free(td_info, M_SLSMM);
+    
+	return error;
+	
+
+}
+
+/* 
+ * XXX This function is sketchy, but will get normalized once the restore
+ * happens incrementally and not all at once.
+ */
+int
+sls_load_filedesc(struct filedesc_info *filedesc, struct file *fp)
+{
+	struct file_info tmp_file;
+	char *path = NULL;
+	char *data = NULL;
+	size_t file_size;
+	int numfiles;
+	int error, i;
+	size_t len;
+
+	struct sbuf *tmp_sbuf = NULL;
+
+	/* General file descriptor */
+	error = sls_file_read(filedesc, sizeof(*filedesc), fp);
+	if (error != 0)
+	    goto sls_load_filedesc_error;
+
+	if (filedesc->magic != SLS_FILEDESC_INFO_MAGIC) {
 	    SLS_DBG("magic mismatch\n");
-	    goto sls_load_error;
+	    error = EINVAL;
+	    goto sls_load_filedesc_error;
 	}
 
-	if (dump->memory.vmspace.magic != SLS_VMSPACE_INFO_MAGIC) {
+	/* Current and root directories */
+	error = sls_load_path(&filedesc->cdir, fp);
+	if (error != 0)
+	    goto sls_load_filedesc_error;
+
+	error = sls_load_path(&filedesc->rdir, fp);
+	if (error != 0)
+	    goto sls_load_filedesc_error;
+
+	/* 
+	 * Allocate and read files. We don't know a priori how many,
+	 * so we read them into a buffer, counting them in the process.
+	 * We deserialize them afterwards. This is quite the loop-de-loop,
+	 * but we can avoid it if we restore each file descriptor as we
+	 * read it.
+	 */
+
+	tmp_sbuf = sbuf_new_auto();
+	path = malloc(PATH_MAX, M_SLSMM, M_WAITOK);
+
+	for (i = 0; ; i++) {
+
+	    error = sls_file_read(&tmp_file, sizeof(tmp_file), fp);
+	    if (error != 0)
+		goto sls_load_filedesc_error;
+
+	    if (tmp_file.magic == SLS_FILES_END)
+		break;
+
+	    if(tmp_file.magic != SLS_FILE_INFO_MAGIC) {
+		SLS_DBG("magic mismatch\n");
+		error = EINVAL;
+		goto sls_load_filedesc_error;
+	    }
+
+	    error = sbuf_bcat(tmp_sbuf, (void *) &tmp_file, sizeof(tmp_file));
+	    if (error != 0)
+		goto sls_load_filedesc_error;
+
+
+	    error = sls_file_read(&len, sizeof(len), fp);
+	    if (error != 0)
+		goto sls_load_filedesc_error;
+
+	    error = sbuf_bcat(tmp_sbuf, (void *) &len, sizeof(len));
+	    if (error != 0)
+		goto sls_load_filedesc_error;
+
+
+	    error = sls_file_read(path, len, fp);
+	    if (error != 0)
+		goto sls_load_filedesc_error;
+
+	    error = sbuf_bcat(tmp_sbuf, (void *) path, len);
+	    if (error != 0)
+		goto sls_load_filedesc_error;
+
+	}
+
+	free(path, M_SLSMM);
+	path = NULL;
+
+	sbuf_finish(tmp_sbuf);
+
+	filedesc->num_files = numfiles = i;
+	file_size = sizeof(struct file_info) * numfiles; 
+	filedesc->infos = malloc(file_size, M_SLSMM, M_WAITOK);
+
+	data = sbuf_data(tmp_sbuf);
+
+	for (i = 0; i < numfiles; i++) {
+	    memcpy(&filedesc->infos[i], data, sizeof(filedesc->infos[i]));
+	    data += sizeof(filedesc->infos[i]);
+
+	    if (filedesc->infos[i].magic != SLS_FILE_INFO_MAGIC) {
+		SLS_DBG("magic mismatch\n");
+		error = EINVAL;
+		goto sls_load_filedesc_error;
+	    }
+
+	    memcpy((void *) &len, data, sizeof(len));
+	    data += sizeof(len);
+
+	    filedesc->infos[i].path = sbuf_new_auto();
+	    sbuf_bcpy(filedesc->infos[i].path, data, len);
+	    data += len;
+
+	}
+
+	sbuf_delete(tmp_sbuf);
+
+	return 0;
+
+sls_load_filedesc_error:
+
+	free(path, M_SLSMM);
+	if (tmp_sbuf != NULL)
+	    sbuf_delete(tmp_sbuf);
+
+	return error;
+
+}
+
+int 
+sls_load_memory(struct memckpt_info *memory, struct file *fp)
+{
+	struct vm_map_entry_info *entries;
+	struct vm_object_info *cur_obj;
+	size_t entry_size;
+	int numentries;
+	int error, i;
+
+	/* Allocate and read memory structure */
+	error = sls_file_read(memory, sizeof(*memory), fp);
+	if (error != 0)
+	    goto sls_load_memory_error;
+
+	if (memory->vmspace.magic != SLS_VMSPACE_INFO_MAGIC) {
 	    SLS_DBG("magic mismatch\n");
-	    goto sls_load_error;
+	    error = EINVAL;
+	    goto sls_load_memory_error;
 	}
 
 	/* Allocations for array-like elements of the dump and cdir/rdir */
-	numthreads = dump->proc.nthreads;
-	numfiles = dump->filedesc.num_files;
-	numentries = dump->memory.vmspace.nentries;
-
-	thread_size = sizeof(struct thread_info) * numthreads; 
-	file_size = sizeof(struct file_info) * numfiles; 
+	numentries = memory->vmspace.nentries;
 	entry_size = sizeof(struct vm_map_entry_info) * numentries; 
-
-	threads = malloc(thread_size, M_SLSMM, M_WAITOK);
-	files = malloc(file_size, M_SLSMM, M_WAITOK);
 	entries = malloc(entry_size, M_SLSMM, M_WAITOK);
+	memory->entries = entries;
 
-	dump->threads = threads;
-	dump->filedesc.infos = files;
-	dump->memory.entries = entries;
-
-	/* Read in arrays of objects */
-
-	error = file_read(dump->threads, thread_size, fd);
-	if (error != 0)
-	    goto sls_load_error;
-
-	for (i = 0; i < numthreads; i++) {
-	    if (dump->threads[i].magic != SLS_THREAD_INFO_MAGIC) {
-		SLS_DBG("magic mismatch\n");
-		goto sls_load_error;
-	    }
-	}
-
-	error = file_read(dump->filedesc.infos, file_size, fd);
-	if (error != 0)
-	    goto sls_load_error;
-
-	for (i = 0; i < numfiles; i++) {
-	    if (dump->filedesc.infos[i].magic != SLS_FILE_INFO_MAGIC) {
-		SLS_DBG("magic mismatch\n");
-		goto sls_load_error;
-	    }
-	}
-
-	error = sls_load_path(&dump->filedesc.cdir, fd);
-	if (error != 0)
-	    goto sls_load_error;
-
-	error = sls_load_path(&dump->filedesc.rdir, fd);
-	if (error != 0)
-	    goto sls_load_error;
-
-	for (i = 0; i < numfiles; i++) {
-	    error = sls_load_path(&files[i].path, fd);
+	for (i = 0; i < numentries; i++) {
+	    error = sls_file_read(&entries[i], sizeof(entries[i]), fp);
 	    if (error != 0)
-		goto sls_load_error;
-	}
+		goto sls_load_memory_error;
 
-	error = file_read(entries, entry_size, fd);
-	if (error != 0)
-	    goto sls_load_error;
-
-	for (i = 0; i < numentries; i++) {
-	    if (dump->memory.entries[i].magic != SLS_ENTRY_INFO_MAGIC) {
+	    if (memory->entries[i].magic != SLS_ENTRY_INFO_MAGIC) {
 		SLS_DBG("magic mismatch");
-		goto sls_load_error;
+		error = EINVAL;
+		goto sls_load_memory_error;
 	    }
-	}
-
-	for (i = 0; i < numentries; i++) {
 
 	    if (entries[i].obj_info == NULL)
 		continue;
 
 	    cur_obj = malloc(sizeof(struct vm_object_info), M_SLSMM, M_WAITOK);
 	    if (cur_obj == NULL)
-		goto sls_load_error;
+		goto sls_load_memory_error;
 
 	    entries[i].obj_info = cur_obj;
 
-	    error = file_read(cur_obj, sizeof(struct vm_object_info), fd);
+	    error = sls_file_read(cur_obj, sizeof(struct vm_object_info), fp);
 	    if (error != 0)
-		goto sls_load_error;
+		goto sls_load_memory_error;
 
 	    if (cur_obj->magic != SLS_OBJECT_INFO_MAGIC) {
 		SLS_DBG("magic mismatch\n");
-		goto sls_load_error;
+		error = EINVAL;
+		goto sls_load_memory_error;
 	    }
 
 	    if (cur_obj->type == OBJT_VNODE) {
-		error = sls_load_path(&cur_obj->path, fd);
+		error = sls_load_path(&cur_obj->path, fp);
 		if (error != 0)
-		    goto sls_load_error;
+		    goto sls_load_memory_error;
 	    }
 	}
 
+	return 0;
+
+sls_load_memory_error:
+
+
+	return error;
+}
+
+
+int
+sls_load_ptable(struct sls_pagetable *ptable, struct file *fp)
+{
+	int error = 0;
+	void *hashpage;
+	vm_offset_t vaddr;
+	struct dump_page *new_entry;
+	size_t size;
+
+	error = htable_init(ptable);
+	if (error != 0)
+	    return error;
 
 	for (;;) {
 
-	    error = file_read(&vaddr, sizeof(vaddr), fd);
+	    error = sls_file_read(&vaddr, sizeof(vaddr), fp);
 	    if (error != 0)
-		goto sls_load_error;
+		goto sls_load_ptable_error;
 
 	    /* Sentinel value */
 	    if (vaddr == SLS_MSG_END)
 		break;
 
-	    error = file_read(&size, sizeof(size), fd);
+	    error = sls_file_read(&size, sizeof(size), fp);
 	    if (error != 0)
-		goto sls_load_error;
+		goto sls_load_ptable_error;
 
 	    /*
 	    * We assume that asking for a page-size chunk will
@@ -397,29 +389,28 @@ sls_load(int fd)
 
 		new_entry->vaddr = vaddr + off;
 		new_entry->data = hashpage;
-		error = file_read(hashpage, PAGE_SIZE, fd);
+		error = sls_file_read(hashpage, PAGE_SIZE, fp);
 		if (error != 0) {
 		    free(new_entry, M_SLSMM);
 		    free(hashpage, M_SLSMM);
-		    goto sls_load_error;
+		    goto sls_load_ptable_error;
 		}
 
 		/*
 		* Add the new page to the hash table, if it already 
 		* exists there don't replace it.
 		*/
-		addpage_noreplace(dump, new_entry);
+		addpage_noreplace(ptable, new_entry);
 	    }
 	}
 
+	return 0;
 
-	return dump;
+sls_load_ptable_error:
 
+	htable_fini(ptable);
 
-sls_load_error:
-
-	free_dump(dump);
-	return NULL;
+	return error;
 }
 
 
@@ -428,15 +419,15 @@ store_pages_file(vm_offset_t vaddr, size_t size, vm_offset_t data, int fd)
 {
 	int error; 
 
-	error = file_write(&vaddr, sizeof(vaddr), fd);
+	error = sls_fd_write(&vaddr, sizeof(vaddr), fd);
 	if (error != 0)
 	    return error;
 
-	error = file_write(&size, sizeof(size), fd);
+	error = sls_fd_write(&size, sizeof(size), fd);
 	if (error != 0)
 	    return error;
 	
-	error = file_write((void*) data, size, fd);
+	error = sls_fd_write((void*) data, size, fd);
 	if (error != 0)
 	    return error;
 
@@ -530,7 +521,7 @@ sls_store_pages(struct vmspace *vm, struct sls_store_tgt tgt, int mode)
 	if (tgt.type == SLS_MEM)
 	    return 0;
 
-	file_write(&sentinel, sizeof(sentinel), tgt.fd);
+	sls_fd_write(&sentinel, sizeof(sentinel), tgt.fd);
 	if (error != 0)
 	    return error;
 
@@ -539,78 +530,36 @@ sls_store_pages(struct vmspace *vm, struct sls_store_tgt tgt, int mode)
 }
 
 int
-sls_store(struct dump *dump, int mode, struct vmspace *vm, int fd)
+sls_store(struct sls_process *slsp, int mode, int fd)
 {
-	int i;
 	int error = 0;
-	struct vm_map_entry_info *entries;
-	struct thread_info *thread_infos;
-	struct file_info *file_infos;
-	struct vm_object_info *cur_obj;
 	struct sls_store_tgt tgt;
-	int numthreads, numentries, numfiles;
+	struct vmspace *vm;
+	char *buf;
+	size_t len;
 
-	thread_infos = dump->threads;
-	entries = dump->memory.entries;
-	file_infos = dump->filedesc.infos;
+	vm = slsp->slsp_vm;
 
-	numthreads = dump->proc.nthreads;
-	numentries = dump->memory.vmspace.nentries;
-	numfiles = dump->filedesc.num_files;
-
-	for (i = 0; i < numentries; i++) {
-	    if (entries->eflags & MAP_ENTRY_IS_SUB_MAP) {
-		printf("WARNING: Submap entry found, dump will be wrong\n");
-		continue;
-	    }
-	}
-
-	error = file_write(dump, sizeof(struct dump), fd);
+	/* First write the coalesced metadata */
+	/* 
+	 * XXX Unpack them maybe to be able to
+	 * store semantic information alongside them.
+	 * Not useful for the file, but necessary for
+	 * the OSD.
+	 */
+	error = sbuf_finish(slsp->slsp_ckptbuf);
 	if (error != 0)
 	    return error;
 
-	error = file_write(thread_infos, sizeof(struct thread_info) * numthreads, fd);
-	if (error != 0)
+	buf = sbuf_data(slsp->slsp_ckptbuf);
+	len = sbuf_len(slsp->slsp_ckptbuf);
+
+	error = sls_fd_write(buf, len, fd);
+
+	sbuf_clear(slsp->slsp_ckptbuf);
+
+	if(error != 0)
 	    return error;
-
-	error = file_write(file_infos, sizeof(struct file_info) * numfiles, fd);
-	if (error != 0)
-	    return error;
-
-	error = sls_store_path(dump->filedesc.cdir, fd);
-	if (error != 0)
-	    return error;
-
-	error = sls_store_path(dump->filedesc.rdir, fd);
-	if (error != 0)
-	    return error;
-
-
-	for (i = 0; i < numfiles; i++) {
-	    error = sls_store_path(file_infos[i].path, fd);
-	    if (error != 0)
-		return error;
-	}
-	
-	error = file_write(entries, sizeof(*entries) * numentries, fd);
-	if (error != 0)
-	    return error;
-
-	for (i = 0; i < numentries; i++) {
-	    cur_obj = entries[i].obj_info;
-	    if (cur_obj == NULL)
-		continue;
-
-	    error = file_write(cur_obj, sizeof(*cur_obj), fd);
-	    if (error != 0)
-		return error;
-
-	    if (cur_obj->type == OBJT_VNODE) {
-		error = sls_store_path(cur_obj->path, fd);
-		if (error != 0)
-		    return error;
-	    }
-	}
 
 	tgt = (struct sls_store_tgt) {
 	    .type = SLS_FILE,

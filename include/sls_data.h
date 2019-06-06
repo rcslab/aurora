@@ -97,6 +97,8 @@ struct memckpt_info {
 };
 
 #define SLS_FILE_INFO_MAGIC 0x736c7234
+#define SLS_STRING_MAGIC 0x72626f72
+#define SLS_FILES_END INT_MAX
 struct file_info {
 	/* 
 	* Let's hope the private data doesn't get used

@@ -11,8 +11,10 @@
 #include "sls_mem.h"
 #include "sls_mosd.h"
 
-int file_read(void* addr, size_t len, int fd);
-int file_write(void* addr, size_t len, int fd);
+int sls_file_read(void* addr, size_t len, struct file *fp);
+int sls_file_write(void* addr, size_t len, struct file *fp);
+int sls_fd_read(void* addr, size_t len, int fd);
+int sls_fd_write(void* addr, size_t len, int fd);
 int file_writev(struct iovec *iov, size_t iovlen, int fd);
 int osd_pread(struct osd_mbmp *mbmp, uint64_t block, void *addr, size_t len);
 int osd_preadv(struct osd_mbmp *mbmp, uint64_t block, struct iovec *iov, size_t iovlen);

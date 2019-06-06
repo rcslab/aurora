@@ -5,10 +5,11 @@
 
 #include <sys/file.h>
 #include <sys/filedesc.h>
+#include <sys/sbuf.h>
 
 #include "sls_data.h"
 
-int fd_ckpt(struct proc *p, struct filedesc_info *filedesc_info);
-int fd_rest(struct proc *p, struct filedesc_info *info);
+int fd_ckpt(struct proc *p, struct sbuf *sb);
+int fd_rest(struct proc *p, struct filedesc_info info);
 
 #endif

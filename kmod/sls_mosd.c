@@ -35,7 +35,7 @@
 #include <vm/uma.h>
 
 #include "sls.h"
-#include "path.h"
+#include "sls_path.h"
 #include "slsmm.h"
 #include "sls_data.h"
 #include "sls_dump.h"

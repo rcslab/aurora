@@ -9,6 +9,7 @@
 #include <sys/param.h>
 #include <sys/pcpu.h>
 #include <sys/proc.h>
+#include <sys/sbuf.h>
 #include <sys/shm.h>
 
 #include <machine/param.h>
@@ -21,7 +22,7 @@
 
 #include "sls_data.h"
 
-int proc_ckpt(struct proc *p, struct proc_info *proc_info, struct thread_info *thread_infos);
+int proc_ckpt(struct proc *p, struct sbuf *sb);
 int proc_rest(struct proc *p, struct proc_info *proc_info, struct thread_info *thread_infos);
 
 #endif

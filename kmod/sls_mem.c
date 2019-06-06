@@ -26,7 +26,7 @@
 #include <vm/uma.h>
 
 #include "slsmm.h"
-#include "path.h"
+#include "sls_path.h"
 #include "sls_mem.h"
 #include "sls_dump.h"
 
@@ -62,39 +62,34 @@ userpage_unmap(vm_offset_t vaddr)
  * now, its pages would be copied twice.
  */
 static int 
-vm_object_ckpt(struct proc *p, vm_object_t obj, struct vm_object_info **obj_info)
+vm_object_ckpt(struct proc *p, vm_object_t obj, struct sbuf *sb)
 {
 	vm_object_t o;
-	struct vm_object_info *cur_obj;
-	struct vnode *vp;
-	struct sbuf *sb;
+	struct vm_object_info cur_obj;
+	struct vnode *vp = NULL;
 	int error;
 
-	cur_obj = malloc(sizeof(*cur_obj), M_SLSMM, M_NOWAIT);
-	if (cur_obj == NULL)
-	    return ENOMEM;
-
-	cur_obj->size = obj->size;
-	cur_obj->type = obj->type;
-	cur_obj->id = (vm_offset_t) obj;
-	cur_obj->backer = 0;
-	cur_obj->backer_off = obj->backing_object_offset;
-	cur_obj->path = NULL;
-	cur_obj->magic = SLS_OBJECT_INFO_MAGIC;
+	cur_obj.size = obj->size;
+	cur_obj.type = obj->type;
+	cur_obj.id = (vm_offset_t) obj;
+	cur_obj.backer = 0;
+	cur_obj.backer_off = obj->backing_object_offset;
+	cur_obj.path = NULL;
+	cur_obj.magic = SLS_OBJECT_INFO_MAGIC;
 
 	/* Get the total backing offset for the deepest non-anonymous object */
 	for (o = obj->backing_object; o != NULL; o = o->backing_object) {
 	    if (o->type != OBJT_DEFAULT)
 		break;
 
-	    cur_obj->backer_off += o->backing_object_offset;
+	    cur_obj.backer_off += o->backing_object_offset;
 	}
 
 	/* Only care about non-anonymous objects */
 	if (o != NULL) {
-	    cur_obj->backer = (vm_offset_t) o;
+	    cur_obj.backer = (vm_offset_t) o;
 	} else
-	    cur_obj->backer_off = 0;
+	    cur_obj.backer_off = 0;
 
 	/*
 	* Used for mmap'd files - we are using the filename
@@ -102,17 +97,6 @@ vm_object_ckpt(struct proc *p, vm_object_t obj, struct vm_object_info **obj_info
 	*/
 	if (obj->type == OBJT_VNODE) {
 	    vp = (struct vnode *) obj->handle;
-
-	    PROC_UNLOCK(p);
-	    error = sls_vn_to_path(vp, &sb);
-	    PROC_LOCK(p);
-	    if (error) {
-		free(cur_obj, M_SLSMM);
-		*obj_info = NULL;
-		return error;
-	    }
-
-	    cur_obj->path = sb; 
 
 	} else if (obj->type == OBJT_DEVICE) {
 	    /* 
@@ -123,7 +107,18 @@ vm_object_ckpt(struct proc *p, vm_object_t obj, struct vm_object_info **obj_info
 	    sls_hpet0 = (struct cdev *) obj->handle;
 	} 
 
-	*obj_info = cur_obj;
+	error = sbuf_bcat(sb, (void *) &cur_obj, sizeof(cur_obj));
+	if (error != 0)
+	    return ENOMEM;
+
+	if (vp != NULL) {
+	    PROC_UNLOCK(p);
+	    error = sls_vn_to_path_append(vp, sb);
+	    PROC_LOCK(p);
+	    if (error)
+		return error;
+	}
+
 
 	return 0;
 }
@@ -132,22 +127,23 @@ vm_object_ckpt(struct proc *p, vm_object_t obj, struct vm_object_info **obj_info
  * return the list of original vm_object and vm_entry for dump
  */
 int
-vmspace_ckpt(struct proc *p, struct memckpt_info *dump, long mode)
+vmspace_ckpt(struct proc *p, struct sbuf *sb, long mode)
 {
 	vm_map_t vm_map;
 	struct vmspace *vmspace;
 	struct vm_map_entry *entry;
-	struct vm_map_entry_info *entries;
-	struct vm_map_entry_info *cur_entry;
+	struct vm_map_entry_info cur_entry;
+	struct vmspace_info vmspace_info;
+	struct memckpt_info memory_info;
 	vm_object_t obj;
+	int error;
 	int i;
 
 	vmspace = p->p_vmspace;
 
-	entries = dump->entries;
 	vm_map = &vmspace->vm_map;
 
-	dump->vmspace = (struct vmspace_info) {
+	vmspace_info = (struct vmspace_info) {
 	    .magic = SLS_VMSPACE_INFO_MAGIC,
 	    .vm_swrss = vmspace->vm_swrss,
 	    .vm_tsize = vmspace->vm_tsize,
@@ -159,27 +155,39 @@ vmspace_ckpt(struct proc *p, struct memckpt_info *dump, long mode)
 	    .nentries = vm_map->nentries,
 	};
 
+	memory_info = (struct memckpt_info) {
+	    .magic = SLS_MEMCKPT_INFO_MAGIC,
+	    .vmspace = vmspace_info,
+	};
+
+	error = sbuf_bcat(sb, (void *) &memory_info, sizeof(memory_info));
+	if (error != 0)
+	    return ENOMEM;
+
 	for (entry = vm_map->header.next, i = 0; entry != &vm_map->header;
 		entry = entry->next, i++) {
 
-	    cur_entry = &entries[i];
-	    cur_entry->magic = SLS_ENTRY_INFO_MAGIC;
-
+	    cur_entry.magic = SLS_ENTRY_INFO_MAGIC;
 
 	    /* Grab vm_entry info. */
-	    cur_entry->start = entry->start;
-	    cur_entry->end = entry->end;
-	    cur_entry->offset = entry->offset;
-	    cur_entry->eflags = entry->eflags;
-	    cur_entry->protection = entry->protection;
-	    cur_entry->max_protection = entry->max_protection;
-	    cur_entry->obj_info = NULL;
+	    cur_entry.start = entry->start;
+	    cur_entry.end = entry->end;
+	    cur_entry.offset = entry->offset;
+	    cur_entry.eflags = entry->eflags;
+	    cur_entry.protection = entry->protection;
+	    cur_entry.max_protection = entry->max_protection;
+	    /* TEMP, used as a marker for whether the entry is backed by an object */
+	    cur_entry.obj_info = (struct vm_object_info *) entry->object.vm_object;
+
+	    error = sbuf_bcat(sb, (void *) &cur_entry, sizeof(cur_entry));
+	    if (error != 0)
+		return ENOMEM;
 
 	    obj = entry->object.vm_object;
 	    if (obj == NULL)
 		continue;
 
-	    vm_object_ckpt(p, obj, &cur_entry->obj_info);
+	    vm_object_ckpt(p, obj, sb);
 
 	}
 
@@ -294,7 +302,7 @@ vm_object_rest(struct proc *p, struct vm_map_entry_info *entry, vm_object_t back
 }
 
 static void
-data_rest(struct dump *dump, struct vm_map *map, vm_object_t object, struct vm_map_entry_info *entry)
+data_rest(struct sls_pagetable ptable, struct vm_map *map, vm_object_t object, struct vm_map_entry_info *entry)
 {
 
 	struct dump_page *page_entry;
@@ -303,8 +311,8 @@ data_rest(struct dump *dump, struct vm_map *map, vm_object_t object, struct vm_m
 	vm_page_t new_page;
 	int error;
 
-	for (int j = 0; j <= dump->hashmask; j++) {
-	    LIST_FOREACH(page_entry, &dump->pages[j & dump->hashmask], next) {
+	for (int j = 0; j <= ptable.hashmask; j++) {
+	    LIST_FOREACH(page_entry, &ptable.pages[j & ptable.hashmask], next) {
 		vaddr = page_entry->vaddr;
 		if (vaddr < entry->start || vaddr >= entry->end)
 		    continue;
@@ -413,9 +421,8 @@ find_obj_id(struct vm_map_entry_info *entries, int numentries, vm_offset_t id)
 }
 
 int
-vmspace_rest(struct proc *p, struct dump *dump)
+vmspace_rest(struct proc *p, struct memckpt_info memckpt, struct sls_pagetable ptable)
 {
-	struct memckpt_info memckpt;
 	struct vmspace *vmspace;
 	struct vm_map *vm_map;
 	struct vm_map_entry_info *entry;
@@ -433,7 +440,6 @@ vmspace_rest(struct proc *p, struct dump *dump)
 
 
 	/* Shorthands */
-	memckpt = dump->memory;
 	vmspace = p->p_vmspace;
 	vm_map = &vmspace->vm_map;
 	numentries = memckpt.vmspace.nentries;
@@ -548,7 +554,7 @@ vmspace_rest(struct proc *p, struct dump *dump)
 
 	    
 	    if (new_object && new_object->type == OBJT_DEFAULT)
-		data_rest(dump, vm_map, new_object, entry);
+		data_rest(ptable, vm_map, new_object, entry);
 	}
 	    
 

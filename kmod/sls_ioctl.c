@@ -45,7 +45,6 @@
 #include "sls_op.h"
 #include "sls_ioctl.h"
 #include "sls_mosd.h"
-#include "path.h"
 
 #include "sls_dump.h"
 
@@ -53,27 +52,6 @@
 MALLOC_DEFINE(M_SLSMM, "slsmm", "SLSMM");
 
 struct sls_metadata slsm;
-
-static struct dump * 
-sls_load_file(char *filename)
-{
-    struct dump *dump;
-    int error;
-    int fd;
-
-    error = kern_openat(curthread, AT_FDCWD, filename, 
-	UIO_SYSSPACE, O_RDWR | O_CREAT, S_IRWXU);
-    fd = curthread->td_retval[0];
-    if (error != 0) {
-	printf("Error: Opening file failed with %d\n", error);
-	return NULL;
-    }
-
-    dump = sls_load(fd);
-    kern_close(curthread, fd);
-
-    return dump;
-}
 
 
 static int
@@ -86,7 +64,6 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	struct sls_op_args *op_args;
 	struct sls_process *slsp;
 	struct proc *p = NULL;
-	struct dump *dump = NULL;
 
 	char *snap_name = NULL;
 	size_t snap_name_len;
@@ -175,20 +152,6 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		
 
 		KASSERT(op == SLS_RESTORE, "operation is restore");
-		/* 
-		 * Eager check for the snapshot, because if we fail
-		 * during restoring we have already trashed this process
-		 * beyond repair.
-		 */
-		dump = sls_load_file(op_args->filename);
-		if (dump == NULL) {
-		    PRELE(op_args->p);
-		    free(op_args->filename, M_SLSMM);
-		    free(op_args, M_SLSMM);
-		    return EINVAL;
-		}
-
-		op_args->dump = dump;
 
 		error = kthread_add((void(*)(void *)) sls_restd, 
 		    op_args, p, NULL, 0, 0, "sls_restored");
@@ -231,15 +194,15 @@ static struct cdevsw slsmm_cdevsw = {
 static int
 SLSHandler(struct module *inModule, int inEvent, void *inArg) {
     int error = 0;
-    struct vnode *vp = NULL;
+    struct vnode __unused *vp = NULL;
     
     switch (inEvent) {
 	case MOD_LOAD:
 	    bzero(&slsm, sizeof(slsm));
 
-	    sls_osdhack();
 	    /* TEMP */
 	    /*
+	    sls_osdhack();
 	    error = filename_to_vnode("/root/nvd0", &vp);
 	    if (error != 0) {
 		printf("Error: Could not find OSD\n");
@@ -248,7 +211,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 
 	    slsm.slsm_osdvp = vp;
 	    printf("Pointer is %p\n", vp);
-	    */
 	    slsm.slsm_osd = slsosd_import(vp);
 	    if (slsm.slsm_osd == NULL) {
 		bzero(&slsm, sizeof(slsm));
@@ -263,6 +225,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		    return EINVAL;
 		}
 	    }
+	    */
 
 	    slsm.slsm_proctable = hashinit(HASH_MAX, M_SLSMM, &slsm.slsm_procmask);
 

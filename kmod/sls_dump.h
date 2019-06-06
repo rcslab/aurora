@@ -18,15 +18,9 @@ struct dump_page {
 
 LIST_HEAD(page_list, dump_page);
 
-#define SLS_DUMP_MAGIC 0x736c7525
-struct dump {
-	struct proc_info proc;
-	struct thread_info *threads;
-	struct memckpt_info memory;
-	struct filedesc_info filedesc;
-	struct page_list *pages;		
-	u_long hashmask;		
-	int magic;
+struct sls_pagetable {
+    struct page_list *pages;		
+    u_long hashmask;		
 };
 
 struct sls_store_tgt {
@@ -37,15 +31,12 @@ struct sls_store_tgt {
     };
 };
 
-struct dump *sls_load(int fd);
-int sls_store(struct dump *dump, int mode, struct vmspace *vm, int fd);
+int sls_store(struct sls_process *slsp, int mode, int fd);
+int sls_load_cpustate(struct proc_info *proc_info, struct thread_info **thread_infos, struct file *fp);
+int sls_load_filedesc(struct filedesc_info *filedesc, struct file *fp);
+int sls_load_memory(struct memckpt_info *memory, struct file *fp);
+int sls_load_ptable(struct sls_pagetable *ptable, struct file *fp);
 
-int dump_clone(struct dump *dst, struct dump *src);
-int copy_dump_pages(struct dump *dst, struct dump *src);
-
-struct dump *alloc_dump(void);
-void free_dump(struct dump *dump);
-
-void addpage_noreplace(struct dump *dump, struct dump_page *dump_page);
+void addpage_noreplace(struct sls_pagetable *ptable, struct dump_page *dump_page);
 
 #endif /* _DUMP_H_ */

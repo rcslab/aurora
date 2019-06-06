@@ -83,8 +83,6 @@ int mbmp_export(struct osd_mbmp *mbmp);
 void mino_addmrec(struct osd_mino *mino, struct osd_mrec *mrec);
 void mrec_addbuf(struct osd_mrec *mrec, void *buf, size_t len);
 
-/* XXX Move into sls_dump.c and make static */
-int osd_dump(struct dump *dump, struct vmspace *vm, int mode);
 
 #endif /* _SLS_MOSD_H_ */
 

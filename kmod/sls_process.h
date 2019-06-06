@@ -3,6 +3,11 @@
 
 #include <sys/param.h>
 
+#include <sys/sbuf.h>
+
+#include <vm/vm.h>
+#include <vm/vm_map.h>
+
 struct sls_process {
     uint64_t		    slsp_pid;	    /* PID of proc */
     uint64_t		    slsp_epoch;	    /* Current epoch, incremented after ckpt */
@@ -11,6 +16,7 @@ struct sls_process {
     vm_ooffset_t	    slsp_charge;    /* Charge for the vmspace above */
 
     int			    slsp_status;    /* Status of checkpoint */
+    struct sbuf		    *slsp_ckptbuf;  /* Buffer to be dumped at ckpt */
 
     LIST_ENTRY(sls_process) slsp_procs;	    /* List of checkpointed procs */
 };

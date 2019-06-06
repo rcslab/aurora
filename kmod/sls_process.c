@@ -50,6 +50,11 @@ slsp_init(pid_t pid)
     procnew->slsp_charge = 0;
     procnew->slsp_status = 0;
     procnew->slsp_epoch = 0;
+    procnew->slsp_ckptbuf = sbuf_new_auto();
+    if (procnew->slsp_ckptbuf == NULL) {
+	free(procnew, M_SLSMM);
+	return NULL;
+    }
     
     LIST_INSERT_HEAD(bucket, procnew, slsp_procs);
     printf("Returning the slsp\n");
@@ -75,6 +80,12 @@ slsp_add(pid_t pid)
 void
 slsp_fini(struct sls_process *slsp)
 {
+    if (slsp->slsp_ckptbuf != NULL) {
+	if (sbuf_done(slsp->slsp_ckptbuf) == 0)
+	    sbuf_finish(slsp->slsp_ckptbuf);
+
+	sbuf_delete(slsp->slsp_ckptbuf);
+    }
 
     if (slsp->slsp_vm != NULL)
 	vmspace_free(slsp->slsp_vm);

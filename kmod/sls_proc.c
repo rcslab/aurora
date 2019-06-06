@@ -5,6 +5,7 @@
 #include <sys/pcpu.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
+#include <sys/sbuf.h>
 #include <sys/signalvar.h>
 #include <sys/sleepqueue.h>
 
@@ -21,27 +22,29 @@
  * takes and leaves the process locked.
  */
 static int
-thread_ckpt(struct thread *td, struct thread_info *thread_info)
+thread_ckpt(struct thread *td, struct sbuf *sb)
 {
 	int error = 0;
+	struct thread_info thread_info;
 
-	/* We are doing the work of thr_new_initthr */
-	cpu_thread_clean(td);
-
-	error = proc_read_regs(td, &thread_info->regs);
+	error = proc_read_regs(td, &thread_info.regs);
 	if (error != 0)
 	    return error;
 
-	error = proc_read_fpregs(td, &thread_info->fpregs);
+	error = proc_read_fpregs(td, &thread_info.fpregs);
 	if (error != 0)
 	    return error;
 
-	bcopy(&td->td_sigmask, &thread_info->sigmask, sizeof(sigset_t));
-	bcopy(&td->td_oldsigmask, &thread_info->oldsigmask, sizeof(sigset_t));
+	bcopy(&td->td_sigmask, &thread_info.sigmask, sizeof(sigset_t));
+	bcopy(&td->td_oldsigmask, &thread_info.oldsigmask, sizeof(sigset_t));
 
-	thread_info->tid = td->td_tid;
-	thread_info->fs_base = td->td_pcb->pcb_fsbase;
-	thread_info->magic = SLS_THREAD_INFO_MAGIC;
+	thread_info.tid = td->td_tid;
+	thread_info.fs_base = td->td_pcb->pcb_fsbase;
+	thread_info.magic = SLS_THREAD_INFO_MAGIC;
+
+	error = sbuf_bcat(sb, (void *) &thread_info, sizeof(thread_info));
+	if (error != 0)
+	    return error;
 
 	return 0;
 }
@@ -84,31 +87,33 @@ rest_done:
  * like PIDs. This function takes and leaves the process locked.
  */
 int
-proc_ckpt(struct proc *p, struct proc_info *proc_info, struct thread_info *thread_infos)
+proc_ckpt(struct proc *p, struct sbuf *sb)
 {
 	struct thread *td;
-	int threadno;
 	int error = 0;
 	struct sigacts *sigacts;
+	struct proc_info proc_info;
 
-	proc_info->nthreads = p->p_numthreads;
-	proc_info->pid = p->p_pid;
-	proc_info->magic = SLS_PROC_INFO_MAGIC;
+	proc_info.nthreads = p->p_numthreads;
+	proc_info.pid = p->p_pid;
+	proc_info.magic = SLS_PROC_INFO_MAGIC;
 
 	sigacts = p->p_sigacts;
 
 	mtx_lock(&sigacts->ps_mtx);
-	bcopy(sigacts, &proc_info->sigacts, offsetof(struct sigacts, ps_refcnt));
+	bcopy(sigacts, &proc_info.sigacts, offsetof(struct sigacts, ps_refcnt));
 	mtx_unlock(&sigacts->ps_mtx);
 
-	threadno = 0;
+	error = sbuf_bcat(sb, (void *) &proc_info, sizeof(proc_info));
+	if (error != 0)
+	    return ENOMEM;
+
 	FOREACH_THREAD_IN_PROC(p, td) {
 	    thread_lock(td);
-	    error = thread_ckpt(td, &thread_infos[threadno]);
+	    error = thread_ckpt(td, sb);
 	    thread_unlock(td);
 	    if (error != 0)
 		return error;
-	    threadno++;
 	}
 
 	return 0;
