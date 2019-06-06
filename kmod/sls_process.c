@@ -32,7 +32,6 @@
 #include "slsmm.h"
 #include "sls_data.h"
 #include "sls_dump.h"
-#include "sls_snapshot.h"
 #include "sls_process.h"
 
 
@@ -47,12 +46,10 @@ slsp_init(pid_t pid)
 
     procnew = malloc(sizeof(*procnew), M_SLSMM, M_WAITOK);
     procnew->slsp_pid = pid;
-    procnew->slsp_ckptd = 0;
     procnew->slsp_vm = NULL;
     procnew->slsp_charge = 0;
-    procnew->slsp_active = 0;
+    procnew->slsp_status = 0;
     procnew->slsp_epoch = 0;
-    LIST_INIT(&procnew->slsp_snaps);
     
     LIST_INSERT_HEAD(bucket, procnew, slsp_procs);
     printf("Returning the slsp\n");
@@ -78,16 +75,6 @@ slsp_add(pid_t pid)
 void
 slsp_fini(struct sls_process *slsp)
 {
-    struct sls_snapshot *slss;
-    struct slss_list *slist;
-
-    slist = &slsp->slsp_snaps;
-    while (!LIST_EMPTY(slist)) {
-	slss = LIST_FIRST(slist);
-	LIST_REMOVE(slss, slss_snaps);
-	LIST_REMOVE(slss, slss_procsnaps);
-	slss_fini(slss);
-    }
 
     if (slsp->slsp_vm != NULL)
 	vmspace_free(slsp->slsp_vm);
@@ -166,5 +153,4 @@ slsp_delall(void)
 			slsp_fini(slsp);
 		}
 	}
-
 }

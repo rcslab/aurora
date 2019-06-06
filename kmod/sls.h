@@ -11,7 +11,6 @@
 #include <vm/vm.h>
 #include <vm/vm_object.h>
 
-#include "sls_snapshot.h"
 #include "sls_process.h"
 #include "sls_osd.h"
 
@@ -42,7 +41,6 @@ struct sls_metadata {
     int			slsm_lastid;
     u_long		slsm_procmask;
     struct slsp_list	*slsm_proctable;
-    struct slss_list	slsm_snaplist;
     struct cdev		*slsm_cdev;
     /* OSD Related members */
     struct vnode	*slsm_osdvp;

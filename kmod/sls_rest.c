@@ -44,17 +44,13 @@
 
 #include "sls_op.h"
 #include "sls_dump.h"
-#include "sls_snapshot.h"
 
 
 
 static int
-sls_rest(struct proc *p, struct sls_snapshot *slss)
+sls_rest(struct proc *p, struct dump *dump)
 {
-	struct dump *dump;
 	int error = 0;
-
-	dump = slss->slss_dump;
 
 	/*
 	* XXX We don't actually need that, right? We're overwriting ourselves,
@@ -69,7 +65,7 @@ sls_rest(struct proc *p, struct sls_snapshot *slss)
 	    goto sls_rest_out;
 	}
 
-	error = vmspace_rest(p, slss, &dump->memory);
+	error = vmspace_rest(p, dump);
 	if (error != 0) {
 	    printf("Error: vmspace_restore failed with error code %d\n", error);
 	    goto sls_rest_out;
@@ -94,14 +90,13 @@ sls_restd(struct sls_op_args *args)
 {
     int error;
 	
-    error = sls_rest(args->p, args->slss);
+    error = sls_rest(args->p, args->dump);
     if (error != 0)
 	printf("Error: sls_rest failed with %d\n", error);
 
     PRELE(args->p);
 
-    if (args->target == SLS_FILE)
-	slss_fini(args->slss);
+    free_dump(args->dump);
     free(args->filename, M_SLSMM);
     free(args, M_SLSMM);
 

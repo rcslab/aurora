@@ -28,7 +28,6 @@
 #include "slsmm.h"
 #include "path.h"
 #include "sls_mem.h"
-#include "sls_snapshot.h"
 #include "sls_dump.h"
 
 /* Hack for supporting the hpet0 counter */
@@ -295,20 +294,17 @@ vm_object_rest(struct proc *p, struct vm_map_entry_info *entry, vm_object_t back
 }
 
 static void
-data_rest(struct sls_snapshot *slss, struct vm_map *map, vm_object_t object, struct vm_map_entry_info *entry)
+data_rest(struct dump *dump, struct vm_map *map, vm_object_t object, struct vm_map_entry_info *entry)
 {
 
 	struct dump_page *page_entry;
-	vm_offset_t vaddr, addr __unused;
-	u_long hashmask;
+	vm_offset_t vaddr, addr;
 	vm_pindex_t offset;
 	vm_page_t new_page;
 	int error;
 
-	hashmask = slss->slss_hashmask;
-
-	for (int j = 0; j <= hashmask; j++) {
-	    LIST_FOREACH(page_entry, &slss->slss_pages[j & hashmask], next) {
+	for (int j = 0; j <= dump->hashmask; j++) {
+	    LIST_FOREACH(page_entry, &dump->pages[j & dump->hashmask], next) {
 		vaddr = page_entry->vaddr;
 		if (vaddr < entry->start || vaddr >= entry->end)
 		    continue;
@@ -398,6 +394,7 @@ map_flags_from_entry(vm_eflags_t flags)
 }
 
 static int
+
 find_obj_id(struct vm_map_entry_info *entries, int numentries, vm_offset_t id)
 {
     int i;
@@ -416,8 +413,9 @@ find_obj_id(struct vm_map_entry_info *entries, int numentries, vm_offset_t id)
 }
 
 int
-vmspace_rest(struct proc *p, struct sls_snapshot *slss, struct memckpt_info *dump)
+vmspace_rest(struct proc *p, struct dump *dump)
 {
+	struct memckpt_info memckpt;
 	struct vmspace *vmspace;
 	struct vm_map *vm_map;
 	struct vm_map_entry_info *entry;
@@ -435,9 +433,10 @@ vmspace_rest(struct proc *p, struct sls_snapshot *slss, struct memckpt_info *dum
 
 
 	/* Shorthands */
+	memckpt = dump->memory;
 	vmspace = p->p_vmspace;
 	vm_map = &vmspace->vm_map;
-	numentries = dump->vmspace.nentries;
+	numentries = memckpt.vmspace.nentries;
 
 	/* The newly created objects */
 	objects = malloc(sizeof(*objects) * numentries, M_SLSMM, M_NOWAIT);
@@ -463,19 +462,18 @@ vmspace_rest(struct proc *p, struct sls_snapshot *slss, struct memckpt_info *dum
 
 
 	/* Copy vmspace state to the existing vmspace */
-	vmspace->vm_swrss = dump->vmspace.vm_swrss;
-	vmspace->vm_tsize = dump->vmspace.vm_tsize;
-	vmspace->vm_dsize = dump->vmspace.vm_dsize;
-	vmspace->vm_ssize = dump->vmspace.vm_ssize;
-	vmspace->vm_taddr = dump->vmspace.vm_taddr;
-	vmspace->vm_taddr = dump->vmspace.vm_daddr;
-	vmspace->vm_maxsaddr = dump->vmspace.vm_maxsaddr;
-
+	vmspace->vm_swrss = memckpt.vmspace.vm_swrss;
+	vmspace->vm_tsize = memckpt.vmspace.vm_tsize;
+	vmspace->vm_dsize = memckpt.vmspace.vm_dsize;
+	vmspace->vm_ssize = memckpt.vmspace.vm_ssize;
+	vmspace->vm_taddr = memckpt.vmspace.vm_taddr;
+	vmspace->vm_taddr = memckpt.vmspace.vm_daddr;
+	vmspace->vm_maxsaddr = memckpt.vmspace.vm_maxsaddr; 
 
 	/* restore vm_map entries */
 	for (i = 0; i < numentries; i++) {
 
-	    entry = &dump->entries[i];
+	    entry = &memckpt.entries[i];
 	    obj_info = entry->obj_info;
 
 	    if (obj_info == NULL) {
@@ -513,7 +511,7 @@ vmspace_rest(struct proc *p, struct sls_snapshot *slss, struct memckpt_info *dum
 	     */
 	    backer = NULL;
 	    if (obj_info->backer != 0) {
-		index = find_obj_id(dump->entries, numentries, obj_info->backer);
+		index = find_obj_id(memckpt.entries, numentries, obj_info->backer);
 		if (index != -1)
 		    backer = objects[index];
 		else
@@ -550,7 +548,7 @@ vmspace_rest(struct proc *p, struct sls_snapshot *slss, struct memckpt_info *dum
 
 	    
 	    if (new_object && new_object->type == OBJT_DEFAULT)
-		data_rest(slss, vm_map, new_object, entry);
+		data_rest(dump, vm_map, new_object, entry);
 	}
 	    
 

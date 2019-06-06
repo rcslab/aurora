@@ -44,7 +44,6 @@
 #include "slsmm.h"
 #include "sls_op.h"
 #include "sls_ioctl.h"
-#include "sls_snapshot.h"
 #include "sls_mosd.h"
 #include "path.h"
 
@@ -54,13 +53,11 @@
 MALLOC_DEFINE(M_SLSMM, "slsmm", "SLSMM");
 
 struct sls_metadata slsm;
-int current_pid = 0;
-int should_be_running = 0;
 
-static struct sls_snapshot * 
-slss_from_file(char *filename)
+static struct dump * 
+sls_load_file(char *filename)
 {
-    struct sls_snapshot *slss;
+    struct dump *dump;
     int error;
     int fd;
 
@@ -72,10 +69,10 @@ slss_from_file(char *filename)
 	return NULL;
     }
 
-    slss = sls_load(fd);
+    dump = sls_load(fd);
     kern_close(curthread, fd);
 
-    return slss;
+    return dump;
 }
 
 
@@ -87,9 +84,9 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	struct proc_param *pparam = NULL;
 
 	struct sls_op_args *op_args;
-	struct sls_snapshot *slss;
 	struct sls_process *slsp;
 	struct proc *p = NULL;
+	struct dump *dump = NULL;
 
 	char *snap_name = NULL;
 	size_t snap_name_len;
@@ -99,20 +96,9 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	int target;
 	int op;
 
-	int alright; 
 	switch (cmd) {
 	    case SLS_OP:
 		oparam = (struct op_param *) data;
-
-	 	alright = atomic_load_int(&current_pid);
-		    /* Abominable hack */
-		if (alright == 0 || alright == oparam->pid) {
-			if (atomic_cmpset_int(&current_pid, alright, oparam->pid) == 0)
-				return EINVAL;
-		} else {
-			return EINVAL;
-		}
-
 
 		target = oparam->target;
 		op = oparam->op;
@@ -181,7 +167,6 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		    op_args->id = oparam->id;
 
 		if (op == SLS_CHECKPOINT) {
-		current_pid = oparam->pid;
 		    error = kthread_add((void(*)(void *)) sls_ckptd, 
 			op_args, NULL, NULL, 0, 0, "sls_checkpointd");
 
@@ -195,19 +180,15 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		 * during restoring we have already trashed this process
 		 * beyond repair.
 		 */
-		if (op_args->target == SLS_FILE)
-		    slss = slss_from_file(op_args->filename);
-		else
-		    slss = slss_find(op_args->id);
-
-		if (slss == NULL) {
+		dump = sls_load_file(op_args->filename);
+		if (dump == NULL) {
 		    PRELE(op_args->p);
 		    free(op_args->filename, M_SLSMM);
 		    free(op_args, M_SLSMM);
 		    return EINVAL;
 		}
 
-		op_args->slss = slss;
+		op_args->dump = dump;
 
 		error = kthread_add((void(*)(void *)) sls_restd, 
 		    op_args, p, NULL, 0, 0, "sls_restored");
@@ -226,12 +207,11 @@ slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 
 		switch (pparam->op) {
 		case SLS_PROCSTAT:
-		    error = copyout(&slsp->slsp_active, pparam->ret, sizeof(*pparam->ret));
+		    error = copyout(&slsp->slsp_status, pparam->ret, sizeof(*pparam->ret));
 		    return error;
 
 		case SLS_PROCSTOP:
-		    atomic_store_int(&should_be_running, 0);
-		    atomic_store_int(&slsp->slsp_active, 0);
+		    atomic_store_int(&slsp->slsp_status, 0);
 		    return 0;
 
 		}
@@ -285,7 +265,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	    }
 
 	    slsm.slsm_proctable = hashinit(HASH_MAX, M_SLSMM, &slsm.slsm_procmask);
-	    LIST_INIT(&slsm.slsm_snaplist);
 
 	    slsm.slsm_cdev = 
 		make_dev(&slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "sls");

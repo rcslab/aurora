@@ -35,7 +35,6 @@
 #include "sls_data.h"
 #include "sls_dump.h"
 #include "sls_ioctl.h"
-#include "sls_snapshot.h"
 #include "sls_file.h"
 
 /* XXX Will become a sysctl value */
@@ -112,13 +111,49 @@ load_path_error:
 }
 
 
+static int 
+dump_init_htable(struct dump *dump)
+{
+	dump->pages = hashinit(HASH_MAX, M_SLSMM, &dump->hashmask);
+	if (dump->pages == NULL)
+		return ENOMEM;
+
+	return 0;
+}
+
+static void
+dump_fini_htable(struct dump *dump)
+{
+	int i;
+	struct dump_page *cur_page;
+	struct page_list *cur_bucket;
+
+	for (i = 0; i <= dump->hashmask; i++) {
+		cur_bucket = &dump->pages[i];
+		while (!LIST_EMPTY(cur_bucket)) {
+			cur_page = LIST_FIRST(cur_bucket);
+			LIST_REMOVE(cur_page, next);
+			free(cur_page->data, M_SLSMM);
+			free(cur_page, M_SLSMM);
+		}
+	}
+
+	hashdestroy(dump->pages, M_SLSMM, dump->hashmask);
+}
+
 struct dump *
 alloc_dump()
 {
-	struct dump *dump = NULL;
+	struct dump *dump;
+	int error;
 
 	dump = malloc(sizeof(struct dump), M_SLSMM, M_WAITOK | M_ZERO);
 	dump->magic = SLS_DUMP_MAGIC;
+	error = dump_init_htable(dump);
+	if (error != 0) {
+	    free(dump, M_SLSMM);
+	    return NULL;
+	}
 
 	return dump;
 }
@@ -133,6 +168,8 @@ free_dump(struct dump *dump)
 
 	if (dump == NULL)
 	    return;
+
+	dump_fini_htable(dump);
 
 	if (dump->threads != NULL)
 	    free(dump->threads, M_SLSMM);
@@ -174,8 +211,31 @@ free_dump(struct dump *dump)
 	free(dump, M_SLSMM);
 }
 
+void
+addpage_noreplace(struct dump *dump, struct dump_page *new_entry)
+{
+	struct page_list *page_bucket;
+	struct dump_page *page_entry;
+	vm_offset_t vaddr;
+	int already_there;
 
-struct sls_snapshot *
+	vaddr = new_entry->vaddr;
+	page_bucket = &dump->pages[vaddr & dump->hashmask];
+
+	already_there = 0;
+	LIST_FOREACH(page_entry, page_bucket, next) {
+	    if(page_entry->vaddr == new_entry->vaddr) {
+		free(new_entry->data, M_SLSMM);
+		free(new_entry, M_SLSMM);
+		already_there = 1;
+		break;
+	    }
+	}
+
+	if (already_there == 0)
+	    LIST_INSERT_HEAD(page_bucket, new_entry, next);
+}
+struct dump *
 sls_load(int fd)
 {
 	int error = 0;
@@ -188,13 +248,11 @@ sls_load(int fd)
 	struct file_info *files;
 	struct vm_object_info *cur_obj;
 	size_t thread_size, entry_size, file_size;
-	struct sls_snapshot *slss;
 	int numfiles, numthreads, numentries;
 	size_t size;
 	int i;
 
-	slss = slss_init(NULL, SLS_CKPT_FULL);
-	dump = slss->slss_dump;
+	dump = alloc_dump();
 
 	error = file_read(dump, sizeof(struct dump), fd);
 	if (error != 0)
@@ -350,21 +408,17 @@ sls_load(int fd)
 		* Add the new page to the hash table, if it already 
 		* exists there don't replace it.
 		*/
-		slss_addpage_noreplace(slss, new_entry);
+		addpage_noreplace(dump, new_entry);
 	    }
 	}
 
 
-	return slss;
+	return dump;
 
 
 sls_load_error:
 
-	/* 
-	 * We do not need to free the allocated structs individually,
-	 * the free_dump() in slss_fini() does it for us.
-	 */
-	slss_fini(slss);
+	free_dump(dump);
 	return NULL;
 }
 
@@ -485,7 +539,7 @@ sls_store_pages(struct vmspace *vm, struct sls_store_tgt tgt, int mode)
 }
 
 int
-sls_store(struct sls_snapshot *slss, int mode, struct vmspace *vm, int fd)
+sls_store(struct dump *dump, int mode, struct vmspace *vm, int fd)
 {
 	int i;
 	int error = 0;
@@ -495,9 +549,7 @@ sls_store(struct sls_snapshot *slss, int mode, struct vmspace *vm, int fd)
 	struct vm_object_info *cur_obj;
 	struct sls_store_tgt tgt;
 	int numthreads, numentries, numfiles;
-	struct dump *dump;
 
-	dump = slss->slss_dump;
 	thread_infos = dump->threads;
 	entries = dump->memory.entries;
 	file_infos = dump->filedesc.infos;

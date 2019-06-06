@@ -40,7 +40,6 @@
 #include "sls_data.h"
 #include "sls_dump.h"
 #include "sls_file.h"
-#include "sls_snapshot.h"
 #include "sls_osd.h"
 #include "sls_mosd.h"
 

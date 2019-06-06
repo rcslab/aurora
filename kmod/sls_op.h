@@ -17,6 +17,7 @@ struct sls_op_args {
     int iterations;
     int interval;
     struct sls_snapshot *slss;
+    struct dump *dump;
 };
 
 void sls_ckptd(struct sls_op_args *args);

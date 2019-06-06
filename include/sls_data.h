@@ -13,13 +13,6 @@
 #include <vm/vm.h>
 #include <vm/vm_map.h>
 
-struct sls_string {
-	size_t str_len;
-	char *str_data;
-};
-
-extern const struct sls_string nullstr; 
-
 #define SLS_PROC_INFO_MAGIC 0x736c7301
 struct proc_info {
 	int magic;

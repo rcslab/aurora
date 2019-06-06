@@ -39,7 +39,6 @@
 #include "sls_file.h"
 #include "sls_dump.h"
 #include "sls_ioctl.h"
-#include "sls_snapshot.h"
 #include "sls_file.h"
 #include "sls_osd.h"
 
@@ -310,7 +309,7 @@ osd_store(struct osd_mino *mino, struct vmspace *vm, int mode)
 }
 
 int
-osd_dump(struct sls_snapshot *slss, struct vmspace *vm, int mode)
+osd_dump(struct dump *dump, struct vmspace *vm, int mode)
 {
 	int i;
 	int error = 0;
@@ -319,7 +318,6 @@ osd_dump(struct sls_snapshot *slss, struct vmspace *vm, int mode)
 	struct file_info *file_infos;
 	struct vm_object_info *cur_obj;
 	int numthreads, numentries, numfiles;
-	struct dump *dump;
 	struct osd_mino *mino;
 	char *path;
 	size_t len;
@@ -328,7 +326,6 @@ osd_dump(struct sls_snapshot *slss, struct vmspace *vm, int mode)
 	size_sent = 0;
 	times_called = 0;
 
-	dump = slss->slss_dump;
 	thread_infos = dump->threads;
 	entries = dump->memory.entries;
 	file_infos = dump->filedesc.infos;

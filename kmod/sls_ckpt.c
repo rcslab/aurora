@@ -45,15 +45,13 @@
 
 #include "sls_op.h"
 #include "sls_dump.h"
-#include "sls_snapshot.h"
 #include "sls_mosd.h"
 
-extern int should_be_running;
-extern int current_pid;
 
-static void
-sls_ckpt_dump_init(struct proc *p, struct dump *dump)
+static struct dump * 
+sls_ckpt_dump(struct proc *p)
 {
+	struct dump *dump;
 	struct thread_info *thread_infos = NULL;
 	struct vm_map_entry_info *entries = NULL;
 	struct file_info *file_infos = NULL;
@@ -63,6 +61,7 @@ sls_ckpt_dump_init(struct proc *p, struct dump *dump)
 	numentries = p->p_vmspace->vm_map.nentries;
 	numfiles = p->p_fd->fd_files->fdt_nfiles;
 
+	dump = alloc_dump();
 	thread_infos = malloc(sizeof(*thread_infos) * numthreads, M_SLSMM, M_WAITOK);
 	entries = malloc(sizeof(*entries) * numentries, M_SLSMM, M_WAITOK);
 	file_infos = malloc(sizeof(*file_infos) * numfiles, M_SLSMM, M_WAITOK);
@@ -71,16 +70,7 @@ sls_ckpt_dump_init(struct proc *p, struct dump *dump)
 	dump->memory.entries = entries;
 	dump->filedesc.infos = file_infos;
 
-}
-
-static struct sls_snapshot *
-sls_ckpt_slss(struct proc *p, int mode)
-{
-    struct sls_snapshot *slss;
-    slss = slss_init(p, mode);
-    sls_ckpt_dump_init(p, slss->slss_dump);
-
-    return slss;
+	return dump;
 }
 
 static void
@@ -155,7 +145,7 @@ sls_ckpt_out:
 }
 
 static int 
-sls_ckpt_tofile(struct sls_snapshot *slss, struct vmspace *vm, 
+sls_ckpt_tofile(struct dump *dump, struct vmspace *vm, 
 	int mode, char *filename)
 {
     int fd;
@@ -167,7 +157,7 @@ sls_ckpt_tofile(struct sls_snapshot *slss, struct vmspace *vm,
     if (error != 0)
 	return error;
 
-    error = sls_store(slss, mode, vm, fd);
+    error = sls_store(dump, mode, vm, fd);
     if (error != 0) {
 	printf("Error: dumping dump to descriptor failed with %d\n", error);
     }
@@ -183,7 +173,7 @@ void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
     vm_ooffset_t fork_charge, new_charge;
     struct timespec tstart, tend;
     struct vmspace *new_vm;
-    struct sls_snapshot *slss;
+    struct dump *dump;
     struct proc *p;
     int error;
     int mode;
@@ -191,18 +181,18 @@ void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
     p = args->p;
     mode = args->mode;
 
-    /* XXX Change signature, we're not creating stray snapshots anymore */
-    slss = sls_ckpt_slss(p, mode);
-    SLS_DBG("Snapshot created\n");
+    dump = sls_ckpt_dump(p);
+
+    SLS_DBG("Dump created\n");
 
     /* This causes the process to get detached from its terminal.*/
     sls_stop_proc(p);
     SLS_DBG("Process stopped\n");
 
     nanotime(&tstart);
-    error = sls_ckpt(p, mode, slss->slss_dump);
+    error = sls_ckpt(p, mode, dump);
     if(error != 0) {
-	slss_fini(slss);
+	free_dump(dump);
 	return;
     }
     nanotime(&tend);
@@ -237,7 +227,7 @@ void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
     }
     SLS_DBG("New vmspace created\n");
 
-    if (slsp->slsp_ckptd == 0) {
+    if (slsp->slsp_epoch == 0) {
 	slsp->slsp_vm = new_vm;
 	slsp->slsp_charge = new_charge;
     }
@@ -250,7 +240,7 @@ void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
     kern_psignal(p, SIGCONT);
     PROC_UNLOCK(p);
 
-    if (slsp->slsp_ckptd == 1 && mode == SLS_CKPT_FULL) {
+    if (slsp->slsp_epoch > 0 && mode == SLS_CKPT_FULL) {
 	nanotime(&tstart);
 	vmspace_free(new_vm);
 	nanotime(&tend);
@@ -263,22 +253,12 @@ void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
     switch (args->target) {
     case SLS_FILE:
 
-	sls_ckpt_tofile(slss, slsp->slsp_vm, mode, args->filename);
-	slss_fini(slss);
+	sls_ckpt_tofile(dump, slsp->slsp_vm, mode, args->filename);
+	free_dump(dump);
 	SLS_DBG("Dumped to file\n");
 	break;
 
-    case SLS_MEM:
-	LIST_INSERT_HEAD(&slsm.slsm_snaplist, slss, slss_snaps);
-	LIST_INSERT_HEAD(&slsp->slsp_snaps, slss, slss_procsnaps);
-	SLS_DBG("Dumped to memory\n");
-	break;
-
-    case SLS_OSD:
-	osd_dump(slss, slsp->slsp_vm, mode);
-	SLS_DBG("Dumped to OSD\n");
-	break;
-
+	/* XXX Bring back SLS_MEM, merge SLS_OSD w/ SLS_FILE */
     default:
 	panic("Invalid dump target\n");
 
@@ -287,7 +267,7 @@ void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
     sls_log(SLSLOG_DUMP, tonano(tend) - tonano(tstart));
 
 
-    if (slsp->slsp_ckptd == 1 && mode == SLS_CKPT_DELTA) {
+    if (slsp->slsp_epoch > 0 && mode == SLS_CKPT_DELTA) {
 	nanotime(&tstart);
 	vmspace_free(new_vm);
 	nanotime(&tend);
@@ -295,7 +275,7 @@ void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
 	SLS_DBG("Delta compaction complete\n");
     }
 
-    slsp->slsp_ckptd = 1;
+    slsp->slsp_epoch += 1;
 
 }
 
@@ -369,18 +349,14 @@ sls_ckptd(struct sls_op_args *args)
 
     slsp = slsp_add(args->p->p_pid);
 
-    atomic_store_int(&slsp->slsp_active, 1);
-    atomic_store_int(&should_be_running,  1);
+    atomic_store_int(&slsp->slsp_status, 1);
 
     SLS_DBG("Process active\n");
 
     iter = args->iterations;
     for (i = 0; (iter == 0) || (i < iter); i++) {
 
-	if (atomic_load_int(&slsp->slsp_active) == 0)
-	    break;
-
-    	if(atomic_load_int(&should_be_running) == 0)
+	if (atomic_load_int(&slsp->slsp_status) == 0)
 	    break;
 
 	nanotime(&tstart);
@@ -400,7 +376,6 @@ sls_ckptd(struct sls_op_args *args)
     }
 
     SLS_DBG("Stopped checkpointing\n");
-    //atomic_set_int(&slsp->slsp_active, 0);
 
     PRELE(args->p);
     log_results();
@@ -409,8 +384,6 @@ sls_ckptd(struct sls_op_args *args)
 	    iter, args->p->p_pid);
     free(args->filename, M_SLSMM);
     free(args, M_SLSMM);
-    atomic_store_int(&current_pid, 0);
-    atomic_store_int(&should_be_running, 0);
 
     kthread_exit();
 }
