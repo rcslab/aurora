@@ -1,5 +1,5 @@
-#ifndef _MEMCKPT_H_
-#define _MEMCKPT_H_
+#ifndef _SLS_MEM_H_
+#define _SLS_MEM_H_
 
 #include <sys/types.h>
 
@@ -8,6 +8,8 @@
 #include "sls.h"
 #include "sls_data.h"
 #include "sls_dump.h"
+#include "sls_load.h"
+#include "sls_objtable.h"
 
 /* XXX Move elsewhere, it's being used by multiple files */
 #define IDX_TO_VADDR(idx, entry_start, entry_offset) \
@@ -17,10 +19,10 @@
 
 #define SLS_VMSPACE_INFO_MAGIC 0x736c7303
 
-vm_offset_t userpage_map(vm_paddr_t phys_addr, size_t order);
-void userpage_unmap(vm_offset_t vaddr);
+int sls_vmspace_ckpt(struct proc *p, struct sbuf *sb, long mode);
+int sls_vmspace_rest(struct proc *p, struct memckpt_info memckpt);
+int sls_vmobject_rest(struct vm_object_info *info, struct sls_objtable *objtable);
+int sls_vmentry_rest(struct vm_map *map, struct vm_map_entry_info *entry, struct sls_objtable *objtable);
+void sls_data_rest(struct sls_pagetable ptable, struct vm_map *map, struct vm_map_entry *entry);
 
-int vmspace_ckpt(struct proc *p, struct sbuf *sb, long mode);
-int vmspace_rest(struct proc *p, struct memckpt_info memckpt, struct sls_pagetable ptable);
-
-#endif
+#endif /* _SLS_MEM_H_ */

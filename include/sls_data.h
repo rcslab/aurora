@@ -52,6 +52,7 @@ struct vmspace_info {
 };
 
 #define SLS_OBJECT_INFO_MAGIC 0x7aaa7303
+#define SLS_OBJECTS_END 0x7abab34
 struct vm_object_info {
 	vm_pindex_t size;
     
@@ -59,10 +60,10 @@ struct vm_object_info {
 
 	struct sbuf *path; 
 
-	vm_offset_t id;
+	vm_object_t id;
 
 	/* Used for objects that are shadows of others */
-	vm_offset_t backer;
+	vm_object_t backer;
 	vm_ooffset_t backer_off;
 
 	/* XXX Bookkeeping for swapped out pages? */
@@ -80,8 +81,9 @@ struct vm_map_entry_info {
 	vm_eflags_t eflags;
 	vm_prot_t protection;
 	vm_prot_t max_protection;
-
-	struct vm_object_info *obj_info;
+	vm_object_t obj;
+	vm_inherit_t inheritance;
+	enum obj_type type;
 };
 
 

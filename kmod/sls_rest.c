@@ -44,22 +44,72 @@
 
 #include "sls_op.h"
 #include "sls_dump.h"
+#include "sls_objtable.h"
+
+static int
+sls_rest_thread(struct proc *p, struct file *fp)
+{
+	struct thread_info thread_info;
+	int error;
+
+	error = sls_load_thread(&thread_info, fp);
+	if (error != 0)
+	    return error;
+
+	error = sls_thread_rest(p, &thread_info);
+	if (error != 0)
+	    return error;
+
+	return 0;
+}
 
 static int
 sls_rest_cpustate(struct proc *p, struct file *fp)
 {
-	int error = 0;
 	struct proc_info proc_info; 
-	struct thread_info *thread_infos;
+	int error, i;
 
-	error = sls_load_cpustate(&proc_info, &thread_infos, fp);
+	error = sls_load_proc(&proc_info, fp);
 	if (error != 0)
 	    return error;
 
-	error = proc_rest(p, &proc_info, thread_infos);
-	free(thread_infos, M_SLSMM);
+	error = sls_proc_rest(p, &proc_info);
+	if (error != 0)
+	    return error;
 
-	return error;
+	for (i = 0; i < proc_info.nthreads; i++) {
+	    error = sls_rest_thread(p, fp);
+	    if (error != 0)
+		return error;
+	}
+
+	return 0;
+}
+
+static int
+sls_rest_file(struct proc *p, int *done, struct file *fp)
+{
+	struct file_info file_info;
+	int error;
+
+	*done = 0;
+
+	error = sls_load_file(&file_info, fp);
+	if (error != 0)
+	    return error;
+
+	if (file_info.magic == SLS_FILES_END) {
+	    *done = 1;
+	    return 0;
+	}
+
+	error = sls_file_rest(p, &file_info);
+	sbuf_delete(file_info.path);
+
+	if (error != 0)
+	    return error;
+
+	return 0;
 }
 
 static int
@@ -67,18 +117,24 @@ sls_rest_filedesc(struct proc *p, struct file *fp)
 {
 	int error = 0;
 	struct filedesc_info filedesc_info;
+	int done;
 
 	error = sls_load_filedesc(&filedesc_info, fp);
 	if (error != 0)
 	    return error;
 
-	error = fd_rest(p, filedesc_info);
+	error = sls_filedesc_rest(p, filedesc_info);
+	sbuf_delete(filedesc_info.cdir);
+	sbuf_delete(filedesc_info.rdir);
+	if (error != 0)
+	    return error;
 
-	/* 
-	 * XXX free filedesc-related resources.
-	 * Again, read the data at a higher 
-	 * granularity to make this easier.
-	 */
+	do {
+	    error = sls_rest_file(p, &done, fp);
+	    if (error != 0)
+		return error;
+	} while (!done);
+
 
 	return error;
 }
@@ -86,31 +142,68 @@ sls_rest_filedesc(struct proc *p, struct file *fp)
 static int
 sls_rest_memory(struct proc *p, struct file *fp)
 {
-	int error;
 	struct memckpt_info memory;
+	struct vm_object_info obj_info;
+	struct vm_map_entry_info entry_info;
 	struct sls_pagetable ptable;
+	struct sls_objtable objtable;
+	vm_map_t map;
+	vm_map_entry_t entry;
+	int error, i;
 
-	/* 
-	 * XXX We don't bother with cleanup right now,
-	 * we need to read and restore at a higher 
-	 * granularity. Next patch will fix that.
-	 */
+	error = sls_objtable_init(&objtable);
+	if (error != 0)
+	    return error;
+
 	error = sls_load_memory(&memory, fp);
 	if (error != 0)
 	    goto sls_rest_memory_out;
+
+	error = sls_vmspace_rest(p, memory);
+	if (error != 0)
+	    goto sls_rest_memory_out;
+
+	map = &p->p_vmspace->vm_map;
+
+	/* Set up the object table */
+	for (;;) {
+	    error = sls_load_vmobject(&obj_info, fp);
+	    if (error != 0)
+		goto sls_rest_memory_out;
+
+	    if (obj_info.magic == SLS_OBJECTS_END)
+		break;
+
+	    error = sls_vmobject_rest(&obj_info, &objtable);
+	    if (error != 0)
+		goto sls_rest_memory_out;
+	}
+
+	for (i = 0; i < memory.vmspace.nentries; i++) {
+	    error = sls_load_vmentry(&entry_info, fp);
+	    if (error != 0)
+		goto sls_rest_memory_out;
+
+	    PROC_UNLOCK(p);
+	    error = sls_vmentry_rest(map, &entry_info, &objtable);
+	    PROC_LOCK(p);
+	    if (error != 0)
+		goto sls_rest_memory_out;
+	}
+	
 
 	error = sls_load_ptable(&ptable, fp);
 	if (error != 0)
 	    goto sls_rest_memory_out;
 
-	error = vmspace_rest(p, memory, ptable);
-	if (error != 0) {
-	    printf("Error: vmspace_restore failed with error code %d\n", error);
-	    goto sls_rest_memory_out;
-	}
+
+	/* Temporary measure until we start associating pages w/ objects */
+	for (entry = map->header.next; entry !=  &map->header; entry = entry->next)
+	    sls_data_rest(ptable, map, entry);
 
 sls_rest_memory_out:
 
+	sls_objtable_fini(&objtable);
 
 	return error;
 }
@@ -135,12 +228,10 @@ sls_rest(struct proc *p, struct file *fp)
 	if (error != 0)
 	    goto sls_rest_out;
 
-	SLS_DBG("cpu restored\n");
 	error = sls_rest_filedesc(p, fp);
 	if (error != 0)
 	    goto sls_rest_out;
 
-	SLS_DBG("fd restored\n");
 	error = sls_rest_memory(p, fp);
 	if (error != 0)
 	    goto sls_rest_out;
@@ -214,5 +305,9 @@ sls_restd_out:
     free(args, M_SLSMM);
 
     dev_relthread(slsm.slsm_cdev, 1);
-    kthread_exit();
+
+    if (error != 0)
+	exit1(curthread, error, 0);
+    else
+	kthread_exit();
 }

@@ -34,8 +34,8 @@
 /* XXX Remove when we get the custom kernel */
 #include "imported_sls.h"
 
-static int
-file_ckpt(struct proc *p, struct file *file, int fd, struct sbuf *sb)
+int
+sls_file_ckpt(struct proc *p, struct file *file, int fd, struct sbuf *sb)
 {
 	int error;
 	struct file_info info;
@@ -62,8 +62,8 @@ file_ckpt(struct proc *p, struct file *file, int fd, struct sbuf *sb)
 	return 0;
 }
 
-static int
-file_rest(struct proc *p, struct file_info *info)
+int
+sls_file_rest(struct proc *p, struct file_info *info)
 {
 	char *path;
 	int error;
@@ -83,7 +83,7 @@ file_rest(struct proc *p, struct file_info *info)
 }
 
 int
-fd_ckpt(struct proc *p, struct sbuf *sb)
+sls_filedesc_ckpt(struct proc *p, struct sbuf *sb)
 {
 	int i;
 	int error = 0;
@@ -105,14 +105,14 @@ fd_ckpt(struct proc *p, struct sbuf *sb)
 
 	error = sbuf_bcat(sb, (void *) &filedesc_info, sizeof(filedesc_info));
 	if (error != 0)
-	    goto fd_ckpt_done;
+	    goto sls_filedesc_ckpt_done;
 
 	PROC_UNLOCK(p);
 	error = sls_vn_to_path_append(filedesc->fd_cdir, sb);
 	PROC_LOCK(p);
 	if (error) {
 	    SLS_DBG("Error: cdir sls_vn_to_path failed with code %d\n", error);
-	    goto fd_ckpt_done;
+	    goto sls_filedesc_ckpt_done;
 	}
 
 
@@ -121,7 +121,7 @@ fd_ckpt(struct proc *p, struct sbuf *sb)
 	PROC_LOCK(p);
 	if (error) {
 	    SLS_DBG("Error: rdir sls_vn_to_path failed with code %d\n", error);
-	    goto fd_ckpt_done;
+	    goto sls_filedesc_ckpt_done;
 	}
 
 
@@ -135,19 +135,19 @@ fd_ckpt(struct proc *p, struct sbuf *sb)
 	    if (fp->f_type != DTYPE_VNODE || fp->f_vnode->v_type != VREG)
 		continue;
 
-	    error = file_ckpt(p, fp, i, sb);
+	    error = sls_file_ckpt(p, fp, i, sb);
 	    if (error != 0)
-		goto fd_ckpt_done;
+		goto sls_filedesc_ckpt_done;
 	}
 
 	memset(&sentinel, 0, sizeof(sentinel));
 	sentinel.magic = SLS_FILES_END;
 	error = sbuf_bcat(sb, (void *) &sentinel, sizeof(sentinel));
 	if (error != 0)
-	    goto fd_ckpt_done;
+	    goto sls_filedesc_ckpt_done;
 
 
-fd_ckpt_done:
+sls_filedesc_ckpt_done:
 
 	vdrop(filedesc->fd_cdir);
 	vdrop(filedesc->fd_rdir);
@@ -159,14 +159,12 @@ fd_ckpt_done:
 }
 
 int
-fd_rest(struct proc *p, struct filedesc_info info)
+sls_filedesc_rest(struct proc *p, struct filedesc_info info)
 {
-	struct file_info *infos = info.infos;
 	int stdfds[] = { 0, 1, 2 };
 	struct filedesc *newfdp;
 	char *cdir, *rdir;
 	int error = 0;
-	int i;
 
 	cdir = sbuf_data(info.cdir);
 	rdir = sbuf_data(info.rdir);
@@ -193,13 +191,6 @@ fd_rest(struct proc *p, struct filedesc_info info)
 	FILEDESC_XLOCK(newfdp);
 	newfdp->fd_cmask = info.fd_cmask;
 	FILEDESC_XUNLOCK(newfdp);
-
-	for (i = 0; i < info.num_files; i++) {
-	    error = file_rest(p, &infos[i]);
-	    if (error != 0)
-		return error;
-	}
-
 
 	return 0;
 }

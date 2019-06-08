@@ -85,7 +85,7 @@ sls_ckpt(struct proc *p, int mode, struct sls_process *slsp)
 	PROC_LOCK(p);
 
 	nanotime(&tstart);
-	error = proc_ckpt(p, slsp->slsp_ckptbuf);
+	error = sls_proc_ckpt(p, slsp->slsp_ckptbuf);
 	if (error != 0) {
 	    SLS_DBG("Error: proc_ckpt failed with error code %d\n", error);
 	    goto sls_ckpt_out;
@@ -94,7 +94,7 @@ sls_ckpt(struct proc *p, int mode, struct sls_process *slsp)
 	sls_log(SLSLOG_PROC, tonano(tend) - tonano(tstart));
 
 	nanotime(&tstart);
-	error = fd_ckpt(p, slsp->slsp_ckptbuf);
+	error = sls_filedesc_ckpt(p, slsp->slsp_ckptbuf);
 	if (error != 0) {
 	    SLS_DBG("Error: fd_ckpt failed with error code %d\n", error);
 	    goto sls_ckpt_out;
@@ -103,7 +103,7 @@ sls_ckpt(struct proc *p, int mode, struct sls_process *slsp)
 	sls_log(SLSLOG_FILE, tonano(tend) - tonano(tstart));
 
 	nanotime(&tstart);
-	error = vmspace_ckpt(p, slsp->slsp_ckptbuf, mode);
+	error = sls_vmspace_ckpt(p, slsp->slsp_ckptbuf, mode);
 	if (error != 0) {
 	    SLS_DBG("Error: vmspace_ckpt failed with error code %d\n", error);
 	    goto sls_ckpt_out;
@@ -130,7 +130,7 @@ sls_ckpt_tofile(struct sls_process *slsp, int mode, char *filename)
     if (error != 0)
 	return error;
 
-    error = sls_store(slsp, mode, fd);
+    error = sls_dump(slsp, mode, fd);
     if (error != 0) {
 	printf("Error: dumping dump to descriptor failed with %d\n", error);
     }

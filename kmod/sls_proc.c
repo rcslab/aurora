@@ -22,7 +22,7 @@
  * takes and leaves the process locked.
  */
 static int
-thread_ckpt(struct thread *td, struct sbuf *sb)
+sls_thread_ckpt(struct thread *td, struct sbuf *sb)
 {
 	int error = 0;
 	struct thread_info thread_info;
@@ -56,7 +56,7 @@ thread_ckpt(struct thread *td, struct sbuf *sb)
  * which thread_rest is an argument.
  */
 static int
-thread_rest(struct thread *td, void *thunk)
+sls_thread_create(struct thread *td, void *thunk)
 {
 	int error = 0;
 	struct thread_info *thread_info = (struct thread_info *) thunk;
@@ -64,11 +64,11 @@ thread_rest(struct thread *td, void *thunk)
 	PROC_LOCK(td->td_proc);
 	error = proc_write_regs(td, &thread_info->regs);
 	if (error != 0)
-	    goto rest_done;
+	    goto done;
 	
 	error = proc_write_fpregs(td, &thread_info->fpregs);
 	if (error != 0)
-	    goto rest_done;
+	    goto done;
 
 	bcopy(&thread_info->sigmask, &td->td_sigmask, sizeof(sigset_t));
 	bcopy(&thread_info->oldsigmask, &td->td_oldsigmask, sizeof(sigset_t));
@@ -76,9 +76,22 @@ thread_rest(struct thread *td, void *thunk)
 	set_pcb_flags(td->td_pcb, PCB_FULL_IRET);
 	td->td_pcb->pcb_fsbase = thread_info->fs_base;
 
-rest_done:
+done:
 
 	PROC_UNLOCK(td->td_proc);
+	return error;
+}
+
+int
+sls_thread_rest(struct proc *p, struct thread_info *thread_info)
+{
+	int error;
+	
+	PROC_UNLOCK(p);
+	error = thread_create(curthread, NULL, sls_thread_create, 
+	    (void *) thread_info);
+	PROC_LOCK(p);
+
 	return error;
 }
 
@@ -87,7 +100,7 @@ rest_done:
  * like PIDs. This function takes and leaves the process locked.
  */
 int
-proc_ckpt(struct proc *p, struct sbuf *sb)
+sls_proc_ckpt(struct proc *p, struct sbuf *sb)
 {
 	struct thread *td;
 	int error = 0;
@@ -110,7 +123,7 @@ proc_ckpt(struct proc *p, struct sbuf *sb)
 
 	FOREACH_THREAD_IN_PROC(p, td) {
 	    thread_lock(td);
-	    error = thread_ckpt(td, sb);
+	    error = sls_thread_ckpt(td, sb);
 	    thread_unlock(td);
 	    if (error != 0)
 		return error;
@@ -125,12 +138,9 @@ proc_ckpt(struct proc *p, struct sbuf *sb)
  * like PIDs. This function takes and leaves the process locked.
  */
 int
-proc_rest(struct proc *p, struct proc_info *proc_info, struct thread_info *thread_infos)
+sls_proc_rest(struct proc *p, struct proc_info *proc_info)
 {
 	struct sigacts *newsigacts, *oldsigacts;
-	struct thread *td __unused;
-	int error = 0;
-	int threadno;
 
 	/* We bcopy the exact way it's done in sigacts_copy(). */
 	newsigacts = sigacts_alloc();
@@ -139,17 +149,6 @@ proc_rest(struct proc *p, struct proc_info *proc_info, struct thread_info *threa
 	oldsigacts = p->p_sigacts;
 	p->p_sigacts = newsigacts;
 	sigacts_free(oldsigacts);
-
-	PROC_UNLOCK(p);
-	for (threadno = 0; threadno < proc_info->nthreads; threadno++) {
-	    error = thread_create(curthread, NULL, thread_rest, 
-		(void *) &thread_infos[threadno]);
-	    if (error != 0) {
-		PROC_LOCK(p);
-		return error;
-	    }
-	}
-	PROC_LOCK(p);
 
 	return 0;
 }

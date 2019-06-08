@@ -1,5 +1,5 @@
-#ifndef _FD_H_
-#define _FD_H_
+#ifndef _SLS_FD_H_
+#define _SLS_FD_H_
 
 #include <sys/types.h>
 
@@ -9,7 +9,10 @@
 
 #include "sls_data.h"
 
-int fd_ckpt(struct proc *p, struct sbuf *sb);
-int fd_rest(struct proc *p, struct filedesc_info info);
+int sls_filedesc_ckpt(struct proc *p, struct sbuf *sb);
+int sls_filedesc_rest(struct proc *p, struct filedesc_info info);
 
-#endif
+int sls_file_ckpt(struct proc *p, struct file *file, int fd, struct sbuf *sb);
+int sls_file_rest(struct proc *p, struct file_info *file);
+
+#endif /* _SLS_FD_H_ */

@@ -1,5 +1,5 @@
-#ifndef _CPUCKPT_H_
-#define _CPUCKPT_H_
+#ifndef _SLS_PROC_H_
+#define _SLS_PROC_H_
 
 #include <sys/types.h>
 
@@ -22,7 +22,9 @@
 
 #include "sls_data.h"
 
-int proc_ckpt(struct proc *p, struct sbuf *sb);
-int proc_rest(struct proc *p, struct proc_info *proc_info, struct thread_info *thread_infos);
+int sls_proc_ckpt(struct proc *p, struct sbuf *sb);
+int sls_proc_rest(struct proc *p, struct proc_info *proc_info);
+int sls_thread_rest(struct proc *p, struct thread_info *thread_info);
 
-#endif
+
+#endif /* _SLS_PROC_H_ */

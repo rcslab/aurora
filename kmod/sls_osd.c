@@ -231,8 +231,10 @@ osd_store(struct osd_mino *mino, struct vmspace *vm, int mode)
 
 		    
 		    /* Never fails on amd64, check is here for futureproofing */
-		    vaddr_data = userpage_map(pagerun_start_phys, pagerun_len);
-		    if ((void *) vaddr_data == NULL) {
+		    data = pmap_map(NULL, pagerun_start_phys->phys_addr, 
+			    pagerun_start_phys + pagerun_len, 
+			    VM_PROT_READ | VM_PROT_WRITE);
+		    if (vaddr_data == 0) {
 			printf("Mapping page failed\n");
 			free(iov, M_SLSMM);
 			free(vaddrs, M_SLSMM);
@@ -258,8 +260,7 @@ osd_store(struct osd_mino *mino, struct vmspace *vm, int mode)
 				curblk += (iov[i].iov_len / mino->mino_mbmp->mbmp_osd->osd_bsize);
 			osd_pwritev(NULL, b, iov, iovlen);
 
-			for (i = 0; i < iovlen; i++)
-			    userpage_unmap((vm_offset_t) iov[i].iov_base);
+			/* XXX pmap_delete or similar? */
 
 			iovlen = 0;
 		    }
@@ -281,8 +282,10 @@ osd_store(struct osd_mino *mino, struct vmspace *vm, int mode)
 	    }
 	}
 
-	vaddr_data = userpage_map(pagerun_start_phys, pagerun_len);
-	if ((void *) vaddr_data == NULL) {
+	data = pmap_map(NULL, pagerun_start_phys->phys_addr, 
+		pagerun_start_phys + pagerun_len, 
+		VM_PROT_READ | VM_PROT_WRITE);
+	if (vaddr_data == 0) {
 	    printf("Mapping page failed\n");
 	    free(iov, M_SLSMM);
 	    free(vaddrs, M_SLSMM);
