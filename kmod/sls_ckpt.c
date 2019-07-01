@@ -66,8 +66,8 @@
 
 SDT_PROVIDER_DEFINE(sls);
 
-SDT_PROBE_DEFINE(sls, , , stop_entry);
-SDT_PROBE_DEFINE(sls, , , stop_exit);
+SDT_PROBE_DEFINE(sls, , , stopped);
+SDT_PROBE_DEFINE(sls, , , cont);
 
 void sls_stop_proc(struct proc *p);
 void sls_ckpt_once(struct proc *p, struct sls_process *slsp);
@@ -76,7 +76,6 @@ int sls_ckpt(struct proc *p, struct sls_process *slsp);
 void
 sls_stop_proc(struct proc *p)
 {
-	SDT_PROBE0(sls, , , stop_entry);
 	int threads_still_running;
 	struct thread *td;
 	
@@ -98,9 +97,8 @@ sls_stop_proc(struct proc *p)
 		break;
 	    }
 	    PROC_UNLOCK(p);
-	    pause_sbt("slsrun", 50 * SBT_1US, 0 , C_HARDCLOCK | C_CATCH);
+	    pause_sbt("slsrun", 50 * SBT_1US, 0 , C_DIRECT_EXEC | C_CATCH);
 	}
-        SDT_PROBE0(sls, , , stop_exit);
 }
 
 
@@ -154,6 +152,7 @@ sls_ckpt_once(struct proc *p, struct sls_process *slsp)
 
     /* This causes the process to get detached from its terminal.*/
     sls_stop_proc(p);
+    SDT_PROBE0(sls, , ,stopped);
     SLS_DBG("Process stopped\n");
 
     error = sls_ckpt(p, slsp);
@@ -196,6 +195,7 @@ sls_ckpt_once(struct proc *p, struct sls_process *slsp)
 
     /* Let the process execute ASAP */
     SLS_CONT(p);
+    SDT_PROBE0(sls, , ,cont);
 
     if (slsp->slsp_epoch > 0 && slsp->slsp_attr.attr_mode == SLS_FULL) {
 	vmspace_free(new_vm);

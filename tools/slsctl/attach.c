@@ -17,7 +17,7 @@ static struct option attach_longopts[] = {
 	{ "delta", no_argument, NULL, 'd' },
 	{ "file", required_argument, NULL, 'f' },
 	{ "memory", no_argument, NULL, 'm' },
-	{ "osd", no_argument, NULL, 'o' },
+	{ "osd", required_argument, NULL, 'o' },
 	{ "pid", required_argument, NULL, 'p' },
 	{ "period", required_argument, NULL, 't' },
 	{ NULL, no_argument, NULL, 0 },
@@ -26,7 +26,7 @@ static struct option attach_longopts[] = {
 void
 attach_usage(void)
 {
-    printf("Usage: slsctl attach [-p <PID>] <-f <filename> | -m> [--delta]\n");
+    printf("Usage: slsctl attach [-p <PID>] <-f <filename> | -m | -o <id>> [-t ms] [--delta]\n");
 }
 
 int
@@ -105,18 +105,9 @@ attach_main(int argc, char* argv[]) {
 	    }
 	}
 
-	if (target_set == 0) {
+	if (target_set == 0 || pid_set == 0 || optind != (argc - 1)) {
 	    attach_usage();
-	    return 0;
-	}
 
-	if (pid_set == 0) {
-	    attach_usage();
-	    return 0;
-	}
-
-	if (optind != argc) {
-	    attach_usage();
 	    return 0;
 	}
 

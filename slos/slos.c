@@ -132,7 +132,7 @@ slosHandler(struct module *inModule, int inEvent, void *inArg) {
 		mtx_init(&slos.slos_mtx, "slosmtx", NULL, MTX_DEF);
 
 		/* Open the device for writing. */
-		error = slos_path_to_vnode("/dev/vtbd1", &slos.slos_vp);
+		error = slos_path_to_vnode("/dev/nvd0", &slos.slos_vp);
 		if (error != 0)
 		    return error;
 

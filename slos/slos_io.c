@@ -269,7 +269,7 @@ slos_write(struct vnode *vp, struct slos_diskptr *diskptr, struct uio *uio)
 		break;
 
 	    /* Issue the write itself. */
-	    bwrite(bp);
+	    bawrite(bp);
 
 	    if (xfersize == 0)
 		break;
