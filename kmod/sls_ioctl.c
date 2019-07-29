@@ -253,6 +253,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	    if (slsm.slsm_proctable != NULL)
 		hashdestroy(slsm.slsm_proctable, M_SLSMM, slsm.slsm_procmask);
 
+	    /*
 	    if (slsm.slsm_osdvp != NULL) {
 		VOP_CLOSE(slsm.slsm_osdvp, FREAD | FWRITE | O_NONBLOCK,
 			curthread->td_proc->p_ucred, curthread);
@@ -264,6 +265,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		mbmp_free(slsm.slsm_mbmp);
 		free(slsm.slsm_osd, M_SLSMM);
 	    }
+	    */
 
 	    printf("SLS Unloaded.\n");
 	    break;

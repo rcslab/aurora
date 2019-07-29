@@ -47,7 +47,9 @@
 #include "sls_dump.h"
 #include "sls_mosd.h"
 
-static void
+void sls_stop_proc(struct proc *p);
+
+void
 sls_stop_proc(struct proc *p)
 {
 	int threads_still_running;
@@ -112,8 +114,8 @@ sls_ckpt(struct proc *p, int mode, struct sls_process *slsp)
 	sls_log(SLSLOG_MEM, tonano(tend) - tonano(tstart));
 
 
-	PROC_UNLOCK(p);
 sls_ckpt_out:
+	PROC_UNLOCK(p);
 
 	return error;
 }

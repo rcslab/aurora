@@ -55,6 +55,10 @@ sls_file_ckpt(struct proc *p, struct file *file, int fd, struct sbuf *sb)
 	PROC_UNLOCK(p);
 	error = sls_vn_to_path_append(file->f_vnode, sb);
 	PROC_LOCK(p);
+	if (error == ENOENT) {
+	    printf("(BUG) Unlinked file found, ignoring for now\n");
+	    return 0;
+	}
 	if (error != 0)
 	    return error;
 

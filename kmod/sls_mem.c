@@ -56,6 +56,10 @@ sls_vmobject_ckpt(struct proc *p, vm_object_t obj, struct sbuf *sb)
 	    PROC_UNLOCK(p);
 	    error = sls_vn_to_path_append((struct vnode *) obj->handle, sb);
 	    PROC_LOCK(p);
+	    if (error == ENOENT) {
+		printf("(BUG) Unlinked file found, ignoring for now\n");
+		return 0;
+	    }
 	    if (error)
 		return error;
 	}
