@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <sys/syscallsubr.h>
 #include <sys/vnode.h>
+#include <sys/sdt.h>
 
 #include <vm/vm.h>
 #include <vm/vm_object.h>
@@ -14,6 +15,7 @@
 #include "sls_process.h"
 #include "sls_osd.h"
 
+SDT_PROVIDER_DECLARE(sls);
 
 #define SLS_CKPT_FULL	    0
 #define SLS_CKPT_DELTA	    1
@@ -97,8 +99,6 @@ sls_osdhack()
 	osdfd = curthread->td_retval[0];
 }
 */
-
-#define SLS_DEBUG
 
 #ifdef SLS_DEBUG
 #define SLS_DBG(fmt, ...) do {			    \

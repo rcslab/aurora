@@ -25,10 +25,6 @@
 #include <sys/time.h>
 #include <sys/uio.h>
 
-#include <machine/atomic.h>
-#include <machine/param.h>
-#include <machine/reg.h>
-
 #include <vm/pmap.h>
 #include <vm/vm.h>
 #include <vm/vm_extern.h>
@@ -47,17 +43,40 @@
 #include "sls_dump.h"
 #include "sls_mosd.h"
 
+#define SLS_SIG(p, sig) \
+	PROC_LOCK(p); \
+	kern_psignal(p, sig); \
+	PROC_UNLOCK(p); \
+
+#define SLS_CONT(p) SLS_SIG(p, SIGCONT)
+    
+#define SLS_STOP(p) SLS_SIG(p, SIGSTOP)
+
+#define SLS_PROCALIVE(proc) \
+    (((proc)->p_state != PRS_ZOMBIE) && !((proc)->p_flag & P_WEXIT))
+
+#define SLS_RUNNABLE(proc, slsp) \
+    (atomic_load_int(&slsp->slsp_status) != 0 && \
+    SLS_PROCALIVE(proc))
+
+SDT_PROVIDER_DEFINE(sls);
+
+SDT_PROBE_DEFINE(sls, , , stop_entry);
+SDT_PROBE_DEFINE(sls, , , stop_exit);
+
 void sls_stop_proc(struct proc *p);
+void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp);
+int sls_ckpt_tofile(struct sls_process *slsp, int mode, char *filename);
+int sls_ckpt(struct proc *p, int mode, struct sls_process *slsp);
 
 void
 sls_stop_proc(struct proc *p)
 {
+	SDT_PROBE0(sls, , , stop_entry);
 	int threads_still_running;
 	struct thread *td;
-
-	PROC_LOCK(p);
-	kern_psignal(p, SIGSTOP);
-	PROC_UNLOCK(p);
+	
+	SLS_STOP(p);
 
 	threads_still_running = 1;
 	while (threads_still_running == 1) {
@@ -69,15 +88,19 @@ sls_stop_proc(struct proc *p)
 		    break;
 		}
 	    }
+	    if(!SLS_PROCALIVE(p)) {
+		SLS_DBG("Proc trying to die, exiting stop\n");
+		PROC_UNLOCK(p);
+		break;
+	    }
 	    PROC_UNLOCK(p);
-
-	    pause_sbt("slsrun", SBT_1MS, 0 , C_HARDCLOCK | C_CATCH);
+	    pause_sbt("slsrun", 50 * SBT_1US, 0 , C_HARDCLOCK | C_CATCH);
 	}
-
+        SDT_PROBE0(sls, , , stop_exit);
 }
 
 
-static int
+int
 sls_ckpt(struct proc *p, int mode, struct sls_process *slsp)
 {
 	int error = 0;
@@ -85,6 +108,11 @@ sls_ckpt(struct proc *p, int mode, struct sls_process *slsp)
 
 	/* Dump the process state */
 	PROC_LOCK(p);
+	if (!SLS_PROCALIVE(p)) {
+	    SLS_DBG("proc trying to die, exiting ckpt\n");
+	    error = ESRCH;
+	    goto sls_ckpt_out;
+	}
 
 	nanotime(&tstart);
 	error = sls_proc_ckpt(p, slsp->slsp_ckptbuf);
@@ -120,9 +148,10 @@ sls_ckpt_out:
 	return error;
 }
 
-static int 
+int 
 sls_ckpt_tofile(struct sls_process *slsp, int mode, char *filename)
 {
+    SLS_DBG("Flushing to file\n");
     int fd;
     int error;
 
@@ -139,11 +168,12 @@ sls_ckpt_tofile(struct sls_process *slsp, int mode, char *filename)
 
     kern_close(curthread, fd);
 
+    SLS_DBG("Flushing done to file\n");
     return error;
 }
 
-static
-void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
+void 
+sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
 {
     vm_ooffset_t fork_charge, new_charge;
     struct timespec tstart, tend;
@@ -165,10 +195,7 @@ void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
     error = sls_ckpt(p, mode, slsp);
     if(error != 0) {
 	SLS_DBG("Checkpointing failed\n");
-
-	PROC_LOCK(p);
-	kern_psignal(p, SIGCONT);
-	PROC_UNLOCK(p);
+	SLS_CONT(p);
 
 	return;
     }
@@ -214,9 +241,7 @@ void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
     sls_log(SLSLOG_FORK, tonano(tend) - tonano(tstart));
 
     /* Let the process execute ASAP */
-    PROC_LOCK(p);
-    kern_psignal(p, SIGCONT);
-    PROC_UNLOCK(p);
+    SLS_CONT(p);
 
     if (slsp->slsp_epoch > 0 && mode == SLS_CKPT_FULL) {
 	nanotime(&tstart);
@@ -254,7 +279,7 @@ void sls_ckpt_one(struct sls_op_args *args, struct sls_process *slsp)
     }
 
     slsp->slsp_epoch += 1;
-
+    SLS_DBG("Checkpointed process once\n");
 }
 
 static char *sls_log_names[] = {"PROC", "MEM", "FILE", "FORK", "COMPACT", "CKPT", "DUMP"};
@@ -322,9 +347,6 @@ sls_ckptd(struct sls_op_args *args)
     int iter;
     int i;
 
-    /* HACK */
-    //sls_osdhack();
-
     slsp = slsp_add(args->p->p_pid);
 
     atomic_store_int(&slsp->slsp_status, 1);
@@ -334,16 +356,16 @@ sls_ckptd(struct sls_op_args *args)
     iter = args->iterations;
     for (i = 0; (iter == 0) || (i < iter); i++) {
 
-	if (atomic_load_int(&slsp->slsp_status) == 0)
+	if (!SLS_RUNNABLE(args->p, slsp)) {
+	    SLS_DBG("Process no longer runnable\n");
 	    break;
+	}
 
 	nanotime(&tstart);
 	sls_ckpt_one(args, slsp);
 	nanotime(&tend);
-	SLS_DBG("Checkpointed process once\n");
 
 	slsp->slsp_epoch += 1;
-
 	msec_elapsed = (tonano(tend) - tonano(tstart)) / (1000 * 1000);
 	msec_left = args->interval - msec_elapsed;
 	if (msec_left > 0)

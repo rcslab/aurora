@@ -16,6 +16,7 @@ tests/print/print
 tests/register/register
 tests/signal/signal
 tests/sleep/sleep
+tests/unlink/unlink
 
 
 tools/dumpcompose/dumpcompose

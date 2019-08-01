@@ -48,11 +48,9 @@
 
 #include "sls_dump.h"
 
-
 MALLOC_DEFINE(M_SLSMM, "slsmm", "SLSMM");
 
 struct sls_metadata slsm;
-
 
 static int
 slsmm_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
