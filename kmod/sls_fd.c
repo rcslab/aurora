@@ -109,14 +109,14 @@ sls_filedesc_ckpt(struct proc *p, struct sbuf *sb)
 
 	error = sbuf_bcat(sb, (void *) &filedesc_info, sizeof(filedesc_info));
 	if (error != 0)
-	    goto sls_filedesc_ckpt_done;
+	    goto done;
 
 	PROC_UNLOCK(p);
 	error = sls_vn_to_path_append(filedesc->fd_cdir, sb);
 	PROC_LOCK(p);
 	if (error) {
 	    SLS_DBG("Error: cdir sls_vn_to_path failed with code %d\n", error);
-	    goto sls_filedesc_ckpt_done;
+	    goto done;
 	}
 
 
@@ -125,7 +125,7 @@ sls_filedesc_ckpt(struct proc *p, struct sbuf *sb)
 	PROC_LOCK(p);
 	if (error) {
 	    SLS_DBG("Error: rdir sls_vn_to_path failed with code %d\n", error);
-	    goto sls_filedesc_ckpt_done;
+	    goto done;
 	}
 
 
@@ -141,17 +141,17 @@ sls_filedesc_ckpt(struct proc *p, struct sbuf *sb)
 
 	    error = sls_file_ckpt(p, fp, i, sb);
 	    if (error != 0)
-		goto sls_filedesc_ckpt_done;
+		goto done;
 	}
 
 	memset(&sentinel, 0, sizeof(sentinel));
 	sentinel.magic = SLS_FILES_END;
 	error = sbuf_bcat(sb, (void *) &sentinel, sizeof(sentinel));
 	if (error != 0)
-	    goto sls_filedesc_ckpt_done;
+	    goto done;
 
 
-sls_filedesc_ckpt_done:
+done:
 
 	vdrop(filedesc->fd_cdir);
 	vdrop(filedesc->fd_rdir);

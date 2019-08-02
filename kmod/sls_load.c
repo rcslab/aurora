@@ -80,23 +80,19 @@ addpage_noreplace(struct sls_pagetable *ptable, struct dump_page *new_entry)
 	struct page_list *page_bucket;
 	struct dump_page *page_entry;
 	vm_offset_t vaddr;
-	int already_there;
 
 	vaddr = new_entry->vaddr;
 	page_bucket = &ptable->pages[vaddr & ptable->hashmask];
 
-	already_there = 0;
 	LIST_FOREACH(page_entry, page_bucket, next) {
 	    if(page_entry->vaddr == new_entry->vaddr) {
 		free(new_entry->data, M_SLSMM);
 		free(new_entry, M_SLSMM);
-		already_there = 1;
-		break;
+		return;
 	    }
 	}
 
-	if (already_there == 0)
-	    LIST_INSERT_HEAD(page_bucket, new_entry, next);
+	LIST_INSERT_HEAD(page_bucket, new_entry, next);
 }
 
 int

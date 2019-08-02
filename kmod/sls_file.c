@@ -38,7 +38,7 @@ uint64_t size_sent = 0;
 char zeroblk[PAGE_SIZE];
 
 int
-sls_file_read(void* addr, size_t len, struct file *fp)
+sls_file_read(void *addr, size_t len, struct file *fp)
 {
 	int error = 0;
 
@@ -75,7 +75,7 @@ sls_file_read(void* addr, size_t len, struct file *fp)
 }
 
 int
-sls_file_write(void* addr, size_t len, struct file *fp)
+sls_file_write(void *addr, size_t len, struct file *fp)
 {
 	int error = 0;
 	struct uio auio;
@@ -103,7 +103,7 @@ sls_file_write(void* addr, size_t len, struct file *fp)
 	return error;
 }
 int
-sls_fd_read(void* addr, size_t len, int fd)
+sls_fd_read(void *addr, size_t len, int fd)
 {
 	int error = 0;
 
@@ -131,7 +131,7 @@ sls_fd_read(void* addr, size_t len, int fd)
 }
 
 int
-sls_fd_write(void* addr, size_t len, int fd)
+sls_fd_write(void *addr, size_t len, int fd)
 {
 	int error = 0;
 	struct uio auio;
@@ -209,6 +209,7 @@ osd_preadv_aligned(struct osd_mbmp *mbmp, uint64_t block,
 {
 	struct uio auio;
 	size_t blksize;
+	int error;
 
 	if (iovcnt > UIO_MAXIOV / 2)
 	    return EINVAL;
@@ -227,11 +228,11 @@ osd_preadv_aligned(struct osd_mbmp *mbmp, uint64_t block,
 	auio.uio_rw = UIO_READ;
 	auio.uio_td = curthread;
 
-	/* HACK */
-	/* XXX */
+	error = VOP_READ(mbmp->mbmp_osdvp, &auio, IO_NODELOCKED | IO_DIRECT, curthread->td_proc->p_ucred);
+	if (error != 0)
+	    return error;
+
 	return 0;
-	//return kern_preadv(curthread, osdfd, &auio, block * blksize);
-	//error = VOP_READ(mbmp->mbmp_osdvp, &auio, IO_NODELOCKED | IO_DIRECT, curthread->td_proc->p_ucred);
 }
 
 static void *
@@ -316,6 +317,7 @@ osd_pwritev_aligned(struct osd_mbmp *mbmp, uint64_t block,
 {
 	struct uio auio;
 	size_t blksize;
+	int error;
 
 	bzero(&auio, sizeof(auio));
 	/* XXX Align to block size later, not page size */
@@ -332,11 +334,11 @@ osd_pwritev_aligned(struct osd_mbmp *mbmp, uint64_t block,
 	auio.uio_td = curthread;
 	size_sent += len;
 
-	/* HACK */
+	error = VOP_WRITE(mbmp->mbmp_osdvp, &auio, IO_NODELOCKED | IO_DIRECT, curthread->td_proc->p_ucred);
+	if (error != 0)
+	    return error;
+
 	return 0;
-	/* XXX */
-	//return kern_pwritev(curthread, osdfd, &auio, block * blksize);
-	//error = VOP_WRITE(mbmp->mbmp_osdvp, &auio, IO_NODELOCKED | IO_DIRECT, curthread->td_proc->p_ucred);
 }
 
 int

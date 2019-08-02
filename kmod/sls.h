@@ -79,26 +79,6 @@ sls_module_exiting(void)
     return slsm.slsm_exiting;
 }
 
-/* XXX Ugly hack until we find out why VOP_WRITE is crashing on us */
-//extern int osdfd;
-/* HACK */
-/*
-inline void 
-sls_osdhack()
-{
-	int error;
-	char *osdname = "/root/st0";
-
-	error = kern_openat(curthread, AT_FDCWD, osdname,
-	    UIO_SYSSPACE, O_RDWR | O_DIRECT, S_IRWXU);
-	if (error != 0) {
-	    printf("Error: Hardcoded OSD %s could not be opened. Continuing.\n", osdname);
-
-	}
-
-	osdfd = curthread->td_retval[0];
-}
-*/
 
 #ifdef SLS_DEBUG
 #define SLS_DBG(fmt, ...) do {			    \

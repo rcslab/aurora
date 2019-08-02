@@ -198,33 +198,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	case MOD_LOAD:
 	    bzero(&slsm, sizeof(slsm));
 
-	    /* TEMP */
-	    /*
-	    sls_osdhack();
-	    error = filename_to_vnode("/root/nvd0", &vp);
-	    if (error != 0) {
-		printf("Error: Could not find OSD\n");
-		return error;
-	    }
-
-	    slsm.slsm_osdvp = vp;
-	    printf("Pointer is %p\n", vp);
-	    slsm.slsm_osd = slsosd_import(vp);
-	    if (slsm.slsm_osd == NULL) {
-		bzero(&slsm, sizeof(slsm));
-		printf("Loading OSD failed\n");
-	    } else {
-
-		slsm.slsm_mbmp = mbmp_import(slsm.slsm_osd);
-		if (slsm.slsm_mbmp == NULL) {
-		    printf("Importing bitmap failed\n");
-		    free(slsm.slsm_osd, M_SLSMM);
-		    bzero(&slsm, sizeof(slsm));
-		    return EINVAL;
-		}
-	    }
-	    */
-
 	    slsm.slsm_proctable = hashinit(HASH_MAX, M_SLSMM, &slsm.slsm_procmask);
 
 	    slsm.slsm_cdev = 
