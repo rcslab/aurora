@@ -3,6 +3,7 @@ machine
 x86
 
 kmod/vnode_if*.h
+slos/vnode_if*.h
 
 tests/array/array
 tests/compute/compute

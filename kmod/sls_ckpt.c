@@ -41,7 +41,6 @@
 
 #include "sls_op.h"
 #include "sls_dump.h"
-#include "sls_mosd.h"
 
 #define SLS_SIG(p, sig) \
 	PROC_LOCK(p); \
@@ -160,6 +159,8 @@ sls_ckpt_tofile(struct sls_process *slsp, int mode, char *filename)
     fd = curthread->td_retval[0];
     if (error != 0)
 	return error;
+
+    SLS_DBG("Dumping to %s\n", filename);
 
     error = sls_dump(slsp, mode, fd);
     if (error != 0) {

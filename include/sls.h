@@ -1,6 +1,9 @@
 #ifndef _SLS_H__
 #define _SLS_H__
 
+#include <sys/param.h>
+#include <sys/mount.h>
+
 #include "sls_ioctl.h"
 
 /* Low-level APIs */
@@ -19,6 +22,7 @@ struct sls_stat
     int streamid;
     uint64_t ckptid;
 };
+
 
 /* Storage Control APIs */
 int slos_openvol(const char *dev);

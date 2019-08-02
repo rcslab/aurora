@@ -113,7 +113,6 @@ sls_path_to_vn(struct sbuf *sb, struct vnode **vpp)
 	int error;
 
 	path = sbuf_data(sb);
-	printf("path: %s\n", path);
 
 	NDINIT(&backing_file, LOOKUP, FOLLOW, UIO_SYSSPACE, path, curthread);
 	error = namei(&backing_file);

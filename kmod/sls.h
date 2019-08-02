@@ -13,7 +13,6 @@
 #include <vm/vm_object.h>
 
 #include "sls_process.h"
-#include "sls_osd.h"
 
 SDT_PROVIDER_DECLARE(sls);
 

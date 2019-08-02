@@ -44,7 +44,6 @@
 #include "slsmm.h"
 #include "sls_op.h"
 #include "sls_ioctl.h"
-#include "sls_mosd.h"
 
 #include "sls_dump.h"
 
@@ -224,19 +223,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	    if (slsm.slsm_proctable != NULL)
 		hashdestroy(slsm.slsm_proctable, M_SLSMM, slsm.slsm_procmask);
 
-	    /*
-	    if (slsm.slsm_osdvp != NULL) {
-		VOP_CLOSE(slsm.slsm_osdvp, FREAD | FWRITE | O_NONBLOCK,
-			curthread->td_proc->p_ucred, curthread);
-		if (VOP_ISLOCKED(slsm.slsm_osdvp)) 
-		    VOP_UNLOCK(slsm.slsm_osdvp, LK_RELEASE);
-	    }
-
-	    if (slsm.slsm_osd != NULL) {
-		mbmp_free(slsm.slsm_mbmp);
-		free(slsm.slsm_osd, M_SLSMM);
-	    }
-	    */
 
 	    printf("SLS Unloaded.\n");
 	    break;
