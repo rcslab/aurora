@@ -13,7 +13,7 @@
 
 /* Read a record from the OSD. */
 static int
-slos_recread(struct slos *slos, uint64_t blkno, struct slos_record **rpp)
+slos_recdread(struct slos *slos, uint64_t blkno, struct slos_record **rpp)
 {
 	struct slos_record *rp;
 	int error;
@@ -40,7 +40,7 @@ slos_recread(struct slos *slos, uint64_t blkno, struct slos_record **rpp)
 
 /* Write a record back to the OSD. */
 static int
-slos_recwrite(struct slos *slos, struct slos_record *rp)
+slos_recdwrite(struct slos *slos, struct slos_record *rp)
 {
 	if (rp->rec_magic != SLOS_RMAGIC)
 	    return EINVAL;
@@ -108,7 +108,7 @@ slos_rcreate(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
 	    goto error;
 
 	/* Write the record out to the disk. */
-	error = slos_recwrite(&slos, rp);
+	error = slos_recdwrite(&slos, rp);
 	if (error != 0)
 	    goto error;
 
@@ -185,7 +185,7 @@ slos_rread(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
 	    goto error;
 
 	/* Get the actual record data from the SLOS. */
-	error = slos_recread(&slos, recordptr.offset, &rp);
+	error = slos_recdread(&slos, recordptr.offset, &rp);
 	if (error != 0)
 	    goto error;
 
@@ -335,7 +335,7 @@ slos_rwrite(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
 	    goto error;
 
 	/* Get the actual record data from the SLOS. */
-	error = slos_recread(&slos, recordptr.offset, &rp);
+	error = slos_recdread(&slos, recordptr.offset, &rp);
 	if (error != 0)
 	    goto error;
 
@@ -592,7 +592,7 @@ slos_rwrite(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
 	if (data->root != rp->rec_data.offset)
 	    rp->rec_data.offset = data->root;
 
-	error = slos_recwrite(&slos, rp);
+	error = slos_recdwrite(&slos, rp);
 	if (error != 0)
 	    goto error;
 
@@ -627,34 +627,366 @@ error:
 	return error;
 }
 
-/* XXX Implement seek, iterate. */
+/* 
+ * Seek the record, returning the position of a boundary between a hole 
+ * and an extent that is as close to the offset as possible and
+ * satisfies the conditions specified by the flags argument. The 
+ * seek points to the closest _beginning_ of an extent; this 
+ * matters when considering that offset may be in the middle
+ * of an extent.
+ */
+int
+slos_rseek(struct slos_vnode *vp, uint64_t rno, uint64_t offset, 
+	int flags, uint64_t *seekoffp, uint64_t *seeklenp)
+{
+	struct slos_recentry preventry, nextentry;
+	struct slos_record *rp = NULL;
+	struct slos_diskptr recordptr;
+	uint64_t prevoff, nextoff;
+	struct btree *data = NULL;
+	int error = 0;
+	
+	/* We have to specify whether we seek left or right. */
+	if ((flags & (SREC_SEEKLEFT | SREC_SEEKRIGHT)) == 0)
+	    return EINVAL;
+
+	/* XXX We don't implement seeking to the left right now. */
+	if ((flags & SREC_SEEKLEFT) != 0)
+	    return EINVAL;
+
+	mtx_lock(&vp->vno_mtx);
+
+	/* Get the record we want from the inode's btree. */
+	error = btree_search(vp->vno_records, rno, &recordptr);
+	if (error != 0)
+	    goto out;
+
+	/* Get the actual record data from the SLOS. */
+	error = slos_recdread(&slos, recordptr.offset, &rp);
+	if (error != 0)
+	    goto out;
+
+	/* Create the in-memory btree of data offsets. */
+	data = btree_init(&slos, rp->rec_data.offset, ALLOCMAIN);
+
+	if ((flags & SREC_SEEKHOLE) != 0) {
+	    /* 
+	     * If we're seeking a hole, go towards the end
+	     * until we find two consecutive extents that 
+	     * are not contiguous.
+	     */
+	    prevoff = offset;
+	    error = btree_keymax(data, &prevoff, &preventry);
+	    if (error == EINVAL) {
+		/* We reached EOF, return the size of the record. */
+		*seekoffp = rp->rec_length;
+		*seeklenp = SREC_SEEKEOF;
+		error = 0;
+		goto out;
+
+	    } else if (error != 0) { 
+		/* True error, abort. */
+		goto out;
+	    }
+
+	    do {
+		/* 
+		 * Try to search for an extent that 
+		 * starts right at prevoff's end.
+		 */
+		nextoff = prevoff + preventry.len;
+		error = btree_search(data, nextoff, &nextentry);
+		if (error == EINVAL) {
+		    /* 
+		     * If there isn't, there is a hole starting from that offset. 
+		     * This includes the case where we have reached the end of the
+		     * file, in which case we make sure we point right at the end.
+		     */
+		    if (nextoff > rp->rec_length) {
+			*seekoffp = rp->rec_length;
+			*seeklenp = SREC_SEEKEOF;
+		    } else {
+			*seekoffp = nextoff;
+			*seeklenp = nextentry.len;
+		    }
+
+		    error = 0;
+		    goto out;
+
+		} else if (error != 0) {
+		    /* True error, abort. */
+		    goto out;
+		}
+
+		/* 
+		 * Otherwise there's an extent in there.
+		 * Try to find its own right neighbor in
+		 * the next iteration.
+		 */
+		prevoff = nextoff;
+		preventry = nextentry;
+
+	    } while (prevoff < rp->rec_length);
+
+	    /* If we reached here, we didn't find anything. */
+	    *seekoffp = rp->rec_length;
+	    *seeklenp = SREC_SEEKEOF;
+	    
+	} else {
+
+	    /* Otherwise we're seeking data. Just do a keymax. */
+	    prevoff = offset;
+	    error = btree_keymax(data, &prevoff, &preventry);
+	    if (error == EINVAL) {
+		/* We reached EOF, return the size of the record. */
+		*seekoffp = rp->rec_length;
+		*seeklenp = SREC_SEEKEOF;
+		error = 0;
+		goto out;
+
+	    } else if (error != 0) { 
+		/* True error, abort. */
+		goto out;
+	    }
+
+	    /* Else we found a next offset. Return it. */
+	    *seekoffp = prevoff;
+	    *seeklenp = preventry.len;
+
+	}
+	    
+out:
+
+	free(rp, M_SLOS);
+	mtx_unlock(&vp->vno_mtx);
+
+	if (data != NULL)
+	    btree_destroy(data);
+
+	return error;
+}
+
+/* 
+ * Helpers for iterating the records btree. We can have the following movements:
+ * - Go to first record in the btree.
+ * - Go to last record in the btree.
+ * - Go to the next record in the btree from a specific offset.
+ * - Go to the previous record in the btree from a specific offset.
+ *
+ * From these basic movements we can compose more complicated ones, like for
+ * example finding the first or last record that has a specific type.
+ */
+
+static struct slos_record *
+slos_prevrec(struct slos_vnode *vp, uint64_t rno)
+{
+	struct slos_diskptr ptr;
+	struct slos_record *rp;
+	int error;
+
+	if (rno == 0)
+	    return NULL;
+
+	rno = rno - 1;
+	error = btree_keymin(vp->vno_records, &rno, &ptr);
+	if (error != 0)
+	    return NULL;
+
+	error = slos_recdread(&slos, ptr.offset, &rp);
+	if (error != 0)
+	    return NULL;
+
+	return rp;
+
+}
+
+static struct slos_record* 
+slos_nextrec(struct slos_vnode *vp, uint64_t rno)
+{
+	struct slos_diskptr ptr;
+	struct slos_record *rp;
+	int error;
+
+	if (rno == vp->vno_lastrec)
+	    return NULL;
+
+	rno = rno + 1;
+	error = btree_keymax(vp->vno_records, &rno, &ptr);
+	if (error != 0)
+	    return NULL;
+
+	error = slos_recdread(&slos, ptr.offset, &rp);
+	if (error != 0)
+	    return NULL;
+
+	return rp;
+
+
+}
+
+static struct slos_record *
+slos_firstrec(struct slos_vnode *vp)
+{
+	struct slos_diskptr ptr;
+	struct slos_record *rp;
+	uint64_t rno;
+	int error;
+
+	rno = 0;
+	error = btree_keymax(vp->vno_records, &rno, &ptr);
+	if (error != 0)
+	    return NULL;
+
+	error = slos_recdread(&slos, ptr.offset, &rp);
+	if (error != 0)
+	    return NULL;
+
+	return rp;
+}
+
+static struct slos_record *
+slos_lastrec(struct slos_vnode *vp)
+{
+	struct slos_diskptr ptr;
+	struct slos_record *rp;
+	uint64_t rno;
+	int error;
+
+	rno = vp->vno_lastrec;
+	error = btree_keymin(vp->vno_records, &rno, &ptr);
+	if (error != 0)
+	    return NULL;
+
+	error = slos_recdread(&slos, ptr.offset, &rp);
+	if (error != 0)
+	    return NULL;
+
+	return rp;
+}
+
+int
+slos_firstrno(struct slos_vnode *vp, uint64_t *rnop)
+{
+	struct slos_diskptr ptr;
+	uint64_t rno;
+	int error;
+
+	rno = vp->vno_lastrec;
+	error = btree_keymin(vp->vno_records, &rno, &ptr);
+	if (error != 0)
+	    return error;
+
+	*rnop = rno;
+
+	return 0;
+}
+
+int
+slos_lastrno(struct slos_vnode *vp, uint64_t *rnop)
+{
+	struct slos_diskptr ptr;
+	uint64_t rno;
+	int error;
+
+	rno = vp->vno_lastrec;
+	error = btree_keymin(vp->vno_records, &rno, &ptr);
+	if (error != 0)
+	    return error;
+
+	*rnop = rno;
+
+	return 0;
+}
+
+int
+slos_prevrno(struct slos_vnode *vp, uint64_t *rnop)
+{
+	struct slos_diskptr ptr;
+	uint64_t rno;
+	int error;
+
+	rno = *rnop - 1;
+	error = btree_keymin(vp->vno_records, &rno, &ptr);
+	if (error != 0)
+	    return error;
+
+	*rnop = rno;
+
+	return 0;
+}
+
+int
+slos_nextrno(struct slos_vnode *vp, uint64_t *rnop)
+{
+	struct slos_diskptr ptr;
+	uint64_t rno;
+	int error;
+
+	rno = *rnop + 1;
+	error = btree_keymax(vp->vno_records, &rno, &ptr);
+	if (error != 0)
+	    return error;
+
+	*rnop = rno;
+
+	return 0;
+}
+
+int
+slos_lastrno_typed(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
+{
+	struct slos_record *rp = NULL;	
+	uint64_t rno;
+
+	rp = slos_lastrec(vp);
+	while (rp != NULL && rp->rec_type != rtype) {
+	    rno = rp->rec_num;
+	    free(rp, M_SLOS);
+	    rp = slos_prevrec(vp, rno);
+	}
+	
+	if (rp != NULL) {
+	    *rnop = rp->rec_num;
+	    free(rp, M_SLOS);
+
+	    return 0;
+	}
+
+	return EINVAL;
+}
+
 
 #ifdef SLOS_TESTS
 
-#define TEXTSIZE    (16 * 4096)   /* The size of the data to be written */
+#define TEXTSIZE    (4096)   /* The size of the data to be written */
 #define RECPID	    (1024)	    /* The PID of the inode */
 #define TESTREC	    (0xcafe)	    /* Arbitrary record type for testing */
-#define ITERATIONS  (1000)	    /* Number of test iterations */
-#define	OPSIZE	    (128)	    /* Maximum operation size */
+#define ITERATIONS  (10000)	    /* Number of test iterations */
+#define	OPSIZE	    (8)	    /* Maximum operation size */
 #define POISON	    ('^')	    /* Poison value */
 
-#define PREAD	    0		    /* Probability weight of the read operation */
+#define PREAD	    80		    /* Probability weight of the read operation */
 #define PWRITE	    80		    /* Probability weight of the write operation */
+#define PSEEK	    80		    /* Probability weight of the seek operation */
 
 int
 slos_test_record(void)
 {
 	struct slos_vnode *vp = NULL;
-	char *text = NULL;
+	uint64_t holesize, holeoff;
+	uint64_t seekoff, seeklen;
+	uint64_t offset, len;
 	char *result = NULL;
 	int ino_created = 0;
-	int error = 0;
 	int iter, operation;
-	struct uio auio;
+	char *text = NULL;
 	struct iovec aiov;
+	struct uio auio;
+	int seek_hole;
+	int error = 0;
 	uint64_t rno;
-	uint64_t offset, len;
 	int i, diffs;
+	int flags;
 
 	/* Get a zeroed buffer as initial input. */
 	text = malloc(TEXTSIZE, M_SLOS, M_WAITOK | M_ZERO);
@@ -720,7 +1052,7 @@ slos_test_record(void)
 	     * and writes read from the record).
 	     */
 
-	    operation = random() % (PREAD + PWRITE);
+	    operation = random() % (PREAD + PWRITE + PSEEK);
 	    /* 
 	     * Get a random offset and size 
 	     * for the operation. 
@@ -767,7 +1099,7 @@ slos_test_record(void)
 		    goto error;
 		}
 
-	    } else {
+	    } else if (operation < PREAD + PWRITE) {
 		/* 
 		 * Fill up the output and the total 
 		 * buffers with random characters.
@@ -823,6 +1155,79 @@ slos_test_record(void)
 		}
 
 
+	    } else {
+		/* 50% chance we'll look for holes, 50% we'll look for extents. */
+		/* XXX We don't care about holes right now. */
+		//seek_hole = ((random() % 2) != 0);
+		seek_hole = 0;
+		flags = SREC_SEEKRIGHT | (seek_hole ? SREC_SEEKHOLE : 0);
+
+		/* Seek the extent/hole. */
+		error = slos_rseek(vp, rno, offset, flags, &seekoff, &seeklen);
+		if (error != 0) {
+		    printf("ERROR: Seeking %s at offset %lu failed with %d\n", 
+			    seek_hole ? "hole" : "data", offset, error);
+		    break;
+		}
+
+		/* XXX SREC_SEEKHOLE is buggy, fix later. */
+		if (seek_hole) {
+		    /* 
+		     * If the hole we were seeking was at the beginning 
+		     * of the file, look if we are returning the 0 offset.
+		     */
+		    if (offset == 0 && text[0] == '\0') {
+			holeoff = 0;
+		    } else {
+			for (holeoff = offset; holeoff < TEXTSIZE; holeoff++) {
+			    if (text[holeoff - 1] != '\0' && text[holeoff] == '\0')
+				break;
+			}
+		    }
+
+		    /* If there isn't a hole, make sure we didn't find one. */
+		    if (holeoff == TEXTSIZE) {
+			/* If the seek failed, the length has a special value. */
+			if (seeklen != SREC_SEEKEOF) {
+			    printf("ERROR: Unexpected hole found at (%ld, %ld)\n",
+				  seekoff, seeklen);
+			    break;
+			}
+
+			/* Otherwise everything is fine, go to next iteration. */
+			continue;
+
+		    } else {
+			/* 
+			 * Otherwise we found something, and we need to compare 
+			 * the received result with the expected one.
+			 */
+
+			/* First find the size of the hole. */
+			for (holesize = 0; holeoff + holesize < TEXTSIZE; holesize++) {
+			    if (text[holeoff + holesize] != '\0')
+				break;
+			}
+
+			if ((holeoff != seekoff) || (holesize != seeklen)) {
+			    printf("ERROR: Expected to find hole at (%ld, %ld), ", 
+				    holeoff, holesize);
+			    printf("found one at (%ld, %ld)\n", seekoff, seeklen);
+			}
+		    }
+
+		} else {
+		    /* 
+		     * We're seeking an extent. Unfortunately, we _cannot_
+		     * compute the expected answer from the flat buffer, since
+		     * there can be consecutive extents without a hole separating
+		     * them, which in turn means there is no way to find out
+		     * how the data is laid out in terms of extents by the buffer.
+		     * For this reason, we rely on the test code for the holes
+		     * above, and assume that the code for seeking extents is
+		     * similarly correct.
+		     */
+		}
 	    }
 	}
 

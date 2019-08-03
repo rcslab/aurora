@@ -11,11 +11,27 @@ int slos_rread(struct slos_vnode *vp, uint64_t rno, struct uio *auio);
 int slos_rwrite(struct slos_vnode *vp, uint64_t rno, struct uio *auio);
 /* XXX Implement */
 int slos_rtrim(struct slos_vnode *vp, uint64_t rno, struct uio *auio);
-/* XXX Find proper signature */
-void *slos_riter(struct slos_vnode *vp, uint64_t rno, struct uio *auio);
+
+/* Flags for slos_seek. */
+#define SREC_SEEKLEFT	0b001
+#define SREC_SEEKRIGHT	0b010
+#define SREC_SEEKHOLE	0b100
+
+/* Special value for seeklenp when we don't find an extent/hole. */
+#define SREC_SEEKEOF	0
+
+int slos_rseek(struct slos_vnode *vp, uint64_t rno, uint64_t offset, 
+	int flags, uint64_t *seekoffp, uint64_t *seeklenp);
 
 /* XXX Find proper signature */
 uint64_t slos_rstat(struct slos_vnode *vp);
+
+/* Records btree iterators */
+int slos_firstrno(struct slos_vnode *vp, uint64_t *rnop);
+int slos_lastrno(struct slos_vnode *vp, uint64_t *rnop);
+int slos_prevrno(struct slos_vnode *vp, uint64_t *rnop);
+int slos_nextrno(struct slos_vnode *vp, uint64_t *rnop);
+int slos_lastrno_typed(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop);
 
 #ifdef SLOS_TESTS
 
