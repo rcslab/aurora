@@ -7,17 +7,15 @@
 #include "sls_ioctl.h"
 
 /* Low-level APIs */
-int sls_op(struct op_param *param);
+int sls_checkpoint(int pid);
+int sls_restore(int pid, struct sls_backend backend);
+
+int sls_attach(int pid, const struct sls_attr attr);
+int sls_detach(int pid);
+
 int sls_proc(struct proc_param *param);
 
-struct sls_attr
-{
-    int backend; /* Backend Identifier */
-    int period; /* Checkpoint Period in ms */
-};
-
-struct sls_stat
-{
+struct sls_stat {
     int type;
     int streamid;
     uint64_t ckptid;
@@ -30,8 +28,6 @@ int slos_closevol(int backendid);
 int slos_stat(struct statfs *sfs);
 
 /* High-level APIs */
-int sls_attach(int pid, const struct sls_attr *attr);
-int sls_detach(int pid);
 int sls_suspend(int pid);
 int sls_resume(int pid);
 int sls_getattr(int pid, struct sls_attr *attr);

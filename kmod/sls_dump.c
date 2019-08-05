@@ -32,26 +32,67 @@
 
 #include "sls.h"
 #include "slsmm.h"
+#include "sls_channel.h"
 #include "sls_data.h"
 #include "sls_dump.h"
 #include "sls_ioctl.h"
-#include "sls_file.h"
 #include "sls_path.h"
 
+#include "../include/slos.h"
+#include "../slos/slos_record.h"
+#include "../slos/slos_io.h"
+#include "../slos/slos_inode.h"
+#include "../slos/slos_inode.h"
+	    
+/* This should work both with deltas and without with the current code. */
 static int
-sls_dump_pages_file(vm_offset_t vaddr, size_t size, vm_offset_t data, int fd)
+sls_dump_pages_slos(vm_offset_t vaddr, size_t len, vm_offset_t data, struct slos_vnode *vp)
+{
+	uint64_t rno;
+	int error;
+	struct uio auio;
+	struct iovec aiov;
+
+	/* Check whether we already have a data record. */
+	error = slos_firstrno_typed(vp, SLOSREC_DATA, &rno);
+	if (error == EINVAL) {
+	    /* Create the SLOS record for the metadata. */
+	    error = slos_rcreate(vp, SLOSREC_DATA, &rno);
+	    if (error != 0)
+		return error;
+	} else if (error != 0) {
+	    /* True error, abort. */
+
+	    return error;
+	}
+
+	/* Create the UIO for the disk. */
+	aiov.iov_base = (void *) data;
+	aiov.iov_len = len;
+	slos_uioinit(&auio, vaddr, UIO_WRITE, &aiov, 1);
+
+	/* The write itself. */
+	error = slos_rwrite(vp, rno, &auio);
+	if (error != 0)
+	    return error;
+
+	return 0;
+}
+
+static int
+sls_dump_pages_file(vm_offset_t vaddr, size_t size, vm_offset_t data, struct file *fp)
 {
 	int error; 
 
-	error = sls_fd_write(&vaddr, sizeof(vaddr), fd);
+	error = sls_file_write(&vaddr, sizeof(vaddr), fp);
 	if (error != 0)
 	    return error;
 
-	error = sls_fd_write(&size, sizeof(size), fd);
+	error = sls_file_write(&size, sizeof(size), fp);
 	if (error != 0)
 	    return error;
 	
-	error = sls_fd_write((void*) data, size, fd);
+	error = sls_file_write((void*) data, size, fp);
 	if (error != 0)
 	    return error;
 
@@ -88,7 +129,7 @@ sls_contig_pages(vm_object_t obj, vm_page_t *page)
 }
 
 static int
-sls_dump_pages(struct vmspace *vm, struct sls_store_tgt tgt, int mode)
+sls_dump_pages(struct vmspace *vm, struct sls_channel *chan, int mode)
 {
 	vm_offset_t sentinel = ULONG_MAX;
 	vm_offset_t vaddr, data;
@@ -122,7 +163,10 @@ sls_dump_pages(struct vmspace *vm, struct sls_store_tgt tgt, int mode)
 		    if (data == 0)
 			return ENOMEM;
 
-		    error = sls_dump_pages_file(vaddr, contig_size, data, tgt.fd);
+		    if (chan->type == SLS_FILE)
+			error = sls_dump_pages_file(vaddr, contig_size, data, chan->fp);
+		    else if (chan->type == SLS_OSD)
+			error = sls_dump_pages_slos(vaddr, contig_size, data, chan->vp);
 		    /* XXX Do we need pmap_delete or something of the sort? */
 
 		    if (error != 0)
@@ -134,7 +178,7 @@ sls_dump_pages(struct vmspace *vm, struct sls_store_tgt tgt, int mode)
 			break;
 		}
 
-		if (mode == SLS_CKPT_DELTA)
+		if (mode == SLS_DELTA)
 		    break;
 
 		offset += obj->backing_object_offset;
@@ -142,22 +186,20 @@ sls_dump_pages(struct vmspace *vm, struct sls_store_tgt tgt, int mode)
 	    }
 	}
 
-	if (tgt.type == SLS_MEM)
-	    return 0;
+	/* Only need to write a sentinel address for file backends. */
+	if (chan->type == SLS_FILE)
+	    sls_file_write(&sentinel, sizeof(sentinel), chan->fp);
 
-	sls_fd_write(&sentinel, sizeof(sentinel), tgt.fd);
 	if (error != 0)
 	    return error;
 
 	return 0;
-
 }
 
 int
-sls_dump(struct sls_process *slsp, int mode, int fd)
+sls_dump(struct sls_process *slsp, struct sls_channel *chan)
 {
 	int error = 0;
-	struct sls_store_tgt tgt;
 	struct vmspace *vm;
 	char *buf;
 	size_t len;
@@ -166,7 +208,7 @@ sls_dump(struct sls_process *slsp, int mode, int fd)
 
 	/* First write the coalesced metadata */
 	/* 
-	 * XXX Unpack them maybe to be able to
+	 * XXX Unpack the different records to be able to
 	 * store semantic information alongside them.
 	 * Not useful for the file, but necessary for
 	 * the OSD.
@@ -178,19 +220,15 @@ sls_dump(struct sls_process *slsp, int mode, int fd)
 	buf = sbuf_data(slsp->slsp_ckptbuf);
 	len = sbuf_len(slsp->slsp_ckptbuf);
 
-	error = sls_fd_write(buf, len, fd);
+	/* Write the data to the channel. */
+	error = sls_write(buf, len, chan);
 
 	sbuf_clear(slsp->slsp_ckptbuf);
 
 	if(error != 0)
 	    return error;
 
-	tgt = (struct sls_store_tgt) {
-	    .type = SLS_FILE,
-	    .fd	  = fd,
-	};
-
-	error = sls_dump_pages(vm, tgt, mode);
+	error = sls_dump_pages(vm, chan, slsp->slsp_attr.attr_mode);
 	if (error != 0) {
 	    printf("Error: Dumping pages failed with %d\n", error);
 	    return error;

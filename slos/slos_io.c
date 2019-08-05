@@ -254,11 +254,9 @@ slos_write(struct vnode *vp, struct slos_diskptr *diskptr, struct uio *uio)
 	    if (bytesinextent < xfersize)
 		xfersize = bytesinextent;
 
-
 	    bp = getblk(vp, bno, slos.slos_sb->sb_bsize, 0, 0, 0);
 	    if (bp == NULL)
 		break;
-
 
 	    /* Copy over the data we need to the block buffer. */
 	    if (buf_mapped(bp)) {

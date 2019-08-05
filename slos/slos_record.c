@@ -114,16 +114,19 @@ slos_rcreate(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
 
 	/* Add the record to the records btree. */
 	error = btree_insert(vp->vno_records, rp->rec_num, &DISKPTR_BLOCK(rp->rec_blkno));
-	if (error != 0)
+	if (error != 0) {
 	    goto error;
+	}
 
 	/* 
 	 * Export the updated inode (this includes possibly 
 	 * updating the root of the records btree if needed). 
 	 */
 	error = slos_vpexport(&slos, vp);
-	if (error != 0)
+	if (error != 0) {
+	    printf("Could not export vp with error %d\n", error);
 	    goto error;
+	}
 
 	/* Export the record number to the caller. */
 	*rnop = rp->rec_num;
@@ -933,6 +936,29 @@ slos_nextrno(struct slos_vnode *vp, uint64_t *rnop)
 }
 
 int
+slos_firstrno_typed(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
+{
+	struct slos_record *rp = NULL;	
+	uint64_t rno;
+
+	rp = slos_firstrec(vp);
+	while (rp != NULL && rp->rec_type != rtype) {
+	    rno = rp->rec_num;
+	    free(rp, M_SLOS);
+	    rp = slos_nextrec(vp, rno);
+	}
+	
+	if (rp != NULL) {
+	    *rnop = rp->rec_num;
+	    free(rp, M_SLOS);
+
+	    return 0;
+	}
+
+	return EINVAL;
+}
+
+int
 slos_lastrno_typed(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
 {
 	struct slos_record *rp = NULL;	
@@ -954,7 +980,6 @@ slos_lastrno_typed(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
 
 	return EINVAL;
 }
-
 
 #ifdef SLOS_TESTS
 

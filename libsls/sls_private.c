@@ -11,30 +11,9 @@
 
 #include "sls_private.h"
 
+/* Generic ioctl for the SLS device. */
 int
-sls_op(struct op_param *param)
-{
-	int status;
-	int fd;
-    
-	fd = open("/dev/sls", O_RDWR);
-	if (fd < 0) {
-		fprintf(stderr, "ERROR: Could not open SLS device: %m");
-		return -1;
-	}
-
-	status = ioctl(fd, SLS_OP, param);
-	if (status < 0) {
-		fprintf(stderr, "ERROR: SLS op ioctl failed: %m");
-	}
-
-	close(fd);
-
-	return status;
-}
-
-int
-sls_proc(struct proc_param *param)
+sls_ioctl(long ionum, void *args)
 {
 	int status;
 	int fd;
@@ -45,7 +24,7 @@ sls_proc(struct proc_param *param)
 		return -1;
 	}
 
-	status = ioctl(fd, SLS_PROC, param);
+	status = ioctl(fd, ionum, args);
 	if (status < 0) {
 		fprintf(stderr, "ERROR: SLS proc ioctl failed: %m");
 	}
@@ -53,6 +32,12 @@ sls_proc(struct proc_param *param)
 	close(fd);
 
 	return status;
+}
 
+/* XXX Will be removed when SLS_PROC gets refactored. */
+int
+sls_proc(struct proc_param *param)
+{
+	return sls_ioctl(SLS_PROC, param);
 }
 

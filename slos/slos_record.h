@@ -31,6 +31,7 @@ int slos_firstrno(struct slos_vnode *vp, uint64_t *rnop);
 int slos_lastrno(struct slos_vnode *vp, uint64_t *rnop);
 int slos_prevrno(struct slos_vnode *vp, uint64_t *rnop);
 int slos_nextrno(struct slos_vnode *vp, uint64_t *rnop);
+int slos_firstrno_typed(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop);
 int slos_lastrno_typed(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop);
 
 #ifdef SLOS_TESTS

@@ -177,12 +177,6 @@ slosHandler(struct module *inModule, int inEvent, void *inArg) {
 		    return error;
 		}
 
-		printf("Testing records...\n");
-		error = slos_test_record(); 
-		if (error != 0)
-		    break;
-
-		/* XXX Here is where we export the SLOS methods to SLS. */
 
 		printf("SLOS Loaded.\n");
 
@@ -265,4 +259,5 @@ static moduledata_t moduleData = {
 	NULL
 };
 
-DECLARE_MODULE(btree_kmod, moduleData, SI_SUB_DRIVERS, SI_ORDER_MIDDLE);
+DECLARE_MODULE(slos, moduleData, SI_SUB_DRIVERS, SI_ORDER_MIDDLE);
+MODULE_VERSION(slos, 0);

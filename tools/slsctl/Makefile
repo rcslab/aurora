@@ -1,8 +1,8 @@
 PROG= slsctl
-SRCS= slsctl.c slsctl_op.c slsctl_period.c
+SRCS= slsctl.c attach.c detach.c checkpoint.c restore.c
 MAN=
 
-LDADD= -lsls
+LDADD= -lsls -lsbuf
 LDFLAGS= -L../../libsls
 CFLAGS= -I../../include
 

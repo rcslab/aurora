@@ -361,6 +361,11 @@ slos_icreate(struct slos *slos, uint64_t pid)
 	 */
 	error = btree_search(slos->slos_inodes, pid, &diskptr);
 	if (error == 0) {
+	    /* 
+	     * Make the disk pointer NULL again so that we 
+	     * don't free the existing vnode in the error path.
+	     */
+	    diskptr = DISKPTR_NULL;
 	    error = EINVAL;
 	    goto error;
 	} else if (error != 0 && error != EINVAL) {

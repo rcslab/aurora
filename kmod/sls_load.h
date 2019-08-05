@@ -24,6 +24,8 @@ int sls_load_ptable(struct sls_pagetable *ptable, struct file *fp);
 int sls_load_vmobject(struct vm_object_info *obj, struct file *fp);
 int sls_load_vmentry(struct vm_map_entry_info *entry, struct file *fp);
 int sls_load_memory(struct memckpt_info *memory, struct file *fp);
+int sls_load_path(struct sbuf **sbp, struct file *fp); 
+
 
 void addpage_noreplace(struct sls_pagetable *ptable, struct dump_page *dump_page);
 

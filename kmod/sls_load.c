@@ -32,10 +32,10 @@
 
 #include "sls.h"
 #include "slsmm.h"
+#include "sls_channel.h"
 #include "sls_data.h"
 #include "sls_dump.h"
 #include "sls_ioctl.h"
-#include "sls_file.h"
 #include "sls_path.h"
 
 /* XXX Will become a sysctl value */
@@ -241,6 +241,63 @@ sls_load_memory(struct memckpt_info *memory, struct file *fp)
 	}
 
 	return 0;
+}
+
+int
+sls_load_path(struct sbuf **sbp, struct file *fp) 
+{
+	int error;
+	size_t len;
+	char *path = NULL;
+	int magic;
+	struct sbuf *sb = NULL;
+
+
+	error = sls_file_read(&magic, sizeof(magic), fp);
+	if (error != 0)
+	    return error;
+
+	if (magic != SLS_STRING_MAGIC)
+	    return EINVAL;
+
+	error = sls_file_read(&len, sizeof(len), fp);
+	if (error != 0)
+	    return error;
+
+	/* First copy the data into a temporary raw buffer */
+	path = malloc(len + 1, M_SLSMM, M_WAITOK);
+	error = sls_file_read(path, len, fp);
+	if (error != 0)
+	    goto error;
+	path[len++] = '\0';
+
+	sb = sbuf_new_auto();
+	if (sb == NULL)
+	    goto error;
+
+	/* Then move it over to the sbuf */
+	error = sbuf_bcpy(sb, path, len);
+	if (error != 0)
+	    goto error;
+
+	error = sbuf_finish(sb);
+	if (error != 0)
+	    goto error;
+
+	*sbp = sb;
+	free(path, M_SLSMM);
+
+	return 0;
+
+error:
+
+	if (sb != NULL)
+	    sbuf_delete(sb);
+
+	free(path, M_SLSMM);
+	*sbp = NULL;
+	return error;
+
 }
 
 

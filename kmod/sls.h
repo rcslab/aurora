@@ -16,28 +16,9 @@
 
 SDT_PROVIDER_DECLARE(sls);
 
-#define SLS_CKPT_FULL	    0
-#define SLS_CKPT_DELTA	    1
-
-
-/* Benchmarking structures XXX improve/streamline somehow */
-#define SLSLOG_PROC	    0
-#define SLSLOG_MEM	    1
-#define SLSLOG_FILE	    2
-#define SLSLOG_FORK	    3
-#define SLSLOG_COMPACT	    4
-#define SLSLOG_CKPT	    5
-#define SLSLOG_DUMP	    6
-#define SLS_LOG_SLOTS	    7
-#define SLS_LOG_ENTRIES	    (1024 * 128)
-#define SLS_LOG_BUFFER	    1024
-
-
 extern size_t sls_contig_limit;
 
 struct sls_metadata {
-    long		slsm_log[SLS_LOG_SLOTS][SLS_LOG_ENTRIES];
-    int			slsm_log_counter;
     int			slsm_exiting;
     int			slsm_lastid;
     u_long		slsm_procmask;
@@ -59,26 +40,13 @@ tonano(struct timespec tp)
     return billion * tp.tv_sec + tp.tv_nsec;
 }
 
-inline void
-sls_log(int type, int value)
-{
-    slsm.slsm_log[type][slsm.slsm_log_counter] = value;
-}
-
-inline void
-sls_log_new(void)
-{
-    slsm.slsm_log_counter++;
-}
-
-
 inline int
 sls_module_exiting(void)
 {
     return slsm.slsm_exiting;
 }
 
-
+#define SLS_DEBUG
 #ifdef SLS_DEBUG
 #define SLS_DBG(fmt, ...) do {			    \
     printf("(%s: Line %d) ", __FILE__, __LINE__);   \
@@ -90,6 +58,19 @@ sls_module_exiting(void)
 #define sls_tmp(fmt, ...) panic("debug printf not removed")
 #endif /* SLS_DEBUG */
 
+struct sls_checkpointd_args {
+	struct proc *p;
+	struct sls_process *slsp;
+};
+
+struct sls_restored_args {
+	struct proc *p;
+	struct sbuf *filename;
+	int target;
+};
+
+void sls_checkpointd(struct sls_checkpointd_args *args);
+void sls_restored(struct sls_restored_args *args);
 
 #endif /* _SLS_H_ */
 

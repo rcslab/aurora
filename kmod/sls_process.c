@@ -51,6 +51,7 @@ slsp_init(pid_t pid)
     procnew->slsp_status = 0;
     procnew->slsp_epoch = 0;
     procnew->slsp_ckptbuf = sbuf_new_auto();
+    procnew->slsp_refcount = 1;
     if (procnew->slsp_ckptbuf == NULL) {
 	free(procnew, M_SLSMM);
 	return NULL;
@@ -67,12 +68,16 @@ slsp_add(pid_t pid)
 {
     struct sls_process *slsp;
 
-
-
+    /* 
+     * Try to find if we already  have added the process to
+     * the SLS, if so we can't add it again.
+     */
     slsp = slsp_find(pid);
-    if (slsp != NULL)
-	return slsp;
-
+    if (slsp != NULL) {
+	/* We got a reference to the process with slsp_find, release it. */
+	slsp_deref(slsp);
+	return NULL;
+    }
 
     return slsp_init(pid);
 }
@@ -80,6 +85,9 @@ slsp_add(pid_t pid)
 void
 slsp_fini(struct sls_process *slsp)
 {
+    
+    LIST_REMOVE(slsp, slsp_procs);
+
     if (slsp->slsp_ckptbuf != NULL) {
 	if (sbuf_done(slsp->slsp_ckptbuf) == 0)
 	    sbuf_finish(slsp->slsp_ckptbuf);
@@ -135,8 +143,11 @@ slsp_find(pid_t pid)
     bucket = &slsm.slsm_proctable[pid & slsm.slsm_procmask];
 
     LIST_FOREACH(slsp, bucket, slsp_procs) {
-	if (slsp->slsp_pid == pid)
+	if (slsp->slsp_pid == pid) {
+	    /* Get a reference to the process and return it. */
+	    slsp_ref(slsp);
 	    return slsp;
+	}
     }
 
     return NULL;
@@ -164,4 +175,20 @@ slsp_delall(void)
 			slsp_fini(slsp);
 		}
 	}
+}
+
+void
+slsp_ref(struct sls_process *slsp)
+{
+	atomic_add_int(&slsp->slsp_refcount, 1);
+}
+
+void
+slsp_deref(struct sls_process *slsp)
+{
+	atomic_add_int(&slsp->slsp_refcount, -1);
+
+	if (slsp->slsp_refcount == 0)
+	    slsp_fini(slsp);
+
 }

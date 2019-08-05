@@ -12,10 +12,10 @@ void
 usage(void)
 {
 	printf("Usage: slsctl <command> [command args]\n");
-	printf("       slsctl checkpoint      -p <PID> <-f <filename> | -m>[-d]\n");
-	printf("       slsctl restore   <-f <filename> | -m id>>\n");
-	printf("       slsctl ckptstart -p pid -t <period> [-n iterations]<-f <filename> | -m>[-d]\n");
-	printf("       slsctl ckptstop -p pid\n");
+	printf("       slsctl checkpoint -p <PID> \n");
+	printf("       slsctl restore <-f <filename> | -m id>>\n");
+	printf("       slsctl attach -p pid -t <period> [-n iterations] <-f <filename> | -m> [-d]\n");
+	printf("       slsctl detach -p pid\n");
 }
 
 struct command {
@@ -23,11 +23,11 @@ struct command {
 	void(*usage)();
 	int(*cmd)(int, char **);
 } commandtable[] = {
-	{ "checkpoint",	&checkpoint_usage,		&checkpoint_main },
-	{ "restore",	&restore_usage,		&restore_main },
-	{ "ckptstart",	&ckptstart_usage,	&ckptstart_main},
-	{ "ckptstop",	&ckptstop_usage,	&ckptstop_main},
-	{ NULL,		NULL,			NULL }
+	{ "checkpoint",	&checkpoint_usage,  &checkpoint_main },
+	{ "restore",	&restore_usage,	    &restore_main },
+	{ "attach",	&attach_usage,	    &attach_main},
+	{ "detach",	&detach_usage,      &detach_main},
+	{ NULL,		NULL,		    NULL }
 };
 
 int

@@ -38,13 +38,15 @@
 #include <vm/uma.h>
 
 #include "sls.h"
-#include "slsmm.h"
-#include "sls_ioctl.h"
 #include "sls_data.h"
-
-#include "sls_op.h"
 #include "sls_dump.h"
+#include "sls_fd.h"
+#include "sls_ioctl.h"
+#include "sls_load.h"
+#include "sls_mem.h"
 #include "sls_objtable.h"
+#include "sls_proc.h"
+#include "slsmm.h"
 
 static int
 sls_rest_thread(struct proc *p, struct file *fp)
@@ -198,7 +200,7 @@ sls_rest_memory(struct proc *p, struct file *fp)
 
 
 	/* Temporary measure until we start associating pages w/ objects */
-	for (entry = map->header.next; entry !=  &map->header; entry = entry->next)
+	for (entry = map->header.next; entry != &map->header; entry = entry->next)
 	    sls_data_rest(ptable, map, entry);
 
 sls_rest_memory_out:
@@ -255,59 +257,61 @@ sls_rest_out:
  * restore.
  */
 static int
-sls_restd_open(char *filename, struct file **fpp)
+sls_restored_open(struct sbuf *filename, struct file **fpp)
 {
-    struct file *fp;
-    int error;
-    int fd;
+	struct file *fp;
+	int error;
+	int fd;
 
-    error = kern_openat(curthread, AT_FDCWD, filename, 
-	UIO_SYSSPACE, O_RDWR, S_IRWXU);
-    if (error != 0) {
-	printf("Error: Opening file failed with %d\n", error);
-	return error;
-    }
-    fd = curthread->td_retval[0];
+	error = kern_openat(curthread, AT_FDCWD, sbuf_data(filename), 
+	    UIO_SYSSPACE, O_RDWR, S_IRWXU);
+	if (error != 0) {
+	    printf("Error: Opening file failed with %d\n", error);
+	    return error;
+	}
+	fd = curthread->td_retval[0];
 
-    error = fget_read(curthread, fd, &cap_read_rights, &fp);
-    if (error != 0) {
-	kern_close(curthread, fd);
-	return error;
-    }
+	error = fget_read(curthread, fd, &cap_read_rights, &fp);
+	if (error != 0) {
+	    kern_close(curthread, fd);
+	    return error;
+	}
 
-    *fpp = fp;
+	*fpp = fp;
 
-    return 0;
+	return 0;
 }
 
 void
-sls_restd(struct sls_op_args *args)
+sls_restored(struct sls_restored_args *args)
 {
-    int error;
-    struct file *fp = NULL;
-    
-    error = sls_restd_open(args->filename, &fp);
-    if (error != 0)
-	goto sls_restd_out;
+	int error;
+	struct file *fp = NULL;
+	
 
-    error = sls_rest(args->p, fp);
-    if (error != 0)
-	printf("Error: sls_rest failed with %d\n", error);
+	error = sls_restored_open(args->filename, &fp);
+	if (error != 0)
+	    goto out;
 
-sls_restd_out:
+	error = sls_rest(args->p, fp);
+	if (error != 0)
+	    printf("Error: sls_rest failed with %d\n", error);
 
-    if (fp != NULL)
-	fdrop(fp, curthread);
+out:
 
-    PRELE(args->p);
+	if (fp != NULL)
+	    fdrop(fp, curthread);
 
-    free(args->filename, M_SLSMM);
-    free(args, M_SLSMM);
+	PRELE(args->p);
 
-    dev_relthread(slsm.slsm_cdev, 1);
+	if (args->filename != NULL)
+	    sbuf_delete(args->filename);
+	free(args, M_SLSMM);
 
-    if (error != 0)
-	exit1(curthread, error, 0);
-    else
-	kthread_exit();
+	dev_relthread(slsm.slsm_cdev, 1);
+
+	if (error != 0)
+	    exit1(curthread, error, 0);
+	else
+	    kthread_exit();
 }

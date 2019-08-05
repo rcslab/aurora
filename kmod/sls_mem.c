@@ -346,6 +346,8 @@ sls_vmobject_rest(struct vm_object_info *info, struct sls_objtable *objtable)
 	    if (error != 0) 
 		return error;
 	    
+	    /* Get a reference for the vnode, since we're going to use it. */
+	    vhold(vp);
 	    object = vp->v_object;
 	    sls_objtable_add(info->id, object, objtable);
 	    return 0;

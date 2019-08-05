@@ -14,11 +14,11 @@ int snaplist_main(int argc, char *argv[]);
 void snapdel_usage(void);
 int snapdel_main(int argc, char *argv[]);
 
-void ckptstart_usage(void);
-int ckptstart_main(int argc, char *argv[]);
+void attach_usage(void);
+int attach_main(int argc, char *argv[]);
 
-void ckptstop_usage(void);
-int ckptstop_main(int argc, char *argv[]);
+void detach_usage(void);
+int detach_main(int argc, char *argv[]);
 
 
 #endif /* _SLSCTL_H_ */
