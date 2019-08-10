@@ -136,12 +136,17 @@ slosHandler(struct module *inModule, int inEvent, void *inArg) {
 		if (error != 0)
 		    return error;
 
-		/* Open the consumer, associate the vnode's bufobj with it. */
-		g_topology_lock();
-		error = g_vfs_open(slos.slos_vp, &slos.slos_cp, "slos", 1);
-		g_topology_unlock();
-		if (error != 0)
-		    return error;
+		/* 
+		 * Open the consumer, associate the vnode's bufobj with it. 
+		 * Only needed if we actually use a device for the filesystem.
+		 */
+		if (slos.slos_vp->v_type == VCHR) {
+		    g_topology_lock();
+		    error = g_vfs_open(slos.slos_vp, &slos.slos_cp, "slos", 1);
+		    g_topology_unlock();
+		    if (error != 0)
+			return error;
+		}
 		
 		/* Read in the superblock. */
 		error = slos_sbread();

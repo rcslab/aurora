@@ -16,6 +16,9 @@ struct slos_diskptr {
 	/*uint8_t   hash[16];*/
 };
 
+/* Block size for file-backed SLOSes. */
+#define SLOS_FILEBLKSIZE (64 * 1024)
+
 /* Shorthands for creating disk pointers. */
 #define DISKPTR(blkno, size) \
     ((struct slos_diskptr) { blkno, size, })

@@ -303,6 +303,11 @@ main(int argc, const char *argv[])
 		if (!size || size < st.st_size) {
 			size = st.st_size;
 		}
+		/* 
+		 * Have the block size be equal to the standard 
+		 * system maximum block size.
+		 */
+		bsize = 64 * 1024;
 	} else {
 		fprintf(stderr, "You can only create an OSD on a device or file\n");
 		exit(1);

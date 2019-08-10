@@ -12,9 +12,6 @@
 #include "../include/slos.h"
 #include "../include/slos_bnode.h"
 
-/* Uncomment to make tests available. */
-#define SLOS_TESTS
-
 struct slos {
 	struct vnode		*slos_vp;	/* The vnode for the disk device */
 	struct slos_sb		*slos_sb;	/* The superblock of the filesystem */

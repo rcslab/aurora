@@ -117,15 +117,14 @@ slos_uiozero(struct uio *auio, size_t xfersize)
 	return error;
 }
 
-
 /*
- * For now let's make all writes synchronous; we'll add an asynchronous
- * case when we actually have records and need the throughput.
+ * Routines for filesystems actually backed by disks. The functions work
+ * with the buffer cache and the device itself.
  */
 
 /* Read from the specified extent. */
-int
-slos_read(struct vnode *vp, struct slos_diskptr *diskptr, struct uio *uio)
+static int
+slos_read_disk(struct vnode *vp, struct slos_diskptr *diskptr, struct uio *uio)
 {
 	struct buf *bp;
 	uint64_t boff;
@@ -144,6 +143,7 @@ slos_read(struct vnode *vp, struct slos_diskptr *diskptr, struct uio *uio)
 	 * correspond to 512 byte increments.
 	 */
 	sectorsperblock = slos.slos_sb->sb_bsize / slos.slos_sb->sb_ssize;
+	/* XXX This doesn't work for sb_ssize != 512, find out why */
 
 	for (error = 0, bp = NULL; uio->uio_resid > 0; bp = NULL) {
 	    /* Check if the offset is still in the extent. */
@@ -210,10 +210,9 @@ slos_read(struct vnode *vp, struct slos_diskptr *diskptr, struct uio *uio)
 	return error;
 }
 
-
 /* Write to an extent beginning from offset off for len bytes. */
-int
-slos_write(struct vnode *vp, struct slos_diskptr *diskptr, struct uio *uio)
+static int
+slos_write_disk(struct vnode *vp, struct slos_diskptr *diskptr, struct uio *uio)
 {
 	struct buf *bp;
 	uint64_t boff;
@@ -278,6 +277,83 @@ slos_write(struct vnode *vp, struct slos_diskptr *diskptr, struct uio *uio)
 	return error;
 }
 
+int
+slos_read(struct vnode *vp, struct slos_diskptr *diskptr, struct uio *uio)
+{
+	struct uio *newuio;
+	size_t extent_size;
+	size_t file_offset;
+	int error;
+
+	switch (vp->v_type) {
+	case VREG:
+	    newuio = cloneuio(uio);
+
+	    /* Get the offset in the file which we're backing the FS with.  */
+	    file_offset = diskptr->offset * slos.slos_sb->sb_bsize;
+	    newuio->uio_offset = file_offset + uio->uio_offset;
+
+	    /* Truncate the size of the operation to fit into the extent. */
+	    extent_size = diskptr->size * slos.slos_sb->sb_bsize;
+	    newuio->uio_resid = min(uio->uio_resid, extent_size - uio->uio_offset);
+
+	    /* Issue the read itself. */
+	    error = VOP_READ(vp, newuio, 0, curthread->td_ucred);
+
+	    /* Increment the size of the original UIO. */
+	    uio->uio_resid = newuio->uio_resid;
+	    uio->uio_offset = newuio->uio_offset - file_offset;
+
+	    free(newuio, M_IOV);
+	    return error;
+		
+	case VCHR:
+	    return slos_read_disk(vp, diskptr, uio);
+
+	default:
+	    return EINVAL;
+	}
+}
+
+int
+slos_write(struct vnode *vp, struct slos_diskptr *diskptr, struct uio *uio)
+{
+	struct uio *newuio;
+	size_t extent_size;
+	size_t file_offset;
+	int error;
+
+	switch (vp->v_type) {
+	case VREG:
+	    newuio = cloneuio(uio);
+
+	    /* Get the offset in the file which we're backing the FS with.  */
+	    file_offset = diskptr->offset * slos.slos_sb->sb_bsize;
+	    newuio->uio_offset = file_offset + uio->uio_offset;
+
+	    /* Truncate the size of the operation to fit into the extent. */
+	    extent_size = diskptr->size * slos.slos_sb->sb_bsize;
+	    newuio->uio_resid = min(uio->uio_resid, extent_size - uio->uio_offset);
+
+	    /* Issue the write itself. */
+	    error = VOP_WRITE(vp, newuio, 0, curthread->td_ucred);
+
+	    /* Increment the size of the original UIO. */
+	    uio->uio_resid = newuio->uio_resid;
+	    uio->uio_offset = newuio->uio_offset - file_offset;
+
+	    free(newuio, M_IOV);
+	    return error;
+		
+	case VCHR:
+	    return slos_write_disk(vp, diskptr, uio);
+
+	default:
+	    return EINVAL;
+	}
+}
+
+
 /* 
  * Internal function that issues a one-block transfer
  * from the disk to a contiguous buffer.
@@ -329,7 +405,29 @@ slos_sbread(void)
 	struct slos_sb *sb;
 	struct buf *bp;
 	struct stat st;
+	struct iovec aiov;
+	struct uio auio;
 	int error;
+
+	/* If we're backed by a file, just call VOP_READ. */
+	if (slos.slos_vp->v_type == VREG) {
+	    sb = malloc(SLOS_FILEBLKSIZE, M_SLOS, M_WAITOK | M_ZERO);
+
+	    /* Read the first SLOS_FILEBLKSIZE bytes. */
+	    aiov.iov_base = sb;
+	    aiov.iov_len = SLOS_FILEBLKSIZE;
+	    slos_uioinit(&auio, 0,UIO_READ, &aiov, 1);
+
+	    /* Issue the read. */
+	    error = VOP_READ(slos.slos_vp, &auio, 0, curthread->td_ucred);
+	    if (error != 0) 
+		free(sb, M_SLOS);
+
+	    /* Make the superblock visible. */
+	    slos.slos_sb = sb;
+
+	    return error;
+	}
 
 	/* Lock needed to call vn_stat. */
 	error = vn_lock(slos.slos_vp, LK_EXCLUSIVE);
@@ -349,9 +447,7 @@ slos_sbread(void)
 	    return error;
 	}
 
-	/* Manually create the iovec and uio. */
 	sb = malloc(st.st_blksize, M_SLOS, M_WAITOK | M_ZERO);
-
 
 	/* 
 	 * Since our read routines use the superblock's data to find
@@ -387,6 +483,19 @@ slos_sbwrite(struct slos *slos)
 	struct iovec aiov;
 	struct uio auio;
 	int error;
+
+	/* If we're backed by a file, just call VOP_READ. */
+	if (slos->slos_vp->v_type == VREG) {
+	    /* Write the first SLOS_FILEBLKSIZE bytes. */
+	    aiov.iov_base = slos->slos_sb;
+	    aiov.iov_len = SLOS_FILEBLKSIZE;
+	    slos_uioinit(&auio, 0, UIO_WRITE, &aiov, 1);
+
+	    /* Issue the write. */
+	    error = VOP_WRITE(slos->slos_vp, &auio, 0, curthread->td_ucred);
+
+	    return error ;
+	}
 
 	sbptr = (struct slos_diskptr) {
 	    .offset = 0,
