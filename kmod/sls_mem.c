@@ -28,7 +28,6 @@
 #include "slsmm.h"
 #include "sls_path.h"
 #include "sls_mem.h"
-#include "sls_dump.h"
 
 static int 
 sls_vmobject_ckpt(struct proc *p, vm_object_t obj, struct sbuf *sb)

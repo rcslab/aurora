@@ -1,6 +1,7 @@
 #ifndef _SLS_RESTORE_H_
 #define _SLS_RESTORE_H_
 
+#include "sls_channel.h"
 #include "sls_process.h"
 
 struct dump_page {
@@ -16,17 +17,15 @@ struct sls_pagetable {
     u_long hashmask;		
 };
 
-int sls_load_thread(struct thread_info *thread_info, struct file *fp);
-int sls_load_proc(struct proc_info *proc_info, struct file *fp);
-int sls_load_file(struct file_info *file, struct file *fp);
-int sls_load_filedesc(struct filedesc_info *filedesc, struct file *fp);
-int sls_load_ptable(struct sls_pagetable *ptable, struct file *fp);
-int sls_load_vmobject(struct vm_object_info *obj, struct file *fp);
-int sls_load_vmentry(struct vm_map_entry_info *entry, struct file *fp);
-int sls_load_memory(struct memckpt_info *memory, struct file *fp);
-int sls_load_path(struct sbuf **sbp, struct file *fp); 
+int sls_load_thread(struct thread_info *thread_info, struct sls_channel *chan);
+int sls_load_proc(struct proc_info *proc_info, struct sls_channel *chan);
+int sls_load_file(struct file_info *file, struct sls_channel *chan);
+int sls_load_filedesc(struct filedesc_info *filedesc, struct sls_channel *chan);
+int sls_load_vmobject(struct vm_object_info *obj, struct sls_channel *chan);
+int sls_load_vmentry(struct vm_map_entry_info *entry, struct sls_channel *chan);
+int sls_load_memory(struct memckpt_info *memory, struct sls_channel *chan);
+int sls_load_path(struct sbuf **sbp, struct sls_channel *chan); 
 
-
-void addpage_noreplace(struct sls_pagetable *ptable, struct dump_page *dump_page);
+int sls_load_ptable(struct sls_pagetable *ptable, struct sls_channel *chan);
 
 #endif /* _SLS_RESTORE_H_ */

@@ -47,7 +47,6 @@
 #include "sls_objtable.h"
 #include "slsmm.h"
 
-#include "sls_dump.h"
 
 MALLOC_DEFINE(M_SLSMM, "slsmm", "SLSMM");
 
@@ -127,6 +126,7 @@ sls_restore(struct sls_restore_args *args)
 	struct sls_restored_args *restd_args = NULL;
 	struct proc *p = NULL;
 	struct sbuf *filename = NULL;
+	struct sls_backend backend; 
 	int error = 0;
 	size_t len;
 
@@ -147,7 +147,8 @@ sls_restore(struct sls_restore_args *args)
 	}
 
 	/* If the source is a file, bring its name into the kernel. */
-	if (args->backend.bak_target == SLS_FILE) {
+	switch (args->backend.bak_target) {
+	case SLS_FILE:
 	    /* Get a new sbuf to read the filename into. */
 	    filename = sbuf_new_auto();
 	    if (filename == NULL) {
@@ -164,15 +165,30 @@ sls_restore(struct sls_restore_args *args)
 
 	    /* Finalize the sbuf. */
 	    sbuf_finish(filename);
-	} 
+
+	    /* Construct the kernel-side backend. */
+	    backend.bak_target = SLS_FILE;
+	    backend.bak_name = filename;
+
+	    break;
+
+	case SLS_OSD:
+
+	    /* There are no pointers in the backend when it's for the OSD. */
+	    backend = args->backend;
+
+	    break;
+
+	default:
+	    error = EINVAL;
+	    goto error;
+	}
 	    
 
 	/* Set up the arguments for the restore. */
 	restd_args = malloc(sizeof(*restd_args), M_SLSMM, M_WAITOK);
-	/* XXX Refactor into a struct backend. */
-	restd_args->filename = filename;
 	restd_args->p = p;
-	restd_args->target = args->backend.bak_target;
+	restd_args->backend = backend;
 
 	/* 
 	 * While for sls_checkpoint we can assign the worker
@@ -191,15 +207,13 @@ sls_restore(struct sls_restore_args *args)
 
 error:
 
-	if (restd_args != NULL)
-	    free(restd_args, M_SLSMM);
+	free(restd_args, M_SLSMM);
 
 	if (filename != NULL)
 	    sbuf_delete(filename);
 
 	if (p != NULL)
 	    PRELE(p);
-
 
 	return error;
 }

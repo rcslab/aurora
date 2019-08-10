@@ -46,6 +46,13 @@ sls_module_exiting(void)
     return slsm.slsm_exiting;
 }
 
+/* Macros for turning in-object offsets to memory addresses and vice versa */
+#define IDX_TO_VADDR(idx, entry_start, entry_offset) \
+	(IDX_TO_OFF(idx) + entry_start - entry_offset)
+#define VADDR_TO_IDX(vaddr, entry_start, entry_offset) \
+	(OFF_TO_IDX(vaddr - entry_start + entry_offset))
+
+/* Macros for debugging messages */
 #define SLS_DEBUG
 #ifdef SLS_DEBUG
 #define SLS_DBG(fmt, ...) do {			    \
@@ -65,8 +72,7 @@ struct sls_checkpointd_args {
 
 struct sls_restored_args {
 	struct proc *p;
-	struct sbuf *filename;
-	int target;
+	struct sls_backend backend;
 };
 
 void sls_checkpointd(struct sls_checkpointd_args *args);

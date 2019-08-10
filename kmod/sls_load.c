@@ -34,9 +34,14 @@
 #include "slsmm.h"
 #include "sls_channel.h"
 #include "sls_data.h"
-#include "sls_dump.h"
 #include "sls_ioctl.h"
-#include "sls_path.h"
+#include "sls_load.h"
+#include "sls_mem.h"
+
+#include <slos.h>
+#include "../slos/slos_inode.h"
+#include "../slos/slos_io.h"
+#include "../slos/slos_record.h"
 
 /* XXX Will become a sysctl value */
 size_t sls_contig_limit = 2 * 1024 * 1024;
@@ -74,7 +79,7 @@ htable_fini(struct sls_pagetable *ptable)
 }
 
 
-void
+static void
 addpage_noreplace(struct sls_pagetable *ptable, struct dump_page *new_entry)
 {
 	struct page_list *page_bucket;
@@ -96,11 +101,11 @@ addpage_noreplace(struct sls_pagetable *ptable, struct dump_page *new_entry)
 }
 
 int
-sls_load_thread(struct thread_info *thread_info, struct file *fp)
+sls_load_thread(struct thread_info *thread_info, struct sls_channel *chan)
 {
 	int error;
 
-	error = sls_file_read(thread_info, sizeof(*thread_info), fp);
+	error = sls_read(thread_info, sizeof(*thread_info), SLOSREC_PROC, chan);
 	if (error != 0)
 	    return error;
 
@@ -114,16 +119,16 @@ sls_load_thread(struct thread_info *thread_info, struct file *fp)
 
 /* Functions that load parts of the state. */
 int 
-sls_load_proc(struct proc_info *proc_info, struct file *fp)
+sls_load_proc(struct proc_info *proc_info, struct sls_channel *chan)
 {
 	int error;
 
-	error = sls_file_read(proc_info, sizeof(*proc_info), fp);
+	error = sls_read(proc_info, sizeof(*proc_info), SLOSREC_PROC, chan);
 	if (error != 0)
 	    return error;
 
 	if (proc_info->magic != SLS_PROC_INFO_MAGIC) {
-	    SLS_DBG("magic mismatch\n");
+	    SLS_DBG("magic mismatch, %d vs %d\n", proc_info->magic, SLS_PROC_INFO_MAGIC);
 	    return EINVAL;
 	}
 
@@ -131,11 +136,11 @@ sls_load_proc(struct proc_info *proc_info, struct file *fp)
 }
 
 int
-sls_load_file(struct file_info *file_info, struct file *fp)
+sls_load_file(struct file_info *file_info, struct sls_channel *chan)
 {
 	int error;
 
-	error = sls_file_read(file_info, sizeof(*file_info), fp);
+	error = sls_read(file_info, sizeof(*file_info), SLOSREC_PROC, chan);
 	if (error != 0)
 	    return error;
 
@@ -147,7 +152,7 @@ sls_load_file(struct file_info *file_info, struct file *fp)
 	    return EINVAL;
 	}
 
-	error = sls_load_path(&file_info->path, fp);
+	error = sls_load_path(&file_info->path, chan);
 	if (error != 0)
 	    return error;
 
@@ -155,12 +160,12 @@ sls_load_file(struct file_info *file_info, struct file *fp)
 }
 
 int
-sls_load_filedesc(struct filedesc_info *filedesc, struct file *fp)
+sls_load_filedesc(struct filedesc_info *filedesc, struct sls_channel *chan)
 {
 	int error;
 
 	/* General file descriptor */
-	error = sls_file_read(filedesc, sizeof(*filedesc), fp);
+	error = sls_read(filedesc, sizeof(*filedesc), SLOSREC_PROC, chan);
 	if (error != 0)
 	    return 0;
 
@@ -170,11 +175,11 @@ sls_load_filedesc(struct filedesc_info *filedesc, struct file *fp)
 	}
 
 	/* Current and root directories */
-	error = sls_load_path(&filedesc->cdir, fp);
+	error = sls_load_path(&filedesc->cdir, chan);
 	if (error != 0)
 	    return error;
 
-	error = sls_load_path(&filedesc->rdir, fp);
+	error = sls_load_path(&filedesc->rdir, chan);
 	if (error != 0) {
 	    sbuf_delete(filedesc->cdir);
 	    return error;
@@ -184,11 +189,11 @@ sls_load_filedesc(struct filedesc_info *filedesc, struct file *fp)
 }
 
 int
-sls_load_vmobject(struct vm_object_info *obj, struct file *fp)
+sls_load_vmobject(struct vm_object_info *obj, struct sls_channel *chan)
 {
 	int error;
 
-	error = sls_file_read(obj, sizeof(*obj), fp);
+	error = sls_read(obj, sizeof(*obj), SLOSREC_PROC, chan);
 	if (error != 0)
 	    return error;
 
@@ -201,7 +206,7 @@ sls_load_vmobject(struct vm_object_info *obj, struct file *fp)
 	}
 
 	if (obj->type == OBJT_VNODE) {
-	    error = sls_load_path(&obj->path, fp);
+	    error = sls_load_path(&obj->path, chan);
 	    if (error != 0)
 		return error;
 	}
@@ -210,11 +215,11 @@ sls_load_vmobject(struct vm_object_info *obj, struct file *fp)
 }
 
 int
-sls_load_vmentry(struct vm_map_entry_info *entry, struct file *fp)
+sls_load_vmentry(struct vm_map_entry_info *entry, struct sls_channel *chan)
 {
 	int error;
 
-	error = sls_file_read(entry, sizeof(*entry), fp);
+	error = sls_read(entry, sizeof(*entry), SLOSREC_PROC, chan);
 	if (error != 0)
 	    return error;
 
@@ -227,11 +232,11 @@ sls_load_vmentry(struct vm_map_entry_info *entry, struct file *fp)
 }
 
 int 
-sls_load_memory(struct memckpt_info *memory, struct file *fp)
+sls_load_memory(struct memckpt_info *memory, struct sls_channel *chan)
 {
 	int error;
 
-	error = sls_file_read(memory, sizeof(*memory), fp);
+	error = sls_read(memory, sizeof(*memory), SLOSREC_PROC, chan);
 	if (error != 0)
 	    return error;
 
@@ -244,7 +249,7 @@ sls_load_memory(struct memckpt_info *memory, struct file *fp)
 }
 
 int
-sls_load_path(struct sbuf **sbp, struct file *fp) 
+sls_load_path(struct sbuf **sbp, struct sls_channel *chan) 
 {
 	int error;
 	size_t len;
@@ -253,20 +258,20 @@ sls_load_path(struct sbuf **sbp, struct file *fp)
 	struct sbuf *sb = NULL;
 
 
-	error = sls_file_read(&magic, sizeof(magic), fp);
+	error = sls_read(&magic, sizeof(magic), SLOSREC_PROC, chan);
 	if (error != 0)
 	    return error;
 
 	if (magic != SLS_STRING_MAGIC)
 	    return EINVAL;
 
-	error = sls_file_read(&len, sizeof(len), fp);
+	error = sls_read(&len, sizeof(len), SLOSREC_PROC, chan);
 	if (error != 0)
 	    return error;
 
 	/* First copy the data into a temporary raw buffer */
 	path = malloc(len + 1, M_SLSMM, M_WAITOK);
-	error = sls_file_read(path, len, fp);
+	error = sls_read(path, len, SLOSREC_PROC, chan);
 	if (error != 0)
 	    goto error;
 	path[len++] = '\0';
@@ -300,9 +305,8 @@ error:
 
 }
 
-
-int
-sls_load_ptable(struct sls_pagetable *ptable, struct file *fp)
+static int
+sls_load_ptable_file(struct sls_pagetable *ptable, struct file *fp)
 {
 	int error = 0;
 	void *hashpage;
@@ -318,7 +322,7 @@ sls_load_ptable(struct sls_pagetable *ptable, struct file *fp)
 
 	    error = sls_file_read(&vaddr, sizeof(vaddr), fp);
 	    if (error != 0)
-		goto sls_load_ptable_error;
+		goto error;
 
 	    /* Sentinel value */
 	    if (vaddr == SLS_MSG_END)
@@ -326,7 +330,7 @@ sls_load_ptable(struct sls_pagetable *ptable, struct file *fp)
 
 	    error = sls_file_read(&size, sizeof(size), fp);
 	    if (error != 0)
-		goto sls_load_ptable_error;
+		goto error;
 
 	    /*
 	    * We assume that asking for a page-size chunk will
@@ -343,7 +347,7 @@ sls_load_ptable(struct sls_pagetable *ptable, struct file *fp)
 		if (error != 0) {
 		    free(new_entry, M_SLSMM);
 		    free(hashpage, M_SLSMM);
-		    goto sls_load_ptable_error;
+		    goto error;
 		}
 
 		/*
@@ -356,9 +360,126 @@ sls_load_ptable(struct sls_pagetable *ptable, struct file *fp)
 
 	return 0;
 
-sls_load_ptable_error:
+error:
 
 	htable_fini(ptable);
+
+	return error;
+}
+
+static int
+sls_load_ptable_slos(struct sls_pagetable *ptable, struct slos_vnode *vp)
+{
+	struct dump_page *new_entry;
+	uint8_t *buf, *hashpage;
+	uint64_t offset, len;
+	vm_offset_t vaddr;
+	struct iovec aiov;
+	struct uio auio;
+	uint64_t rno;
+	int error;
+
+	error = htable_init(ptable);
+	if (error != 0)
+	    return error;
+
+
+	/* Get the SLOS record with the metadata. */
+	/* 
+	 * XXX When we have multiple checkpoints we are
+	 * going to have to look to the _last_ record of
+	 * that type, but now we want to start looking from
+	 * the beginning of the file for performance.
+	 */
+	error = slos_firstrno_typed(vp, SLOSREC_DATA, &rno);
+	if (error != 0) {
+	    htable_fini(ptable);
+	    return error;
+	}
+
+
+	offset = 0;
+	for (;;) {
+	    /* Seek the next extent in the record. */
+	    error = slos_rseek(vp, rno, offset, 0, &offset, &len);
+	    if (error != 0) {
+		htable_fini(ptable);
+		printf("Seek failed\n");
+		break;
+	    }
+
+	    /* If we get EOF, we're done. */
+	    if (len == SREC_SEEKEOF)
+		break;
+
+	    /* Otherwise allocate a buffer for the data. */
+	    buf = malloc(len, M_SLSMM, M_WAITOK);
+
+	    /* Create the UIO for the disk. */
+	    aiov.iov_base = buf;
+	    aiov.iov_len = len;
+	    slos_uioinit(&auio, offset, UIO_READ, &aiov, 1);
+
+	    /* The read itself. */
+	    error = slos_rread(vp, rno, &auio);
+	    if (error != 0) {
+		free(buf, M_SLSMM);
+		htable_fini(ptable);
+		return error;
+	    }
+
+	    /* 
+	     * The offset from which we read is the virtual address
+	     * in the restored process in which it must be placed.
+	     */
+	    vaddr = offset;
+
+	    /* Increment the offset by the amount of bytes read. */
+	    offset += (len - auio.uio_resid);
+
+	    /* Break down the read part into pages, enter into ptable. */
+	    for (vm_offset_t off = 0; off < len; off += PAGE_SIZE) {
+		new_entry = malloc(sizeof(*new_entry), M_SLSMM, M_WAITOK);
+		hashpage = malloc(PAGE_SIZE, M_SLSMM, M_WAITOK);
+
+		/* Copy the page into a new buffer to be given to the ptable. */
+		new_entry->vaddr = vaddr + off;
+		new_entry->data = hashpage;
+		memcpy(hashpage, &buf[off], PAGE_SIZE);
+
+		/*
+		* Add the new page to the hash table, if it already 
+		* exists there don't replace it.
+		*/
+		addpage_noreplace(ptable, new_entry);
+	    }
+
+	    free(buf, M_SLSMM);
+	}
+
+	
+	return 0;
+
+
+}
+
+int 
+sls_load_ptable(struct sls_pagetable *ptable, struct sls_channel *chan)
+{ 
+	int error;
+
+	switch (chan->type) {
+	case SLS_FILE:
+	    error = sls_load_ptable_file(ptable, chan->fp);
+	    break;
+
+	case SLS_OSD:
+	    error = sls_load_ptable_slos(ptable, chan->vp);
+	    break;
+
+	default:
+	    return EINVAL;
+	}
 
 	return error;
 }

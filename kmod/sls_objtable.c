@@ -10,7 +10,6 @@
 #include <vm/vm_object.h>
 
 #include "sls_objtable.h"
-#include "sls_dump.h"
 #include "slsmm.h"
 
 int 

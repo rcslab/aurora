@@ -26,7 +26,7 @@ static struct option attach_longopts[] = {
 void
 attach_usage(void)
 {
-    printf("Usage: slsctl attach [-p <PID>] <-f <filename> | -m | -o <id>> [-t ms] [--delta]\n");
+    printf("Usage: slsctl attach [-p <pid>] <-f <filename> | -m | -o <id>> [-t ms] [--delta]\n");
 }
 
 int
@@ -53,7 +53,7 @@ attach_main(int argc, char* argv[]) {
 	pid_set = 0;
 	target_set = 0;
 
-	while ((opt = getopt_long(argc, argv, "adf:mop:t:", attach_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "adf:mo:p:t:", attach_longopts, NULL)) != -1) {
 	    switch (opt) {
 	    case 'd':
 		attr.attr_mode = SLS_DELTA;
@@ -85,8 +85,8 @@ attach_main(int argc, char* argv[]) {
 		break;
 
 	    case 'o':
-		/* XXX Require a PID argument */
 		attr.attr_backend.bak_target = SLS_OSD;
+		attr.attr_backend.bak_id = strtol(optarg, NULL, 10);
 		target_set = 1;
 		break;
 
@@ -105,7 +105,7 @@ attach_main(int argc, char* argv[]) {
 	    }
 	}
 
-	if (target_set == 0 || pid_set == 0 || optind != (argc - 1)) {
+	if (target_set == 0 || pid_set == 0 || optind != argc) {
 	    attach_usage();
 
 	    return 0;

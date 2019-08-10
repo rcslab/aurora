@@ -33,7 +33,7 @@
 #include "sls_mem.h"
 #include "imported_sls.h"
 
-#include "../include/slos.h"
+#include <slos.h>
 #include "../slos/slos_inode.h"
 #include "../slos/slos_io.h"
 #include "../slos/slos_record.h"
@@ -112,22 +112,29 @@ sls_file_write(void *addr, size_t len, struct file *fp)
 	return error;
 }
 
-
-/* 
- * Read a record with type value type from the SLOS inode pointed to
- * by vp, into the buffer of size len pointed to by addr. The record
- * read is the one with the newest one with that type.
- */
 int
-sls_slos_read(void *addr, size_t len, uint64_t type, uint64_t offset, struct slos_vnode *vp)
+sls_slos_read(void* addr, size_t len, uint64_t type, uint64_t *offset, 
+	struct slos_vnode *vp)
 {
+	struct iovec aiov;
+	struct uio auio;
 	uint64_t rno;
 	int error;
-	struct uio auio;
-	struct iovec aiov;
 
-	/* Get the appropriate SLOS record. */
-	error = slos_lastrno_typed(vp, type, &rno);
+	/* 
+	 * XXX Right now we are using only two types of records
+	 * in the SLS - one for the metadata, and one for the
+	 * data of the process. That is important because
+	 * here we would have normally traversed the backend
+	 * and found the starting point of the checkpoint, and
+	 * then consecutively read each record separately. Here
+	 * we just get the record with the metadata and read it.
+	 * When we have multiple records for the metadata, we are
+	 * going to have to do more bookkeeping when reading. 
+	 */
+
+	/* Get the SLOS record with the metadata. */
+	error = slos_lastrno_typed(vp, SLOSREC_PROC, &rno);
 	if (error != 0) {
 	    return error;
 	}
@@ -135,23 +142,26 @@ sls_slos_read(void *addr, size_t len, uint64_t type, uint64_t offset, struct slo
 	/* Create the UIO for the disk. */
 	aiov.iov_base = addr;
 	aiov.iov_len = len;
-	slos_uioinit(&auio, offset, UIO_READ, &aiov, 1);
+	slos_uioinit(&auio, *offset, UIO_READ, &aiov, 1);
 
-	/* The write itself. */
+	/* The read itself. */
 	error = slos_rread(vp, rno, &auio);
 	if (error != 0)
 	    return error;
 
+	/* Increment the offset by the amount of bytes read. */
+	*offset += (len - auio.uio_resid);
+	
 	return 0;
 }
-
 
 /* 
  * Write a new record with type value type into the SLOS inode pointed to
  * by vp, whose data is the buffer of size len pointed to by addr.
  */
 int
-sls_slos_write(void *addr, size_t len, uint64_t type, uint64_t offset, struct slos_vnode *vp)
+sls_slos_write(void* addr, size_t len, uint64_t type, uint64_t *offset, 
+	struct slos_vnode *vp)
 {
 	uint64_t rno;
 	int error;
@@ -167,19 +177,52 @@ sls_slos_write(void *addr, size_t len, uint64_t type, uint64_t offset, struct sl
 	/* Create the UIO for the disk. */
 	aiov.iov_base = addr;
 	aiov.iov_len = len;
-	slos_uioinit(&auio, offset, UIO_WRITE, &aiov, 1);
+	slos_uioinit(&auio, *offset, UIO_WRITE, &aiov, 1);
 
 	/* The write itself. */
 	error = slos_rwrite(vp, rno, &auio);
 	if (error != 0)
 	    return error;
 
+	/* Advance the offset into the record. */
+	*offset += (len - auio.uio_resid);
+
 	return 0;
+}
+
+/* 
+ * Read a buffer buf of length len into the channel. The 
+ * channel works as a simple wrapper for the file pointer 
+ * in the case of dumping and restoring from a file, but 
+ * holds the equivalent state of a file pointer when used
+ * to read from the OSD. The reason is that we are issuing
+ * consecutive reads into the same record, so we have to
+ * track the current offset each time.
+ */
+int 
+sls_read(void *buf, size_t len, uint64_t rtype, struct sls_channel *chan)
+{ 
+	int error;
+
+	switch (chan->type) {
+	case SLS_FILE:
+	    error = sls_file_read(buf, len, chan->fp);
+	    break;
+
+	case SLS_OSD:
+	    error = sls_slos_read(buf, len, rtype, &chan->offset, chan->vp);
+	    break;
+
+	default:
+	    return EINVAL;
+	}
+
+	return error;
 }
 
 /* Write a buffer buf of length len into the channel. */
 int 
-sls_write(void *buf, size_t len, struct sls_channel *chan)
+sls_write(void *buf, size_t len, uint64_t rtype, struct sls_channel *chan)
 { 
 	int error;
 
@@ -189,12 +232,7 @@ sls_write(void *buf, size_t len, struct sls_channel *chan)
 	    break;
 
 	case SLS_OSD:
-	    /* 
-	    * XXX For now we write the metadata into one record.
-	    * When we split the data into different sbufs, we will
-	    * be able to write them separately.
-	    */
-	    error = sls_slos_write(buf, len, SLOSREC_PROC, chan->offset, chan->vp);
+	    error = sls_slos_write(buf, len, rtype, &chan->offset, chan->vp);
 	    break;
 
 	default:
@@ -215,7 +253,7 @@ slschan_initfile(struct sbuf *sb, struct sls_channel *chanp)
 	int fd;
 	
 	/* The flags for the open call below. */
-	flags = O_RDWR | O_CREAT | O_DIRECT | O_TRUNC;
+	flags = O_RDWR | O_CREAT | O_DIRECT;
 
 	/* Get a file descriptor for the file in which we will dump. */
 	error = kern_openat(curthread, AT_FDCWD, sbuf_data(sb),

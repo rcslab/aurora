@@ -34,11 +34,10 @@
 #include "slsmm.h"
 #include "sls_channel.h"
 #include "sls_data.h"
-#include "sls_dump.h"
 #include "sls_ioctl.h"
 #include "sls_path.h"
 
-#include "../include/slos.h"
+#include <slos.h>
 #include "../slos/slos_record.h"
 #include "../slos/slos_io.h"
 #include "../slos/slos_inode.h"
@@ -99,6 +98,27 @@ sls_dump_pages_file(vm_offset_t vaddr, size_t size, vm_offset_t data, struct fil
 	return 0;
 }
 
+static int
+sls_dump_pages_chan(vm_offset_t vaddr, size_t size, vm_offset_t data, struct sls_channel *chan)
+{
+	int error;
+    
+	switch (chan->type) {
+	case SLS_FILE:
+	    error = sls_dump_pages_file(vaddr, size, data, chan->fp);
+	    break;
+
+	case SLS_OSD:
+	    error = sls_dump_pages_slos(vaddr, size, data, chan->vp);
+	    break;
+
+	default:
+	    return EINVAL;
+	}
+
+	return error;
+}
+
 static size_t
 sls_contig_pages(vm_object_t obj, vm_page_t *page)
 {
@@ -120,7 +140,6 @@ sls_contig_pages(vm_object_t obj, vm_page_t *page)
 
 	    contig_size += pagesizes[cur->psind];
 	    prev = cur;
-
 	}
 
 	*page = cur;
@@ -163,14 +182,11 @@ sls_dump_pages(struct vmspace *vm, struct sls_channel *chan, int mode)
 		    if (data == 0)
 			return ENOMEM;
 
-		    if (chan->type == SLS_FILE)
-			error = sls_dump_pages_file(vaddr, contig_size, data, chan->fp);
-		    else if (chan->type == SLS_OSD)
-			error = sls_dump_pages_slos(vaddr, contig_size, data, chan->vp);
-		    /* XXX Do we need pmap_delete or something of the sort? */
-
+		    error = sls_dump_pages_chan(vaddr, contig_size, data, chan);
 		    if (error != 0)
 			return error;
+
+		    /* XXX Do we need pmap_delete or something of the sort? */
 
 		    /* We have looped around */
 		    if (page == NULL || 
@@ -211,7 +227,8 @@ sls_dump(struct sls_process *slsp, struct sls_channel *chan)
 	 * XXX Unpack the different records to be able to
 	 * store semantic information alongside them.
 	 * Not useful for the file, but necessary for
-	 * the OSD.
+	 * the OSD. Right now we write everything in
+	 * a single SLOS process file.
 	 */
 	error = sbuf_finish(slsp->slsp_ckptbuf);
 	if (error != 0)
@@ -221,7 +238,7 @@ sls_dump(struct sls_process *slsp, struct sls_channel *chan)
 	len = sbuf_len(slsp->slsp_ckptbuf);
 
 	/* Write the data to the channel. */
-	error = sls_write(buf, len, chan);
+	error = sls_write(buf, len, SLOSREC_PROC, chan);
 
 	sbuf_clear(slsp->slsp_ckptbuf);
 

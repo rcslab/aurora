@@ -15,14 +15,14 @@
 
 static struct option restore_longopts[] = {
 	{ "file", required_argument, NULL, 'f' },
-	{ "memory", required_argument, NULL, 'm' },
+	{ "osd", required_argument, NULL, 'o' },
 	{ NULL, no_argument, NULL, 0 },
 };
 
 void
 restore_usage(void)
 {
-	printf("Usage: slsctl restore <-f <filename> | -m <id>> \n");
+	printf("Usage: slsctl restore <-f <filename> | -o <ID>> \n");
 }
 
 int
@@ -43,7 +43,7 @@ restore_main(int argc, char* argv[]) {
 	};
 	target_set = 0;
 
-	while ((opt = getopt_long(argc, argv, "f:m:", restore_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "f:m:o:", restore_longopts, NULL)) != -1) {
 	    switch (opt) {
 	    case 'f':
 		if (target_set == 1) {
@@ -59,19 +59,26 @@ restore_main(int argc, char* argv[]) {
 		}
 
 		sbuf_finish(backend.bak_name);
+		target_set = 1;
 		break;
 
-	    case 'm':
+	    case 'o':
 		if (target_set == 1) {
 		    restore_usage();
 		    return 0;
 		}
 
-		backend.bak_target = SLS_MEM;
-		backend.bak_id = optarg;
+		/* Release the buffer allocated for the backend. */
+		sbuf_finish(backend.bak_name);
+		sbuf_delete(backend.bak_name);
+
+		backend.bak_target = SLS_OSD;
+		/* The id is the PID of the checkpointed process. */
+		backend.bak_id = strtol(optarg, NULL, 10);
+		
+		target_set = 1;
 		break;
 
-	    /* XXX case 's' for the SLOS */
 	    default:
 		restore_usage();
 		return 0;

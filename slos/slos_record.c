@@ -648,14 +648,13 @@ slos_rseek(struct slos_vnode *vp, uint64_t rno, uint64_t offset,
 	uint64_t prevoff, nextoff;
 	struct btree *data = NULL;
 	int error = 0;
-	
-	/* We have to specify whether we seek left or right. */
-	if ((flags & (SREC_SEEKLEFT | SREC_SEEKRIGHT)) == 0)
-	    return EINVAL;
 
 	/* XXX We don't implement seeking to the left right now. */
+	/* If we don't want to seek left, we implicitly want to seek right. */
 	if ((flags & SREC_SEEKLEFT) != 0)
 	    return EINVAL;
+	else
+	    flags |= SREC_SEEKRIGHT;
 
 	mtx_lock(&vp->vno_mtx);
 
@@ -908,6 +907,9 @@ slos_prevrno(struct slos_vnode *vp, uint64_t *rnop)
 	uint64_t rno;
 	int error;
 
+	if (*rnop == 0)
+	    return EINVAL;
+
 	rno = *rnop - 1;
 	error = btree_keymin(vp->vno_records, &rno, &ptr);
 	if (error != 0)
@@ -924,6 +926,9 @@ slos_nextrno(struct slos_vnode *vp, uint64_t *rnop)
 	struct slos_diskptr ptr;
 	uint64_t rno;
 	int error;
+
+	if ((*rnop) == vp->vno_lastrec)
+	    return EINVAL;
 
 	rno = *rnop + 1;
 	error = btree_keymax(vp->vno_records, &rno, &ptr);
@@ -948,7 +953,7 @@ slos_firstrno_typed(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
 	    rp = slos_nextrec(vp, rno);
 	}
 	
-	if (rp != NULL) {
+	if (rp != NULL && rp->rec_type == rtype) {
 	    *rnop = rp->rec_num;
 	    free(rp, M_SLOS);
 
@@ -970,8 +975,9 @@ slos_lastrno_typed(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
 	    free(rp, M_SLOS);
 	    rp = slos_prevrec(vp, rno);
 	}
+
 	
-	if (rp != NULL) {
+	if (rp != NULL && rp->rec_type == rtype) {
 	    *rnop = rp->rec_num;
 	    free(rp, M_SLOS);
 
