@@ -3,7 +3,6 @@
 
 #include <sys/param.h>
 
-#include <sys/file.h>
 #include <sys/uio.h>
 
 #include <vm/vm_object.h>

@@ -102,22 +102,12 @@ struct memckpt_info {
 #define SLS_STRING_MAGIC 0x72626f72
 #define SLS_FILES_END INT_MAX
 struct file_info {
-	/* 
-	* Let's hope the private data doesn't get used
-	* for regular files, because we're not saving it.
-	*/
-	/*
-	* XXX Merge with mmap stuff, there's 
-	* duplication when doing vnode to filename conversions and back.
-	*/
 	int fd;
-	struct sbuf *path;
 
 	short type;
 	u_int flag;
 
 	off_t offset;
-
 
 	/* 
 	* Let's not bother with this flag from the filedescent struct.
@@ -145,4 +135,69 @@ struct filedesc_info {
 	struct file_info *infos;
 	int magic;
 };
+
+#define SLS_PIPE_INFO_MAGIC  0x736c7499
+struct pipe_info {
+	uint64_t    iswriteend;	/* Is this the write end? */
+	uint64_t    otherend;	/* The fd of the other end */
+	uint64_t    needrest;	/* Should we restore this? */
+	uint64_t    onlyend;	/* Are we the only end? */
+	uint64_t    magic;	/* Magic value */
+};
+
+#define SLS_KQUEUE_INFO_MAGIC  0x736c7265
+struct kqueue_info {
+	uint64_t    numevents;
+	uint64_t    magic;
+};
+
+#define SLS_KEVENT_INFO_MAGIC  0x736c7115
+struct kevent_info {
+	int32_t	    status;
+	int64_t	    ident;
+	int16_t	    filter;
+	int32_t	    flags;
+	int32_t	    fflags;
+	int64_t	    data;
+	uint64_t    magic;
+};
+
+#define SLS_SOCKET_INFO_MAGIC  0x736c7268
+struct sock_info {
+	/* Socket-wide options */
+	int16_t	    family;
+	int16_t	    type;
+	int16_t	    proto;
+	uint32_t    options;
+
+	/* Fields saved in VPS that do not make much sense to restore right now. */
+	/*
+	uint32_t    qlimit;
+	uint32_t    qstate;
+	int16_t	    state;
+	int32_t	    qlen;
+	int16_t	    incqlen;
+	*/
+
+	/* Internet protocol-related options */
+	uint8_t	    vflag;
+	uint8_t	    ip_p;
+	uint8_t	    have_ppcb;
+	int32_t	    flags;
+	int32_t	    flags2;
+
+	struct {
+		uint8_t inc_flags;
+		uint8_t inc_len;
+		uint16_t inc_fibnum;
+
+		uint8_t ie_ufaddr[0x10];
+
+		uint8_t ie_uladdr[0x10];
+
+		uint16_t ie_fport;
+		uint16_t ie_lport;
+	} inp_inc;
+};
+
 #endif /* _SLS_DATA_H_ */

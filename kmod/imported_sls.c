@@ -1,5 +1,6 @@
 #include <sys/param.h>
 
+#include <sys/event.h>
 #include <sys/filedesc.h>
 #include <sys/kernel.h>
 #include <sys/capsicum.h>
@@ -16,6 +17,8 @@
 #include <sys/sysctl.h>
 #include <sys/systm.h>
 #include <sys/vnode.h>
+
+#include <sys/eventvar.h>
 
 #ifdef KTRACE
 #include <sys/ktrace.h>
@@ -210,4 +213,51 @@ dofilewrite(struct thread *td, int fd, struct file *fp, struct uio *auio,
 #endif
 	td->td_retval[0] = cnt;
 	return (error);
+}
+
+#define KQ_LOCK(kq) do {						\
+	mtx_lock(&(kq)->kq_lock);					\
+} while (0)
+#define KQ_UNLOCK(kq) do {						\
+	mtx_unlock(&(kq)->kq_lock);					\
+} while (0)
+#define KQ_OWNED(kq) do {						\
+	mtx_assert(&(kq)->kq_lock, MA_OWNED);				\
+} while (0)
+
+int
+kqueue_acquire(struct file *fp, struct kqueue **kqp)
+{
+	int error;
+	struct kqueue *kq;
+
+	error = 0;
+
+	kq = fp->f_data;
+	if (fp->f_type != DTYPE_KQUEUE || kq == NULL)
+		return (EBADF);
+	*kqp = kq;
+	KQ_LOCK(kq);
+	if ((kq->kq_state & KQ_CLOSING) == KQ_CLOSING) {
+		KQ_UNLOCK(kq);
+		return (EBADF);
+	}
+	kq->kq_refcnt++;
+	KQ_UNLOCK(kq);
+
+	return error;
+}
+
+void
+kqueue_release(struct kqueue *kq, int locked)
+{
+	if (locked)
+		KQ_OWNED(kq);
+	else
+		KQ_LOCK(kq);
+	kq->kq_refcnt--;
+	if (kq->kq_refcnt == 1)
+		wakeup(&kq->kq_refcnt);
+	if (!locked)
+		KQ_UNLOCK(kq);
 }

@@ -19,7 +19,7 @@ struct sls_pagetable {
 
 int sls_load_thread(struct thread_info *thread_info, struct sls_channel *chan);
 int sls_load_proc(struct proc_info *proc_info, struct sls_channel *chan);
-int sls_load_file(struct file_info *file, struct sls_channel *chan);
+int sls_load_file(struct file_info *file, void **data, struct sls_channel *chan);
 int sls_load_filedesc(struct filedesc_info *filedesc, struct sls_channel *chan);
 int sls_load_vmobject(struct vm_object_info *obj, struct sls_channel *chan);
 int sls_load_vmentry(struct vm_map_entry_info *entry, struct sls_channel *chan);

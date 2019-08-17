@@ -13,6 +13,6 @@ int sls_filedesc_ckpt(struct proc *p, struct sbuf *sb);
 int sls_filedesc_rest(struct proc *p, struct filedesc_info info);
 
 int sls_file_ckpt(struct proc *p, struct file *file, int fd, struct sbuf *sb);
-int sls_file_rest(struct proc *p, struct file_info *file);
+int sls_file_rest(struct proc *p, void *data, struct file_info *file);
 
 #endif /* _SLS_FD_H_ */

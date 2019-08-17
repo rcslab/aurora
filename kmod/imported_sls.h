@@ -25,5 +25,8 @@ int dofilewrite(struct thread *td, int fd, struct file *fp, struct uio *auio,
 
 void bwillwrite(void);
 
+int kqueue_acquire(struct file *fp, struct kqueue **kqp);
+void kqueue_release(struct kqueue *kq, int locked);
+
 #endif /* _COPIED_FD_H */
 

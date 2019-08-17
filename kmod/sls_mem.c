@@ -425,7 +425,6 @@ sls_vmentry_rest_anon(struct vm_map *map, struct vm_map_entry_info *entry, struc
 	 * We could call use the prefault flag
 	 * avoid minor faults after restoring.
 	 */
-	SLS_DBG("ANON\n");
 
 	return 0;
 

@@ -3,6 +3,7 @@ machine
 x86
 
 kmod/vnode_if*.h
+kmod/offset.inc
 slos/vnode_if*.h
 
 tests/array/array

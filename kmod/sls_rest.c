@@ -25,8 +25,11 @@
 #include <sys/time.h>
 #include <sys/uio.h>
 
+
 #include <machine/param.h>
 #include <machine/reg.h>
+
+#include <netinet/in.h>
 
 #include <vm/pmap.h>
 #include <vm/vm.h>
@@ -88,15 +91,19 @@ sls_rest_cpustate(struct proc *p, struct sls_channel *chan)
 	return 0;
 }
 
+struct kqueue_info *slskq = NULL;
+struct file_info slsfp;
+
 static int
 sls_rest_file(struct proc *p, int *done, struct sls_channel *chan)
 {
 	struct file_info file_info;
+	void *data;
 	int error;
 
 	*done = 0;
 
-	error = sls_load_file(&file_info, chan);
+	error = sls_load_file(&file_info, &data, chan);
 	if (error != 0)
 	    return error;
 
@@ -105,11 +112,34 @@ sls_rest_file(struct proc *p, int *done, struct sls_channel *chan)
 	    return 0;
 	}
 
-	error = sls_file_rest(p, &file_info);
-	sbuf_delete(file_info.path);
+	if (file_info.type != DTYPE_KQUEUE) {
+	    error = sls_file_rest(p, data, &file_info);
+	    if (error != 0)
+		return error;
+	}
 
-	if (error != 0)
-	    return error;
+	switch (file_info.type) {
+	case DTYPE_VNODE:
+	    sbuf_delete((struct sbuf *) data);
+	    break;
+
+	case DTYPE_KQUEUE:
+	    memcpy(&slsfp, &file_info, sizeof(slsfp));
+	    slskq = (struct kqueue_info *) data;
+	    break;
+
+	case DTYPE_PIPE:
+	    free(data, M_SLSMM);
+	    break;
+
+	case DTYPE_SOCKET:
+	    free(data, M_SLSMM);
+	    break;
+
+	default:
+	    return EINVAL;
+
+	}
 
 	return 0;
 }
@@ -136,6 +166,16 @@ sls_rest_filedesc(struct proc *p, struct sls_channel *chan)
 	    if (error != 0)
 		return error;
 	} while (!done);
+
+	if (slskq != NULL) {
+	    error = sls_file_rest(p, slskq, &slsfp);
+	    free(slskq, M_SLSMM);
+	    slskq = NULL;
+
+	    if (error != 0)
+		return error;
+
+	}
 
 
 	return error;

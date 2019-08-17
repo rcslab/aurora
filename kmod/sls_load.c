@@ -135,8 +135,75 @@ sls_load_proc(struct proc_info *proc_info, struct sls_channel *chan)
 	return 0;
 }
 
+extern struct kevent_info sls_kevents[1024]; 
+
+static int
+sls_load_kqueue(struct kqueue_info *kqinfo, struct sls_channel *chan)
+{
+	int error; 
+
+	/* Read in the kqueue itself. */
+	error = sls_read(kqinfo, sizeof(*kqinfo), SLOSREC_PROC, chan);
+	if (error != 0)
+	    return error;
+
+	if (kqinfo->magic != SLS_KQUEUE_INFO_MAGIC) {
+	    SLS_DBG("magic mismatch, %lu vs %d\n", kqinfo->magic, SLS_KQUEUE_INFO_MAGIC);
+	    return EINVAL;
+	}
+
+	/* Read in the kevents for this kqueue. */
+	error = sls_read(sls_kevents, kqinfo->numevents * sizeof(struct kevent_info), SLOSREC_PROC, chan);
+	if (error != 0)
+	    return error;
+
+	return 0;
+}
+
+static int
+sls_load_pipe(struct pipe_info *ppinfo, struct sls_channel *chan)
+{
+	int error; 
+
+	/* Read in the kqueue itself. */
+	error = sls_read(ppinfo, sizeof(*ppinfo), SLOSREC_PROC, chan);
+	if (error != 0)
+	    return error;
+
+	if (ppinfo->magic != SLS_PIPE_INFO_MAGIC) {
+	    SLS_DBG("magic mismatch, %lx vs %x\n", ppinfo->magic, SLS_PIPE_INFO_MAGIC);
+	    return EINVAL;
+	}
+
+	return 0;
+}
+
+static int
+sls_load_vnode(struct sbuf **path, struct sls_channel *chan)
+{
+	int error;
+
+	error = sls_load_path(path, chan);
+	if (error != 0)
+	    return error;
+
+	return 0;
+}
+
+static int
+sls_load_socket(struct sock_info *sock_info, struct sls_channel *chan)
+{
+	int error;
+
+	error = sls_read(sock_info, sizeof(*sock_info), SLOSREC_PROC, chan);
+	if (error != 0)
+	    return error;
+
+	return 0;
+}
+
 int
-sls_load_file(struct file_info *file_info, struct sls_channel *chan)
+sls_load_file(struct file_info *file_info, void **data, struct sls_channel *chan)
 {
 	int error;
 
@@ -152,9 +219,33 @@ sls_load_file(struct file_info *file_info, struct sls_channel *chan)
 	    return EINVAL;
 	}
 
-	error = sls_load_path(&file_info->path, chan);
+	switch (file_info->type) {
+	case DTYPE_VNODE:
+	    error = sls_load_vnode((struct sbuf **) data, chan);
+	    break;
+
+	case DTYPE_KQUEUE:
+	    *data = malloc(sizeof(struct kqueue_info), M_SLSMM, M_WAITOK);
+	    error = sls_load_kqueue((struct kqueue_info *) *data, chan);
+	    break;
+
+	case DTYPE_PIPE:
+	    *data = malloc(sizeof(struct pipe_info), M_SLSMM, M_WAITOK);
+	    error = sls_load_pipe((struct pipe_info *) *data, chan);
+	    break;
+
+	case DTYPE_SOCKET:
+	    *data = malloc(sizeof(struct sock_info), M_SLSMM, M_WAITOK);
+	    error = sls_load_socket((struct sock_info *) *data, chan);
+	    break;
+
+	default:
+	    panic("unhandled file type");
+	}
+	
 	if (error != 0)
 	    return error;
+
 
 	return 0;
 }
