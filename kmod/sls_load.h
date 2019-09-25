@@ -1,6 +1,7 @@
 #ifndef _SLS_RESTORE_H_
 #define _SLS_RESTORE_H_
 
+#include "slskv.h"
 #include "sls_channel.h"
 #include "sls_process.h"
 
@@ -26,6 +27,6 @@ int sls_load_vmentry(struct vm_map_entry_info *entry, struct sls_channel *chan);
 int sls_load_memory(struct memckpt_info *memory, struct sls_channel *chan);
 int sls_load_path(struct sbuf **sbp, struct sls_channel *chan); 
 
-int sls_load_ptable(struct sls_pagetable *ptable, struct sls_channel *chan);
+int sls_load_ptable(struct slskv_table **ptable, struct sls_channel *chan);
 
 #endif /* _SLS_RESTORE_H_ */

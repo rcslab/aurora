@@ -25,6 +25,7 @@
 #include <vm/uma.h>
 
 #include "sls.h"
+#include "slskv.h"
 #include "slsmm.h"
 #include "sls_path.h"
 #include "sls_mem.h"
@@ -240,24 +241,24 @@ sls_shadow(vm_object_t source, vm_ooffset_t offset, vm_size_t length)
 }
 
 void
-sls_data_rest(struct sls_pagetable ptable, struct vm_map *map, struct vm_map_entry *entry)
+sls_data_rest(struct slskv_table *ptable, struct vm_map *map, struct vm_map_entry *entry)
 {
 
-	struct dump_page *page_entry;
+	struct slskv_iter piter;
 	vm_offset_t vaddr, addr;
 	vm_pindex_t offset;
 	vm_object_t object;
 	vm_page_t new_page;
-	int error, i;
+	uintptr_t data;
+	int error;
 
 	object = entry->object.vm_object;
 	/* Non-anonymous objects can retrieve their pages from vnodes/devices */ 
 	if (object == NULL || object->type != OBJT_DEFAULT)
 	    return;
 
-	for (i = 0; i <= ptable.hashmask; i++) {
-	    LIST_FOREACH(page_entry, &ptable.pages[i & ptable.hashmask], next) {
-		vaddr = page_entry->vaddr;
+	piter = slskv_iterstart(ptable);
+	while (slskv_itercont(&piter, (uint64_t *) &vaddr, &data) != SLSKV_ITERDONE) {
 		if (vaddr < entry->start || vaddr >= entry->end)
 		    continue;
 
@@ -292,10 +293,10 @@ sls_data_rest(struct sls_pagetable ptable, struct vm_map *map, struct vm_map_ent
 
 		VM_OBJECT_WUNLOCK(object);
 
-		addr= pmap_map(NULL, new_page->phys_addr,
+		addr = pmap_map(NULL, new_page->phys_addr,
 			new_page->phys_addr + PAGE_SIZE,
 			VM_PROT_READ | VM_PROT_WRITE);
-		memcpy((void *) addr, (void *) page_entry->data, PAGE_SIZE);
+		memcpy((void *) addr, (void *) data, PAGE_SIZE);
 		/* pmap_delete or something? */
 
 		error = pmap_enter(vm_map_pmap(map), vaddr, new_page,
@@ -306,28 +307,29 @@ sls_data_rest(struct sls_pagetable ptable, struct vm_map *map, struct vm_map_ent
 		
 		vm_page_xunbusy(new_page);
 
-	    }
 	}
 }
 
 int
-sls_vmobject_rest(struct vm_object_info *info, struct sls_objtable *objtable)
+sls_vmobject_rest(struct vm_object_info *info, struct slskv_table *objtable)
 {
 	vm_object_t object, parent;
 	struct vnode *vp;
 	int error;
 
 	/* Check if we have already restored it. */
-	if (sls_objtable_find(info->id, objtable) != NULL)
+	if (slskv_find(objtable, (uint64_t) info->id, (uintptr_t *) &object) == 0)
 	    return 0;
 
 	switch (info->type) {
 	case OBJT_DEFAULT:
 
 	    /* Else grab the parent (if it exists) and shadow it. */
-	    parent = sls_objtable_find(info->backer, objtable);
+	    if (slskv_find(objtable, (uint64_t) info->backer, (uintptr_t *) &parent) != 0)
+		parent = NULL;
+
 	    object = sls_shadow(parent, info->backer_off, ptoa(info->size));
-	    sls_objtable_add(info->id, object, objtable);
+	    slskv_add(objtable, (uintptr_t) info->id, (uint64_t) object);
 
 	    return 0;
 
@@ -348,7 +350,7 @@ sls_vmobject_rest(struct vm_object_info *info, struct sls_objtable *objtable)
 	    /* Get a reference for the vnode, since we're going to use it. */
 	    vhold(vp);
 	    object = vp->v_object;
-	    sls_objtable_add(info->id, object, objtable);
+	    slskv_add(objtable, (uintptr_t) info->id, (uint64_t) object);
 	    return 0;
 
 	/* 
@@ -369,7 +371,7 @@ sls_vmobject_rest(struct vm_object_info *info, struct sls_objtable *objtable)
 
 	    object = curthread->td_proc->p_sysent->sv_shared_page_obj;
 	    if (object != NULL)
-		sls_objtable_add(info->id, object, objtable);
+		slskv_add(objtable, (uintptr_t) info->id, (uint64_t) object);
 
 	    return 0;
 
@@ -383,14 +385,16 @@ sls_vmobject_rest(struct vm_object_info *info, struct sls_objtable *objtable)
  * Great for anonymous pages.
  */
 static int
-sls_vmentry_rest_anon(struct vm_map *map, struct vm_map_entry_info *entry, struct sls_objtable *objtable)
+sls_vmentry_rest_anon(struct vm_map *map, struct vm_map_entry_info *entry, struct slskv_table *objtable)
 {
 	vm_map_entry_t new_entry; 
 	boolean_t contained;
 	vm_object_t object;
 	int error;
 
-	object = sls_objtable_find(entry->obj, objtable);
+	/* Find an object if it exists. */
+	if (slskv_find(objtable, (uint64_t) entry->obj, (uintptr_t *) &object) != 0)
+	    object = NULL;
 
 	/* 
 	 * Unfortunately, vm_map_entry_create is static, and so is
@@ -431,7 +435,7 @@ sls_vmentry_rest_anon(struct vm_map *map, struct vm_map_entry_info *entry, struc
 }
 
 static int
-sls_vmentry_rest_file(struct vm_map *map, struct vm_map_entry_info *entry, struct sls_objtable *objtable)
+sls_vmentry_rest_file(struct vm_map *map, struct vm_map_entry_info *entry, struct slskv_table *objtable)
 {
 	vm_object_t object; 
 	struct vnode *vp;
@@ -442,9 +446,9 @@ sls_vmentry_rest_file(struct vm_map *map, struct vm_map_entry_info *entry, struc
 	int error;
 
 	/* If we have an object, it has to have been restored. */
-	object = sls_objtable_find(entry->obj, objtable);
-	if (object == NULL)
-	    return EINVAL;
+	error = slskv_find(objtable, (uint64_t) entry->obj, (uintptr_t *) &object);
+	if (error != 0)
+	    return error;
 
 	vp = (struct vnode *) object->handle;
 	error = sls_vn_to_path(vp, &sb);
@@ -499,7 +503,7 @@ sls_vmentry_rest_file_done:
 
 
 int
-sls_vmentry_rest(struct vm_map *map, struct vm_map_entry_info *entry, struct sls_objtable *objtable)
+sls_vmentry_rest(struct vm_map *map, struct vm_map_entry_info *entry, struct slskv_table *objtable)
 {
 	int error;
 	int fd;

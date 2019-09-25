@@ -34,17 +34,17 @@
 #include <machine/reg.h>
 
 #include <vm/pmap.h>
+#include <vm/uma.h>
 #include <vm/vm.h>
 #include <vm/vm_extern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
 #include <vm/vm_radix.h>
-#include <vm/uma.h>
 
 #include "sls.h"
 #include "sls_ioctl.h"
-#include "sls_objtable.h"
+#include "slskv.h"
 #include "slsmm.h"
 
 
@@ -411,7 +411,18 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	case MOD_LOAD:
 	    bzero(&slsm, sizeof(slsm));
 
-	    slsm.slsm_proctable = hashinit(HASH_MAX, M_SLSMM, &slsm.slsm_procmask);
+	    slskv_zone = uma_zcreate("SLS table pairs", 
+		    sizeof(struct slskv_pair), NULL, NULL, NULL, 
+		    NULL, UMA_ALIGNOF(struct slskv_pair), 0);
+
+	    if (slskv_zone == NULL) {
+		error = ENOMEM;
+		break;
+	    }
+
+	    error = slskv_create(&slsm.slsm_proctable, SLSKV_NOREPLACE, SLSKV_VALNUM);
+	    if (error != 0)
+		return error;
 
 	    slsm.slsm_cdev = 
 		make_dev(&slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "sls");
@@ -435,8 +446,9 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	    slsp_delall();
 
 	    if (slsm.slsm_proctable != NULL)
-		hashdestroy(slsm.slsm_proctable, M_SLSMM, slsm.slsm_procmask);
+		slskv_destroy(slsm.slsm_proctable);
 
+	    uma_zdestroy(slskv_zone);
 
 	    printf("SLS Unloaded.\n");
 	    break;

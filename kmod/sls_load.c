@@ -48,58 +48,6 @@ size_t sls_contig_limit = 2 * 1024 * 1024;
 
 #define SLS_MSG_END ULONG_MAX 
 
-static int 
-htable_init(struct sls_pagetable *ptable)
-{
-	ptable->pages = hashinit(HASH_MAX, M_SLSMM, &ptable->hashmask);
-	if (ptable->pages == NULL)
-		return ENOMEM;
-
-	return 0;
-}
-
-static void
-htable_fini(struct sls_pagetable *ptable)
-{
-	int i;
-	struct dump_page *cur_page;
-	struct page_list *cur_bucket;
-
-	for (i = 0; i <= ptable->hashmask; i++) {
-		cur_bucket = &ptable->pages[i];
-		while (!LIST_EMPTY(cur_bucket)) {
-			cur_page = LIST_FIRST(cur_bucket);
-			LIST_REMOVE(cur_page, next);
-			free(cur_page->data, M_SLSMM);
-			free(cur_page, M_SLSMM);
-		}
-	}
-
-	hashdestroy(ptable->pages, M_SLSMM, ptable->hashmask);
-}
-
-
-static void
-addpage_noreplace(struct sls_pagetable *ptable, struct dump_page *new_entry)
-{
-	struct page_list *page_bucket;
-	struct dump_page *page_entry;
-	vm_offset_t vaddr;
-
-	vaddr = new_entry->vaddr;
-	page_bucket = &ptable->pages[vaddr & ptable->hashmask];
-
-	LIST_FOREACH(page_entry, page_bucket, next) {
-	    if(page_entry->vaddr == new_entry->vaddr) {
-		free(new_entry->data, M_SLSMM);
-		free(new_entry, M_SLSMM);
-		return;
-	    }
-	}
-
-	LIST_INSERT_HEAD(page_bucket, new_entry, next);
-}
-
 int
 sls_load_thread(struct thread_info *thread_info, struct sls_channel *chan)
 {
@@ -397,17 +345,12 @@ error:
 }
 
 static int
-sls_load_ptable_file(struct sls_pagetable *ptable, struct file *fp)
+sls_load_ptable_file(struct slskv_table *ptable, struct file *fp)
 {
 	int error = 0;
 	void *hashpage;
-	vm_offset_t vaddr;
-	struct dump_page *new_entry;
+	vm_offset_t vaddr, pageaddr;
 	size_t size;
-
-	error = htable_init(ptable);
-	if (error != 0)
-	    return error;
 
 	for (;;) {
 
@@ -429,14 +372,11 @@ sls_load_ptable_file(struct sls_pagetable *ptable, struct file *fp)
 	    * that we are probably getting it from a slab allocator.
 	    */
 	    for (vm_offset_t off = 0; off < size; off += PAGE_SIZE) {
-		new_entry = malloc(sizeof(*new_entry), M_SLSMM, M_WAITOK);
 		hashpage = malloc(PAGE_SIZE, M_SLSMM, M_WAITOK);
+		pageaddr = vaddr + off;
 
-		new_entry->vaddr = vaddr + off;
-		new_entry->data = hashpage;
 		error = sls_file_read(hashpage, PAGE_SIZE, fp);
 		if (error != 0) {
-		    free(new_entry, M_SLSMM);
 		    free(hashpage, M_SLSMM);
 		    goto error;
 		}
@@ -445,7 +385,7 @@ sls_load_ptable_file(struct sls_pagetable *ptable, struct file *fp)
 		* Add the new page to the hash table, if it already 
 		* exists there don't replace it.
 		*/
-		addpage_noreplace(ptable, new_entry);
+		slskv_add(ptable, (uint64_t) pageaddr, (uintptr_t) hashpage);
 	    }
 	}
 
@@ -453,26 +393,20 @@ sls_load_ptable_file(struct sls_pagetable *ptable, struct file *fp)
 
 error:
 
-	htable_fini(ptable);
 
 	return error;
 }
 
 static int
-sls_load_ptable_slos(struct sls_pagetable *ptable, struct slos_vnode *vp)
+sls_load_ptable_slos(struct slskv_table *ptable, struct slos_vnode *vp)
 {
-	struct dump_page *new_entry;
 	uint8_t *buf, *hashpage;
 	uint64_t offset, len;
-	vm_offset_t vaddr;
+	vm_offset_t vaddr, pageaddr;
 	struct iovec aiov;
 	struct uio auio;
 	uint64_t rno;
 	int error;
-
-	error = htable_init(ptable);
-	if (error != 0)
-	    return error;
 
 
 	/* Get the SLOS record with the metadata. */
@@ -483,10 +417,8 @@ sls_load_ptable_slos(struct sls_pagetable *ptable, struct slos_vnode *vp)
 	 * the beginning of the file for performance.
 	 */
 	error = slos_firstrno_typed(vp, SLOSREC_DATA, &rno);
-	if (error != 0) {
-	    htable_fini(ptable);
+	if (error != 0)
 	    return error;
-	}
 
 
 	offset = 0;
@@ -494,7 +426,6 @@ sls_load_ptable_slos(struct sls_pagetable *ptable, struct slos_vnode *vp)
 	    /* Seek the next extent in the record. */
 	    error = slos_rseek(vp, rno, offset, 0, &offset, &len);
 	    if (error != 0) {
-		htable_fini(ptable);
 		printf("Seek failed\n");
 		break;
 	    }
@@ -515,7 +446,6 @@ sls_load_ptable_slos(struct sls_pagetable *ptable, struct slos_vnode *vp)
 	    error = slos_rread(vp, rno, &auio);
 	    if (error != 0) {
 		free(buf, M_SLSMM);
-		htable_fini(ptable);
 		return error;
 	    }
 
@@ -530,19 +460,17 @@ sls_load_ptable_slos(struct sls_pagetable *ptable, struct slos_vnode *vp)
 
 	    /* Break down the read part into pages, enter into ptable. */
 	    for (vm_offset_t off = 0; off < len; off += PAGE_SIZE) {
-		new_entry = malloc(sizeof(*new_entry), M_SLSMM, M_WAITOK);
 		hashpage = malloc(PAGE_SIZE, M_SLSMM, M_WAITOK);
 
 		/* Copy the page into a new buffer to be given to the ptable. */
-		new_entry->vaddr = vaddr + off;
-		new_entry->data = hashpage;
+		pageaddr = vaddr + off;
 		memcpy(hashpage, &buf[off], PAGE_SIZE);
 
 		/*
 		* Add the new page to the hash table, if it already 
 		* exists there don't replace it.
 		*/
-		addpage_noreplace(ptable, new_entry);
+		slskv_add(ptable, (uint64_t) pageaddr, (uintptr_t) hashpage);
 	    }
 
 	    free(buf, M_SLSMM);
@@ -555,22 +483,29 @@ sls_load_ptable_slos(struct sls_pagetable *ptable, struct slos_vnode *vp)
 }
 
 int 
-sls_load_ptable(struct sls_pagetable *ptable, struct sls_channel *chan)
+sls_load_ptable(struct slskv_table **ptable, struct sls_channel *chan)
 { 
 	int error;
 
+	error = slskv_create(ptable, SLSKV_NOREPLACE, SLSKV_VALPTR);
+	if (error != 0)
+	    return error;
+
 	switch (chan->type) {
 	case SLS_FILE:
-	    error = sls_load_ptable_file(ptable, chan->fp);
+	    error = sls_load_ptable_file(*ptable, chan->fp);
 	    break;
 
 	case SLS_OSD:
-	    error = sls_load_ptable_slos(ptable, chan->vp);
+	    error = sls_load_ptable_slos(*ptable, chan->vp);
 	    break;
 
 	default:
 	    return EINVAL;
 	}
+
+	if (error != 0)
+	    slskv_destroy(*ptable);
 
 	return error;
 }

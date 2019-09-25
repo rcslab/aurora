@@ -41,13 +41,13 @@
 #include <vm/uma.h>
 
 #include "sls.h"
+#include "slskv.h"
 #include "sls_channel.h"
 #include "sls_data.h"
 #include "sls_fd.h"
 #include "sls_ioctl.h"
 #include "sls_load.h"
 #include "sls_mem.h"
-#include "sls_objtable.h"
 #include "sls_proc.h"
 #include "slsmm.h"
 
@@ -187,13 +187,13 @@ sls_rest_memory(struct proc *p, struct sls_channel *chan)
 	struct memckpt_info memory;
 	struct vm_object_info obj_info;
 	struct vm_map_entry_info entry_info;
-	struct sls_pagetable ptable;
-	struct sls_objtable objtable;
+	struct slskv_table *ptable;
+	struct slskv_table *objtable;
 	vm_map_t map;
 	vm_map_entry_t entry;
 	int error, i;
 
-	error = sls_objtable_init(&objtable);
+	error = slskv_create(&objtable, SLSKV_NOREPLACE, SLSKV_VALNUM);
 	if (error != 0)
 	    return error;
 
@@ -216,7 +216,7 @@ sls_rest_memory(struct proc *p, struct sls_channel *chan)
 	    if (obj_info.magic == SLS_OBJECTS_END)
 		break;
 
-	    error = sls_vmobject_rest(&obj_info, &objtable);
+	    error = sls_vmobject_rest(&obj_info, objtable);
 	    if (error != 0)
 		goto sls_rest_memory_out;
 	}
@@ -227,7 +227,7 @@ sls_rest_memory(struct proc *p, struct sls_channel *chan)
 		goto sls_rest_memory_out;
 
 	    PROC_UNLOCK(p);
-	    error = sls_vmentry_rest(map, &entry_info, &objtable);
+	    error = sls_vmentry_rest(map, &entry_info, objtable);
 	    PROC_LOCK(p);
 	    if (error != 0)
 		goto sls_rest_memory_out;
@@ -237,6 +237,7 @@ sls_rest_memory(struct proc *p, struct sls_channel *chan)
 	error = sls_load_ptable(&ptable, chan);
 	if (error != 0)
 	    goto sls_rest_memory_out;
+	printf("(%p) ptable created\n", ptable);
 
 
 	/* Temporary measure until we start associating pages w/ objects */
@@ -245,7 +246,7 @@ sls_rest_memory(struct proc *p, struct sls_channel *chan)
 
 sls_rest_memory_out:
 
-	sls_objtable_fini(&objtable);
+	slskv_destroy(objtable);
 
 	return error;
 }

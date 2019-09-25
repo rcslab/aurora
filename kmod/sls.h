@@ -9,10 +9,12 @@
 #include <sys/vnode.h>
 #include <sys/sdt.h>
 
+#include <vm/uma.h>
 #include <vm/vm.h>
 #include <vm/vm_object.h>
 
 #include "sls_process.h"
+#include "slskv.h"
 
 SDT_PROVIDER_DECLARE(sls);
 
@@ -21,8 +23,7 @@ extern size_t sls_contig_limit;
 struct sls_metadata {
     int			slsm_exiting;
     int			slsm_lastid;
-    u_long		slsm_procmask;
-    struct slsp_list	*slsm_proctable;
+    struct slskv_table	*slsm_proctable;
     struct cdev		*slsm_cdev;
     /* OSD Related members */
     struct vnode	*slsm_osdvp;
@@ -45,6 +46,9 @@ sls_module_exiting(void)
 {
     return slsm.slsm_exiting;
 }
+
+/* The number of buckets for the hashtable used for the processes */
+#define SLSP_BUCKETS (64)
 
 /* Macros for turning in-object offsets to memory addresses and vice versa */
 #define IDX_TO_VADDR(idx, entry_start, entry_offset) \

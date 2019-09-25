@@ -3,12 +3,18 @@
 
 #include <sys/param.h>
 
+
 #include <sys/sbuf.h>
 
+#include <vm/pmap.h>
 #include <vm/vm.h>
 #include <vm/vm_map.h>
 
+#include <machine/pmap.h>
+
 #include <sls_ioctl.h>
+
+#include "slskv.h"
 
 /* Possible states of an SLS_PROCESS */
 #define	SPROC_AVAILABLE	    0	/* Process is not doing anything */
