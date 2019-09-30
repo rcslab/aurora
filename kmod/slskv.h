@@ -2,15 +2,14 @@
 #define	_SLSKV_H_ 
 
 #include <sys/param.h>
+#include <sys/lock.h>
+#include <sys/queue.h>
 
 #include <machine/param.h>
 
 #include <sys/malloc.h>
-#include <sys/systm.h>
-#include <sys/queue.h>
-
-#include <sys/lock.h>
 #include <sys/mutex.h>
+#include <sys/systm.h>
 
 #include <vm/uma.h>
 

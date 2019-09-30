@@ -23,8 +23,13 @@ int slos_rtrim(struct slos_vnode *vp, uint64_t rno, struct uio *auio);
 int slos_rseek(struct slos_vnode *vp, uint64_t rno, uint64_t offset, 
 	int flags, uint64_t *seekoffp, uint64_t *seeklenp);
 
-/* XXX Find proper signature */
-uint64_t slos_rstat(struct slos_vnode *vp);
+/* Stat structure for individual records. */
+struct slos_rstat {
+	uint64_t type;	/* The type of the record */
+	uint64_t len;	/* The length of the record */
+};
+
+int slos_rstat(struct slos_vnode *vp, uint64_t rno, struct slos_rstat *stat);
 
 /* Records btree iterators */
 int slos_firstrno(struct slos_vnode *vp, uint64_t *rnop);

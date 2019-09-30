@@ -99,18 +99,21 @@ struct slos_inode {
 	uint64_t		ino_magic;		/* magic for finding errors */
 };
 
-#define SLOSREC_INVALID	    0x00000000
-#define SLOSREC_PROC	    0x00000001
-#define SLOSREC_TD	    0x00000002
-#define SLOSREC_MEM	    0x00000003
-#define SLOSREC_MEMENTRY    0x00000004
-#define SLOSREC_MEMOBJT	    0x00000005
-#define SLOSREC_FDESC	    0x00000006
-#define SLOSREC_FILE	    0x00000007
-#define SLOSREC_FILENAME    0x00000008
-#define SLOSREC_DATA	    0x00000009
-#define SLOSREC_ADDR	    0x0000000A
-#define SLOSREC_PAGE	    0x0000000B
+#define SLOSREC_INVALID	    0x00000000	/* Record is invalid */
+#define SLOSREC_PROC	    0x00000001	/* Record holds process-local info */
+#define SLOSREC_MEM	    0x00000003	/* Record holds info related to a vmspace */
+#define SLOSREC_VMOBJ	    0x00000005	/* Record holds info for an object */
+#define SLOSREC_FILE	    0x00000006	/* Record holds info for a file */
+#define SLOSREC_PIPE	    0x00000007	/* Record holds info for a pipe */
+#define SLOSREC_KQUEUE	    0x00000008	/* Record holds info for a kqueue */
+#define SLOSREC_SOCKET	    0x00000009	/* Record holds info for a socket */
+#define SLOSREC_VNODE	    0x0000000a	/* Record holds info for a vnode */
+
+/* XXX Factor out */
+#define SLOSREC_FDESC	    0x000000a0	/* Record holds a file descriptor*/
+#define SLOSREC_DATA	    0x000000a1
+#define SLOSREC_FILENAME    0x000000a2
+
 
 #define SLOS_RMAGIC	    0x51058A1CUL
 

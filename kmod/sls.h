@@ -21,14 +21,15 @@ SDT_PROVIDER_DECLARE(sls);
 extern size_t sls_contig_limit;
 
 struct sls_metadata {
-    int			slsm_exiting;
-    int			slsm_lastid;
-    struct slskv_table	*slsm_proctable;
-    struct cdev		*slsm_cdev;
+    int			slsm_exiting;	/* Is the SLS being destroyed? */
+    struct slskv_table	*slsm_proctable;    /* All processes in the SLS */
+    struct cdev		*slsm_cdev;	/* The cdev that exposes the SLS' ops */
+
     /* OSD Related members */
-    struct vnode	*slsm_osdvp;
-    struct slsosd	*slsm_osd;
-    struct osd_mbmp	*slsm_mbmp;
+    struct slskv_table	*slsm_typetable;    /* Associates objects to SLOS types */
+    struct slskv_table	*slsm_rectable;	/* Associates in-memory pointers to data */
+    struct vnode	*slsm_osdvp;	/* The device that holds the SLOS */
+    struct slsosd	*slsm_osd;	/* Similar to struct mount, but for the SLOS */
 };
 
 extern struct sls_metadata slsm;

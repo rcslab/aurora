@@ -769,6 +769,41 @@ out:
 }
 
 /* 
+ * Get information for a specific record in the vnode. 
+ * Right now these are the size and type.
+ */
+int
+slos_rstat(struct slos_vnode *vp, uint64_t rno, struct slos_rstat *stat)
+{
+	struct slos_diskptr ptr;
+	struct slos_record *rp;
+	int error;
+
+	mtx_lock(&vp->vno_mtx);
+
+	error = btree_search(vp->vno_records, rno, &ptr);
+	if (error != 0) {
+	    mtx_unlock(&vp->vno_mtx);
+	    return error;
+	}
+
+	error = slos_recdread(&slos, ptr.offset, &rp);
+	if (error != 0) {
+	    mtx_unlock(&vp->vno_mtx);
+	    return 0;
+	}
+
+	mtx_unlock(&vp->vno_mtx);
+
+	stat->type = rp->rec_type;
+	stat->len = rp->rec_length;
+
+	free(rp, M_SLOS);
+
+	return 0;
+}
+
+/* 
  * Helpers for iterating the records btree. We can have the following movements:
  * - Go to first record in the btree.
  * - Go to last record in the btree.
@@ -786,17 +821,25 @@ slos_prevrec(struct slos_vnode *vp, uint64_t rno)
 	struct slos_record *rp;
 	int error;
 
+	mtx_lock(&vp->vno_mtx);
+
 	if (rno == 0)
 	    return NULL;
 
 	rno = rno - 1;
 	error = btree_keymin(vp->vno_records, &rno, &ptr);
-	if (error != 0)
+	if (error != 0) {
+	    mtx_unlock(&vp->vno_mtx);
 	    return NULL;
+	}
 
 	error = slos_recdread(&slos, ptr.offset, &rp);
-	if (error != 0)
+	if (error != 0) {
+	    mtx_unlock(&vp->vno_mtx);
 	    return NULL;
+	}
+
+	mtx_unlock(&vp->vno_mtx);
 
 	return rp;
 
@@ -809,17 +852,25 @@ slos_nextrec(struct slos_vnode *vp, uint64_t rno)
 	struct slos_record *rp;
 	int error;
 
+	mtx_lock(&vp->vno_mtx);
+
 	if (rno == vp->vno_lastrec)
 	    return NULL;
 
 	rno = rno + 1;
 	error = btree_keymax(vp->vno_records, &rno, &ptr);
-	if (error != 0)
+	if (error != 0) {
+	    mtx_unlock(&vp->vno_mtx);
 	    return NULL;
+	}
 
 	error = slos_recdread(&slos, ptr.offset, &rp);
-	if (error != 0)
+	if (error != 0) {
+	    mtx_unlock(&vp->vno_mtx);
 	    return NULL;
+	}
+
+	mtx_unlock(&vp->vno_mtx);
 
 	return rp;
 
@@ -834,14 +885,22 @@ slos_firstrec(struct slos_vnode *vp)
 	uint64_t rno;
 	int error;
 
+	mtx_lock(&vp->vno_mtx);
+
 	rno = 0;
 	error = btree_keymax(vp->vno_records, &rno, &ptr);
-	if (error != 0)
+	if (error != 0) {
+	    mtx_unlock(&vp->vno_mtx);
 	    return NULL;
+	}
 
 	error = slos_recdread(&slos, ptr.offset, &rp);
-	if (error != 0)
+	if (error != 0) {
+	    mtx_unlock(&vp->vno_mtx);
 	    return NULL;
+	}
+
+	mtx_unlock(&vp->vno_mtx);
 
 	return rp;
 }
@@ -854,14 +913,22 @@ slos_lastrec(struct slos_vnode *vp)
 	uint64_t rno;
 	int error;
 
+	mtx_lock(&vp->vno_mtx);
+
 	rno = vp->vno_lastrec;
 	error = btree_keymin(vp->vno_records, &rno, &ptr);
-	if (error != 0)
+	if (error != 0) {
+	    mtx_unlock(&vp->vno_mtx);
 	    return NULL;
+	}
 
 	error = slos_recdread(&slos, ptr.offset, &rp);
-	if (error != 0)
+	if (error != 0) {
+	    mtx_unlock(&vp->vno_mtx);
 	    return NULL;
+	}
+
+	mtx_unlock(&vp->vno_mtx);
 
 	return rp;
 }
@@ -873,12 +940,18 @@ slos_firstrno(struct slos_vnode *vp, uint64_t *rnop)
 	uint64_t rno;
 	int error;
 
-	rno = vp->vno_lastrec;
-	error = btree_keymin(vp->vno_records, &rno, &ptr);
-	if (error != 0)
+	mtx_lock(&vp->vno_mtx);
+
+	rno = 0;
+	error = btree_keymax(vp->vno_records, &rno, &ptr);
+	if (error != 0) {
+	    mtx_unlock(&vp->vno_mtx);
 	    return error;
+	}
 
 	*rnop = rno;
+
+	mtx_unlock(&vp->vno_mtx);
 
 	return 0;
 }
@@ -890,12 +963,18 @@ slos_lastrno(struct slos_vnode *vp, uint64_t *rnop)
 	uint64_t rno;
 	int error;
 
+	mtx_lock(&vp->vno_mtx);
+
 	rno = vp->vno_lastrec;
 	error = btree_keymin(vp->vno_records, &rno, &ptr);
-	if (error != 0)
+	if (error != 0) {
+	    mtx_unlock(&vp->vno_mtx);
 	    return error;
+	}
 
 	*rnop = rno;
+
+	mtx_unlock(&vp->vno_mtx);
 
 	return 0;
 }
@@ -910,12 +989,18 @@ slos_prevrno(struct slos_vnode *vp, uint64_t *rnop)
 	if (*rnop == 0)
 	    return EINVAL;
 
+	mtx_lock(&vp->vno_mtx);
+
 	rno = *rnop - 1;
 	error = btree_keymin(vp->vno_records, &rno, &ptr);
-	if (error != 0)
+	if (error != 0) {
+	    mtx_unlock(&vp->vno_mtx);
 	    return error;
+	}
 
 	*rnop = rno;
+
+	mtx_unlock(&vp->vno_mtx);
 
 	return 0;
 }
@@ -927,15 +1012,21 @@ slos_nextrno(struct slos_vnode *vp, uint64_t *rnop)
 	uint64_t rno;
 	int error;
 
+	mtx_lock(&vp->vno_mtx);
+
 	if ((*rnop) == vp->vno_lastrec)
 	    return EINVAL;
 
 	rno = *rnop + 1;
 	error = btree_keymax(vp->vno_records, &rno, &ptr);
-	if (error != 0)
+	if (error != 0) {
+	    mtx_unlock(&vp->vno_mtx);
 	    return error;
+	}
 
 	*rnop = rno;
+
+	mtx_unlock(&vp->vno_mtx);
 
 	return 0;
 }
@@ -945,6 +1036,8 @@ slos_firstrno_typed(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
 {
 	struct slos_record *rp = NULL;	
 	uint64_t rno;
+
+	mtx_lock(&vp->vno_mtx);
 
 	rp = slos_firstrec(vp);
 	while (rp != NULL && rp->rec_type != rtype) {
@@ -956,9 +1049,12 @@ slos_firstrno_typed(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
 	if (rp != NULL && rp->rec_type == rtype) {
 	    *rnop = rp->rec_num;
 	    free(rp, M_SLOS);
+	    mtx_unlock(&vp->vno_mtx);
 
 	    return 0;
 	}
+
+	mtx_unlock(&vp->vno_mtx);
 
 	return EINVAL;
 }
@@ -968,6 +1064,8 @@ slos_lastrno_typed(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
 {
 	struct slos_record *rp = NULL;	
 	uint64_t rno;
+
+	mtx_lock(&vp->vno_mtx);
 
 	rp = slos_lastrec(vp);
 	while (rp != NULL && rp->rec_type != rtype) {
@@ -980,9 +1078,12 @@ slos_lastrno_typed(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
 	if (rp != NULL && rp->rec_type == rtype) {
 	    *rnop = rp->rec_num;
 	    free(rp, M_SLOS);
+	    mtx_unlock(&vp->vno_mtx);
 
 	    return 0;
 	}
+
+	mtx_unlock(&vp->vno_mtx);
 
 	return EINVAL;
 }

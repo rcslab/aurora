@@ -46,6 +46,7 @@
 #include "sls_ioctl.h"
 #include "slskv.h"
 #include "slsmm.h"
+#include "slstable.h"
 
 
 MALLOC_DEFINE(M_SLSMM, "slsmm", "SLSMM");
@@ -414,8 +415,15 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	    slskv_zone = uma_zcreate("SLS table pairs", 
 		    sizeof(struct slskv_pair), NULL, NULL, NULL, 
 		    NULL, UMA_ALIGNOF(struct slskv_pair), 0);
-
 	    if (slskv_zone == NULL) {
+		error = ENOMEM;
+		break;
+	    }
+
+	    slspagerun_zone = uma_zcreate("SLS pageruns", 
+		    sizeof(struct slspagerun), NULL, NULL, NULL, 
+		    NULL, UMA_ALIGNOF(struct slspagerun), 0);
+	    if (slspagerun_zone == NULL) {
 		error = ENOMEM;
 		break;
 	    }
@@ -424,9 +432,24 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	    if (error != 0)
 		return error;
 
+	    error = slskv_create(&slsm.slsm_rectable, SLSKV_NOREPLACE, SLSKV_VALNUM);
+	    if (error != 0)
+		return error;
+
+	    error = slskv_create(&slsm.slsm_typetable, SLSKV_NOREPLACE, SLSKV_VALNUM);
+	    if (error != 0)
+		return error;
+
 	    slsm.slsm_cdev = 
 		make_dev(&slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "sls");
 
+#ifdef SLS_TEST 
+	    printf("Testing slstable component...\n");
+	    error = slstable_test();
+	    if (error != 0)
+		return error;
+
+#endif /* SLS_TEST */
 	    printf("SLS Loaded.\n");
 	    break;
 
@@ -445,10 +468,20 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 
 	    slsp_delall();
 
+	    if (slsm.slsm_rectable != NULL)
+		slskv_destroy(slsm.slsm_rectable);
+
+	    if (slsm.slsm_typetable != NULL)
+		slskv_destroy(slsm.slsm_typetable);
+
 	    if (slsm.slsm_proctable != NULL)
 		slskv_destroy(slsm.slsm_proctable);
 
-	    uma_zdestroy(slskv_zone);
+	    if (slspagerun_zone != NULL)
+		uma_zdestroy(slspagerun_zone);
+
+	    if (slskv_zone!= NULL)
+		uma_zdestroy(slskv_zone);
 
 	    printf("SLS Unloaded.\n");
 	    break;

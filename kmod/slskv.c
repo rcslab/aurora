@@ -13,7 +13,7 @@
 #include "slsmm.h"
 #include "sls.h"
 
-uma_zone_t slskv_zone;
+uma_zone_t slskv_zone = NULL;
 
 /* 
  * Create a table with values of the specified size.
@@ -229,6 +229,7 @@ slskv_pop(struct slskv_table *table, uint64_t *key, uint64_t *value)
 		*value = kv->value;
 
 		LIST_REMOVE(kv, next);
+		uma_zfree(slskv_zone, kv);
 		error = 0;
 
 		break;

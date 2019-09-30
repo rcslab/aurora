@@ -76,7 +76,7 @@ sls_load_proc(struct proc_info *proc_info, struct sls_channel *chan)
 	    return error;
 
 	if (proc_info->magic != SLS_PROC_INFO_MAGIC) {
-	    SLS_DBG("magic mismatch, %d vs %d\n", proc_info->magic, SLS_PROC_INFO_MAGIC);
+	    SLS_DBG("magic mismatch, %ld vs %d\n", proc_info->magic, SLS_PROC_INFO_MAGIC);
 	    return EINVAL;
 	}
 

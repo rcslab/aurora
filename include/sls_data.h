@@ -13,18 +13,25 @@
 #include <vm/vm.h>
 #include <vm/vm_map.h>
 
+/* 
+ * XXX Make magic always be uint64_t. Also we need to clean up this file.
+ * For one, all info structs should have a type field at the top, and 
+ * the magic at the very end.
+ */
+
 #define SLS_PROC_INFO_MAGIC 0x736c7301
 struct proc_info {
-	int magic;
+	uint64_t magic;
+	uint64_t slsid;
 	size_t nthreads;
 	pid_t pid;
-	/* All fields valid except for the mutex */
 	struct sigacts sigacts;
 };
 
 #define SLS_THREAD_INFO_MAGIC 0x736c7302
 struct thread_info {
-	int magic;
+	uint64_t magic;
+	uint64_t slsid;
 	struct reg regs;
 	struct fpreg fpregs;
 	lwpid_t tid;
@@ -35,7 +42,8 @@ struct thread_info {
 
 /* State of the vmspace, but also of its vm_map */
 struct vmspace_info {
-	int magic;
+	uint64_t magic;
+	uint64_t slsid;
 	/* State of the vmspace object */
 	segsz_t vm_swrss;
 	segsz_t vm_tsize;
@@ -54,6 +62,8 @@ struct vmspace_info {
 #define SLS_OBJECT_INFO_MAGIC 0x7aaa7303
 #define SLS_OBJECTS_END 0x7abab34
 struct vm_object_info {
+	uint64_t magic;
+	uint64_t slsid;
 	vm_pindex_t size;
     
 	enum obj_type type;
@@ -67,13 +77,13 @@ struct vm_object_info {
 	vm_ooffset_t backer_off;
 
 	/* XXX Bookkeeping for swapped out pages? */
-	int magic;
 };
 
 #define SLS_ENTRY_INFO_MAGIC 0x736c7304
 /* State of a vm_map_entry and its backing object */
 struct vm_map_entry_info {
-	int magic;
+	uint64_t magic;
+	uint64_t slsid;
 	/* State of the map entry */
 	vm_offset_t start;
 	vm_offset_t end;
@@ -93,7 +103,8 @@ struct memckpt_info {
 	 * XXX Actually use the magic, we aren't actually reading/
 	 * writing it right now 
 	 */
-	int magic;
+	uint64_t magic;
+	uint64_t slsid;
 	struct vmspace_info vmspace;
 	struct vm_map_entry_info *entries;
 };
@@ -102,6 +113,8 @@ struct memckpt_info {
 #define SLS_STRING_MAGIC 0x72626f72
 #define SLS_FILES_END INT_MAX
 struct file_info {
+	uint64_t magic;
+	uint64_t slsid;
 	int fd;
 
 	short type;
@@ -114,11 +127,12 @@ struct file_info {
 	* It's only about autoclosing on exec, and we don't really care right now 
 	*/
 	/* uint8_t fde_flags; */
-	int magic;
 };
 
 #define SLS_FILEDESC_INFO_MAGIC 0x736c7233
 struct filedesc_info {
+	uint64_t magic;
+	uint64_t slsid;
 
 	struct sbuf *cdir;
 	struct sbuf *rdir;
@@ -133,37 +147,43 @@ struct filedesc_info {
 	int num_files;
 
 	struct file_info *infos;
-	int magic;
 };
 
 #define SLS_PIPE_INFO_MAGIC  0x736c7499
 struct pipe_info {
+	uint64_t    magic;	/* Magic value */
+	uint64_t    slsid;	/* Unique SLS ID */
 	uint64_t    iswriteend;	/* Is this the write end? */
 	uint64_t    otherend;	/* The fd of the other end */
 	uint64_t    needrest;	/* Should we restore this? */
 	uint64_t    onlyend;	/* Are we the only end? */
-	uint64_t    magic;	/* Magic value */
 };
 
 #define SLS_KQUEUE_INFO_MAGIC  0x736c7265
 struct kqueue_info {
-	uint64_t    numevents;
 	uint64_t    magic;
+	uint64_t    slsid;	/* Unique SLS ID */
+	uint64_t    numevents;
 };
 
 #define SLS_KEVENT_INFO_MAGIC  0x736c7115
 struct kevent_info {
+	uint64_t    magic;
+	uint64_t    slsid;	/* Unique SLS ID */
 	int32_t	    status;
 	int64_t	    ident;
 	int16_t	    filter;
 	int32_t	    flags;
 	int32_t	    fflags;
 	int64_t	    data;
-	uint64_t    magic;
 };
 
 #define SLS_SOCKET_INFO_MAGIC  0x736c7268
 struct sock_info {
+	/* SLS Object options */
+	uint64_t    magic;
+	uint64_t    slsid;	/* Unique SLS ID */
+
 	/* Socket-wide options */
 	int16_t	    family;
 	int16_t	    type;

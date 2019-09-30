@@ -233,6 +233,12 @@ slos_write_disk(struct vnode *vp, struct slos_diskptr *diskptr, struct uio *uio)
 	sectorsperblock = slos.slos_sb->sb_bsize / slos.slos_sb->sb_ssize;
 
 	for (error = 0; uio->uio_resid > 0;) {
+
+	    /* 
+	     * XXX If the IO is not aligned, read the buffer from the disk. 
+	     * It's OK right now, since we never partially overwrite pages, but still.
+	     */
+
 	    /* Check if the offset is still in the extent. */
 	    bytesinextent = (diskptr->size * slos.slos_sb->sb_bsize) - uio->uio_offset;
 	    if (bytesinextent <= 0)
