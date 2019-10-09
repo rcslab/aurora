@@ -25,7 +25,6 @@
 #include "slsmm.h"
 #include "sls.h"
 #include "sls_path.h"
-#include "sls_channel.h"
 #include <sls_data.h>
 
 /*

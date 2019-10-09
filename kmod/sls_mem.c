@@ -27,14 +27,25 @@
 #include "sls.h"
 #include "slskv.h"
 #include "slsmm.h"
+#include "slstable.h"
 #include "sls_path.h"
 #include "sls_mem.h"
 
+#include <slos.h>
+
 static int 
-sls_vmobject_ckpt(struct proc *p, vm_object_t obj, struct sbuf *sb)
+sls_vmobject_ckpt(struct proc *p, vm_object_t obj)
 {
 	struct vm_object_info cur_obj;
+	struct sbuf *sb;
 	int error;
+
+	/* Find if we have already checkpointed the object. */
+	if (slskv_find(slsm.slsm_rectable, (uint64_t) obj, (uintptr_t *) &sb) == 0)
+	    return 0;
+
+	/* First time we come across it, create a buffer for the info struct. */
+	sb = sbuf_new_auto();
 
 	cur_obj.size = obj->size;
 	cur_obj.type = obj->type;
@@ -43,15 +54,16 @@ sls_vmobject_ckpt(struct proc *p, vm_object_t obj, struct sbuf *sb)
 	cur_obj.backer_off = obj->backing_object_offset;
 	cur_obj.path = NULL;
 	cur_obj.magic = SLS_OBJECT_INFO_MAGIC;
+	cur_obj.slsid = (uint64_t) obj;
 
 	error = sbuf_bcat(sb, (void *) &cur_obj, sizeof(cur_obj));
 	if (error != 0)
-	    return ENOMEM;
+	    goto error;
 
 	/*
-	* Used for mmap'd files - we are using the filename
-	* to find out how to map.
-	*/
+	 * Used for mmap'd files - we are using the filename
+	 * to find out how to map.
+	 */
 	if (obj->type == OBJT_VNODE) {
 	    PROC_UNLOCK(p);
 	    error = sls_vn_to_path_append((struct vnode *) obj->handle, sb);
@@ -60,12 +72,32 @@ sls_vmobject_ckpt(struct proc *p, vm_object_t obj, struct sbuf *sb)
 		printf("(BUG) Unlinked file found, ignoring for now\n");
 		return 0;
 	    }
-	    if (error)
-		return error;
+
+	    if (error != 0)
+		goto error;
 	}
 
 
+	error = sbuf_finish(sb);
+	if (error != 0)
+	    return error;
+
+	error = slskv_add(slsm.slsm_rectable, (uint64_t) obj, (uintptr_t) sb);
+	if (error != 0)
+	    goto error;
+
+	error = slskv_add(slsm.slsm_typetable, (uint64_t) sb, (uintptr_t) SLOSREC_VMOBJ);
+	if (error != 0)
+	    goto error;
+
 	return 0;
+
+error:
+
+	slskv_del(slsm.slsm_rectable, (uint64_t) obj);
+	sbuf_delete(sb);
+
+	return error;
 }
 
 static int
@@ -85,6 +117,7 @@ sls_vmentry_ckpt(struct vm_map_entry *entry, struct sbuf *sb)
 	cur_entry.max_protection = entry->max_protection;
 	cur_entry.inheritance = entry->inheritance;
 	cur_entry.obj = entry->object.vm_object;
+	cur_entry.slsid = (uint64_t) entry;
 	if (cur_entry.obj != NULL)
 	    cur_entry.type = cur_entry.obj->type;
 	else
@@ -105,12 +138,8 @@ sls_vmspace_ckpt(struct proc *p, struct sbuf *sb, long mode)
 	struct vm_map_entry *entry;
 	struct vmspace_info vmspace_info;
 	struct memckpt_info memory_info;
-	struct vm_object_info obj_info;
-	struct sbuf *objsb;
-	size_t bufsize;
-	vm_object_t *objects;
 	vm_object_t obj;
-	int error, i;
+	int error;
 
 	vmspace = p->p_vmspace;
 	vm_map = &vmspace->vm_map;
@@ -129,6 +158,7 @@ sls_vmspace_ckpt(struct proc *p, struct sbuf *sb, long mode)
 
 	memory_info = (struct memckpt_info) {
 	    .magic = SLS_MEMCKPT_INFO_MAGIC,
+	    .slsid = (uint64_t) vmspace,
 	    .vmspace = vmspace_info,
 	};
 
@@ -137,55 +167,18 @@ sls_vmspace_ckpt(struct proc *p, struct sbuf *sb, long mode)
 	    return ENOMEM;
 
 
+	/* Checkpoint all objects, including their ancestors. */
 	for (entry = vm_map->header.next; entry != &vm_map->header; 
 		entry = entry->next) {
-	    /* 
-	     * We checkpoint all ancestors of the top level objects.
-	     * This way we may checkpoint the same object twice.
-	     * We deduplicate at restore time.
-	     *
-	     * We need to restore backing objects before their shadows.
-	     * For that reason, first traverse the chain then 
-	     * checkpoint in the reverse order.
-	     */
-	    objsb = sbuf_new_auto();
+
 	    for (obj = entry->object.vm_object; obj != NULL; 
 		    obj = obj->backing_object) {
 
-		error = sbuf_bcat(objsb, &obj, sizeof(obj));
-		if (error != 0) {
-		    sbuf_delete(objsb);
+		error = sls_vmobject_ckpt(p, obj);
+		if (error != 0) 
 		    return error;
-		
-		}
 	    }
-
-	    error = sbuf_finish(objsb);
-	    if (error != 0) {
-		sbuf_delete(objsb);
-		return error;
-	    }
-	    objects = (vm_object_t *) sbuf_data(objsb);
-	    bufsize = sbuf_len(objsb) / sizeof(vm_object_t);
-
-	    for (i = bufsize- 1; i >= 0; i--) {
-		error = sls_vmobject_ckpt(p, objects[i], sb);
-		if (error != 0) {
-		    sbuf_delete(objsb);
-		    return error;
-		}
-	    }
-
-	    sbuf_delete(objsb);
-
 	}
-
-	/* Sentinel value, we are done with the objects. */
-	obj_info.magic = SLS_OBJECTS_END;
-	error = sbuf_bcat(sb, (void *) &obj_info, sizeof(obj_info));
-	if (error != 0)
-	    return ENOMEM;
-
 
 	for (entry = vm_map->header.next; entry != &vm_map->header;
 		entry = entry->next) {
@@ -201,137 +194,92 @@ sls_vmspace_ckpt(struct proc *p, struct sbuf *sb, long mode)
  * The same as vm_object_shadow, with different refcount handling and return values.
  * We also always create a shadow, regardless of the refcount.
  */
-static vm_object_t 
-sls_shadow(vm_object_t source, vm_ooffset_t offset, vm_size_t length)
+void
+sls_shadow(vm_object_t shadow, vm_object_t source, vm_ooffset_t offset)
 {
-	vm_object_t result;
-
 	/*
 	 * Store the offset into the source object, and fix up the offset into
 	 * the new object.
 	 */
-
-	result = vm_object_allocate(OBJT_DEFAULT, atop(length));
-	result->backing_object = source;
-	result->backing_object_offset = offset;
+	shadow->backing_object = source;
+	shadow->backing_object_offset = offset;
 
 
-	if (source != NULL) {
-	    /* 
-	    * If this is the first shadow, then we transfer the reference
-	    * from the caller to the shadow, as done in vm_object_shadow.
-	    * Otherwise we add a reference to the shadow.
-	    */
-	    if (source->shadow_count != 0)
-		source->ref_count += 1;
+	/* 
+	* If this is the first shadow, then we transfer the reference
+	* from the caller to the shadow, as done in vm_object_shadow.
+	* Otherwise we add a reference to the shadow.
+	*/
+	if (source->shadow_count != 0)
+	    source->ref_count += 1;
 
-		VM_OBJECT_WLOCK(source);
-		result->domain = source->domain;
-		LIST_INSERT_HEAD(&source->shadow_head, result, shadow_list);
-		source->shadow_count++;
+	VM_OBJECT_WLOCK(source);
+	shadow->domain = source->domain;
+	LIST_INSERT_HEAD(&source->shadow_head, shadow, shadow_list);
+	source->shadow_count++;
+
 #if VM_NRESERVLEVEL > 0
-		result->flags |= source->flags & OBJ_COLORED;
-		result->pg_color = (source->pg_color + OFF_TO_IDX(offset)) &
-		    ((1 << (VM_NFREEORDER - 1)) - 1);
+	shadow->flags |= source->flags & OBJ_COLORED;
+	shadow->pg_color = (source->pg_color + OFF_TO_IDX(offset)) &
+	    ((1 << (VM_NFREEORDER - 1)) - 1);
 #endif
-		VM_OBJECT_WUNLOCK(source);
-	}
 
-	return result;
+	VM_OBJECT_WUNLOCK(source);
 }
 
-void
-sls_data_rest(struct slskv_table *ptable, struct vm_map *map, struct vm_map_entry *entry)
+static void
+sls_data_rest(vm_object_t object, struct slsdata *slsdata)
 {
+	struct slspagerun *pagerun; 
+	vm_page_t page;
+	char *data;
+	int i;
 
-	struct slskv_iter piter;
-	vm_offset_t vaddr, addr;
-	vm_pindex_t offset;
-	vm_object_t object;
-	vm_page_t new_page;
-	uintptr_t data;
-	int error;
+	VM_OBJECT_WLOCK(object);
 
-	object = entry->object.vm_object;
-	/* Non-anonymous objects can retrieve their pages from vnodes/devices */ 
-	if (object == NULL || object->type != OBJT_DEFAULT)
-	    return;
-
-	piter = slskv_iterstart(ptable);
-	while (slskv_itercont(&piter, (uint64_t *) &vaddr, &data) != SLSKV_ITERDONE) {
-		if (vaddr < entry->start || vaddr >= entry->end)
-		    continue;
-
-		/*
-		* We cannot add the page we have saved the data in
-		* to the object, because it currently belongs to
-		* the kernel. So we get another one, copy the contents
-		* to it, and add the mapping to the page tables.
-		*/
-
-		offset = VADDR_TO_IDX(vaddr, entry->start, entry->offset);
-
-		VM_OBJECT_WLOCK(object);
-		new_page = vm_page_alloc(object, offset, VM_ALLOC_NORMAL);
-
-		if (new_page == NULL) {
-		    printf("Error: vm_page_grab failed\n");
-		    continue;
+	LIST_FOREACH(pagerun, slsdata, next) {
+	    /* XXX Do one page_alloc per pagerun */
+	    for (i = 0; i < (pagerun->len >> PAGE_SHIFT); i++) {
+		page = vm_page_alloc(object, pagerun->idx + i, VM_ALLOC_NORMAL);
+		if (page == NULL) {
+		    VM_OBJECT_WUNLOCK(object);
+		    return;
 		}
 
-		/* XXX Checkpoint and restore page valid/dirty bits? */
-		/*
-		if (new_page->valid != VM_PAGE_BITS_ALL) {
-		    error = vm_pager_get_pages(object, &new_page, 1, NULL, NULL);
-		    if (error != VM_PAGER_OK)
-			panic("page could not be retrieved\n");
+		page->valid = VM_PAGE_BITS_ALL;
 
-		}
-		*/
-
-		new_page->valid = VM_PAGE_BITS_ALL;
-
-		VM_OBJECT_WUNLOCK(object);
-
-		addr = pmap_map(NULL, new_page->phys_addr,
-			new_page->phys_addr + PAGE_SIZE,
+		/* Copy the data over to the VM Object's pages */
+		data = (char *) pmap_map(NULL, page->phys_addr,
+			page->phys_addr + PAGE_SIZE,
 			VM_PROT_READ | VM_PROT_WRITE);
-		memcpy((void *) addr, (void *) data, PAGE_SIZE);
-		/* pmap_delete or something? */
 
-		error = pmap_enter(vm_map_pmap(map), vaddr, new_page,
-			entry->protection, VM_PROT_READ, 0);
-		if (error != 0) {
-		    printf("Error: pmap_enter failed\n");
-		}
-		
-		vm_page_xunbusy(new_page);
+		memcpy(data, &((char *) pagerun->data)[i << PAGE_SHIFT], PAGE_SIZE);
 
+		vm_page_xunbusy(page);
+	    }
 	}
+
+	VM_OBJECT_WUNLOCK(object);
 }
 
 int
-sls_vmobject_rest(struct vm_object_info *info, struct slskv_table *objtable)
+sls_vmobject_rest(struct vm_object_info *info, struct slskv_table *objtable, 
+	struct slsdata *slsdata)
 {
-	vm_object_t object, parent;
+	vm_object_t object;
 	struct vnode *vp;
 	int error;
-
-	/* Check if we have already restored it. */
-	if (slskv_find(objtable, (uint64_t) info->id, (uintptr_t *) &object) == 0)
-	    return 0;
 
 	switch (info->type) {
 	case OBJT_DEFAULT:
 
-	    /* Else grab the parent (if it exists) and shadow it. */
-	    if (slskv_find(objtable, (uint64_t) info->backer, (uintptr_t *) &parent) != 0)
-		parent = NULL;
+	    /* Simple vm_allocate*/
+	    object = vm_object_allocate(OBJT_DEFAULT, info->size);
 
-	    object = sls_shadow(parent, info->backer_off, ptoa(info->size));
-	    slskv_add(objtable, (uintptr_t) info->id, (uint64_t) object);
+	    /* Restore any data pages the object might have. */
+	    sls_data_rest(object, slsdata);
 
-	    return 0;
+	    break;
 
 	case OBJT_VNODE:
 	    /* 
@@ -350,8 +298,7 @@ sls_vmobject_rest(struct vm_object_info *info, struct slskv_table *objtable)
 	    /* Get a reference for the vnode, since we're going to use it. */
 	    vhold(vp);
 	    object = vp->v_object;
-	    slskv_add(objtable, (uintptr_t) info->id, (uint64_t) object);
-	    return 0;
+	    break;
 
 	/* 
 	 * Device files either can't be mmap()'d, or have an mmap
@@ -360,7 +307,8 @@ sls_vmobject_rest(struct vm_object_info *info, struct slskv_table *objtable)
 	 * object, so we don't need it.
 	 */
 	case OBJT_DEVICE:
-	    return 0;
+	    object = NULL;
+	    break;
 	
 	/* 
 	 * Physical objects are unlikely to back other objects, but we
@@ -368,16 +316,20 @@ sls_vmobject_rest(struct vm_object_info *info, struct slskv_table *objtable)
 	 * a physical object had a VM_INHERIT_COPY inheritance flag.
 	 */
 	case OBJT_PHYS:
-
 	    object = curthread->td_proc->p_sysent->sv_shared_page_obj;
-	    if (object != NULL)
-		slskv_add(objtable, (uintptr_t) info->id, (uint64_t) object);
-
-	    return 0;
+	    break;
 
 	default:
 	    return EINVAL;
 	}
+
+	/* Export the newly created/found object to the table. */
+	error = slskv_add(objtable, info->slsid, (uintptr_t) object);
+	if (error != 0)
+	    return error;
+
+
+	return 0;
 }
 
 /*
@@ -385,15 +337,17 @@ sls_vmobject_rest(struct vm_object_info *info, struct slskv_table *objtable)
  * Great for anonymous pages.
  */
 static int
-sls_vmentry_rest_anon(struct vm_map *map, struct vm_map_entry_info *entry, struct slskv_table *objtable)
+sls_vmentry_rest_anon(struct vm_map *map, struct vm_map_entry_info *info, struct slskv_table *objtable)
 {
-	vm_map_entry_t new_entry; 
+	vm_map_entry_t entry; 
+	vm_page_t page;
+	vm_offset_t vaddr;
 	boolean_t contained;
 	vm_object_t object;
 	int error;
 
 	/* Find an object if it exists. */
-	if (slskv_find(objtable, (uint64_t) entry->obj, (uintptr_t *) &object) != 0)
+	if (slskv_find(objtable, (uint64_t) info->obj, (uintptr_t *) &object) != 0)
 	    object = NULL;
 
 	/* 
@@ -406,29 +360,43 @@ sls_vmentry_rest_anon(struct vm_map *map, struct vm_map_entry_info *entry, struc
 	 * proper arguments (mainly flags).
 	 */
 	vm_map_lock(map);
-	error = vm_map_insert(map, object, entry->offset, 
-		    entry->start, entry->end, 
-		    entry->protection, entry->max_protection, 0);
+	error = vm_map_insert(map, object, info->offset, 
+		    info->start, info->end, 
+		    info->protection, info->max_protection, 0);
 	if (error != 0)
 	    return error;
 
 	/* Get the entry from the map. */
-	contained = vm_map_lookup_entry(map, entry->start, &new_entry);
+	contained = vm_map_lookup_entry(map, info->start, &entry);
 	if (contained == FALSE)
 	    return EINVAL;
 
-	new_entry->eflags = entry->eflags;
-	new_entry->inheritance = entry->inheritance;
+	entry->eflags = info->eflags;
+	entry->inheritance = info->inheritance;
+
+	if (object != NULL) {
+	    /* Enter the object's pages to the map's pmap. */
+	    TAILQ_FOREACH(page, &object->memq, listq) {
+
+		/* Compute the virtual address for the page. */
+		vaddr = IDX_TO_VADDR(page->pindex, entry->start, entry->offset);
+
+		vm_page_sbusy(page);
+
+		/* If the page is within the entry's bounds, add it to the map. */
+		error = pmap_enter(vm_map_pmap(map), vaddr, page, 
+			entry->protection, VM_PROT_READ, page->psind);
+		if (error != 0)
+		    printf("Error: pmap_enter_failed\n");
+
+		vm_page_sunbusy(page);
+	    }
+	}
+
 
 	/* XXX restore cred if needed */
-	new_entry->cred = NULL;
+	entry->cred = NULL;
 	vm_map_unlock(map);
-
-
-	/* 
-	 * We could call use the prefault flag
-	 * avoid minor faults after restoring.
-	 */
 
 	return 0;
 
@@ -459,6 +427,7 @@ sls_vmentry_rest_file(struct vm_map *map, struct vm_map_entry_info *entry, struc
 	    error = EPERM;
 	    goto sls_vmentry_rest_file_done;
 	}
+
 
 	rprot = entry->protection & (VM_PROT_READ | VM_PROT_WRITE);
 	if (rprot == VM_PROT_WRITE)

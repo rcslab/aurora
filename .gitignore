@@ -6,6 +6,10 @@ kmod/vnode_if*.h
 kmod/offset.inc
 slos/vnode_if*.h
 
+shim/shim.pico
+shim/*.so
+shim/tests/test
+
 tests/array/array
 tests/compute/compute
 tests/fd/fd

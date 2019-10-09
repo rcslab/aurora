@@ -22,16 +22,14 @@
 #define SPROC_DETACHED	    2	/* Process has been detached */
 
 struct sls_process {
+    /* XXX Change from PIDs to lists of PIDs */
     uint64_t		    slsp_pid;	    /* PID of proc */
     uint64_t		    slsp_epoch;	    /* Current epoch, incremented after ckpt */
 
-    struct vmspace	    *slsp_vm;	    /* vmspace created by last checkpoint */
-    vm_ooffset_t	    slsp_charge;    /* Charge for the vmspace above */
-
     int			    slsp_status;    /* Status of checkpoint */
-    struct sbuf		    *slsp_ckptbuf;  /* Buffer to be dumped at ckpt */
     struct sls_attr	    slsp_attr;	    /* Parameters for checkpointing the process */
     int			    slsp_refcount;  /* Reference count for the process. */
+    struct slskv_table	    *slsp_objects;  /* VM Objects created for the SLS */
 
     LIST_ENTRY(sls_process) slsp_procs;	    /* List of checkpointed procs */
 };

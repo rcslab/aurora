@@ -97,6 +97,7 @@ sls_kqueue_ckpt(struct proc *p, struct file *fp, struct sbuf *sb)
 		sls_kevents[numevents].flags = kn->kn_kevent.flags;
 		sls_kevents[numevents].fflags = kn->kn_kevent.fflags;
 		sls_kevents[numevents].data = kn->kn_kevent.data;
+		sls_kevents[numevents].slsid= (uint64_t) kn;
 		sls_kevents[numevents].magic = SLS_KQUEUE_INFO_MAGIC;
 		numevents += 1;
 	    }
@@ -104,6 +105,7 @@ sls_kqueue_ckpt(struct proc *p, struct file *fp, struct sbuf *sb)
 
 	/* Create the structure for the kqueue itself. */
 	kqinfo.magic = SLS_KQUEUE_INFO_MAGIC;
+	kqinfo.slsid = (uint64_t) kq;
 	kqinfo.numevents = numevents;
 
 	/* Write the kqueue itself to the sbuf. */
@@ -134,8 +136,7 @@ sls_vnode_ckpt(struct proc *p, struct vnode *vp, struct sbuf *sb)
 	PROC_LOCK(p);
 
 	/* 
-	 * XXX Handle later, right now the vnode might 
-	 * be unlinked, and therefore have no name.
+	 * XXX Make sure the unlinked file case is handled. 
 	 */
 	if (error == ENOENT)
 	    return 0;
@@ -157,6 +158,7 @@ sls_pipe_ckpt(struct proc *p, struct file *fp, struct sbuf *sb)
 	/* Find out if we are the write end. */
 	info.iswriteend = (&pair->pp_wpipe == fp->f_data);
 	info.magic = SLS_PIPE_INFO_MAGIC;
+	info.slsid = (uint64_t) pair;
 
 	/* 
 	 * Assume the other end is closed for now, if it 
@@ -232,6 +234,9 @@ sls_socket_ckpt(struct proc *p, struct socket *so, struct sbuf *sb)
 	 * XXX Right now we're using a small subset of these 
 	 * fields, but we are going to need them later. 
 	 */
+	info.magic = SLS_SOCKET_INFO_MAGIC;
+	info.slsid = (uint64_t) so;
+
 	info.family = so->so_proto->pr_domain->dom_family;
 	info.proto = so->so_proto->pr_protocol;
 	info.type = so->so_proto->pr_type;
@@ -266,12 +271,15 @@ sls_file_ckpt(struct proc *p, struct file *file, int fd, struct sbuf *sb)
 	int error;
 	struct file_info info;
 
+	/* XXX Decouple files and fds - multiple processes may share files. */
+
 	info.type = file->f_type;
 	info.flag = file->f_flag;
 	info.offset = file->f_offset;
 	info.fd = fd;
 
 	info.magic = SLS_FILE_INFO_MAGIC;
+	info.slsid = (uint64_t) file;
 
 	error = sbuf_bcat(sb, (void *) &info, sizeof(info));
 

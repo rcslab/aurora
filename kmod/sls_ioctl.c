@@ -129,7 +129,6 @@ sls_restore(struct sls_restore_args *args)
 	struct sbuf *filename = NULL;
 	struct sls_backend backend; 
 	int error = 0;
-	size_t len;
 
 	/* Check if the backend type being requested is valid. */
 	if (args->backend.bak_target >= SLS_TARGETS) {
@@ -150,6 +149,11 @@ sls_restore(struct sls_restore_args *args)
 	/* If the source is a file, bring its name into the kernel. */
 	switch (args->backend.bak_target) {
 	case SLS_FILE:
+	    /* XXX Temporarily turn off the file backend. */
+	    error = EINVAL;
+	    goto error;
+
+#if 0
 	    /* Get a new sbuf to read the filename into. */
 	    filename = sbuf_new_auto();
 	    if (filename == NULL) {
@@ -170,8 +174,8 @@ sls_restore(struct sls_restore_args *args)
 	    /* Construct the kernel-side backend. */
 	    backend.bak_target = SLS_FILE;
 	    backend.bak_name = filename;
-
 	    break;
+#endif
 
 	case SLS_OSD:
 
@@ -468,11 +472,11 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 
 	    slsp_delall();
 
-	    if (slsm.slsm_rectable != NULL)
-		slskv_destroy(slsm.slsm_rectable);
-
 	    if (slsm.slsm_typetable != NULL)
 		slskv_destroy(slsm.slsm_typetable);
+
+	    if (slsm.slsm_rectable != NULL)
+		slskv_destroy(slsm.slsm_rectable);
 
 	    if (slsm.slsm_proctable != NULL)
 		slskv_destroy(slsm.slsm_proctable);

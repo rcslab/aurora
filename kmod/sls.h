@@ -26,8 +26,8 @@ struct sls_metadata {
     struct cdev		*slsm_cdev;	/* The cdev that exposes the SLS' ops */
 
     /* OSD Related members */
-    struct slskv_table	*slsm_typetable;    /* Associates objects to SLOS types */
     struct slskv_table	*slsm_rectable;	/* Associates in-memory pointers to data */
+    struct slskv_table	*slsm_typetable;	/* Associates data with a record type */
     struct vnode	*slsm_osdvp;	/* The device that holds the SLOS */
     struct slsosd	*slsm_osd;	/* Similar to struct mount, but for the SLOS */
 };
@@ -73,6 +73,7 @@ sls_module_exiting(void)
 struct sls_checkpointd_args {
 	struct proc *p;
 	struct sls_process *slsp;
+	struct sls_backend backend;
 };
 
 struct sls_restored_args {

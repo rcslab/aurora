@@ -37,34 +37,23 @@
 /*
  * Create a new struct sls_process to be entered into the SLS.
  */
-static struct sls_process *
-slsp_init(pid_t pid)
+static int 
+slsp_init(pid_t pid, struct sls_process **slspp)
 {
 	struct sls_process *procnew;
-	int error;
 
 	/* Create the new process to */
-	procnew = malloc(sizeof(*procnew), M_SLSMM, M_WAITOK);
+	procnew = malloc(sizeof(*procnew), M_SLSMM, M_WAITOK | M_ZERO);
 	procnew->slsp_pid = pid;
-	procnew->slsp_vm = NULL;
-	procnew->slsp_charge = 0;
 	procnew->slsp_status = 0;
 	procnew->slsp_epoch = 0;
-	procnew->slsp_ckptbuf = sbuf_new_auto();
 	procnew->slsp_refcount = 1;
-	if (procnew->slsp_ckptbuf == NULL) {
-	    free(procnew, M_SLSMM);
-	    return NULL;
-	}
+	/* This pointer is set during checkpointing. */
+	procnew->slsp_objects = NULL;
 	
-	/* Add the process to the hashtable. */
-	error = slskv_add(slsm.slsm_proctable, pid, (uintptr_t) procnew);
-	if (error != 0) {
-	    slsp_fini(procnew);
-	    return NULL;
-	}
+	*slspp = procnew;
 
-	return procnew;
+	return 0;
 }
 
 /*
@@ -75,6 +64,7 @@ struct sls_process *
 slsp_add(pid_t pid)
 {
 	struct sls_process *slsp;
+	int error;
 
 	/* 
 	* Try to find if we already have added the process 
@@ -87,7 +77,19 @@ slsp_add(pid_t pid)
 	    return NULL;
 	}
 
-	return slsp_init(pid);
+	/* If we didn't find it,. create one. */
+	error = slsp_init(pid, &slsp);
+	if (error != 0)
+	    return NULL;
+
+	/* Add the process to the hashtable. */
+	error = slskv_add(slsm.slsm_proctable, pid, (uintptr_t) slsp);
+	if (error != 0) {
+	    slsp_fini(slsp);
+	    return NULL;
+	}
+
+	return slsp;
 }
 
 /* 
@@ -97,15 +99,19 @@ slsp_add(pid_t pid)
 void
 slsp_fini(struct sls_process *slsp)
 {
-	if (slsp->slsp_ckptbuf != NULL) {
-	    if (sbuf_done(slsp->slsp_ckptbuf) == 0)
-		sbuf_finish(slsp->slsp_ckptbuf);
+	vm_object_t obj, shadow;
 
-	    sbuf_delete(slsp->slsp_ckptbuf);
+	/* Remove any references to VM objects we may have. */
+	if (slsp->slsp_objects != NULL) {
+
+	    /* Collapse all shadows that we created. */
+	    while (slskv_pop(slsp->slsp_objects, (uint64_t *) &obj, (uintptr_t *) &shadow) == 0)
+		vm_object_deallocate(obj);
+
+	    slskv_destroy(slsp->slsp_objects);
 	}
 
-	if (slsp->slsp_vm != NULL)
-	    vmspace_free(slsp->slsp_vm);
+	free(slsp, M_SLSMM);
 }
 
 /* Attempt to find and delete a process with PID pid from the SLS. */

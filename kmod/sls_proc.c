@@ -41,6 +41,7 @@ sls_thread_ckpt(struct thread *td, struct sbuf *sb)
 	thread_info.tid = td->td_tid;
 	thread_info.fs_base = td->td_pcb->pcb_fsbase;
 	thread_info.magic = SLS_THREAD_INFO_MAGIC;
+	thread_info.slsid = (uint64_t) td;
 
 	error = sbuf_bcat(sb, (void *) &thread_info, sizeof(thread_info));
 	if (error != 0)
@@ -110,6 +111,7 @@ sls_proc_ckpt(struct proc *p, struct sbuf *sb)
 	proc_info.nthreads = p->p_numthreads;
 	proc_info.pid = p->p_pid;
 	proc_info.magic = SLS_PROC_INFO_MAGIC;
+	proc_info.slsid = (uint64_t) p;
 
 	sigacts = p->p_sigacts;
 

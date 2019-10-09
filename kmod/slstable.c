@@ -44,38 +44,34 @@
 #endif /* SLS_TEST */
 
 
+/* XXX Turn into a sysctl */
+/* The maximum size of a single data transfer */
+size_t sls_contig_limit = (16 * 1024 * 1024);
+
 uma_zone_t slspagerun_zone = NULL;
 
 /* 
  * A list of info structs which can hold data, 
  * along with the size of their metadata. 
  */
-static uint64_t sls_datastructs[][2] =  { 
-    { SLOSREC_VMOBJ, sizeof(struct vm_object_info) }, 
+static uint64_t sls_datastructs[] =  { 
+    SLOSREC_VMOBJ, 
 #ifdef SLS_TEST
-    { SLOSREC_TESTDATA, sizeof(struct data_info) }, 
-#endif /* SLS_TEST */
+    SLOSREC_TESTDATA, 
+#endif
 };
 
-/* 
- * Find the size for the metadata of the data-holding struct. 
- * If the type cannot hold data, return an error. 
- */
 static int
-sls_datasizes(uint64_t type, uint64_t *size)
-{
+sls_isdata(uint64_t type) {
+
 	int i;
 
-	for (i = 0; i < sizeof(sls_datastructs) / (sizeof(*sls_datastructs)); i++) {
-	    if (sls_datastructs[i][0] == type) {
-		*size = sls_datastructs[i][1];
-		return 0;
-	    }
+	for (i = 0; i < sizeof(sls_datastructs) / sizeof(*sls_datastructs); i++) {
+	    if (sls_datastructs[i] == type)
+		return 1;
 	}
 
-	/* The type cannot hold data. */
-
-	return EINVAL;
+	return 0;
 }
 
 /*
@@ -87,6 +83,7 @@ sls_readmeta_slos(struct slos_vnode *vp, uint64_t rno, struct slos_rstat stat,
 {
 	struct iovec aiov;
 	struct uio auio;
+	struct slos_rstat *st;
 	void *record;
 	int error;
 
@@ -106,8 +103,13 @@ sls_readmeta_slos(struct slos_vnode *vp, uint64_t rno, struct slos_rstat stat,
 	    }
 	}
 
+	/* Add in the whole stat structure into the table. */
+	st = malloc(sizeof(*st), M_SLSMM, M_WAITOK);
+	st->type = stat.type;
+	st->len = stat.len;
+
 	/* Add the record to the table to be parsed into info structs later. */
-	error = slskv_add(table, (uint64_t) record, (uintptr_t) stat.type);
+	error = slskv_add(table, (uint64_t) record, (uintptr_t) st);
 	if (error != 0) {
 	    slskv_del(table, (uint64_t) record);
 	    free(record, M_SLSMM);
@@ -137,10 +139,15 @@ sls_readdata_slos(struct slos_vnode *vp, uint64_t rno, struct slos_rstat stat,
 	uint64_t len;
 	int error;
 
-	/* 
-	 * First read the VM object metadata. The data pages get read separately.
-	 */
-	
+	/* First read the object metadata. The data gets read separately. */
+
+	/* Find the end of the metadata; that's how much the first read is.  */
+	error = slos_rseek(vp, rno, 0, SREC_SEEKHOLE, &stat.len, &len);
+	if (error != 0) {
+	    printf("Seek failed\n");
+	    return error;
+	}
+
 	error = sls_readmeta_slos(vp, rno, stat, metatable, &record);
 	if (error != 0)
 	    return error;
@@ -158,9 +165,7 @@ sls_readdata_slos(struct slos_vnode *vp, uint64_t rno, struct slos_rstat stat,
 	if (error != 0)
 	    return error;
 
-
-	/* We start from the end of the VM object metadata. */
-	offset = sizeof(struct vm_object_info);
+	offset = stat.len;
 	for (;;) {
 
 	    /* Seek the next extent in the record. */
@@ -221,9 +226,9 @@ sls_read_slos(struct slos_vnode *vp, struct slskv_table **metatablep,
 {
 	struct slskv_table *metatable, *datatable;
 	struct slspagerun *pagerun, *tmp;
-	struct slos_rstat stat;
+	struct slos_rstat stat, *st;
 	struct slsdata data;
-	uint64_t rno, type;
+	uint64_t rno;
 	void *record;
 	int error;
 
@@ -259,10 +264,10 @@ sls_read_slos(struct slos_vnode *vp, struct slskv_table **metatablep,
 	     * If the record can hold data,  "typecast" it to look like 
 	     * it only has metadata. We will manually read the data later.
 	     */
-	    if (sls_datasizes(stat.type, &stat.len) != 0)
-		error = sls_readmeta_slos(vp, rno, stat, metatable, &record);
-	    else
+	    if (sls_isdata(stat.type))
 		error = sls_readdata_slos(vp, rno, stat, metatable, datatable);
+	    else
+		error = sls_readmeta_slos(vp, rno, stat, metatable, &record);
 
 	    if (error != 0)
 		goto error;
@@ -278,8 +283,10 @@ sls_read_slos(struct slos_vnode *vp, struct slskv_table **metatablep,
 
 error:
 
-	while (slskv_pop(metatable, (uint64_t *) &record, (uintptr_t *) &type) == 0)
+	while (slskv_pop(metatable, (uint64_t *) &record, (uintptr_t *) &st) == 0) {
+	    free(st, M_SLSMM);
 	    free(record, M_SLSMM);
+	}
 
 	while (slskv_pop(datatable, (uint64_t *) &record, (uintptr_t *) &data) == 0) {
 	    LIST_FOREACH_SAFE(pagerun, &data, next, tmp) {
@@ -357,6 +364,7 @@ sls_objdata(struct slos_vnode *vp, uint64_t rno, vm_object_t obj)
 	struct iovec aiov;
 	struct uio auio;
 	int error;
+	int x = 0;
 
 	/* Traverse the object's resident pages. */
 	page = TAILQ_FIRST(&obj->memq); 
@@ -372,6 +380,7 @@ sls_objdata(struct slos_vnode *vp, uint64_t rno, vm_object_t obj)
 	     */
 	    startpage = page;
 	    contig_len = sls_contig_pages(obj, &page);
+	    x += contig_len >> PAGE_SHIFT;
 
 	    /* Map the process' data into the kernel. */
 	    data = pmap_map(NULL, startpage->phys_addr, 
@@ -408,6 +417,9 @@ sls_objdata(struct slos_vnode *vp, uint64_t rno, vm_object_t obj)
 	    if (page == NULL || startpage->pindex >= page->pindex)
 		break;
 	}
+	printf("(%p) %d pages checkpointed out of %d (full size %ld)", obj, x, obj->resident_page_count, obj->size);
+	printf(" Backer: (%p)\n", obj->backing_object);
+
 
 	if (error != 0)
 	    return error;
@@ -429,11 +441,10 @@ sls_writemeta_slos(struct slos_vnode *vp, struct sbuf *sb, uint64_t type, uint64
 	size_t len;
 	int error;
 
-	error = sbuf_finish(sb);
-	if (error != 0)
-	    return error;
-
 	record = sbuf_data(sb);
+	if (record == NULL)
+	    return EINVAL;
+
 	len = sbuf_len(sb);
 
 	error = slos_rcreate(vp, type, &rno);
@@ -469,10 +480,11 @@ sls_writemeta_slos(struct slos_vnode *vp, struct sbuf *sb, uint64_t type, uint64
  * in the VM object.
  */
 static int
-sls_writedata_slos(struct slos_vnode *vp, struct sbuf *sb, uint64_t type)
+sls_writedata_slos(struct slos_vnode *vp, struct sbuf *sb,
+	uint64_t type, struct slskv_table *objtable)
 {
 	struct vm_object_info *info;
-	vm_object_t obj;
+	vm_object_t obj, newobj;
 	uint64_t rno;
 	int error;
 
@@ -492,8 +504,15 @@ sls_writedata_slos(struct slos_vnode *vp, struct sbuf *sb, uint64_t type)
 	 * retrieve the object and grab its data.
 	 */
 	obj = (vm_object_t) info->slsid;
+	if (obj->type != OBJT_DEFAULT)
+	    return 0;
 
-	/* Send the object's data to the same record as the metadata. */
+	/* Get the shadow we created for the object from the table. */
+	error = slskv_find(objtable, (uint64_t) obj, (uintptr_t *) &newobj);
+	if (error != 0)
+	    return error;
+
+	/* Checkpoint the object. */
 	error = sls_objdata(vp, rno, obj);
 	if (error != 0)
 	    return error;
@@ -507,10 +526,10 @@ sls_writedata_slos(struct slos_vnode *vp, struct sbuf *sb, uint64_t type)
  * need to be sent to the SLOS.
  */
 int
-sls_write_slos(struct slos_vnode *vp, struct slskv_table *table)
+sls_write_slos(struct slos_vnode *vp, struct slskv_table *table, struct slskv_table *objtable)
 {
 	struct sbuf *sb;
-	uint64_t type, size;
+	uint64_t type;
 	uint64_t rno;
 	int error;
 
@@ -522,10 +541,10 @@ sls_write_slos(struct slos_vnode *vp, struct slskv_table *table)
 
 	    /* ------------ SLOS-Specific Part ------------ */
 
-	    if (sls_datasizes(type, &size) != 0)
-		error = sls_writemeta_slos(vp, sb, type, &rno);
+	    if (sls_isdata(type))
+		error = sls_writedata_slos(vp, sb, type, objtable);
 	    else 
-		error = sls_writedata_slos(vp, sb, type);
+		error = sls_writemeta_slos(vp, sb, type, &rno);
 
 	    if (error != 0)
 		return error;
@@ -652,6 +671,13 @@ slstable_mkinfo(struct slskv_table *origtable, struct slskv_table *backuptable,
 	if (error != 0)
 	    goto out;
 
+	error = sbuf_finish(sb);
+	if (error != 0)
+	    goto out;
+
+	error = sbuf_finish(sbbak);
+	if (error != 0)
+	    goto out;
 
 	/* Add the sbuf to the "before" table. */
 	error = slskv_add(origtable, (uint64_t) sb, type);
@@ -865,6 +891,7 @@ slstable_test(void)
 	struct slsdata *slsdata;
 	uint64_t lost_elements;
 	vm_object_t obj = NULL;
+	struct slos_rstat *st;
 	meta_info *record;
 	struct sbuf *sb;
 	int sloserror;
@@ -942,12 +969,12 @@ slstable_test(void)
 	 * - Is the struct identical to the one in the original table?
 	 * - If the entry is a data entry, also check its data.
 	 */
-	while (slskv_pop(metatable, (uint64_t *) &record, (uintptr_t *) &type) == 0) {
+	while (slskv_pop(metatable, (uint64_t *) &record, (uintptr_t *) &st) == 0) {
 
-	    switch (type) {
+	    switch (st->type) {
 	    case SLOSREC_TESTMETA:
 		/* Test only the metadata, since there is no data. */
-		error = slstable_testmeta(origtable, record, type);
+		error = slstable_testmeta(origtable, record, st->type);
 		if (error != 0)
 		    goto out;
 
@@ -955,7 +982,7 @@ slstable_test(void)
 
 	    case SLOSREC_TESTDATA:
 		/* A data record also has metadata; test it separately. */
-		error = slstable_testmeta(origtable, record, type);
+		error = slstable_testmeta(origtable, record, st->type);
 		if (error != 0)
 		    goto out;
 
@@ -968,13 +995,14 @@ slstable_test(void)
 		break;
 
 	    default:
-		printf("ERROR: Invalid type found: %ld.\n", type);
+		printf("ERROR: Invalid type found: %ld.\n", st->type);
 		printf("Valid types: %x, %x\n", SLOSREC_TESTMETA, SLOSREC_TESTDATA);
 		goto out;
 
 	    }
 
-	    /* The record isn't needed anymore, so we free it. */
+	    /* The record and its metadata aren't needed anymore, so we free both. */
+	    free(st, M_SLSMM);
 	    free(record, M_SLSMM);
 	}
 
@@ -1004,8 +1032,10 @@ out:
 	    slskv_destroy(backuptable);
 	
 	if (metatable != NULL) {
-	    while (slskv_pop(metatable, (uint64_t *) &record, (uintptr_t *) &type) == 0)
+	    while (slskv_pop(metatable, (uint64_t *) &record, (uintptr_t *) &st) == 0) {
+		free(st, M_SLSMM);
 		free(record, M_SLSMM);
+	    }
 
 	    slskv_destroy(metatable);
 	}
@@ -1042,46 +1072,4 @@ out:
 	return error;
 }
 
-#endif /* SLS_TEST */
-
-/* --------------------------------------------*/
-/* XXX PARSING after we are done thoroughly testing the code above */
-
-#if 0
-/*
- * Parse the data read from the backend into SLS info structs.
- */
-int
-sls_parsedata(struct slskv_table *rectable, struct slskv_table *infotable)
-{
-	void *record;
-	uint64_t type;
-    
-    
-	while (slskv_pop(rectable, (uint64_t *) &record, (uintptr_t *) &type) == 0) {
-	    switch (type) {
-	    case SLOSREC_PROC:
-		/* The record holds a process and all its threads. */
-		break;
-	    case SLOSREC_MEM:
-		/* The record holds a vmspace and its entries. */
-		break;
-	    case SLOSREC_MEMOBJT:
-		/* 
-		 * The record holds a VM object and its pages.
-		 */
-		break;
-	    case SLOSREC_FDESC:
-		/*
-		 * The record holds a file descriptor and its associated data.
-		 */
-		break;
-
-	    }
-
-	}
-}
-
-
-
-#endif
+#endif /* SLS_TEST */ 

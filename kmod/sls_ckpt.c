@@ -35,13 +35,13 @@
 #include <vm/uma.h>
 
 #include "sls.h"
-#include "sls_channel.h"
 #include "sls_data.h"
 #include "sls_fd.h"
 #include "sls_ioctl.h"
 #include "sls_mem.h"
 #include "sls_proc.h"
 #include "slsmm.h"
+#include "slstable.h"
 
 #include "../include/slos.h"
 #include "../slos/slos_internal.h"
@@ -104,6 +104,7 @@ sls_stop_proc(struct proc *p)
 int
 sls_ckpt(struct proc *p, struct sls_process *slsp)
 {
+	struct sbuf *sb;
 	int error = 0;
 
 	/* Dump the process state */
@@ -111,40 +112,182 @@ sls_ckpt(struct proc *p, struct sls_process *slsp)
 	if (!SLS_PROCALIVE(p)) {
 	    SLS_DBG("proc trying to die, exiting ckpt\n");
 	    error = ESRCH;
-	    goto sls_ckpt_out;
+	    goto out;
 	}
 
-	error = sls_proc_ckpt(p, slsp->slsp_ckptbuf);
+	sb = sbuf_new_auto();
+
+	error = sls_proc_ckpt(p, sb);
 	if (error != 0) {
 	    SLS_DBG("Error: proc_ckpt failed with error code %d\n", error);
-	    goto sls_ckpt_out;
+	    goto out;
 	}
 
-	error = sls_filedesc_ckpt(p, slsp->slsp_ckptbuf);
+	error = sls_filedesc_ckpt(p, sb);
 	if (error != 0) {
 	    SLS_DBG("Error: fd_ckpt failed with error code %d\n", error);
-	    goto sls_ckpt_out;
+	    goto out;
 	}
 
-	error = sls_vmspace_ckpt(p, slsp->slsp_ckptbuf, slsp->slsp_attr.attr_mode);
+	error = sls_vmspace_ckpt(p, sb, slsp->slsp_attr.attr_mode);
 	if (error != 0) {
 	    SLS_DBG("Error: vmspace_ckpt failed with error code %d\n", error);
-	    goto sls_ckpt_out;
+	    goto out;
 	}
 
+	error = sbuf_finish(sb);
+	if (error != 0)
+	    goto out;
 
-sls_ckpt_out:
+	error = slskv_add(slsm.slsm_rectable, (uint64_t) p, (uintptr_t) sb);
+	if (error != 0)
+	    goto out;
+
+	error = slskv_add(slsm.slsm_typetable, (uint64_t) sb, (uintptr_t) SLOSREC_PROC);
+	if (error != 0)
+	    goto out;
+
+out:
 	PROC_UNLOCK(p);
 
+	if (error != 0) {
+	    slskv_del(slsm.slsm_rectable, (uint64_t) sb);
+	    sbuf_delete(sb);
+	}
+
 	return error;
+}
+
+
+/*
+ * Below are the two functions used for creating the shadows, slsobj_shadow()
+ * and slsobj_collapse(). What slsobj_shadow does it take a reference on the
+ * objects that are directly attached to the process' entries, and then create
+ * a shadow for it. The entry's reference to the original object is transferred
+ * to the shadow, while the new object gets another reference to the original.
+ * As a net result, if O the old object, S the shadow, and E the entry, we
+ * go from 
+ *
+ * [O (1)] - E
+ *
+ * to 
+ *
+ * [O (2)] - [S (1)] - E
+ *    |
+ *   SLS
+ *
+ * where the numbers in parentheses are the number of references and lines 
+ * denote a reference to objects. To collapse the objects, we remove the
+ * reference taken by the SLS.
+ */
+
+/*
+ * Get all objects accessible throught the VM entries of the checkpointed process.
+ * This causes any CoW objects shared among memory maps to split into two. 
+ */
+static int 
+slsobj_shadow(struct proc *p, struct slskv_table *objtable, struct slskv_table *newtable)
+{
+	struct vm_map_entry *entry, *header;
+	struct slskv_table *table;
+	vm_object_t obj, shadow;
+	int error;
+
+	table = (newtable != NULL) ? newtable : objtable;
+
+	header = &p->p_vmspace->vm_map.header;
+	for (entry = header->next; entry != header; entry = entry->next) {
+		obj = entry->object.vm_object;
+		if (obj == NULL || obj->type != OBJT_DEFAULT)
+		    continue;
+		
+		/* Check if we have already shadowed the object. */
+		if (slskv_find(table, (uint64_t) obj, (uintptr_t *) &shadow) == 0)
+		    continue;
+
+		/* 
+		 * We take a reference to the old object for ourselves.
+		 * That way, we avoid issues like its pages being 
+		 * transferred to the shadow when the process faults.
+		 */
+		vm_object_reference(obj);
+		vm_object_shadow(&entry->object.vm_object, &entry->offset, 
+			entry->end - entry->start);
+
+		/* Remove the mappings so that the process rereads them. */
+		pmap_remove(&p->p_vmspace->vm_pmap, entry->start, entry->end);
+
+		/* Add them to the table for dumping later. */
+		error = slskv_add(table, (uint64_t) obj, (uintptr_t) entry->object.vm_object);
+		if (error != 0) {
+		    /* If we failed, undo the shadowing. */
+		    vm_object_deallocate(obj);
+		    return error;
+		}
+
+		/* 
+		 * If we are doing a full checkpoint, or if this is the first
+		 * of a series of delta checkpoints, we need to checkpoint all
+		 * parent objects apart from the top-level ones. Otherwise we
+		 * are fine with only the top-level objects. The way we can
+		 * see whether we should traverse the whole object hierarchy
+		 * is by checking the table argument; if there are still 
+		 * objects from a previous checkpoint (the latter case) it is
+		 * non-NULL.
+		 */
+		if (newtable == NULL)
+		    continue;
+
+		obj = obj->backing_object;
+		while (obj != NULL && obj->type == OBJT_DEFAULT) {
+		    /* 
+		     * Take a reference to the object. We do this because
+		     * it's possible to move pages from an object to one of its 
+		     * shadows while we are checkpointing. If we have already
+		     * dumped that shadow's pages, that means that we will miss
+		     * it. By adding an extra reference we disallow this optimization.
+		     */
+
+		    vm_object_reference(obj);
+		    /* These objects have no shadows. */
+		    error = slskv_add(table, (uint64_t) obj, (uintptr_t) NULL);
+		    if (error != 0) {
+			/* If we failed, undo the shadowing. */
+			vm_object_deallocate(obj);
+			return error;
+		    }
+		}
+	}
+
+	return error;
+}
+
+/*
+ * Collapse an object created by SLS into its parent.
+ */
+static void
+slsobj_collapse(struct slskv_table *objtable)
+{
+	struct slskv_iter iter;
+	vm_object_t obj, shadow;
+	
+	/* 
+	 * When collapsing, we do so by removing the 
+	 * reference of the original object we took in 
+	 * slsobj_shadow. After having done so, the
+	 * object is left with one reference and one
+	 * shadow, so it can be collapsed with it.
+	 */
+	iter = slskv_iterstart(objtable);
+	while (slskv_itercont(&iter, (uint64_t *) &obj, (uintptr_t *) &shadow) != SLSKV_ITERDONE)
+	    vm_object_deallocate(obj);
 }
 
 void 
 sls_ckpt_once(struct proc *p, struct sls_process *slsp)
 {
-    vm_ooffset_t new_charge;
-    struct sls_channel chan;
-    struct vmspace *new_vm;
+    struct slskv_table *newtable = NULL, *table;
+    struct slos_vnode *vp;
     int error = 0;
 
     SLS_DBG("Dump created\n");
@@ -154,6 +297,7 @@ sls_ckpt_once(struct proc *p, struct sls_process *slsp)
     SDT_PROBE0(sls, , ,stopped);
     SLS_DBG("Process stopped\n");
 
+    /* Get all the metadata from the process. */
     error = sls_ckpt(p, slsp);
     if(error != 0) {
 	SLS_DBG("Checkpointing failed\n");
@@ -162,64 +306,127 @@ sls_ckpt_once(struct proc *p, struct sls_process *slsp)
 	return;
     }
 
+    /* 
+     * Check if there are objects from a previous iteration. 
+     * If there are, we need to discern between them and those
+     * that we will create in this iteration.
+     *
+     * This check is an elegant way of checking if we are doing
+     * either a) a full checkpoint, or the first in a series of
+     * delta checkpoints, or b) a normal delta checkpoint. This
+     * matters when choosing which and how many elements to shadow. 
+     */
+    error = slskv_create(&table, SLSKV_NOREPLACE, SLSKV_VALNUM);
+    if (error != 0)
+	goto out;
 
-    /* XXX Create new option for deep deltas */
-    /*
-    old_vm = slsp->slsp_vm;
-    old_charge = slsp->slsp_charge;
-    */
+    if (slsp->slsp_objects == NULL)
+	slsp->slsp_objects = table;
+    else 
+	newtable = table;
 
-    new_vm = vmspace_fork(p->p_vmspace, &new_charge);
 
-    /* XXX Code only valid for deep deltas, uncomment when ready */
-    /*
-    if (slsp->slsp_vm == NULL) {
-	printf("Error: Shadowing vmspace failed\n");
-	slss_fini(slss);
-	return;
-    }
-    */
-
-    if (swap_reserve_by_cred(new_charge, proc0.p_ucred) == 0) {
-	printf("Error: Could not reserve swap space\n");
-	vmspace_free(slsp->slsp_vm);
-	return;
-    }
-    SLS_DBG("New vmspace created\n");
-
-    if (slsp->slsp_epoch == 0) {
-	slsp->slsp_vm = new_vm;
-	slsp->slsp_charge = new_charge;
-    }
+    /* Shadow the objects to be dumped. */
+    error = slsobj_shadow(p, slsp->slsp_objects, newtable);
+    if (error != 0)
+	goto out;
 
     /* Let the process execute ASAP */
     SLS_CONT(p);
     SDT_PROBE0(sls, , ,cont);
 
-    if (slsp->slsp_epoch > 0 && slsp->slsp_attr.attr_mode == SLS_FULL) {
-	vmspace_free(new_vm);
-	SLS_DBG("Full compaction complete\n");
-    }
+    /* ------------ SLOS-Specific Part ------------ */
 
-    /* Create the channel that will be used to send the data to the backend. */
-    error = slschan_init(&slsp->slsp_attr.attr_backend, &chan);
-    if (error != 0)
-	return;
+    /* XXX TEMP so that we can checkpoint multiple times. */
+    slos_iremove(&slos, 1024);
 
     /* The dump itself. */
-    error = sls_dump(slsp, &chan);
-
-    /* Close up the channel before going checking the error value. */
-    slschan_fini(&chan);
-
-    /* Check whether we dumped successfully. */
+    /* XXX Temporary until we change to multiple inodes per checkpoint. */
+    error = slos_icreate(&slos, 1024);
     if (error != 0)
-	return;
+	goto out;
 
-    if (slsp->slsp_epoch > 0 && slsp->slsp_attr.attr_mode == SLS_DELTA) {
-	vmspace_free(new_vm);
-	SLS_DBG("Delta compaction complete\n");
+    vp = slos_iopen(&slos, 1024);
+    if (vp == NULL)
+	goto out;
+
+    table = (newtable != NULL) ? newtable : slsp->slsp_objects;
+    error = sls_write_slos(vp, slsm.slsm_typetable, table);
+    if (error != 0) {
+	SLS_DBG("sls_write_slos return %d\n", error);
+	goto out;
     }
+
+    error = slos_iclose(&slos, vp);
+    if (error != 0)
+	goto out;
+
+    /* ------------ End SLOS-Specific Part ------------ */
+
+    /* 
+     *  If this is a delta checkpoint, and it is not the first
+     *  one, we partially collapse the chain of shadows.
+     *  We assume a  structure where, if P the parent object 
+     *  and S the SLS-created shadow:
+     *
+     * (P) --> (S)
+     *
+     * For the next checkpoint, we shadow the shadow itself, creating
+     * the chain:
+     *
+     * (P) --> (S) --> (DS (for Double Shadow))
+     *
+     * Now we need to collapse part of the chain. Whether we collapse
+     * P with S or S with DS depends on whether we use the "deep" or
+     * "shallow" strategy, respectively, named based on how deep on
+     * the chain we collapse. If we use deep deltas, we merge the pages 
+     * of the two objects, incurring an extra cost. However, at the next
+     * iteration, the chain will be like this:
+     *
+     * (P, S) --> (DS) --> (TS)
+     *
+     * Since we get the pages to be dumped from the middle object, we
+     * have less pages to dump, because we dump only the pages touched 
+     * since the last checkpoint. If, onthe other hand, we used shallow
+     * deltas, we collapse S and DS, which logically have less pages than
+     * P for large loads (since they only hold pages touched during the
+     * last two checkpoints), but on the next checkpoint the chain will
+     * be
+     *
+     * (P) --> (S, DS) --> (TS)
+     *
+     * meaning that we dump _all_ pages touched since P was shadowed.
+     * This means that the middle object eventually holds all pages,
+     * and we should possibly do a deep checkpoint to fix that.
+     */
+
+    if (newtable != NULL) {
+	switch (slsp->slsp_attr.attr_mode) {
+	/* XXX For now we assume deep deltas. */
+	case SLS_DELTA:
+	case SLS_DEEP:
+	    slsobj_collapse(slsp->slsp_objects);
+	    slskv_destroy(slsp->slsp_objects);
+	    slsp->slsp_objects = newtable;
+
+	case SLS_SHALLOW:
+	    slsobj_collapse(newtable);
+	    slskv_destroy(newtable);
+
+	default:
+	    panic("invalid mode %d\n", slsp->slsp_attr.attr_mode);
+	}
+    }
+
+out:
+
+    /* 
+     * If we did a full checkpoint, we don't need to keep the 
+     * shadows. As a result, we remove _all_ references we
+     * made, causing the shadows to collapse into the parents.
+     */
+    if (slsp->slsp_attr.attr_mode == SLS_FULL)
+	slsobj_collapse(slsp->slsp_objects);
 
     slsp->slsp_epoch += 1;
     SLS_DBG("Checkpointed process once\n");

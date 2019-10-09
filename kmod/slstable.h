@@ -4,6 +4,8 @@
 #include <sys/malloc.h>
 
 #include <vm/uma.h>
+#include <vm/vm.h>
+#include <vm/vm_map.h>
 
 #include <sls_data.h>
 #include <slos.h>
@@ -31,7 +33,8 @@ LIST_HEAD(slsdata, slspagerun);
 int sls_read_slos(struct slos_vnode *vp, struct slskv_table **metatablep,
 	struct slskv_table **datatablep);
 
-int sls_write_slos(struct slos_vnode *vp, struct slskv_table *table);
+int sls_write_slos(struct slos_vnode *vp, struct slskv_table *table, 
+	struct slskv_table *objtable);
 
 /* Zone for the pageruns. */
 extern uma_zone_t slspagerun_zone;

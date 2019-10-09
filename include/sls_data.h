@@ -59,7 +59,7 @@ struct vmspace_info {
 	 */
 };
 
-#define SLS_OBJECT_INFO_MAGIC 0x7aaa7303
+#define SLS_OBJECT_INFO_MAGIC 0x7abc7303
 #define SLS_OBJECTS_END 0x7abab34
 struct vm_object_info {
 	uint64_t magic;

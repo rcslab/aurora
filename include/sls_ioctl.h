@@ -69,7 +69,9 @@ struct sls_detach_args {
  */
 #define SLS_FULL		0   /* Full dump, all pages are saved */
 #define SLS_DELTA		1   /* Delta dump, only modified pages are saved */
-#define SLS_MODES		2   /* Number of modes */
+#define SLS_DEEP		2   /* Deep delta (explained in sls_ckpt.c) */
+#define SLS_SHALLOW		3   /* Shallow delta (explained in sls_ckpt.c) */
+#define SLS_MODES		4   /* Number of modes */
 
 /*
  * Values for the target field of the arguments for SLS_OP
