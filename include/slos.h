@@ -3,6 +3,7 @@
 #define _SLOS_H_
 
 #include <sys/uuid.h>
+#include <sys/vnode.h>
 
 /*
  * SLOS Pointer
@@ -89,7 +90,9 @@ struct slos_inode {
 	u_char			ino_procname[64];	/* process name */
 
 	uint64_t		ino_ctime;		/* creation time */
+	uint32_t		ino_ctime_nsec;		/* creation time nano part */
 	uint64_t		ino_mtime;		/* last modification time */
+	uint32_t		ino_mtime_nsec;		/* modification time nano part */
 
 	uint64_t		ino_blk;		/* on-disk position */
 	uint64_t		ino_lastrec;		/* last record */
@@ -97,6 +100,10 @@ struct slos_inode {
 
 	uint64_t		ino_flags;		/* inode flags */
 	uint64_t		ino_magic;		/* magic for finding errors */
+	uint16_t		ino_mode;		/* mode of inode */
+	uint64_t		ino_asize;		/* actual allocated size on disk */
+	uint64_t		ino_size;		/* size of file	*/
+	uint64_t		ino_link_num;		/* number of hard links */
 };
 
 #define SLOSREC_INVALID	    0x00000000	/* Record is invalid */
@@ -130,6 +137,7 @@ struct slos_record {
 	uint64_t		rec_num;	/* record number in the inode */
 	uint64_t		rec_blkno;	/* on-disk position of record */
 	struct slos_diskptr	rec_data;	/* root of record data btree */
+	char			rec_internal_data[]; /* When data is small enough will place at end of slos_record */
 };
 
 /* 

@@ -61,8 +61,8 @@ struct bnode *bnode_alloc(struct slos *slos, uint64_t blkno, uint64_t vsize, int
 struct bnode *bnode_copy(struct slos *slos, uint64_t blkno, struct bnode *bnode);
 void bnode_free(struct bnode *bnode);
 
-struct bnode *bnode_parent(struct bnode *bnode);
-struct bnode *bnode_child(struct bnode *bnode, size_t offset);
+struct bnode *bnode_parent(struct slos *slos, struct bnode *bnode);
+struct bnode *bnode_child(struct slos *slos, struct bnode *bnode, size_t offset);
 
 int bnode_search(struct bnode *bnode, uint64_t key, void *value);
 

@@ -10,6 +10,7 @@
 #include "slos_internal.h"
 #include "slos_io.h"
 #include "slosmm.h"
+#include "slsfs.h"
 
 /* 
  * Initialize the hashtable that holds all open vnodes. There is no need
@@ -68,11 +69,11 @@ slos_vhtable_fini(struct slos *slos)
  * Find a vnode corresponding to the given PID. This function takes
  * in the SLOS locked, and leaves it so.
  */
-struct slos_vnode *
+struct slos_node *
 slos_vhtable_find(struct slos *slos, uint64_t pid)
 {
 	struct slos_vnlist *bucket;
-	struct slos_vnode *vp;
+	struct slos_node *vp;
 
 	bucket = &slos->slos_vhtable->vh_table[pid & slos->slos_vhtable->vh_hashmask];
 	LIST_FOREACH(vp, bucket, vno_entries) {
@@ -88,7 +89,7 @@ slos_vhtable_find(struct slos *slos, uint64_t pid)
  * in the SLOS locked, and leaves it so.
  */
 void
-slos_vhtable_add(struct slos *slos, struct slos_vnode *vp)
+slos_vhtable_add(struct slos *slos, struct slos_node *vp)
 {
 	struct slos_vnlist *bucket;
 
@@ -102,7 +103,7 @@ slos_vhtable_add(struct slos *slos, struct slos_vnode *vp)
  * in the SLOS locked, and leaves it so.
  */
 void
-slos_vhtable_remove(struct slos *slos, struct slos_vnode *vp)
+slos_vhtable_remove(struct slos *slos, struct slos_node *vp)
 {
 	/* 
 	 * All vnodes are in the hashtable, so
@@ -163,11 +164,11 @@ slos_iwrite(struct slos *slos, struct slos_inode *ino)
  * Create the in-memory vnode from the on-disk inode.
  * The inode needs to have no existing vnode in memory.
  */
-struct slos_vnode *
+struct slos_node *
 slos_vpimport(struct slos *slos, uint64_t inoblk)
 {
 	struct slos_inode *ino;
-	struct slos_vnode *vp;
+	struct slos_node *vp;
 	int error;
 
 	/* Read the inode from disk. */
@@ -175,11 +176,12 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 	if (error != 0)
 	    return NULL;
 
-	vp = malloc(sizeof(*vp), M_SLOS, M_WAITOK | M_ZERO);
+	vp = malloc(sizeof(struct slos_node), M_SLOS, M_WAITOK | M_ZERO);
 	/* 
 	 * Move each field separately, 
 	 * translating between the two. 
 	 */
+	vp->vno_ino = ino;
 	vp->vno_pid = ino->ino_pid;
 	vp->vno_uid = ino->ino_uid;
 	vp->vno_gid = ino->ino_gid;
@@ -207,14 +209,12 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 	/* Initialize the mutex used by record operations. */
 	mtx_init(&vp->vno_mtx, "slosvno", NULL, MTX_DEF);
 
-	free(ino, M_SLOS);
-
 	return vp;
 }
 
 /* Export an updated vnode into the on-disk inode. */
 int
-slos_vpexport(struct slos *slos, struct slos_vnode *vp)
+slos_vpexport(struct slos *slos, struct slos_node *vp)
 {
 	struct slos_inode *ino;
 	int error;
@@ -245,8 +245,8 @@ slos_vpexport(struct slos *slos, struct slos_vnode *vp)
 }
 
 /* Free an in-memory vnode. */
-static void
-slos_vpfree(struct slos *slos, struct slos_vnode *vp)
+void
+slos_vpfree(struct slos *slos, struct slos_node *vp)
 {
 	/* Remove the vnode from the hashtable. */
 	slos_vhtable_remove(slos, vp);
@@ -258,12 +258,13 @@ slos_vpfree(struct slos *slos, struct slos_vnode *vp)
 	btree_discardelem(vp->vno_records);
 	btree_destroy(vp->vno_records);
 
+	free(vp->vno_ino, M_SLOS);
 	free(vp, M_SLOS);
 }
 
 /* Free the on-disk resources for an inode. */
 static void
-slos_ifree(struct slos *slos, struct slos_vnode *vp)
+slos_ifree(struct slos *slos, struct slos_node *vp)
 {
 	uint64_t prevroot;
 	int error;
@@ -342,7 +343,7 @@ error:
 
 /* Create an inode for the process with the given PID. */
 int
-slos_icreate(struct slos *slos, uint64_t pid)
+slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 {
 	struct slos_inode *ino = NULL;
 	struct bnode *bnode = NULL;
@@ -359,6 +360,7 @@ slos_icreate(struct slos *slos, uint64_t pid)
 	 * Search the inodes btree for an existing 
 	 * inode with the same key.
 	 */
+	DBUG("iCreate Allocation search\n");
 	error = btree_search(slos->slos_inodes, pid, &diskptr);
 	if (error == 0) {
 	    /* 
@@ -367,12 +369,16 @@ slos_icreate(struct slos *slos, uint64_t pid)
 	     */
 	    diskptr = DISKPTR_NULL;
 	    error = EINVAL;
+	    DBUG("iCreate Allocation pid found\n");
 	    goto error;
 	} else if (error != 0 && error != EINVAL) {
+	    DBUG("iCreate Allocation other error\n");
 	    goto error;
 	}
 
+	DBUG("iCreate Allocation - Diskptr\n");
 	diskptr = slos_alloc(slos->slos_alloc, 1);
+	DBUG("Diskptr allocated - %ld , %ld\n", diskptr.offset, diskptr.size);
 	if (diskptr.offset == 0) {
 	    error = ENOSPC;
 	    goto error;
@@ -394,10 +400,12 @@ slos_icreate(struct slos *slos, uint64_t pid)
 	ino->ino_flags = 0;
 	ino->ino_blk = diskptr.offset;
 	ino->ino_magic = SLOS_IMAGIC;
+	ino->ino_mode = mode;
 
-	
 	/* Get a block for the records btree. */
+	DBUG("iCreate Allocation - Recptr\n");
 	recptr = slos_alloc(slos->slos_alloc, 1);
+	DBUG("Recptr allocated - %ld , %ld\n", recptr.offset, recptr.size);
 	if (recptr.offset == 0) {
 	    error = ENOSPC;
 	    goto error;
@@ -465,7 +473,7 @@ error:
 int
 slos_iremove(struct slos *slos, uint64_t pid)
 {
-	struct slos_vnode *vp;
+	struct slos_node *vp;
 	struct slos_diskptr inoptr; 
 	int error;
 
@@ -517,15 +525,15 @@ slos_iremove(struct slos *slos, uint64_t pid)
  * Open a vnode corresponding
  * to an on-disk inode. 
  */
-struct slos_vnode *
+struct slos_node *
 slos_iopen(struct slos *slos, uint64_t pid)
 {
-	struct slos_vnode *vp = NULL;
+	DBUG("Opening Inode %lu\n", pid);
+	struct slos_node *vp = NULL;
 	struct slos_diskptr inoptr;
 	int error;
 
 	mtx_lock(&slos->slos_mtx);
-
 	vp = slos_vhtable_find(slos, pid);
 	if (vp != NULL) {
 	    /* Found, update refcount and return. */
@@ -541,6 +549,7 @@ slos_iopen(struct slos *slos, uint64_t pid)
 	 */
 	error = btree_search(slos->slos_inodes, pid, &inoptr);
 	if (error != 0) {
+	    DBUG("Could not find %lu in btree\n", pid);
 	    mtx_unlock(&slos->slos_mtx);
 	    return NULL;
 	}
@@ -548,10 +557,10 @@ slos_iopen(struct slos *slos, uint64_t pid)
 	/* Create a vnode for the inode. */
 	vp = slos_vpimport(slos, inoptr.offset);
 	if (vp == NULL) {
+	    DBUG("Could not create vnode for %lu\n", pid);
 	    mtx_unlock(&slos->slos_mtx);
 	    return NULL;
 	}
-
 	vp->vno_refcnt += 1;
 
 	mtx_unlock(&slos->slos_mtx);
@@ -562,7 +571,7 @@ slos_iopen(struct slos *slos, uint64_t pid)
  * Close an open vnode.
  */
 int
-slos_iclose(struct slos *slos, struct slos_vnode *vp)
+slos_iclose(struct slos *slos, struct slos_node *vp)
 {
 	int error;
 
@@ -588,7 +597,6 @@ slos_iclose(struct slos *slos, struct slos_vnode *vp)
 		slos_vpfree(slos, vp);
 	    }
 	} 
-
 	mtx_unlock(&slos->slos_mtx);
 
 	return 0;
@@ -599,7 +607,7 @@ slos_iclose(struct slos *slos, struct slos_vnode *vp)
  * statistics about the inode.
  */
 /* XXX Fix prototype */
-struct slos_vnode *
+struct slos_node *
 slos_istat(struct slos *slos, uint64_t ino)
 {
 	/* XXX Implement */
@@ -615,7 +623,7 @@ slos_istat(struct slos *slos, uint64_t ino)
  */
 struct slos_viter {
 	uint64_t nextpid;
-	struct slos_vnode *curvp;
+	struct slos_node *curvp;
 };
 
 static struct slos_viter *
@@ -630,10 +638,10 @@ slos_viter_begin(struct slos *slos)
 	return viter;
 }
 
-static struct slos_vnode *
+static struct slos_node *
 slos_viter_iter(struct slos *slos, struct slos_viter *viter)
 {
-	struct slos_vnode *vp;
+	struct slos_node *vp;
 	struct slos_diskptr inoptr;
 	int error;
 
@@ -710,7 +718,7 @@ slos_viter_end(struct slos *slos, struct slos_viter *viter)
 int
 slos_test_inode(void)
 {
-	struct slos_vnode *vp;
+	struct slos_node *vp;
 	struct slos_viter *viter;
 	uint8_t *pids, *open;
 	int operation;

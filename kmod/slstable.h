@@ -30,10 +30,10 @@ LIST_HEAD(slsdata, slspagerun);
 /*
  * Read from and write to the SLOS. 
  */
-int sls_read_slos(struct slos_vnode *vp, struct slskv_table **metatablep,
+int sls_read_slos(struct slos_node *vp, struct slskv_table **metatablep,
 	struct slskv_table **datatablep);
 
-int sls_write_slos(struct slos_vnode *vp, struct slskv_table *table, 
+int sls_write_slos(struct slos_node *vp, struct slskv_table *table, 
 	struct slskv_table *objtable);
 
 /* Zone for the pageruns. */

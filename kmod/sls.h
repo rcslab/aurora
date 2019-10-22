@@ -19,6 +19,7 @@
 SDT_PROVIDER_DECLARE(sls);
 
 extern size_t sls_contig_limit;
+extern struct slos slos;
 
 struct sls_metadata {
     int			slsm_exiting;	/* Is the SLS being destroyed? */

@@ -287,7 +287,7 @@ void
 sls_ckpt_once(struct proc *p, struct sls_process *slsp)
 {
     struct slskv_table *newtable = NULL, *table;
-    struct slos_vnode *vp;
+    struct slos_node *vp;
     int error = 0;
 
     SLS_DBG("Dump created\n");
@@ -342,7 +342,7 @@ sls_ckpt_once(struct proc *p, struct sls_process *slsp)
 
     /* The dump itself. */
     /* XXX Temporary until we change to multiple inodes per checkpoint. */
-    error = slos_icreate(&slos, 1024);
+    error = slos_icreate(&slos, 1024, 0);
     if (error != 0)
 	goto out;
 

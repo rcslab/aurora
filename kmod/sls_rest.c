@@ -269,7 +269,7 @@ sls_rest(struct proc *p, struct sls_backend backend)
 	vm_object_t parent, object;
 	struct slsdata *slsdata;
 	struct slskv_iter iter;
-	struct slos_vnode *vp;
+	struct slos_node *vp;
 	struct slos_rstat *st;
 	size_t buflen;
 	void *record;
