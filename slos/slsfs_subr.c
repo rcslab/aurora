@@ -30,27 +30,26 @@ slsfs_uninit(struct vfsconf *vfsp)
 }
 
 int
-slsfs_newnode(struct slos *slos, struct slos_node **spp)
+slsfs_newnode(struct slos *slos, uint16_t mode, uint64_t *ppid, struct slos_node **spp)
 {
-    struct slos_node *vp;
+    //struct slos_node *vp;
+    uint64_t pid;
     int error;
 
-    uint64_t pid = atomic_fetchadd_64(&pids, 1);
-    error = slos_icreate(slos, pid, 0);
+    if (*ppid != 0) {
+	pid = atomic_fetchadd_64(&pids, 1);
+    } else {
+	pid = *ppid;
+    }
+
+    error = slos_icreate(slos, pid, mode);
     if (error) {
-	*spp = NULL;
+	*ppid = 0;
 	return (error);
     }
 
-    vp = slos_iopen(slos, pid);
-    if (vp == NULL) {
-	*spp = NULL;
-	return (-1);
-    }
-
-    *spp = vp;
-    return (0);
-
+    *ppid = pid;
+    return slsfs_getnode(slos, *ppid, spp);
 }
 
 
@@ -62,10 +61,8 @@ slsfs_getnode(struct slos *slos, uint64_t pid, struct slos_node **spp)
     vp = slos_iopen(slos, pid);
     if (vp != NULL) {
 	*spp = vp;
-
 	return (0);
     }
-    *spp = NULL;
 
     return (EINVAL);
 }

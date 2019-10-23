@@ -79,6 +79,12 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 static int
 slsfs_mkdir(struct vop_mkdir_args *args)
 {
+    /*struct vnode *vp = args->a_dvp;*/
+    /*struct slos_node *slsvp = SLSVP(vp);*/
+    /*struct vnode **vpp = args->a_vpp;*/
+    /*struct componentname *name = args->a_cnp;*/
+    /*struct vattr *attr = args->a_vap;*/
+    
     return (0);
 }
 

@@ -16,6 +16,7 @@
 #define SLOS_VDEAD	1
 
 #define SVPBLK(svp) (svp->vno_slos->slos_sb->sb_bsize);
+#define INUM(node) (node->vno_ino->ino_pid);
 
 struct slos_node {
 	int64_t			vno_pid;		/* process id */

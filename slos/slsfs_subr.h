@@ -7,5 +7,5 @@
 
 int slsfs_uninit(struct vfsconf *vfsp);
 int slsfs_init(struct vfsconf *vfsp);
-int slsfs_getnode(struct slos *, uint64_t ino, struct slos_node **);
-int slsfs_newnode(struct slos *, struct slos_node **);
+int slsfs_getnode(struct slos *, uint64_t ino, struct slos_node **spp);
+int slsfs_newnode(struct slos *, uint16_t mode, uint64_t *pid, struct slos_node **spp);

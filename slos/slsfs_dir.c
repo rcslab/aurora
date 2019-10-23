@@ -8,6 +8,7 @@
 #include "slos_inode.h"
 #include "slos_record.h"
 #include "slsfs_dir.h"
+#include "slsfs_subr.h"
 
 int 
 slsfs_add_dirent(struct slos_node *vp, uint64_t ino, char *nameptr, long namelen, uint8_t type)
@@ -68,25 +69,23 @@ slsfs_init_dir(struct slos_node *vp, uint64_t ino, uint64_t parent)
  * rather than constantly being executed. This is where the bufcache comes in handy we need to have 
  * some sort of option to allow for straight flush to disk or just buffered writes. */
 int
-slsfs_create_dir(struct slos *slos, uint64_t ino, uint64_t parent_ino, struct slos_node **vpp)
+slsfs_create_dir(struct slos_node *dvp, struct componentname *name, struct slos_node **vpp)
 {
     mode_t mode;
     struct slos_node *vp;
     int error;
+    uint64_t ino = 0;
 
     mode = MAKEIMODE(VDIR, S_IRWXU | S_IRWXG | S_IRWXO);
-    error = slos_icreate(slos, ino, mode);
+    error = slsfs_newnode(dvp->vno_slos, mode, &ino, &vp);
     if (error) {
 	return (error);
     }
 
-    // Open the vnode
-    vp = slos_iopen(slos, ino);
-    error = slsfs_init_dir(vp, ino, parent_ino);
+//    error = slsfs_init_dir(vp, ino, );
     if (error) {
 	return (error);
     }
-
     *vpp = vp;
     return (0);
 }

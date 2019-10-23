@@ -522,3 +522,4 @@ static struct vfsops slsfs_vfsops = {
 };
 
 VFS_SET(slsfs_vfsops, slsfs, 0);
+MODULE_VERSION(slsfs, 0);
