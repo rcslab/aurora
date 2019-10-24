@@ -1,4 +1,6 @@
 #include <sys/param.h>
+#include <sys/endian.h>
+#include <sys/queue.h>
 
 #include <machine/param.h>
 
@@ -43,22 +45,23 @@
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
-#include "slsmm.h"
+#include <sls_data.h>
+
+#include "sls_file.h"
+#include "sls_internal.h"
+#include "sls_mm.h"
 #include "sls_path.h"
-#include "sls_data.h"
-#include "sls_fd.h"
-#include "sls.h"
 
 #include "imported_sls.h"
 
-struct kevent_info sls_kevents[1024]; 
+struct slskevent sls_kevents[1024]; 
 
 /* Checkpoint a kqueue and all of its pending knotes. */
 static int
-sls_kqueue_ckpt(struct proc *p, struct file *fp, struct sbuf *sb)
+slsckpt_kqueue(struct proc *p, struct file *fp, struct sbuf *sb)
 {
 	struct kqueue *kq;
-	struct kqueue_info kqinfo;
+	struct slskqueue kqinfo;
 	struct knote *kn;
 	uint64_t numevents = 0;
 	int error, i;
@@ -98,13 +101,13 @@ sls_kqueue_ckpt(struct proc *p, struct file *fp, struct sbuf *sb)
 		sls_kevents[numevents].fflags = kn->kn_kevent.fflags;
 		sls_kevents[numevents].data = kn->kn_kevent.data;
 		sls_kevents[numevents].slsid= (uint64_t) kn;
-		sls_kevents[numevents].magic = SLS_KQUEUE_INFO_MAGIC;
+		sls_kevents[numevents].magic = SLSKQUEUE_ID;
 		numevents += 1;
 	    }
 	}
 
 	/* Create the structure for the kqueue itself. */
-	kqinfo.magic = SLS_KQUEUE_INFO_MAGIC;
+	kqinfo.magic = SLSKQUEUE_ID;
 	kqinfo.slsid = (uint64_t) kq;
 	kqinfo.numevents = numevents;
 
@@ -127,7 +130,7 @@ out:
 
 /* Get the name of a vnode. This is the only information we need about it. */
 static int
-sls_vnode_ckpt(struct proc *p, struct vnode *vp, struct sbuf *sb)
+slsckpt_vnode(struct proc *p, struct vnode *vp, struct sbuf *sb)
 {
 	int error;
 
@@ -145,11 +148,11 @@ sls_vnode_ckpt(struct proc *p, struct vnode *vp, struct sbuf *sb)
 }
 
 static int
-sls_pipe_ckpt(struct proc *p, struct file *fp, struct sbuf *sb)
+slsckpt_pipe(struct proc *p, struct file *fp, struct sbuf *sb)
 {
 	struct file *curfp;
 	struct pipepair *pair, *curpair;
-	struct pipe_info info;
+	struct slspipe info;
 	int error, i;
 	
 	/* Get the pipe pair that the current pipe is in. */
@@ -157,7 +160,7 @@ sls_pipe_ckpt(struct proc *p, struct file *fp, struct sbuf *sb)
 
 	/* Find out if we are the write end. */
 	info.iswriteend = (&pair->pp_wpipe == fp->f_data);
-	info.magic = SLS_PIPE_INFO_MAGIC;
+	info.magic = SLSPIPE_ID;
 	info.slsid = (uint64_t) pair;
 
 	/* 
@@ -187,7 +190,7 @@ sls_pipe_ckpt(struct proc *p, struct file *fp, struct sbuf *sb)
 	    /* 
 	     * If we found ourselves, return. It means the other
 	     * end of the pipe is open. This in turn means that
-	     * when we call sls_pipe_ckpt() for the other end,
+	     * when we call slsckpt_pipe() for the other end,
 	     * we'll find this end before it, and checkpoint 
 	     * both of them at once.
 	     */
@@ -222,9 +225,9 @@ sls_pipe_ckpt(struct proc *p, struct file *fp, struct sbuf *sb)
 }
 
 static int
-sls_socket_ckpt(struct proc *p, struct socket *so, struct sbuf *sb)
+slsckpt_socket(struct proc *p, struct socket *so, struct sbuf *sb)
 {
-	struct sock_info info;
+	struct slssock info;
 	struct inpcb *inpcb;
 	int error;
 
@@ -234,7 +237,7 @@ sls_socket_ckpt(struct proc *p, struct socket *so, struct sbuf *sb)
 	 * XXX Right now we're using a small subset of these 
 	 * fields, but we are going to need them later. 
 	 */
-	info.magic = SLS_SOCKET_INFO_MAGIC;
+	info.magic = SLSSOCKET_ID;
 	info.slsid = (uint64_t) so;
 
 	info.family = so->so_proto->pr_domain->dom_family;
@@ -266,10 +269,12 @@ sls_socket_ckpt(struct proc *p, struct socket *so, struct sbuf *sb)
 
 /* Get generic file info applicable to all kinds of flies. */
 int
-sls_file_ckpt(struct proc *p, struct file *file, int fd, struct sbuf *sb)
+slsckpt_file(struct proc *p, struct file *file, int fd, struct sbuf *sb)
 {
 	int error;
-	struct file_info info;
+	struct slsfile info;
+
+	/* XXX Decouple files and fds - multiple processes may share files. */
 
 	/* XXX Decouple files and fds - multiple processes may share files. */
 
@@ -278,7 +283,7 @@ sls_file_ckpt(struct proc *p, struct file *file, int fd, struct sbuf *sb)
 	info.offset = file->f_offset;
 	info.fd = fd;
 
-	info.magic = SLS_FILE_INFO_MAGIC;
+	info.magic = SLSFILE_ID;
 	info.slsid = (uint64_t) file;
 
 	error = sbuf_bcat(sb, (void *) &info, sizeof(info));
@@ -287,7 +292,7 @@ sls_file_ckpt(struct proc *p, struct file *file, int fd, struct sbuf *sb)
 }
 
 static int
-sls_vnode_rest(struct proc *p, struct sbuf *path, struct file_info *info)
+slsrest_vnode(struct proc *p, struct sbuf *path, struct slsfile *info)
 {
 	char *filepath;
 	int error;
@@ -307,7 +312,7 @@ sls_vnode_rest(struct proc *p, struct sbuf *path, struct file_info *info)
 }
 
 static int
-sls_kqueue_rest(struct proc *p, struct kqueue_info *kqinfo, struct file_info *info)
+slsrest_kqueue(struct proc *p, struct slskqueue *kqinfo, struct slsfile *info)
 {
 	struct kevent *kev;
 	int error, i;
@@ -363,7 +368,7 @@ sls_kqueue_rest(struct proc *p, struct kqueue_info *kqinfo, struct file_info *in
 }
 
 static int
-sls_pipe_rest(struct proc *p, struct pipe_info *ppinfo, struct file_info *info)
+slsrest_pipe(struct proc *p, struct slspipe *ppinfo, struct slsfile *info)
 {
 	int filedes[2];
 	int readend, writeend;
@@ -440,7 +445,7 @@ sls_pipe_rest(struct proc *p, struct pipe_info *ppinfo, struct file_info *info)
 }
 
 static int
-sls_socket_rest(struct proc *p, struct sock_info *info, struct file_info *finfo)
+slsrest_socket(struct proc *p, struct slssock *info, struct slsfile *finfo)
 {
 	struct sockaddr_in addr_in;
 	struct sockaddr *sa;
@@ -513,20 +518,20 @@ sls_socket_rest(struct proc *p, struct sock_info *info, struct file_info *finfo)
 }
 
 int 
-sls_file_rest(struct proc *p, void *data, struct file_info *info)
+slsrest_file(struct proc *p, void *data, struct slsfile *info)
 {
 	switch(info->type) {
 	case DTYPE_VNODE:
-	    return sls_vnode_rest(p, (struct sbuf *) data, info);
+	    return slsrest_vnode(p, (struct sbuf *) data, info);
 
 	case DTYPE_KQUEUE:
-	    return sls_kqueue_rest(p, (struct kqueue_info*) data, info);
+	    return slsrest_kqueue(p, (struct slskqueue*) data, info);
 	
 	case DTYPE_PIPE:
-	    return sls_pipe_rest(p, data, info);
+	    return slsrest_pipe(p, data, info);
 
 	case DTYPE_SOCKET:
-	    return sls_socket_rest(p, data, info);
+	    return slsrest_socket(p, data, info);
 
 	default:
 	    panic("invalid file type");
@@ -536,14 +541,14 @@ sls_file_rest(struct proc *p, void *data, struct file_info *info)
 }
 
 int
-sls_filedesc_ckpt(struct proc *p, struct sbuf *sb)
+slsckpt_filedesc(struct proc *p, struct sbuf *sb)
 {
 	int i;
 	int error = 0;
 	struct file *fp;
 	struct filedesc *filedesc;
-	struct filedesc_info filedesc_info;
-	struct file_info sentinel;
+	struct slsfiledesc slsfiledesc;
+	struct slsfile sentinel;
 	struct socket *so;
 
 	filedesc = p->p_fd;
@@ -551,13 +556,13 @@ sls_filedesc_ckpt(struct proc *p, struct sbuf *sb)
 	vhold(filedesc->fd_cdir);
 	vhold(filedesc->fd_rdir);
 
-	filedesc_info.fd_cmask = filedesc->fd_cmask;
-	filedesc_info.num_files = 0;
-	filedesc_info.magic = SLS_FILEDESC_INFO_MAGIC;
+	slsfiledesc.fd_cmask = filedesc->fd_cmask;
+	slsfiledesc.num_files = 0;
+	slsfiledesc.magic = SLSFILEDESC_ID;
 
 	FILEDESC_XLOCK(filedesc);
 
-	error = sbuf_bcat(sb, (void *) &filedesc_info, sizeof(filedesc_info));
+	error = sbuf_bcat(sb, (void *) &slsfiledesc, sizeof(slsfiledesc));
 	if (error != 0)
 	    goto done;
 
@@ -625,7 +630,7 @@ sls_filedesc_ckpt(struct proc *p, struct sbuf *sb)
 	    }
 
 	    /* Checkpoint the file structure itself. */
-	    error = sls_file_ckpt(p, fp, i, sb);
+	    error = slsckpt_file(p, fp, i, sb);
 	    if (error != 0)
 		goto done;
 
@@ -633,21 +638,21 @@ sls_filedesc_ckpt(struct proc *p, struct sbuf *sb)
 	    switch (fp->f_type) {
 	    /* Backed by a vnode - get the name. */
 	    case DTYPE_VNODE:
-		error = sls_vnode_ckpt(p, fp->f_vnode, sb);
+		error = slsckpt_vnode(p, fp->f_vnode, sb);
 		break;
 
 	    /* Backed by a kqueue - get all pending knotes. */
 	    case DTYPE_KQUEUE:
-		error = sls_kqueue_ckpt(p, fp, sb);
+		error = slsckpt_kqueue(p, fp, sb);
 		break;
 
 	    /* Backed by a pipe - get existing data. */
 	    case DTYPE_PIPE:
-		error = sls_pipe_ckpt(p, fp, sb);
+		error = slsckpt_pipe(p, fp, sb);
 		break;
 
 	    case DTYPE_SOCKET:
-		error = sls_socket_ckpt(p, (struct socket *) fp->f_data, sb);
+		error = slsckpt_socket(p, (struct socket *) fp->f_data, sb);
 		break;
 
 	    default:
@@ -660,7 +665,7 @@ sls_filedesc_ckpt(struct proc *p, struct sbuf *sb)
 	}
 
 	memset(&sentinel, 0, sizeof(sentinel));
-	sentinel.magic = SLS_FILES_END;
+	sentinel.magic = SLSFILES_END;
 	error = sbuf_bcat(sb, (void *) &sentinel, sizeof(sentinel));
 	if (error != 0)
 	    goto done;
@@ -678,7 +683,7 @@ done:
 }
 
 int
-sls_filedesc_rest(struct proc *p, struct filedesc_info info)
+slsrest_filedesc(struct proc *p, struct slsfiledesc info)
 {
 	int stdfds[] = { 0, 1, 2 };
 	struct filedesc *newfdp;

@@ -9,9 +9,9 @@
 
 #include <vm/uma.h>
 
-#include "slskv.h"
-#include "slsmm.h"
-#include "sls.h"
+#include "sls_internal.h"
+#include "sls_kv.h"
+#include "sls_mm.h"
 
 uma_zone_t slskv_zone = NULL;
 
@@ -19,7 +19,7 @@ uma_zone_t slskv_zone = NULL;
  * Create a table with values of the specified size.
  */
 int 
-slskv_create(struct slskv_table **tablep, enum slskv_policy policy, enum slskv_valtype type)
+slskv_create(struct slskv_table **tablep, enum slskv_policy policy)
 {
 	struct slskv_table *table;
 	int i;
@@ -38,7 +38,6 @@ slskv_create(struct slskv_table **tablep, enum slskv_policy policy, enum slskv_v
 	    mtx_init(&table->mtx[i], "slskv", NULL, MTX_DEF);
 
 	table->repl_policy = policy;
-	table->valtype = type;
 	table->elems = 0;
 
 	/* Export the table. */
@@ -66,8 +65,6 @@ slskv_destroy(struct slskv_table *table)
 		 * We are also responsible for freeing the values themselves. 
 		 */
 		LIST_REMOVE(kv, next);
-		if (table->valtype == SLSKV_VALPTR)
-		    free((void *) kv->value, M_SLSMM);
 		uma_zfree(slskv_zone, kv);
 	    }
 	}
@@ -159,9 +156,6 @@ slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value)
 		 */
 		if (kv->key == key) {
 		    LIST_REMOVE(kv, next);
-		    if (table->valtype == SLSKV_VALPTR)
-			free((void *) kv->value, M_SLSMM);
-
 		    uma_zfree(slskv_zone, kv);
 		}
 	    }
@@ -195,8 +189,6 @@ slskv_del(struct slskv_table *table, uint64_t key)
 	     */
 	    if (kv->key == key) {
 		LIST_REMOVE(kv, next);
-		if (table->valtype == SLSKV_VALPTR)
-		    free((void *) kv->value, M_SLSMM);
 		uma_zfree(slskv_zone, kv);
 		table->elems -= 1;
 

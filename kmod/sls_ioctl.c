@@ -42,11 +42,11 @@
 #include <vm/vm_page.h>
 #include <vm/vm_radix.h>
 
-#include "sls.h"
+#include "sls_internal.h"
 #include "sls_ioctl.h"
-#include "slskv.h"
-#include "slsmm.h"
-#include "slstable.h"
+#include "sls_kv.h"
+#include "sls_mm.h"
+#include "sls_table.h"
 
 
 MALLOC_DEFINE(M_SLSMM, "slsmm", "SLSMM");
@@ -55,7 +55,7 @@ struct sls_metadata slsm;
 
 /* Launch a checkpointing daemon. */
 static int
-sls_start_checkpointing(struct proc *p, struct sls_process *slsp)
+sls_start_checkpointing(struct proc *p, struct slspart *slsp)
 {
 	struct sls_checkpointd_args *ckptd_args;
 	int error = 0;
@@ -78,7 +78,7 @@ sls_start_checkpointing(struct proc *p, struct sls_process *slsp)
 static int
 sls_checkpoint(struct sls_checkpoint_args *args)
 {
-	struct sls_process *slsp;
+	struct slspart *slsp;
 	struct proc *p = NULL;
 	int error = 0;
 
@@ -228,7 +228,7 @@ error:
 static int
 sls_attach(struct sls_attach_args *args)
 {
-	struct sls_process *slsp = NULL;
+	struct slspart *slsp = NULL;
 	struct proc *p = NULL;
 	struct sbuf *filename = NULL;
 	int error;
@@ -323,7 +323,7 @@ error:
 static int
 sls_detach(struct sls_detach_args *args)
 {
-	struct sls_process *slsp;
+	struct slspart *slsp;
 	
 	/* Try to find the process. */
 	slsp = slsp_find(args->pid);
@@ -353,7 +353,7 @@ sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	int flag __unused, struct thread *td)
 {
 	struct proc_param *pparam = NULL;
-	struct sls_process *slsp;
+	struct slspart *slsp;
 	int error = 0;
 
 	switch (cmd) {
@@ -432,15 +432,15 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		break;
 	    }
 
-	    error = slskv_create(&slsm.slsm_proctable, SLSKV_NOREPLACE, SLSKV_VALNUM);
+	    error = slskv_create(&slsm.slsm_proctable, SLSKV_NOREPLACE);
 	    if (error != 0)
 		return error;
 
-	    error = slskv_create(&slsm.slsm_rectable, SLSKV_NOREPLACE, SLSKV_VALNUM);
+	    error = slskv_create(&slsm.slsm_rectable, SLSKV_NOREPLACE);
 	    if (error != 0)
 		return error;
 
-	    error = slskv_create(&slsm.slsm_typetable, SLSKV_NOREPLACE, SLSKV_VALNUM);
+	    error = slskv_create(&slsm.slsm_typetable, SLSKV_NOREPLACE);
 	    if (error != 0)
 		return error;
 

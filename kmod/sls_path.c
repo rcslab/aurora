@@ -22,10 +22,11 @@
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
-#include "slsmm.h"
-#include "sls.h"
-#include "sls_path.h"
 #include <sls_data.h>
+
+#include "sls_internal.h"
+#include "sls_mm.h"
+#include "sls_path.h"
 
 /*
  * Appends the filename of the given vnode to the sbuf.
@@ -70,7 +71,7 @@ sls_vn_to_path_error:
 int 
 sls_vn_to_path_append(struct vnode *vp, struct sbuf *sb)
 {
-	int magic = SLS_STRING_MAGIC;
+	int magic = SLSSTRING_ID;
 	struct sbuf *path;
 	char *data;
 	size_t len;

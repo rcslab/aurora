@@ -38,9 +38,6 @@ LIST_HEAD(slskv_pairs, slskv_pair);	/* A bucket of the hashtable */
  */
 enum slskv_policy { SLSKV_REPLACE, SLSKV_NOREPLACE, SLSKV_MULTIPLES };
 
-/* Values can either be numbers (64 bit by default), or pointers. */
-enum slskv_valtype { SLSKV_VALNUM, SLSKV_VALPTR };
-
 /* The main key-value table. */
 struct slskv_table {
 	struct mtx_padalign mtx[SLSKV_BUCKETS];	/* Per-bucket locking */
@@ -49,7 +46,6 @@ struct slskv_table {
 	u_long		    mask;		/* Hashmask used by the builtin hashtable */
 	size_t		    valsize;		/* Size of values */
 	enum slskv_policy   repl_policy;	/* Replace policy for adds */
-	enum slskv_valtype  valtype;		/* Are values pointers or numbers? */
 	/* Could become debug-only if it causes coherence traffic */
 	size_t		    elems;		/* Number of elements in the table */
 };
@@ -57,7 +53,7 @@ struct slskv_table {
 /* Hash function from keys to buckets. */
 #define SLSKV_BUCKETNO(table, key) (((u_long) key & table->mask)) 
 
-int slskv_create(struct slskv_table **tablep, enum slskv_policy policy, enum slskv_valtype type);
+int slskv_create(struct slskv_table **tablep, enum slskv_policy policy);
 void slskv_destroy(struct slskv_table *table);
 int slskv_find(struct slskv_table *table, uint64_t key, uintptr_t *value);
 int slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value);

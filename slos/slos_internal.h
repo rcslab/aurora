@@ -8,7 +8,7 @@
 #include <sys/uuid.h>
 
 #include "../include/slos.h"
-#include "../include/slos_bnode.h"
+#include "slos_bnode.h"
 
 struct slos {
 	SLIST_ENTRY(slos)	next_slos;

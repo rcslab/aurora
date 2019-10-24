@@ -34,10 +34,10 @@
 #include <sls_data.h>
 #include <slos.h>
 
-#include "sls.h"
-#include "slskv.h"
-#include "slsmm.h"
-#include "slstable.h"
+#include "sls_internal.h"
+#include "sls_kv.h"
+#include "sls_mm.h"
+#include "sls_table.h"
 
 #ifdef SLS_TEST
 #include "slstable_test.h"
@@ -234,11 +234,11 @@ sls_read_slos(struct slos_node *vp, struct slskv_table **metatablep,
 
 
 	/* Create the tables that hold the data and metadata of the checkpoint. */
-	error = slskv_create(&metatable, SLSKV_NOREPLACE, SLSKV_VALNUM);
+	error = slskv_create(&metatable, SLSKV_NOREPLACE);
 	if (error != 0)
 	    return error;
 
-	error = slskv_create(&datatable, SLSKV_NOREPLACE, SLSKV_VALNUM);
+	error = slskv_create(&datatable, SLSKV_NOREPLACE);
 	if (error != 0) {
 	    slskv_destroy(metatable);
 	    return error;
@@ -483,7 +483,7 @@ static int
 sls_writedata_slos(struct slos_node *vp, struct sbuf *sb,
 	uint64_t type, struct slskv_table *objtable)
 {
-	struct vm_object_info *info;
+	struct slsvmobject *info;
 	vm_object_t obj, newobj;
 	uint64_t rno;
 	int error;
@@ -493,10 +493,10 @@ sls_writedata_slos(struct slos_node *vp, struct sbuf *sb,
 	    return error;
 
 	/* 
-	 * We know that the sbuf holds a vm_object_info struct,
+	 * We know that the sbuf holds a slsvmobject struct,
 	 * that's why we are in this function in the first place.
 	 */
-	info = (struct vm_object_info *) sbuf_data(sb);
+	info = (struct slsvmobject *) sbuf_data(sb);
 
 	/* 
 	 * The ID of the info struct and the in-memory pointer
@@ -911,7 +911,7 @@ slstable_test(void)
 	 * The table with the original info structs, plays the role
 	 * of the actual table that is passed from the upper layers.
 	 */
-	error = slskv_create(&origtable, SLSKV_NOREPLACE, SLSKV_VALNUM);
+	error = slskv_create(&origtable, SLSKV_NOREPLACE);
 	if (error != 0)
 	    goto out;
 
@@ -922,7 +922,7 @@ slstable_test(void)
 	 * create here a _second_ table, which will be passed to - and
 	 * destroyed by - slstable_write.
 	 */
-	error = slskv_create(&backuptable, SLSKV_NOREPLACE, SLSKV_VALNUM);
+	error = slskv_create(&backuptable, SLSKV_NOREPLACE);
 	if (error != 0)
 	    goto out;
 

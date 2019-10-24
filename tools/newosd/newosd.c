@@ -17,7 +17,8 @@
 
 #include <sls.h>
 #include <slos.h>
-#include <slos_bnode.h>
+
+#include "../../slos/slos_bnode.h"
 
 static int fd;
 static uint32_t bsize = 0;

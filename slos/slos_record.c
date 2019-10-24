@@ -2,7 +2,6 @@
 #include <sys/vnode.h>
 
 #include "../include/slos.h"
-#include "../include/slos_bnode.h"
 #include "slos_alloc.h"
 #include "slos_btree.h"
 #include "slos_inode.h"

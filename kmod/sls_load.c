@@ -30,12 +30,11 @@
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
-#include "sls.h"
-#include "slsmm.h"
 #include "sls_data.h"
 #include "sls_ioctl.h"
 #include "sls_load.h"
-#include "sls_mem.h"
+#include "sls_mm.h"
+#include "sls_vmspace.h"
 
 #include <slos.h>
 #include "../slos/slos_inode.h"
@@ -61,15 +60,15 @@ sls_info(void *info, size_t infosize, char **bufp, size_t *bufsizep)
 }
 
 int
-sls_load_thread(struct thread_info *thread_info, char **bufp, size_t *bufsizep)
+slsload_thread(struct slsthread *slsthread, char **bufp, size_t *bufsizep)
 {
 	int error;
 
-	error = sls_info(thread_info, sizeof(*thread_info), bufp, bufsizep);
+	error = sls_info(slsthread, sizeof(*slsthread), bufp, bufsizep);
 	if (error != 0)
 	    return error;
 
-	if (thread_info->magic != SLS_THREAD_INFO_MAGIC) {
+	if (slsthread->magic != SLSTHREAD_ID) {
 	    SLS_DBG("magic mismatch\n");
 	    return EINVAL;
 	}
@@ -79,26 +78,26 @@ sls_load_thread(struct thread_info *thread_info, char **bufp, size_t *bufsizep)
 
 /* Functions that load parts of the state. */
 int 
-sls_load_proc(struct proc_info *proc_info, char **bufp, size_t *bufsizep)
+slsload_proc(struct slsproc *slsproc, char **bufp, size_t *bufsizep)
 {
 	int error;
 
-	error = sls_info(proc_info, sizeof(*proc_info), bufp, bufsizep);
+	error = sls_info(slsproc, sizeof(*slsproc), bufp, bufsizep);
 	if (error != 0)
 	    return error;
 
-	if (proc_info->magic != SLS_PROC_INFO_MAGIC) {
-	    SLS_DBG("magic mismatch, %lu vs %d\n", proc_info->magic, SLS_PROC_INFO_MAGIC);
+	if (slsproc->magic != SLSPROC_ID) {
+	    SLS_DBG("magic mismatch, %lu vs %d\n", slsproc->magic, SLSPROC_ID);
 	    return EINVAL;
 	}
 
 	return 0;
 }
 
-extern struct kevent_info sls_kevents[1024]; 
+extern struct slskevent sls_kevents[1024]; 
 
 static int
-sls_load_kqueue(struct kqueue_info *kqinfo, char **bufp, size_t *bufsizep)
+slsload_kqueue(struct slskqueue *kqinfo, char **bufp, size_t *bufsizep)
 {
 	int error; 
 
@@ -107,13 +106,13 @@ sls_load_kqueue(struct kqueue_info *kqinfo, char **bufp, size_t *bufsizep)
 	if (error != 0)
 	    return error;
 
-	if (kqinfo->magic != SLS_KQUEUE_INFO_MAGIC) {
-	    SLS_DBG("magic mismatch, %lu vs %d\n", kqinfo->magic, SLS_KQUEUE_INFO_MAGIC);
+	if (kqinfo->magic != SLSKQUEUE_ID) {
+	    SLS_DBG("magic mismatch, %lu vs %d\n", kqinfo->magic, SLSKQUEUE_ID);
 	    return EINVAL;
 	}
 
 	/* Read in the kevents for this kqueue. */
-	error = sls_info(sls_kevents, kqinfo->numevents * sizeof(struct kevent_info), bufp, bufsizep);
+	error = sls_info(sls_kevents, kqinfo->numevents * sizeof(struct slskevent), bufp, bufsizep);
 	if (error != 0)
 	    return error;
 
@@ -121,17 +120,17 @@ sls_load_kqueue(struct kqueue_info *kqinfo, char **bufp, size_t *bufsizep)
 }
 
 static int
-sls_load_pipe(struct pipe_info *ppinfo, char **bufp, size_t *bufsizep)
+slsload_pipe(struct slspipe *slspipe, char **bufp, size_t *bufsizep)
 {
 	int error; 
 
 	/* Read in the kqueue itself. */
-	error = sls_info(ppinfo, sizeof(*ppinfo), bufp, bufsizep);
+	error = sls_info(slspipe, sizeof(*slspipe), bufp, bufsizep);
 	if (error != 0)
 	    return error;
 
-	if (ppinfo->magic != SLS_PIPE_INFO_MAGIC) {
-	    SLS_DBG("magic mismatch, %lx vs %x\n", ppinfo->magic, SLS_PIPE_INFO_MAGIC);
+	if (slspipe->magic != SLSPIPE_ID) {
+	    SLS_DBG("magic mismatch, %lx vs %x\n", slspipe->magic, SLSPIPE_ID);
 	    return EINVAL;
 	}
 
@@ -139,11 +138,11 @@ sls_load_pipe(struct pipe_info *ppinfo, char **bufp, size_t *bufsizep)
 }
 
 static int
-sls_load_vnode(struct sbuf **path, char **bufp, size_t *bufsizep)
+slsload_vnode(struct sbuf **path, char **bufp, size_t *bufsizep)
 {
 	int error;
 
-	error = sls_load_path(path, bufp, bufsizep);
+	error = slsload_path(path, bufp, bufsizep);
 	if (error != 0)
 	    return error;
 
@@ -151,11 +150,11 @@ sls_load_vnode(struct sbuf **path, char **bufp, size_t *bufsizep)
 }
 
 static int
-sls_load_socket(struct sock_info *sock_info, char **bufp, size_t *bufsizep)
+slsload_socket(struct slssock *slssock, char **bufp, size_t *bufsizep)
 {
 	int error;
 
-	error = sls_info(sock_info, sizeof(*sock_info), bufp, bufsizep);
+	error = sls_info(slssock, sizeof(*slssock), bufp, bufsizep);
 	if (error != 0)
 	    return error;
 
@@ -163,40 +162,40 @@ sls_load_socket(struct sock_info *sock_info, char **bufp, size_t *bufsizep)
 }
 
 int
-sls_load_file(struct file_info *file_info, void **data, char **bufp, size_t *bufsizep)
+slsload_file(struct slsfile *slsfile, void **data, char **bufp, size_t *bufsizep)
 {
 	int error;
 
-	error = sls_info(file_info, sizeof(*file_info), bufp, bufsizep);
+	error = sls_info(slsfile, sizeof(*slsfile), bufp, bufsizep);
 	if (error != 0)
 	    return error;
 
-	if (file_info->magic == SLS_FILES_END)
+	if (slsfile->magic == SLSFILES_END)
 	    return 0;
 
-	if (file_info->magic != SLS_FILE_INFO_MAGIC) {
+	if (slsfile->magic != SLSFILE_ID) {
 	    SLS_DBG("magic mismatch");
 	    return EINVAL;
 	}
 
-	switch (file_info->type) {
+	switch (slsfile->type) {
 	case DTYPE_VNODE:
-	    error = sls_load_vnode((struct sbuf **) data, bufp, bufsizep);
+	    error = slsload_vnode((struct sbuf **) data, bufp, bufsizep);
 	    break;
 
 	case DTYPE_KQUEUE:
-	    *data = malloc(sizeof(struct kqueue_info), M_SLSMM, M_WAITOK);
-	    error = sls_load_kqueue((struct kqueue_info *) *data, bufp, bufsizep);
+	    *data = malloc(sizeof(struct slskqueue), M_SLSMM, M_WAITOK);
+	    error = slsload_kqueue((struct slskqueue *) *data, bufp, bufsizep);
 	    break;
 
 	case DTYPE_PIPE:
-	    *data = malloc(sizeof(struct pipe_info), M_SLSMM, M_WAITOK);
-	    error = sls_load_pipe((struct pipe_info *) *data, bufp, bufsizep);
+	    *data = malloc(sizeof(struct slspipe), M_SLSMM, M_WAITOK);
+	    error = slsload_pipe((struct slspipe *) *data, bufp, bufsizep);
 	    break;
 
 	case DTYPE_SOCKET:
-	    *data = malloc(sizeof(struct sock_info), M_SLSMM, M_WAITOK);
-	    error = sls_load_socket((struct sock_info *) *data, bufp, bufsizep);
+	    *data = malloc(sizeof(struct slssock), M_SLSMM, M_WAITOK);
+	    error = slsload_socket((struct slssock *) *data, bufp, bufsizep);
 	    break;
 
 	default:
@@ -211,7 +210,7 @@ sls_load_file(struct file_info *file_info, void **data, char **bufp, size_t *buf
 }
 
 int
-sls_load_filedesc(struct filedesc_info *filedesc, char **bufp, size_t *bufsizep)
+slsload_filedesc(struct slsfiledesc *filedesc, char **bufp, size_t *bufsizep)
 {
 	int error;
 
@@ -220,17 +219,17 @@ sls_load_filedesc(struct filedesc_info *filedesc, char **bufp, size_t *bufsizep)
 	if (error != 0)
 	    return 0;
 
-	if (filedesc->magic != SLS_FILEDESC_INFO_MAGIC) {
+	if (filedesc->magic != SLSFILEDESC_ID) {
 	    SLS_DBG("magic mismatch\n");
 	    return EINVAL;
 	}
 
 	/* Current and root directories */
-	error = sls_load_path(&filedesc->cdir, bufp, bufsizep);
+	error = slsload_path(&filedesc->cdir, bufp, bufsizep);
 	if (error != 0)
 	    return error;
 
-	error = sls_load_path(&filedesc->rdir, bufp, bufsizep);
+	error = slsload_path(&filedesc->rdir, bufp, bufsizep);
 	if (error != 0) {
 	    sbuf_delete(filedesc->cdir);
 	    return error;
@@ -240,7 +239,7 @@ sls_load_filedesc(struct filedesc_info *filedesc, char **bufp, size_t *bufsizep)
 }
 
 int
-sls_load_vmobject(struct vm_object_info *obj, char **bufp, size_t *bufsizep)
+slsload_vmobject(struct slsvmobject *obj, char **bufp, size_t *bufsizep)
 {
 	int error;
 
@@ -248,16 +247,13 @@ sls_load_vmobject(struct vm_object_info *obj, char **bufp, size_t *bufsizep)
 	if (error != 0)
 	    return error;
 
-	if (obj->magic == SLS_OBJECTS_END)
-	    return 0;
-
-	if (obj->magic != SLS_OBJECT_INFO_MAGIC) {
+	if (obj->magic != SLSVMOBJECT_ID) {
 	    SLS_DBG("magic mismatch\n");
 	    return EINVAL;
 	}
 
 	if (obj->type == OBJT_VNODE) {
-	    error = sls_load_path(&obj->path, bufp, bufsizep);
+	    error = slsload_path(&obj->path, bufp, bufsizep);
 	    if (error != 0)
 		return error;
 	}
@@ -266,7 +262,7 @@ sls_load_vmobject(struct vm_object_info *obj, char **bufp, size_t *bufsizep)
 }
 
 int
-sls_load_vmentry(struct vm_map_entry_info *entry, char **bufp, size_t *bufsizep)
+slsload_vmentry(struct slsvmentry *entry, char **bufp, size_t *bufsizep)
 {
 	int error;
 
@@ -274,7 +270,7 @@ sls_load_vmentry(struct vm_map_entry_info *entry, char **bufp, size_t *bufsizep)
 	if (error != 0)
 	    return error;
 
-	if (entry->magic != SLS_ENTRY_INFO_MAGIC) {
+	if (entry->magic != SLSVMENTRY_ID) {
 	    SLS_DBG("magic mismatch");
 	    return EINVAL;
 	}
@@ -283,15 +279,15 @@ sls_load_vmentry(struct vm_map_entry_info *entry, char **bufp, size_t *bufsizep)
 }
 
 int 
-sls_load_memory(struct memckpt_info *memory, char **bufp, size_t *bufsizep)
+slsload_vmspace(struct slsvmspace *vm, char **bufp, size_t *bufsizep)
 {
 	int error;
 
-	error = sls_info(memory, sizeof(*memory), bufp, bufsizep);
+	error = sls_info(vm, sizeof(*vm), bufp, bufsizep);
 	if (error != 0)
 	    return error;
 
-	if (memory->vmspace.magic != SLS_VMSPACE_INFO_MAGIC) {
+	if (vm->magic != SLSVMSPACE_ID) {
 	    SLS_DBG("magic mismatch\n");
 	    return EINVAL;
 	}
@@ -300,7 +296,7 @@ sls_load_memory(struct memckpt_info *memory, char **bufp, size_t *bufsizep)
 }
 
 int
-sls_load_path(struct sbuf **sbp, char **bufp, size_t *bufsizep) 
+slsload_path(struct sbuf **sbp, char **bufp, size_t *bufsizep) 
 {
 	int error;
 	size_t sblen;
@@ -312,7 +308,7 @@ sls_load_path(struct sbuf **sbp, char **bufp, size_t *bufsizep)
 	if (error != 0)
 	    return error;
 
-	if (magic != SLS_STRING_MAGIC)
+	if (magic != SLSSTRING_ID)
 	    return EINVAL;
 
 	error = sls_info(&sblen, sizeof(sblen), bufp, bufsizep);

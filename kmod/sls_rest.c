@@ -28,6 +28,7 @@
 
 #include <machine/param.h>
 #include <machine/reg.h>
+#include <machine/vmparam.h>
 
 #include <netinet/in.h>
 
@@ -40,30 +41,30 @@
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
-#include "sls.h"
-#include "slskv.h"
 #include "sls_data.h"
-#include "sls_fd.h"
+#include "sls_file.h"
 #include "sls_ioctl.h"
+#include "sls_kv.h"
 #include "sls_load.h"
-#include "sls_mem.h"
+#include "sls_mm.h"
 #include "sls_proc.h"
-#include "slsmm.h"
-#include "slstable.h"
+#include "sls_table.h"
+#include "sls_vmobject.h"
+#include "sls_vmspace.h"
 
 #include "../slos/slos_record.h"
 
 static int
-sls_rest_thread(struct proc *p, char **bufp, size_t *buflenp)
+slsrest_dothread(struct proc *p, char **bufp, size_t *buflenp)
 {
-	struct thread_info thread_info;
+	struct slsthread slsthread;
 	int error;
 
-	error = sls_load_thread(&thread_info, bufp, buflenp);
+	error = slsload_thread(&slsthread, bufp, buflenp);
 	if (error != 0)
 	    return error;
 
-	error = sls_thread_rest(p, &thread_info);
+	error = slsrest_thread(p, &slsthread);
 	if (error != 0)
 	    return error;
 
@@ -71,21 +72,21 @@ sls_rest_thread(struct proc *p, char **bufp, size_t *buflenp)
 }
 
 static int
-sls_rest_cpustate(struct proc *p, char **bufp, size_t *buflenp)
+slsrest_doproc(struct proc *p, char **bufp, size_t *buflenp)
 {
-	struct proc_info proc_info; 
+	struct slsproc slsproc; 
 	int error, i;
 
-	error = sls_load_proc(&proc_info, bufp, buflenp);
+	error = slsload_proc(&slsproc, bufp, buflenp);
 	if (error != 0)
 	    return error;
 
-	error = sls_proc_rest(p, &proc_info);
+	error = slsrest_proc(p, &slsproc);
 	if (error != 0)
 	    return error;
 
-	for (i = 0; i < proc_info.nthreads; i++) {
-	    error = sls_rest_thread(p, bufp, buflenp);
+	for (i = 0; i < slsproc.nthreads; i++) {
+	    error = slsrest_dothread(p, bufp, buflenp);
 	    if (error != 0)
 		return error;
 	}
@@ -93,41 +94,44 @@ sls_rest_cpustate(struct proc *p, char **bufp, size_t *buflenp)
 	return 0;
 }
 
-struct kqueue_info *slskq = NULL;
-struct file_info slsfp;
+struct slskqueue *slskq = NULL;
+struct slsfile slsfp;
 
+/* XXX Decouple files from processes. */
 static int
-sls_rest_file(struct proc *p, int *done, char **bufp, size_t *buflenp)
+slsrest_dofile(struct proc *p, int *done, char **bufp, size_t *buflenp)
 {
-	struct file_info file_info;
+	struct slsfile slsfile;
 	void *data;
 	int error;
 
 	*done = 0;
 
-	error = sls_load_file(&file_info, &data, bufp, buflenp);
+	error = slsload_file(&slsfile, &data, bufp, buflenp);
 	if (error != 0)
 	    return error;
 
-	if (file_info.magic == SLS_FILES_END) {
+	/* XXX Factor this out, now know how many files we have. */
+	if (slsfile.magic == SLSFILES_END) {
 	    *done = 1;
 	    return 0;
 	}
 
-	if (file_info.type != DTYPE_KQUEUE) {
-	    error = sls_file_rest(p, data, &file_info);
+	/* XXX Remove the kqueue hack. */
+	if (slsfile.type != DTYPE_KQUEUE) {
+	    error = slsrest_file(p, data, &slsfile);
 	    if (error != 0)
 		return error;
 	}
 
-	switch (file_info.type) {
+	switch (slsfile.type) {
 	case DTYPE_VNODE:
 	    sbuf_delete((struct sbuf *) data);
 	    break;
 
 	case DTYPE_KQUEUE:
-	    memcpy(&slsfp, &file_info, sizeof(slsfp));
-	    slskq = (struct kqueue_info *) data;
+	    memcpy(&slsfp, &slsfile, sizeof(slsfp));
+	    slskq = (struct slskqueue *) data;
 	    break;
 
 	case DTYPE_PIPE:
@@ -147,30 +151,30 @@ sls_rest_file(struct proc *p, int *done, char **bufp, size_t *buflenp)
 }
 
 static int
-sls_rest_filedesc(struct proc *p, char **bufp, size_t *buflenp)
+slsrest_dofiledesc(struct proc *p, char **bufp, size_t *buflenp)
 {
 	int error = 0;
-	struct filedesc_info filedesc_info;
+	struct slsfiledesc slsfiledesc;
 	int done;
 
-	error = sls_load_filedesc(&filedesc_info, bufp, buflenp);
+	error = slsload_filedesc(&slsfiledesc, bufp, buflenp);
 	if (error != 0)
 	    return error;
 
-	error = sls_filedesc_rest(p, filedesc_info);
-	sbuf_delete(filedesc_info.cdir);
-	sbuf_delete(filedesc_info.rdir);
+	error = slsrest_filedesc(p, slsfiledesc);
+	sbuf_delete(slsfiledesc.cdir);
+	sbuf_delete(slsfiledesc.rdir);
 	if (error != 0)
 	    return error;
 
 	do {
-	    error = sls_rest_file(p, &done, bufp, buflenp);
+	    error = slsrest_dofile(p, &done, bufp, buflenp);
 	    if (error != 0)
 		return error;
 	} while (!done);
 
 	if (slskq != NULL) {
-	    error = sls_file_rest(p, slskq, &slsfp);
+	    error = slsrest_file(p, slskq, &slsfp);
 	    free(slskq, M_SLSMM);
 	    slskq = NULL;
 
@@ -184,33 +188,33 @@ sls_rest_filedesc(struct proc *p, char **bufp, size_t *buflenp)
 }
 
 static int
-sls_rest_memory(struct proc *p, char **bufp, size_t *buflenp, 
+slsrest_domemory(struct proc *p, char **bufp, size_t *buflenp, 
 	struct slskv_table *objtable)
 {
-	struct vm_map_entry_info entry_info;
-	struct memckpt_info memory;
+	struct slsvmentry slsvmentry;
+	struct slsvmspace slsvmspace;
 	vm_map_t map;
 	int error, i;
 
 	/* Restore the VM space and its map. */
-	error = sls_load_memory(&memory, bufp, buflenp);
+	error = slsload_vmspace(&slsvmspace, bufp, buflenp);
 	if (error != 0)
 	    goto out;
 
-	error = sls_vmspace_rest(p, memory);
+	error = slsrest_vmspace(p, &slsvmspace);
 	if (error != 0)
 	    goto out;
 
 	map = &p->p_vmspace->vm_map;
 
 	/* Create the individual VM entries. */
-	for (i = 0; i < memory.vmspace.nentries; i++) {
-	    error = sls_load_vmentry(&entry_info, bufp, buflenp);
+	for (i = 0; i < slsvmspace.nentries; i++) {
+	    error = slsload_vmentry(&slsvmentry, bufp, buflenp);
 	    if (error != 0)
 		goto out;
 
 	    PROC_UNLOCK(p);
-	    error = sls_vmentry_rest(map, &entry_info, objtable);
+	    error = slsrest_vmentry(map, &slsvmentry, objtable);
 	    PROC_LOCK(p);
 	    if (error != 0)
 		goto out;
@@ -225,7 +229,7 @@ out:
  * Restore a process' local data (threads, VM map, file descriptor table).
  */
 static int
-sls_rest_proc(struct proc *p, struct slskv_table *proctable, 
+slsrest_metadata(struct proc *p, struct slskv_table *proctable, 
 	struct slskv_table *objtable, char **bufp, size_t *buflenp)
 {
 	int error;
@@ -234,15 +238,15 @@ sls_rest_proc(struct proc *p, struct slskv_table *proctable,
 	 * Restore CPU state, file state, and memory 
 	 * state, parsing the buffer at each step. 
 	 */
-	error = sls_rest_cpustate(p, bufp, buflenp);
+	error = slsrest_doproc(p, bufp, buflenp);
 	if (error != 0)
 	    return error;
 
-	error = sls_rest_filedesc(p, bufp, buflenp);
+	error = slsrest_dofiledesc(p, bufp, buflenp);
 	if (error != 0)
 	    return error;
 
-	error = sls_rest_memory(p, bufp, buflenp, objtable);
+	error = slsrest_domemory(p, bufp, buflenp, objtable);
 	if (error != 0)
 	    return error;
 
@@ -259,13 +263,50 @@ sls_rest_proc(struct proc *p, struct slskv_table *proctable,
 	return 0;
 }
 
+/*
+ * The same as vm_object_shadow, with different refcount handling and return values.
+ * We also always create a shadow, regardless of the refcount.
+ */
+static void
+slsrest_shadow(vm_object_t shadow, vm_object_t source, vm_ooffset_t offset)
+{
+	/*
+	 * Store the offset into the source object, and fix up the offset into
+	 * the new object.
+	 */
+	shadow->backing_object = source;
+	shadow->backing_object_offset = offset;
+
+
+	/* 
+	* If this is the first shadow, then we transfer the reference
+	* from the caller to the shadow, as done in vm_object_shadow.
+	* Otherwise we add a reference to the shadow.
+	*/
+	if (source->shadow_count != 0)
+	    source->ref_count += 1;
+
+	VM_OBJECT_WLOCK(source);
+	shadow->domain = source->domain;
+	LIST_INSERT_HEAD(&source->shadow_head, shadow, shadow_list);
+	source->shadow_count++;
+
+#if VM_NRESERVLEVEL > 0
+	shadow->flags |= source->flags & OBJ_COLORED;
+	shadow->pg_color = (source->pg_color + OFF_TO_IDX(offset)) &
+	    ((1 << (VM_NFREEORDER - 1)) - 1);
+#endif
+
+	VM_OBJECT_WUNLOCK(source);
+}
+
 static int
 sls_rest(struct proc *p, struct sls_backend backend)
 {
 	struct slskv_table *metatable = NULL, *datatable = NULL;
 	struct slskv_table *proctable = NULL, *objtable = NULL;
 	struct slspagerun *pagerun, *tmppagerun;
-	struct vm_object_info objinfo, *objinfop;
+	struct slsvmobject slsvmobject, *slsvmobjectp;
 	vm_object_t parent, object;
 	struct slsdata *slsdata;
 	struct slskv_iter iter;
@@ -305,11 +346,11 @@ sls_rest(struct proc *p, struct sls_backend backend)
 	SLS_DBG("Creating tables\n");
 
 	/* Set up the restored process and VM object tables. */
-	error = slskv_create(&proctable, SLSKV_NOREPLACE, SLSKV_VALNUM);
+	error = slskv_create(&proctable, SLSKV_NOREPLACE);
 	if (error != 0)
 	    goto out;
 
-	error = slskv_create(&objtable, SLSKV_NOREPLACE, SLSKV_VALNUM);
+	error = slskv_create(&objtable, SLSKV_NOREPLACE);
 	if (error != 0)
 	    goto out;
 
@@ -353,7 +394,7 @@ sls_rest(struct proc *p, struct sls_backend backend)
 		continue;
 
 	    /* Get the data associated with the object in the table. */
-	    error =  sls_load_vmobject(&objinfo, &buf, &buflen);
+	    error =  slsload_vmobject(&slsvmobject, &buf, &buflen);
 	    if (error != 0)
 		goto out;
 
@@ -362,7 +403,7 @@ sls_rest(struct proc *p, struct sls_backend backend)
 		goto out;
 
 	    /* Restore the object */
-	    error = sls_vmobject_rest(&objinfo, objtable, slsdata);
+	    error = slsrest_vmobject(&slsvmobject, objtable, slsdata);
 	    if (error != 0)
 		goto out;
 
@@ -383,17 +424,17 @@ sls_rest(struct proc *p, struct sls_backend backend)
 	     * struct is the first thing in the record to typecast
 	     * the latter into the former, skipping the parse function.
 	     */
-	    objinfop = (struct vm_object_info *) record; 
-	    error = slskv_find(objtable, objinfop->slsid, (uintptr_t *) &object);
+	    slsvmobjectp = (struct slsvmobject *) record; 
+	    error = slskv_find(objtable, slsvmobjectp->slsid, (uintptr_t *) &object);
 	    if (error != 0)
 		goto out;
 
 	    /* Try to find a parent for the restored object, if it exists. */
-	    error = slskv_find(objtable, (uint64_t) objinfop->backer, (uintptr_t *) &parent);
+	    error = slskv_find(objtable, (uint64_t) slsvmobjectp->backer, (uintptr_t *) &parent);
 	    if (error != 0)
 		continue;
 	    
-	    sls_shadow(object, parent, objinfop->backer_off);
+	    slsrest_shadow(object, parent, slsvmobjectp->backer_off);
 	}
 
 	SLS_DBG("Third pass\n");
@@ -410,21 +451,11 @@ sls_rest(struct proc *p, struct sls_backend backend)
 	    buf = (char *) record;
 	    buflen = st->len;
 
-	    error = sls_rest_proc(p, proctable, objtable, &buf, &buflen);
+	    error = slsrest_metadata(p, proctable, objtable, &buf, &buflen);
 	    if (error != 0)
 		goto out;
 
 	}
-
-	     for (struct vm_map_entry *entry = p->p_vmspace->vm_map.header.next;
-                  entry != &p->p_vmspace->vm_map.header;
-                  entry = entry->next) {
-              printf("Entry: %8lx Object: %p", entry->start, entry->object.vm_object);
-              if (entry->object.vm_object != NULL)
-                  printf("\tBacker: %p", entry->object.vm_object->backing_object);
-              printf("\n");
-          }
-
 
 	SLS_DBG("Done\n");
 	kern_psignal(p, SIGCONT);
@@ -451,7 +482,6 @@ out:
 
 	    slskv_destroy(metatable);
 	}
-
 	
 	if (datatable != NULL) {
 	    while (slskv_pop(datatable, (uint64_t *) &record, (uint64_t *) &slsdata) == 0) {
@@ -460,7 +490,6 @@ out:
 		    free(pagerun->data, M_SLSMM);
 		    uma_zfree(slspagerun_zone, pagerun);
 		}
-
 		free(slsdata, M_SLSMM);
 	    }
 

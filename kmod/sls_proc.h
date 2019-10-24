@@ -22,9 +22,9 @@
 
 #include "sls_data.h"
 
-int sls_proc_ckpt(struct proc *p, struct sbuf *sb);
-int sls_proc_rest(struct proc *p, struct proc_info *proc_info);
-int sls_thread_rest(struct proc *p, struct thread_info *thread_info);
+int slsckpt_proc(struct proc *p, struct sbuf *sb);
+int slsrest_proc(struct proc *p, struct slsproc *slsproc);
+int slsrest_thread(struct proc *p, struct slsthread *slsthread);
 
 
 #endif /* _SLS_PROC_H_ */

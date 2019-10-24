@@ -10,7 +10,7 @@
 #include <sls_data.h>
 #include <slos.h>
 
-#include "slskv.h"
+#include "sls_kv.h"
 
 #include "../slos/slos_inode.h"
 #include "../slos/slos_io.h"

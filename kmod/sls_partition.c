@@ -28,19 +28,19 @@
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
-#include "sls.h"
-#include "slsmm.h"
 #include "sls_data.h"
-#include "sls_process.h"
+#include "sls_internal.h"
+#include "sls_mm.h"
+#include "sls_partition.h"
 
 
 /*
- * Create a new struct sls_process to be entered into the SLS.
+ * Create a new struct slspart to be entered into the SLS.
  */
 static int 
-slsp_init(pid_t pid, struct sls_process **slspp)
+slsp_init(pid_t pid, struct slspart **slspp)
 {
-	struct sls_process *procnew;
+	struct slspart *procnew;
 
 	/* Create the new process to */
 	procnew = malloc(sizeof(*procnew), M_SLSMM, M_WAITOK | M_ZERO);
@@ -60,10 +60,10 @@ slsp_init(pid_t pid, struct sls_process **slspp)
  * Add the running process with PID pid to the SLS. If a process 
  * of that PID is already in the SLS, the operation fails.
  */
-struct sls_process *
+struct slspart *
 slsp_add(pid_t pid)
 {
-	struct sls_process *slsp;
+	struct slspart *slsp;
 	int error;
 
 	/* 
@@ -93,11 +93,11 @@ slsp_add(pid_t pid)
 }
 
 /* 
- * Destroy a struct sls_process. The struct has to have 
+ * Destroy a struct slspart. The struct has to have 
  * have already been removed from the hashtable.
  */
 void
-slsp_fini(struct sls_process *slsp)
+slsp_fini(struct slspart *slsp)
 {
 	vm_object_t obj, shadow;
 
@@ -118,7 +118,7 @@ slsp_fini(struct sls_process *slsp)
 void
 slsp_del(pid_t pid)
 {
-	struct sls_process *slsp;
+	struct slspart *slsp;
 
 	if (slskv_find(slsm.slsm_proctable, pid, (uintptr_t *) &slsp) != 0)
 	    return;
@@ -132,7 +132,7 @@ slsp_del(pid_t pid)
 static void
 slsp_list(void)
 {
-	struct sls_process *slsp;
+	struct slspart *slsp;
 	struct slskv_iter iter;
 	uint64_t pid;
 
@@ -142,10 +142,10 @@ slsp_list(void)
 }
 
 /* Find a process in the SLS with the given PID. */
-struct sls_process *
+struct slspart *
 slsp_find(pid_t pid)
 {
-	struct sls_process *slsp;
+	struct slspart *slsp;
 
 	if (slskv_find(slsm.slsm_proctable, pid, (uintptr_t *) &slsp) != 0)
 	    return NULL;
@@ -160,7 +160,7 @@ slsp_find(pid_t pid)
 void
 slsp_delall(void)
 {
-	struct sls_process *slsp;
+	struct slspart *slsp;
 	uint64_t pid;
 
 	/* If we never completed initialization, abort. */
@@ -173,13 +173,13 @@ slsp_delall(void)
 }
 
 void
-slsp_ref(struct sls_process *slsp)
+slsp_ref(struct slspart *slsp)
 {
 	atomic_add_int(&slsp->slsp_refcount, 1);
 }
 
 void
-slsp_deref(struct sls_process *slsp)
+slsp_deref(struct slspart *slsp)
 {
 	atomic_add_int(&slsp->slsp_refcount, -1);
 

@@ -4,7 +4,6 @@
 #include <sys/systm.h>
 #include <sys/uio.h>
 
-#include "../include/slos_bnode.h"
 #include "slos_bootalloc.h"
 #include "slos_internal.h"
 #include "slos_io.h"

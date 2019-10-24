@@ -1,16 +1,17 @@
-#ifndef _SLS_RESTORE_H_
-#define _SLS_RESTORE_H_
+#ifndef _SLS_LOAD_H_
+#define _SLS_LOAD_H_
 
-#include "slskv.h"
-#include "sls_process.h"
+#include <sls_data.h>
 
-int sls_load_thread(struct thread_info *thread_info, char **bufp, size_t *bufsizep);
-int sls_load_proc(struct proc_info *proc_info, char **bufp, size_t *bufsizep);
-int sls_load_file(struct file_info *file, void **data, char **bufp, size_t *bufsizep);
-int sls_load_filedesc(struct filedesc_info *filedesc, char **bufp, size_t *bufsizep);
-int sls_load_vmobject(struct vm_object_info *obj, char **bufp, size_t *bufsizep);
-int sls_load_vmentry(struct vm_map_entry_info *entry, char **bufp, size_t *bufsizep);
-int sls_load_memory(struct memckpt_info *memory, char **bufp, size_t *bufsizep);
-int sls_load_path(struct sbuf **sbp, char **bufp, size_t *bufsizep); 
+#include "sls_kv.h"
 
-#endif /* _SLS_RESTORE_H_ */
+int slsload_thread(struct slsthread *thread_info, char **bufp, size_t *bufsizep);
+int slsload_proc(struct slsproc *proc_info, char **bufp, size_t *bufsizep);
+int slsload_file(struct slsfile *file, void **data, char **bufp, size_t *bufsizep);
+int slsload_filedesc(struct slsfiledesc *filedesc, char **bufp, size_t *bufsizep);
+int slsload_vmobject(struct slsvmobject *obj, char **bufp, size_t *bufsizep);
+int slsload_vmentry(struct slsvmentry *entry, char **bufp, size_t *bufsizep);
+int slsload_vmspace(struct slsvmspace *vm, char **bufp, size_t *bufsizep);
+int slsload_path(struct sbuf **sbp, char **bufp, size_t *bufsizep); 
+
+#endif /* _SLS_LOAD_H_ */

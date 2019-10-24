@@ -3,8 +3,6 @@
 #include <sys/queue.h>
 #include <sys/systm.h>
 
-#include "../include/slos_bnode.h"
-
 #include "slos_alloc.h"
 #include "slos_bootalloc.h"
 #include "slos_btree.h"

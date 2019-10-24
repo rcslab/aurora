@@ -13,8 +13,8 @@
 #include <vm/vm.h>
 #include <vm/vm_object.h>
 
-#include "sls_process.h"
-#include "slskv.h"
+#include "sls_kv.h"
+#include "sls_partition.h"
 
 SDT_PROVIDER_DECLARE(sls);
 
@@ -73,7 +73,7 @@ sls_module_exiting(void)
 
 struct sls_checkpointd_args {
 	struct proc *p;
-	struct sls_process *slsp;
+	struct slspart *slsp;
 	struct sls_backend backend;
 };
 

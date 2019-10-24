@@ -5,7 +5,7 @@
 
 #include <sys/queue.h>
 
-#include "./slos.h"
+#include "../include/slos.h"
 
 #define BNODE_INTERNAL 0
 #define BNODE_EXTERNAL 1
