@@ -351,7 +351,7 @@ sls_checkpoint(struct proc *p, struct slspart *slsp)
 
 	/* The dump itself. */
 	/* XXX Temporary until we change to multiple inodes per checkpoint. */
-	error = slos_icreate(&slos, 1024, MAKEIMODE(VREG, S_IRWXU | S_IRWXG | S_IRWXO));
+	error = slos_icreate(&slos, 1024);
 	if (error != 0)
 	    goto out;
 
