@@ -44,8 +44,8 @@ struct slskv_table {
 	struct slskv_pairs  *buckets;		/* The buckets of key-value pairs */
 	/* Read-only elements of the struct */
 	u_long		    mask;		/* Hashmask used by the builtin hashtable */
-	size_t		    valsize;		/* Size of values */
 	enum slskv_policy   repl_policy;	/* Replace policy for adds */
+	void		    *data;		/* Private data */
 	/* Could become debug-only if it causes coherence traffic */
 	size_t		    elems;		/* Number of elements in the table */
 };
@@ -59,7 +59,40 @@ int slskv_find(struct slskv_table *table, uint64_t key, uintptr_t *value);
 int slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value);
 int slskv_pop(struct slskv_table *table, uint64_t *key, uintptr_t *value);
 void slskv_del(struct slskv_table *table, uint64_t key);
+int slskv_serial(struct slskv_table *table, struct sbuf *sbp);
+int slskv_deserial(char *buf, size_t len, struct slskv_table **tablep);
 
+/* 
+ * Implementation of a hash set on top of the table. In order to reuse code,
+ * we still store the data in struct slskv_pair objects, even though that means
+ * we waste 64 bits for every element. However, the table is not used to store
+ * large amounts of data, so the memory footprint is still low. 
+ */
+
+typedef struct slskv_table slsset;
+
+#define slsset_create(tablep) (slskv_create(tablep, SLSKV_NOREPLACE))
+#define slsset_destroy(table) (slskv_destroy(table))
+#define slsset_del(table, key) (slskv_del(table, key))
+#define slsset_serial(table, sb) (slskv_serial(table, sb))
+#define slsset_deserial(buf, len, tablep) (slskv_serial(buf, len, tablep))
+
+inline int 
+slsset_find(slsset *table, uint64_t key)
+{
+	return (slskv_find(table, key, (uintptr_t *) &key));
+}
+inline int
+slsset_add(slsset *table, uint64_t key)
+{
+	return (slskv_add(table, key, (uintptr_t) key));
+}
+
+inline int
+slsset_pop(slsset *table, uint64_t *key)
+{
+	return (slskv_pop(table, key, (uintptr_t *) key));
+}
 
 #define SLSKV_ITERDONE 1
 

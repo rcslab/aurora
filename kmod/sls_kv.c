@@ -1,11 +1,11 @@
 #include <sys/param.h>
-
-#include <sys/malloc.h>
-#include <sys/systm.h>
+#include <sys/lock.h>
 #include <sys/queue.h>
 
-#include <sys/lock.h>
+#include <sys/malloc.h>
 #include <sys/mutex.h>
+#include <sys/sbuf.h>
+#include <sys/systm.h>
 
 #include <vm/uma.h>
 
@@ -30,7 +30,7 @@ slskv_create(struct slskv_table **tablep, enum slskv_policy policy)
 	table->buckets = hashinit(SLSKV_BUCKETS, M_SLSMM, &table->mask);
 	if (table->buckets == NULL) {
 	    free(table, M_SLSMM);
-	    return ENOMEM;
+	    return (ENOMEM);
 	}
 
 	/* Initialize the mutex. */
@@ -39,11 +39,12 @@ slskv_create(struct slskv_table **tablep, enum slskv_policy policy)
 
 	table->repl_policy = policy;
 	table->elems = 0;
+	table->data = NULL;
 
 	/* Export the table. */
 	*tablep = table;
 
-	return 0;
+	return (0);
 }
 
 /*
@@ -93,13 +94,13 @@ slskv_find(struct slskv_table *table, uint64_t key, uintptr_t *value)
 	    if (kv->key == key) {
 		mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 		*value = kv->value;
-		return 0;
+		return (0);
 	    }
 	}
 
 	mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 	/* We failed to find the key. */
-	return EINVAL;
+	return (EINVAL);
 }
 
 /* 
@@ -127,7 +128,7 @@ slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value)
 	    LIST_INSERT_HEAD(bucket, newkv, next);
 	    table->elems += 1;
 	    mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
-	    return 0;
+	    return (0);
 
 	
 	case SLSKV_NOREPLACE:
@@ -137,7 +138,7 @@ slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value)
 		if (kv->key == key) {
 		    uma_zfree(slskv_zone, kv);
 		    mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
-		    return EINVAL;
+		    return (EINVAL);
 		}
 	    }
 
@@ -145,7 +146,7 @@ slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value)
 	    LIST_INSERT_HEAD(bucket, newkv, next);
 	    table->elems += 1;
 	    mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
-	    return 0;
+	    return (0);
 
 	case SLSKV_REPLACE:
 	    /* Try to find existing instances of the key. */
@@ -165,7 +166,7 @@ slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value)
 	    table->elems += 1;
 
 	    mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
-	    return 0;
+	    return (0);
 	}
 }
 
@@ -230,7 +231,7 @@ slskv_pop(struct slskv_table *table, uint64_t *key, uint64_t *value)
 
 	mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 
-	return error;
+	return (error);
 }
 
 /*
@@ -317,5 +318,88 @@ slskv_itercont(struct slskv_iter *iter, uint64_t *key, uintptr_t *value)
 	/* Point to the next pair. */
 	iter->pair = LIST_NEXT(iter->pair, next); 
 
-	return 0;
+	return (0);
+}
+
+/* 
+ * Serialize a table into a linear buffer. 
+ * Used for exporting the table to disk.
+ */
+int
+slskv_serial(struct slskv_table *table, struct sbuf *sb)
+{
+	struct slskv_iter iter;
+	uintptr_t value;
+	uint64_t key;
+	int error;
+
+	/* Iterate the hashtable, saving the key-value pairs. */
+	iter = slskv_iterstart(table);
+	while (slskv_pop(table, &key, &value) == 0) {
+	    error = sbuf_bcat(sb, (void *) &key, sizeof(key));
+	    if (error != 0)
+		return (error);
+		    
+	    sbuf_bcat(sb, (void *) &value, sizeof(value));
+	    if (error != 0)
+		return (error);
+		    
+	}
+
+	/* 
+	 * Add the policy to the end. By adding it to the end, instead
+	 * of the start, we can easily concatenate serializations of 
+	 * hashtables, effectively joining them (whether the result 
+	 * deserializes to a valid hashtable depends on the replacement
+	 * policy, though).
+	 */
+	error = sbuf_bcat(sb, (void *) &table->repl_policy, sizeof(table->repl_policy));
+	if (error != 0)
+	    return (error);
+
+	return (0);
+}
+
+/*
+ * Deserialize a table from a linear buffer.
+ * Used from importing the table from disk.
+ */
+int
+slskv_deserial(char *buf, size_t len, struct slskv_table **tablep)
+{
+	enum slskv_policy repl_policy;
+	struct slskv_table *table;
+	uintptr_t value;
+	char *pairaddr;
+	uint64_t key;
+	int i, error;
+	size_t pairs;
+
+	/* Get the replacement policy of the table first. */
+	memcpy(&repl_policy, &buf[len - sizeof(repl_policy)], sizeof(repl_policy));
+
+	KASSERT(buf != NULL, "buffer is not finalized");
+
+	error = slskv_create(&table, repl_policy);
+	if (error != 0)
+	    return (error);
+
+	/* Find out how many pairs there are. */
+	pairs = (len - sizeof(repl_policy)) / (sizeof(uint64_t) + sizeof(uintptr_t));
+	for (i = 0; i < pairs; i++) {
+	    pairaddr = &buf[i * (sizeof(uint64_t) + sizeof(uintptr_t))];
+	    memcpy(&key, (void *) pairaddr, sizeof(key));
+	    memcpy(&value, (void *) (pairaddr + sizeof(key)), sizeof(value));
+
+	    error = slskv_add(table, key, value);
+	    if (error != 0) {
+		slskv_destroy(table);
+		return (error);
+	    }
+	}
+
+	/* Export the resulting table to the caller. */
+	*tablep = table;
+	
+	return (0);
 }

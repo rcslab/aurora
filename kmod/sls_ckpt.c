@@ -127,15 +127,15 @@ slsckpt_metadata(struct proc *p, struct slspart *slsp)
 	    goto out;
 	}
 
-	error = slsckpt_filedesc(p, sb);
-	if (error != 0) {
-	    SLS_DBG("Error: fd_ckpt failed with error code %d\n", error);
-	    goto out;
-	}
-
 	error = slsckpt_vmspace(p, sb, slsp->slsp_attr.attr_mode);
 	if (error != 0) {
 	    SLS_DBG("Error: vmspace_ckpt failed with error code %d\n", error);
+	    goto out;
+	}
+
+	error = slsckpt_filedesc(p, sb);
+	if (error != 0) {
+	    SLS_DBG("Error: fd_ckpt failed with error code %d\n", error);
 	    goto out;
 	}
 

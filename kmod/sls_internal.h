@@ -21,15 +21,24 @@ SDT_PROVIDER_DECLARE(sls);
 extern size_t sls_contig_limit;
 
 struct sls_metadata {
-    int			slsm_exiting;	/* Is the SLS being destroyed? */
-    struct slskv_table	*slsm_proctable;    /* All processes in the SLS */
-    struct cdev		*slsm_cdev;	/* The cdev that exposes the SLS' ops */
+	int		    slsm_exiting;	/* Is the SLS being destroyed? */
+	struct slskv_table  *slsm_proctable;    /* All processes in the SLS */
+	struct cdev	    *slsm_cdev;	    /* The cdev that exposes the SLS' ops */
 
-    /* OSD Related members */
-    struct slskv_table	*slsm_rectable;	/* Associates in-memory pointers to data */
-    struct slskv_table	*slsm_typetable;	/* Associates data with a record type */
-    struct vnode	*slsm_osdvp;	/* The device that holds the SLOS */
-    struct slsosd	*slsm_osd;	/* Similar to struct mount, but for the SLOS */
+	/* OSD Related members */
+	/* XXX Put the rectable and typetable in their own structure */
+	struct slskv_table  *slsm_rectable;	/* Associates in-memory pointers to data */
+	struct slskv_table  *slsm_typetable;	/* Associates data with a record type */
+	struct vnode	    *slsm_osdvp;	/* The device that holds the SLOS */
+	struct slsosd	    *slsm_osd;	    /* Similar to struct mount, but for the SLOS */
+};
+
+/* The data needed to restore an SLS partition. */
+struct slsrest_data {
+	struct slskv_table *objtable;	/* Holds the new VM Objects, indexed by ID */
+	struct slskv_table *proctable;	/* Holds the process records, indexed by ID */
+	struct slskv_table *filetable;	/* Holds the new files, indexed by ID */
+	struct slskv_table *kevtable;	/* Holds the kevents for a kq, indexed by kq */
 };
 
 extern struct sls_metadata slsm;

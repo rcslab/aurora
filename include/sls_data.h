@@ -48,10 +48,6 @@ struct slsvmspace {
 	caddr_t vm_daddr;
 	caddr_t vm_maxsaddr;
 	int nentries;
-	/*  
-	 * Needed to know how many index-page pairs
-	 * to read from the file 
-	 */
 };
 
 #define SLSVMOBJECT_ID 0x7abc7303
@@ -88,16 +84,15 @@ struct slsvmentry {
 
 #define SLSFILE_ID 0x736c7234
 #define SLSSTRING_ID 0x72626f72
-#define SLSFILES_END INT_MAX
 struct slsfile {
 	uint64_t magic;
 	uint64_t slsid;
-	int fd;
 
 	short type;
 	u_int flag;
 
 	off_t offset;
+	uint64_t backer;
 
 	/* 
 	* Let's not bother with this flag from the filedescent struct.
@@ -117,13 +112,9 @@ struct slsfiledesc {
 
 	u_short fd_cmask;
 	/* XXX Should these go to 1? */
-	int fd_refcnt;
 	int fd_holdcnt;
 	/* TODO: kqueue list? */
 
-	int num_files;
-
-	struct file_info *infos;
 };
 
 #define SLSPIPE_ID  0x736c7499
@@ -131,9 +122,7 @@ struct slspipe {
 	uint64_t    magic;	/* Magic value */
 	uint64_t    slsid;	/* Unique SLS ID */
 	uint64_t    iswriteend;	/* Is this the write end? */
-	uint64_t    otherend;	/* The fd of the other end */
-	uint64_t    needrest;	/* Should we restore this? */
-	uint64_t    onlyend;	/* Are we the only end? */
+	uint64_t    peer;	/* The SLS ID of the other end */
 };
 
 #define SLSKQUEUE_ID  0x736c7265

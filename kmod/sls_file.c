@@ -45,6 +45,7 @@
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
+#include <slos.h>
 #include <sls_data.h>
 
 #include "sls_file.h"
@@ -54,79 +55,9 @@
 
 #include "imported_sls.h"
 
-struct slskevent sls_kevents[1024]; 
+/* XXX Spin out vnode operations to a new file. */
 
-/* Checkpoint a kqueue and all of its pending knotes. */
-static int
-slsckpt_kqueue(struct proc *p, struct file *fp, struct sbuf *sb)
-{
-	struct kqueue *kq;
-	struct slskqueue kqinfo;
-	struct knote *kn;
-	uint64_t numevents = 0;
-	int error, i;
-
-	/* Acquire the kqueue for reading. */
-	error = kqueue_acquire(fp, &kq);
-	if (error != 0)
-	    return error;
-
-	/* Traverse all lists of knotes in the kqueue. */
-	for (i = 0; i < kq->kq_knlistsize; i++) {
-	    /* Get all knotes from each list. */
-	    SLIST_FOREACH(kn, &kq->kq_knlist[i], kn_link) {
-		/* 
-		 * XXX Check whether any knotes are in flux. 
-		 * This is erring on the side of caution, since
-		 * I'm not sure what being in flux would do for us.
-		 */
-		if (kn != NULL && (kn->kn_influx > 0))
-		    panic("knote in flux while checkpointing");
-		
-		/* 
-		 * 
-		 * Get all relevant fields. Most of them are 
-		 * from the kevent struct the knote points to.
-		 */
-		/*
-		 * XXX Right now we're using a static buffer
-		 * that we assume will suffice for 1 kqueue.
-		 * What we truly need is a queue that we can
-		 * write events to. Until then, this suffices.
-		 */
-		sls_kevents[numevents].status = kn->kn_status;
-		sls_kevents[numevents].ident = kn->kn_kevent.ident;
-		sls_kevents[numevents].filter = kn->kn_kevent.filter;
-		sls_kevents[numevents].flags = kn->kn_kevent.flags;
-		sls_kevents[numevents].fflags = kn->kn_kevent.fflags;
-		sls_kevents[numevents].data = kn->kn_kevent.data;
-		sls_kevents[numevents].slsid= (uint64_t) kn;
-		sls_kevents[numevents].magic = SLSKQUEUE_ID;
-		numevents += 1;
-	    }
-	}
-
-	/* Create the structure for the kqueue itself. */
-	kqinfo.magic = SLSKQUEUE_ID;
-	kqinfo.slsid = (uint64_t) kq;
-	kqinfo.numevents = numevents;
-
-	/* Write the kqueue itself to the sbuf. */
-	error = sbuf_bcat(sb, (void *) &kqinfo, sizeof(kqinfo));
-	if (error != 0)
-	    goto out;
-
-	/* Write each kevent to the sbuf. */
-	error = sbuf_bcat(sb, (void *) sls_kevents, numevents * sizeof(sls_kevents[0]));
-	if (error != 0)
-	    goto out;
-
-out:
-	/* Release the reference to the kqueue. */
-	kqueue_release(kq, 0);
-
-	return 0;
-}
+/* -------------- VNODE OPERATIONS -------------- */
 
 /* Get the name of a vnode. This is the only information we need about it. */
 static int
@@ -142,414 +73,347 @@ slsckpt_vnode(struct proc *p, struct vnode *vp, struct sbuf *sb)
 	 * XXX Make sure the unlinked file case is handled. 
 	 */
 	if (error == ENOENT)
-	    return 0;
+	    return (0);
 
-	return 0;
+	return (0);
 }
 
 static int
-slsckpt_pipe(struct proc *p, struct file *fp, struct sbuf *sb)
-{
-	struct file *curfp;
-	struct pipepair *pair, *curpair;
-	struct slspipe info;
-	int error, i;
-	
-	/* Get the pipe pair that the current pipe is in. */
-	pair = ((struct pipe *) fp->f_data)->pipe_pair;
-
-	/* Find out if we are the write end. */
-	info.iswriteend = (&pair->pp_wpipe == fp->f_data);
-	info.magic = SLSPIPE_ID;
-	info.slsid = (uint64_t) pair;
-
-	/* 
-	 * Assume the other end is closed for now, if it 
-	 * isn't we'll find it later. Also assume we are
-	 * actually going to need to restore this (if we
-	 * restore the other end, we don't need to do
-	 * anything).
-	 */
-	info.onlyend = 1;
-	info.needrest = 1;
-
-	/* Find out if we are the read or the writeend. */
-
-	/* 
-	 * Pipes are a tricky case, because we have to find
-	 * which two FDs correspond to its ends. This means
-	 * we have to traverse the whole file descriptor space
-	 * to find the other end.
-	 */
-	for (i = 0; i <= p->p_fd->fd_lastfile; i++) {
-	    if (!fdisused(p->p_fd, i))
-		continue;
-
-	    curfp = p->p_fd->fd_files->fdt_ofiles[i].fde_file;
-
-	    /* 
-	     * If we found ourselves, return. It means the other
-	     * end of the pipe is open. This in turn means that
-	     * when we call slsckpt_pipe() for the other end,
-	     * we'll find this end before it, and checkpoint 
-	     * both of them at once.
-	     */
-	    if (curfp == fp) {
-		info.needrest = 0;
-		break;
-	    }
-
-	    /* 
-	     * If the file pointer isn't a pipe, it's
-	     * not what we're looking for.
-	     */
-	    if (curfp->f_type != DTYPE_PIPE)
-		continue;
-
-	    curpair = ((struct pipe *)curfp->f_data)->pipe_pair;
-
-	    if (curpair == pair) {
-		/* Got it! */
-		info.onlyend = 0;
-		info.otherend = i;
-		break;
-	    }
-	}
-	
-	/* Write out the data. */
-	error = sbuf_bcat(sb, (void *) &info, sizeof(info));
-	if (error != 0)
-	    return error;
-
-	return 0;
-}
-
-static int
-slsckpt_socket(struct proc *p, struct socket *so, struct sbuf *sb)
-{
-	struct slssock info;
-	struct inpcb *inpcb;
-	int error;
-
-	inpcb = (struct inpcb *) so->so_pcb;
-
-	/* 
-	 * XXX Right now we're using a small subset of these 
-	 * fields, but we are going to need them later. 
-	 */
-	info.magic = SLSSOCKET_ID;
-	info.slsid = (uint64_t) so;
-
-	info.family = so->so_proto->pr_domain->dom_family;
-	info.proto = so->so_proto->pr_protocol;
-	info.type = so->so_proto->pr_type;
-
-	info.options = so->so_options;
-
-	info.vflag = inpcb->inp_vflag;
-	info.flags = inpcb->inp_flags;
-	info.flags2 = inpcb->inp_flags2;
-	info.ip_p = inpcb->inp_ip_p;
-	
-	info.inp_inc.inc_flags = inpcb->inp_inc.inc_flags;
-	info.inp_inc.inc_len = inpcb->inp_inc.inc_len;
-	info.inp_inc.inc_fibnum = inpcb->inp_inc.inc_fibnum;
-	info.inp_inc.ie_fport = inpcb->inp_inc.inc_ie.ie_fport;
-	info.inp_inc.ie_lport = inpcb->inp_inc.inc_ie.ie_lport;
-
-	memcpy(info.inp_inc.ie_ufaddr, &inpcb->inp_inc.inc_faddr, 0x10);
-	memcpy(info.inp_inc.ie_uladdr, &inpcb->inp_inc.inc_laddr, 0x10);
-
-	error = sbuf_bcat(sb, (void *) &info, sizeof(info));
-	if (error != 0)
-	    return error;
-
-	return 0;
-}
-
-/* Get generic file info applicable to all kinds of flies. */
-int
-slsckpt_file(struct proc *p, struct file *file, int fd, struct sbuf *sb)
-{
-	int error;
-	struct slsfile info;
-
-	/* XXX Decouple files and fds - multiple processes may share files. */
-
-	/* XXX Decouple files and fds - multiple processes may share files. */
-
-	info.type = file->f_type;
-	info.flag = file->f_flag;
-	info.offset = file->f_offset;
-	info.fd = fd;
-
-	info.magic = SLSFILE_ID;
-	info.slsid = (uint64_t) file;
-
-	error = sbuf_bcat(sb, (void *) &info, sizeof(info));
-
-	return error;
-}
-
-static int
-slsrest_vnode(struct proc *p, struct sbuf *path, struct slsfile *info)
+slsrest_vnode(struct sbuf *path, struct slsfile *info, int *fdp)
 {
 	char *filepath;
 	int error;
+	int fd;
 
 	filepath = sbuf_data(path);
 
-	error = kern_openat(curthread, info->fd, filepath, 
+	/* XXX Permissions/flags. Also, is O_CREAT reasonable? */
+	error = kern_openat(curthread, AT_FDCWD, filepath, 
 		UIO_SYSSPACE, O_RDWR | O_CREAT, S_IRWXU);	
 	if (error != 0)
-	    return error;
+	    return (error);
 
-	error = kern_lseek(curthread, info->fd, info->offset, SEEK_SET);
+	fd = curthread->td_retval[0];
+
+	/* Vnodes are seekable. Fix up the offset here. */
+	error = kern_lseek(curthread, fd, info->offset, SEEK_SET);
 	if (error != 0)
-	    return error;
+	    return (error);
 
-	return 0;
+	/* Export the fd to the caller. */
+	*fdp = fd;
+
+	return (0);
 }
 
-static int
-slsrest_kqueue(struct proc *p, struct slskqueue *kqinfo, struct slsfile *info)
-{
-	struct kevent *kev;
-	int error, i;
-	int kqfd;
-
-	/* Create a kqueue for the process. */
-	error = kern_kqueue(curthread, 0, NULL);
-	if (error != 0)
-	    return error;
-
-	/* Move the fd to its original position. */
-	kqfd = curthread->td_retval[0];
-	if (kqfd != info->fd) {
-	    error = kern_dup(curthread, FDDUP_FIXED, 0, kqfd, info->fd);
-	    if (error != 0) {
-		kern_close(curthread, kqfd);
-		return error;
-	    }
-
-	    kern_close(curthread, kqfd);
-	}
-
-	/* For each kqinfo, create a kevent and register it. */
-	for (i = 0; i < kqinfo->numevents; i++) {
-	    kev = malloc(sizeof(*kev), M_SLSMM, M_WAITOK);
-
-	    kev->ident = sls_kevents[i].ident;
-	    /* XXX Right now we only need EVFILT_READ, which we 
-	     * aren't getting at checkpoint time. Find out why.
-	     */
-	    kev->filter = sls_kevents[i].filter; 
-	    kev->flags = sls_kevents[i].flags;
-	    kev->fflags = sls_kevents[i].fflags;
-	    kev->data = sls_kevents[i].data;
-	    /* Add the kevetnt to the kqueue */
-	    kev->flags = EV_ADD;
-
-	    /* If any of the events were disabled , keep them that way. */
-	    if ((sls_kevents[i].status & KN_DISABLED) != 0)
-		kev->flags |= EV_DISABLE;
-
-	    error = kqfd_register(kqfd, kev, curthread, 1);
-	    if (error != 0) {
-		/* 
-		 * We don't handle restoring certain types of
-		 * fds like IPv6 sockets yet.
-		 */
-		SLS_DBG("(BUG) fd for kevent %ld not restored\n", kev->ident);
-	    }
-	}
-
-	return 0;
-}
+/* -------------- END VNODE OPERATIONS -------------- */
 
 static int
-slsrest_pipe(struct proc *p, struct slspipe *ppinfo, struct slsfile *info)
+slsckpt_getvnode(struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
 {
-	int filedes[2];
-	int readend, writeend;
-	int curfd;
 	int error;
 
-	/* 
-	 * We may not need to restore this, because we 
-	 * can do it later for the pipe's other end.
-	 */
-	if (ppinfo->needrest == 0)
+	info->backer = (uint64_t) fp->f_vnode;
+
+	/* Write out the struct file. */
+	error = sbuf_bcat(sb, (void *) info, sizeof(*info));
+	if (error != 0)
+	    return (error);
+
+	error = slsckpt_vnode(p, fp->f_vnode, sb);
+	if (error != 0)
+	    return (error);
+
+	return (0);
+}
+
+static int
+slsckpt_getkqueue(struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
+{
+	struct kqueue *kq;
+	int error;
+
+	/* Acquire the kqueue for reading. */
+	error = kqueue_acquire(fp, &kq);
+	if (error != 0)
+	    return (error);
+
+	info->backer = (uint64_t) kq;
+
+	/* Write out the struct file. */
+	error = sbuf_bcat(sb, (void *) info, sizeof(*info));
+	if (error != 0)
+	    return (error);
+
+	error = slsckpt_kqueue(p, kq, sb);
+	if (error != 0)
+	    goto out;
+
+	kqueue_release(kq, 0);
+
+	return (0);
+
+out:
+	kqueue_release(kq, 0);
+	return (error);
+}
+
+static int
+slsckpt_getpipe(struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
+{
+	int error;
+
+	info->backer = (uint64_t) fp->f_data;
+
+	/* Write out the struct file. */
+	error = sbuf_bcat(sb, (void *) info, sizeof(*info));
+	if (error != 0)
+	    return (error);
+
+	error = slsckpt_pipe(p, fp, sb);
+	if (error != 0)
+	    return (error);
+
+	return (0);
+}
+
+static int
+slsckpt_getsocket(struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
+{
+	int error;
+
+	info->backer = (uint64_t) fp->f_data;
+
+	/* Write out the struct file. */
+	error = sbuf_bcat(sb, (void *) info, sizeof(*info));
+	if (error != 0)
+	    return (error);
+
+	error = slsckpt_socket(p, (struct socket *) fp->f_data, sb);
+	if (error != 0)
+	    return (error);
+
+	return (0);
+
+}
+
+/* 
+ * Get generic file info applicable to all kinds of files. 
+ * While one struct file can belong to multiple descriptor
+ * tables, the underlying structures (pipes, sockets, etc.)
+ * belong to exactly one open file when anonymous. That means
+ * that we can safely store them together.
+ */
+static int
+slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid)
+{
+	struct slsfile info;
+	struct sbuf *sb;
+	int error;
+
+	/* If we have already checkpointed this open file, return success. */
+	if (slskv_find(slsm.slsm_rectable, (uint64_t) fp, (uintptr_t *) &sb) == 0)
 	    return 0;
 
-	error = kern_pipe(curthread, filedes, O_NONBLOCK, NULL, NULL);
-	if (error != 0)
-	    return error;
+	info.type = fp->f_type;
+	info.flag = fp->f_flag;
+	info.offset = fp->f_offset;
 
-	/* If one end of the pipe is closed, have both ends point to the same fd. */
-	if (info->fd == ppinfo->onlyend) {
+	info.magic = SLSFILE_ID;
+	*slsid = (uint64_t) fp;
+	info.slsid = *slsid;
 
-	    if (ppinfo->iswriteend) {
-		kern_close(curthread, filedes[1]);
-		curfd = filedes[0];
-	    } else {
-		kern_close(curthread, filedes[0]);
-		curfd = filedes[1];
-	    }
+	sb = sbuf_new_auto();	
 
-	    if (info->fd != curfd) {
-		error = kern_dup(curthread, FDDUP_FIXED, 0, curfd, info->fd);
-		if (error != 0)
-		    return error;
-
-		kern_close(curthread, curfd);
-	    }
-
-	    kern_fcntl_freebsd(curthread, info->fd, F_SETFL, O_RDWR | O_NONBLOCK);
-	} else {
-	    /* Otherwise find which end is the write end. */
-	    readend = (ppinfo->iswriteend) ? ppinfo->otherend : info->fd;
-	    writeend = (ppinfo->iswriteend) ? info->fd : ppinfo->otherend;
-
-	    /* Otherwise find which end is the write end. */
-	    /* 
-	     * Move the descriptors to the right place. 
-	     * XXX What if the descriptors need to go to each other's place?
-	     * We aren't handling this right now.
-	     */
-
-	    if (writeend != filedes[1]) {
-		error = kern_dup(curthread, FDDUP_FIXED, 0, filedes[1], writeend);
-		if (error != 0)
-		    return error;
-
-		kern_close(curthread, filedes[1]);
-	    }
-
-	    if (readend != filedes[0]) {
-		error = kern_dup(curthread, FDDUP_FIXED, 0, filedes[0], readend);
-		if (error != 0)
-		    return error;
-
-		kern_close(curthread, filedes[0]);
-	    }
-
-	    kern_fcntl_freebsd(curthread, readend, F_SETFL, O_RDWR | O_NONBLOCK);
-	    kern_fcntl_freebsd(curthread, writeend, F_SETFL, O_RDWR | O_NONBLOCK);
-	    
-	}
-
-
-
-	return 0;
-}
-
-static int
-slsrest_socket(struct proc *p, struct slssock *info, struct slsfile *finfo)
-{
-	struct sockaddr_in addr_in;
-	struct sockaddr *sa;
-	struct socket *so;
-	struct file *fp;
-	int sockfd;
-	int error;
-
-	/* Open the socket. */
-	error = kern_socket(curthread, info->family, info->type, info->proto);
-	if (error != 0)
-	    return error;
-
-	/* Move the socket to the correct position. */
-	sockfd = curthread->td_retval[0];
-	if (sockfd != finfo->fd) {
-	    error = kern_dup(curthread, FDDUP_FIXED, 0, sockfd, finfo->fd);
-	    if (error != 0) {
-		kern_close(curthread, sockfd);
-		return error;
-	    }
-
-	    kern_close(curthread, sockfd);
-	    sockfd = finfo->fd;
-	}
-
-	/* Reach into the file descriptor and get the socket. */
-	fp = curthread->td_proc->p_fd->fd_files->fdt_ofiles[sockfd].fde_file;
-	so = (struct socket *) fp->f_data;
-
-	/* Set up all the options again. */
-
-	/* Do the same for the Internet protocol PCB. */
-	//so->so_options = info->options;
-
-	sa = malloc(SOCK_MAXADDRLEN, M_SLSMM, M_WAITOK);
-
-	/* Zero the address structs. */
-	bzero(&addr_in, sizeof(addr_in));
-	bzero(sa, SOCK_MAXADDRLEN);
-
-	addr_in.sin_family = info->family;
-	addr_in.sin_port = info->inp_inc.ie_lport;
-	/* XXX Find a way to transfer the address if it exists. */
-	addr_in.sin_addr.s_addr = htonl(INADDR_ANY);
-
-	/* Create the generic address. */
-	memcpy(sa, &addr_in, sizeof(addr_in));
-	sa->sa_len = sizeof(addr_in);
-
-	error = kern_bindat(curthread, AT_FDCWD, sockfd, sa);
-	if (error != 0) {
-	    kern_close(curthread, sockfd);
-	    free(sa, M_SLSMM);
-	    return error;
-	}
-
-	/* XXX Pick max backlog right now, find the actual one later. */
-	error = kern_listen(curthread, sockfd, 511);
-	if (error != 0) {
-	    kern_close(curthread, sockfd);
-	    free(sa, M_SLSMM);
-	    return error;
-	}
-
-	kern_fcntl_freebsd(curthread, sockfd, F_SETFL, O_RDWR | O_NONBLOCK);
-
-	free(sa, M_SLSMM);
-	return 0;
-}
-
-int 
-slsrest_file(struct proc *p, void *data, struct slsfile *info)
-{
-	switch(info->type) {
+	/* Checkpoint further information depending on the file's type. */
+	switch (fp->f_type) {
+	/* Backed by a vnode - get the name. */
 	case DTYPE_VNODE:
-	    return slsrest_vnode(p, (struct sbuf *) data, info);
+	    error = slsckpt_getvnode(p, fp, &info, sb);
+	    if (error != 0)
+		goto error;
 
+	    break;
+
+	/* Backed by a kqueue - get all pending knotes. */
 	case DTYPE_KQUEUE:
-	    return slsrest_kqueue(p, (struct slskqueue*) data, info);
-	
+	    error = slsckpt_getkqueue(p, fp, &info, sb);
+	    if (error != 0)
+		goto error;
+
+	    break;
+
+	/* Backed by a pipe - get existing data. */
 	case DTYPE_PIPE:
-	    return slsrest_pipe(p, data, info);
+
+	    /* 
+	     * In order to be able to use the open file table 
+	     * to find if we need to restore a file's peer, we
+	     * need to make it so that the open file and its 
+	     * backing pipe have the same ID. Pass it to the caller.
+	     */
+	    *slsid = (uint64_t) fp->f_data;
+	    info.slsid = *slsid;
+
+	    /* 
+	     * Since we're using the pipe pointer instead of the file 
+	     * pointer for deduplication, recheck whether we actually
+	     * need to checkpoint.
+	     */
+	    if (slskv_find(slsm.slsm_rectable, (uint64_t) slsid, (uintptr_t *) &sb) == 0) {
+		sbuf_delete(sb);
+		return 0;
+	    }
+
+	    error = slsckpt_getpipe(p, fp, &info, sb);
+	    if (error != 0)
+		goto error;
+
+	    break;
 
 	case DTYPE_SOCKET:
-	    return slsrest_socket(p, data, info);
+	    error = slsckpt_getsocket(p, fp, &info, sb);
+	    if (error != 0)
+		goto error;
+
+	    break;
 
 	default:
 	    panic("invalid file type");
 	}
 
-	return 0;
+	/* Add the backing entities to the global tables. */
+	error = slskv_add(slsm.slsm_rectable, *slsid, (uintptr_t) sb);
+	if (error != 0)
+	    return (error);
+
+	error = slskv_add(slsm.slsm_typetable, (uint64_t) sb, (uintptr_t) SLOSREC_FILE);
+	if (error != 0)
+	    return (error);
+
+	/* Give the SLS ID we want to use for the file pointer to the caller. */
+	*slsid = info.slsid;
+
+	return (0);
+
+error:
+	SLS_DBG("error %d", error);
+
+	sbuf_delete(sb);
+
+	return (error);
+
+}
+
+int 
+slsrest_file(void *slsbacker, struct slsfile *info, 
+	struct slskv_table *filetable, struct slskv_table *kqtable)
+{
+	struct file *fp;
+	uintptr_t pipe;
+	uint64_t slsid;
+	void *kqdata;
+	int error;
+	void *kq;
+	int fd;
+
+	slsid = info->slsid;
+
+	switch(info->type) {
+	case DTYPE_VNODE:
+	    error = slsrest_vnode((struct sbuf *) slsbacker, info, &fd);
+	    if (error != 0)
+		return (error);
+	    break;
+
+	case DTYPE_KQUEUE:
+	    kqdata = ((slsset *) slsbacker)->data;
+	    error = slsrest_kqueue((struct slskqueue *) kqdata, &fd);
+	    if (error != 0)
+		return (error);
+
+	    /* 
+	     * Associate the restored kqueue with its record. We can't 
+	     * restore the kevents properly because we need to have a 
+	     * fully restored file descriptor table. We therefore keep
+	     * the set of kevents for the kqueue in a table until we need it.
+	     */
+	    kq = curproc->p_fd->fd_files->fdt_ofiles[fd].fde_file->f_data;
+	    error = slskv_add(kqtable, (uint64_t) kq, (uintptr_t) slsbacker);
+	    if (error != 0)
+		return (error);
+
+	    break;
+	
+	case DTYPE_PIPE:
+
+	    /* 
+	     * Pipes are a special case, because restoring one end 
+	     * also brings back the other. For this reason, we look
+	     * for the pipe's SLS ID instead of the open file's.
+	     *
+	     * Because the rest of the filetable's data is indexed
+	     * by the ID held in the slsfile structure, we do an
+	     * extra check using the ID of slspipe. If we find it,
+	     * we have already restored the peer, and so we don't
+	     * need to do anything.
+	     */
+	    slsid = ((struct slspipe *) slsbacker)->slsid;
+	    if (slskv_find(filetable, slsid, &pipe) == 0)
+		return 0;
+
+	    error = slsrest_pipe(filetable, (struct slspipe *) slsbacker, &fd);
+	    if (error != 0)
+		return (error);
+	    break;
+
+	case DTYPE_SOCKET:
+	    error = slsrest_socket(slsbacker, info, &fd);
+	    if (error != 0)
+		return (error);
+	    break;
+
+	default:
+	    panic("invalid file type");
+	}
+
+	/* Get the open file from the table and add it to the hashtable. */
+	fp = curthread->td_proc->p_fd->fd_files->fdt_ofiles[fd].fde_file;
+
+	error = slskv_add(filetable, info->slsid, (uintptr_t) fp);
+	if (error != 0) {
+	    kern_close(curthread, fd);
+	    return (error);
+	}
+
+	/* We keep the open file in the filetable, so we grab a reference. */
+	fhold(fp);
+
+	/* 
+	 * Remove the open from this process' table. 
+	 * When we find out we need it, we'll put
+	 * it into the table of the appropriate process.
+	 */
+	kern_close(curthread, fd);
+
+	return (0);
 }
 
 int
 slsckpt_filedesc(struct proc *p, struct sbuf *sb)
 {
-	int i;
-	int error = 0;
-	struct file *fp;
-	struct filedesc *filedesc;
 	struct slsfiledesc slsfiledesc;
-	struct slsfile sentinel;
+	struct slskv_table *fdtable;
+	struct filedesc *filedesc;
+	uint64_t slsid;
 	struct socket *so;
+	struct file *fp;
+	int error = 0;
+	int fd;
+
+	error = slskv_create(&fdtable, SLSKV_NOREPLACE);
+	if (error != 0)
+	    return (error);
 
 	filedesc = p->p_fd;
 
@@ -557,7 +421,6 @@ slsckpt_filedesc(struct proc *p, struct sbuf *sb)
 	vhold(filedesc->fd_rdir);
 
 	slsfiledesc.fd_cmask = filedesc->fd_cmask;
-	slsfiledesc.num_files = 0;
 	slsfiledesc.magic = SLSFILEDESC_ID;
 
 	FILEDESC_XLOCK(filedesc);
@@ -574,7 +437,6 @@ slsckpt_filedesc(struct proc *p, struct sbuf *sb)
 	    goto done;
 	}
 
-
 	PROC_UNLOCK(p);
 	error = sls_vn_to_path_append(filedesc->fd_rdir, sb);
 	PROC_LOCK(p);
@@ -583,12 +445,11 @@ slsckpt_filedesc(struct proc *p, struct sbuf *sb)
 	    goto done;
 	}
 
-
-	for (i = 0; i <= filedesc->fd_lastfile; i++) {
-	    if (!fdisused(filedesc, i))
+	for (fd = 0; fd <= filedesc->fd_lastfile; fd++) {
+	    if (!fdisused(filedesc, fd))
 		continue;
 
-	    fp = filedesc->fd_files->fdt_ofiles[i].fde_file;
+	    fp = filedesc->fd_files->fdt_ofiles[fd].fde_file;
 
 	    /* 
 	     * XXX Right now we checkpoint a subset of all file types. 
@@ -628,48 +489,22 @@ slsckpt_filedesc(struct proc *p, struct sbuf *sb)
 		continue;
 
 	    }
-
 	    /* Checkpoint the file structure itself. */
-	    error = slsckpt_file(p, fp, i, sb);
+	    error = slsckpt_file(p, fp, &slsid);
 	    if (error != 0)
 		goto done;
 
-	    /* Checkpoint further information depending on the file's type. */
-	    switch (fp->f_type) {
-	    /* Backed by a vnode - get the name. */
-	    case DTYPE_VNODE:
-		error = slsckpt_vnode(p, fp->f_vnode, sb);
-		break;
-
-	    /* Backed by a kqueue - get all pending knotes. */
-	    case DTYPE_KQUEUE:
-		error = slsckpt_kqueue(p, fp, sb);
-		break;
-
-	    /* Backed by a pipe - get existing data. */
-	    case DTYPE_PIPE:
-		error = slsckpt_pipe(p, fp, sb);
-		break;
-
-	    case DTYPE_SOCKET:
-		error = slsckpt_socket(p, (struct socket *) fp->f_data, sb);
-		break;
-
-	    default:
-		panic("invalid file type");
-	    }
-
+	    /* Add the fd - slsid pair to the table. */
+	    error = slskv_add(fdtable, fd, (uintptr_t) slsid);
 	    if (error != 0)
 		goto done;
 
 	}
 
-	memset(&sentinel, 0, sizeof(sentinel));
-	sentinel.magic = SLSFILES_END;
-	error = sbuf_bcat(sb, (void *) &sentinel, sizeof(sentinel));
+	/* Add the table to the descriptor table record. */
+	error = slskv_serial(fdtable, sb);
 	if (error != 0)
 	    goto done;
-
 
 done:
 
@@ -678,17 +513,22 @@ done:
 
 	FILEDESC_XUNLOCK(filedesc);
 
+	slskv_destroy(fdtable);
 
-	return error;
+	return (error);
 }
 
 int
-slsrest_filedesc(struct proc *p, struct slsfiledesc info)
+slsrest_filedesc(struct proc *p, struct slsfiledesc info, 
+	struct slskv_table *fdtable, struct slskv_table *filetable)
 {
 	int stdfds[] = { 0, 1, 2 };
 	struct filedesc *newfdp;
 	char *cdir, *rdir;
+	struct file *fp;
+	uint64_t slsid;
 	int error = 0;
+	int fd, res;
 
 	cdir = sbuf_data(info.cdir);
 	rdir = sbuf_data(info.rdir);
@@ -696,25 +536,54 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc info)
 	 * We assume that fds 0, 1, and 2 are still stdin, stdout, stderr.
 	 * This is a valid assumption considering that we control the process 
 	 * on top of which we restore.
+	 *
+	 * XXX Find a nicer way to do that. Some processes don't have these,
+	 * how are we going to handle them? This is especially important for
+	 * multiprocess checkpointing, where we may have multiple processes
+	 * under one controlling terminal.
 	 */
 	error = fdcopy_remapped(p->p_fd, stdfds, 3, &newfdp);
 	if (error != 0)
-	    return error;
+	    return (error);
 	fdinstall_remapped(curthread, newfdp);
 
 	PROC_UNLOCK(p);
 	error = kern_chdir(curthread, cdir, UIO_SYSSPACE);
 	if (error != 0)
-	    return error;
+	    return (error);
 
 	error = kern_chroot(curthread, rdir, UIO_SYSSPACE);
 	if (error != 0)
-	    return error;
+	    return (error);
 	PROC_LOCK(p);
 
 	FILEDESC_XLOCK(newfdp);
 	newfdp->fd_cmask = info.fd_cmask;
 	FILEDESC_XUNLOCK(newfdp);
 
-	return 0;
+
+	/* Attach the appropriate open files to the descriptor table. */
+	while (slskv_pop(fdtable, (uint64_t *) &fd, (uintptr_t *) &slsid) == 0) {
+	    /* Get the restored open file from the ID. */
+	    error = slskv_find(filetable, slsid, (uint64_t *) &fp);
+	    if (error != 0)
+		return (error);
+
+	    /* We restore the file _exactly_ at the same fd.*/
+	    error = fdalloc(curthread, fd, &res);
+	    if (error != 0)
+		return (error);
+
+	    if (res != fd)
+		return (error);
+
+	    /* Get a reference to the open file for the table and install it. */
+	    fhold(fp);
+	    /* XXX Keep the UF_EXCLOSE flag with the entry somehow, maybe w/ bit ops? */
+	    _finstall(p->p_fd, fp, fd, O_CLOEXEC, NULL);
+	}
+	
+	slskv_destroy(fdtable);
+
+	return (0);
 }

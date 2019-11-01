@@ -417,8 +417,6 @@ sls_objdata(struct slos_vnode *vp, uint64_t rno, vm_object_t obj)
 	    if (page == NULL || startpage->pindex >= page->pindex)
 		break;
 	}
-	printf("(%p) %d pages checkpointed out of %d (full size %ld)", obj, x, obj->resident_page_count, obj->size);
-	printf(" Backer: (%p)\n", obj->backing_object);
 
 
 	if (error != 0)
