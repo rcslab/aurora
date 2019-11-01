@@ -1,8 +1,8 @@
+
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/disk.h>
-#include <sys/vnode.h>
 
 #include <fcntl.h>
 #include <getopt.h>
@@ -12,8 +12,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <uuid.h>
-#include <dirent.h>
-#include <time.h>
 
 #include <sls.h>
 #include <slos.h>
@@ -31,8 +29,6 @@ struct bnode *broot;
 #define BROOTBLK    1
 #define SZROOTBLK   2
 #define BKTBLK	    3
-
-#define SLOS_ROOT_INODE (100000)
 
 /* Used in init_bnode below. */
 #define max(a, b) (((a) > (b)) ? (a) : (b))
@@ -53,7 +49,7 @@ init_bnode(struct bnode *bnode, uint64_t blkno, uint64_t vsize, int external)
 	bnode->bsize = ((sb->sb_bsize - sizeof(struct bnode)) / 
 	     (max(vsize, sizeof(struct slos_diskptr)) + sizeof(uint64_t))) - 1;
 	bnode->size = 0;
-	bnode->parent = (struct slos_diskptr) { blkno, 1};
+	bnode->parent = (struct slos_diskptr) { blkno, 1, 0 };
 	bnode->magic = SLOS_BMAGIC;
 
 }
@@ -156,7 +152,12 @@ write_sb()
 	sb->sb_inodes.offset = sb->sb_data.offset;
 	sb->sb_inodes.size = 1;
 
-		
+	status = pwrite(fd, sb, bsize, 0);
+	if (status < 0) {
+		perror("pwritesb");
+		return -1;
+	}
+	
 
 	/* 
 	 * Create the root of the alllocator offset btree. 
@@ -235,115 +236,18 @@ write_sb()
 	/* The root of the inode btree. */
 	init_bnode(broot, sb->sb_inodes.offset, 
 		sizeof(struct slos_diskptr), BNODE_EXTERNAL);
-	uint64_t blks = 1;
-	init_bkey(broot, 0, SLOS_ROOT_INODE);
-	blks++;
-	init_bval(broot, 0, &DISKPTR_BLOCK(sb->sb_data.offset + blks));
-	broot->size = 1;
+	/* No elements yet. */
+	broot->size = 0;
 
 	status = pwrite(fd, broot, bsize, broot->blkno * bsize);
-	if (status < 0)
-	    goto error;
-	
-
-	// Write the root_inode;
-	struct slos_inode root_inode;
-	struct timespec ts;
-
-	status = clock_gettime(CLOCK_REALTIME, &ts);
-	if (status < 0) 
-	    goto error;
-
-	bzero(&root_inode, sizeof(struct slos_inode));
-	root_inode.ino_pid = SLOS_ROOT_INODE;
-	root_inode.ino_blk = sb->sb_data.offset + blks;
-	root_inode.ino_flags |= VV_ROOT;
-	root_inode.ino_magic = SLOS_IMAGIC;
-	root_inode.ino_mode = S_IFDIR | S_IRWXU;
-	root_inode.ino_ctime = ts.tv_sec;
-	root_inode.ino_ctime_nsec = ts.tv_nsec;
-	root_inode.ino_mtime = ts.tv_sec;
-	root_inode.ino_mtime_nsec = ts.tv_nsec;
-	root_inode.ino_link_num = 2;
-	root_inode.ino_lastrec = 1;
-	root_inode.ino_asize = bsize * 2;
-	root_inode.ino_size = bsize * 2;
-
-	// Write the record btree
-	blks++;
-	init_bnode(broot, sb->sb_data.offset + blks, sizeof(uint64_t), BNODE_EXTERNAL);
-
-	root_inode.ino_records.offset = broot->blkno;
-	root_inode.ino_records.size = 1;
-
-	status = pwrite(fd, &root_inode, bsize, root_inode.ino_blk * bsize);
-	if (status < 0)
-	    goto error;
-
-	init_bkey(broot, 0, 0);
-	blks++;
-	uint64_t cur_dir_ptr = sb->sb_data.offset + blks;
-	init_bval(broot, 0, &DISKPTR_BLOCK(cur_dir_ptr));
-	blks++;
-	uint64_t prev_dir_ptr = sb->sb_data.offset + blks;
-	init_bkey(broot, 1, 1);
-	init_bval(broot, 1, &DISKPTR_BLOCK(prev_dir_ptr));
-	broot->size = 2;
-
-	status = pwrite(fd, broot, bsize, broot->blkno * bsize);
-	if (status < 0)
-	    goto error;
-
-	struct dirent dir;
-	dir.d_fileno = SLOS_ROOT_INODE;
-	dir.d_off = 0;
-	dir.d_type = DT_DIR;
-
-	dir.d_namlen = 1;
-	dir.d_reclen = sizeof(struct dirent);
-	stpcpy(dir.d_name, ".");
-
-	//Write the records now
-	struct slos_record dir_rec;
-	dir_rec.rec_type = SLOSREC_DATA;
-	dir_rec.rec_length = sizeof(struct dirent);
-	dir_rec.rec_size = 1;
-	dir_rec.rec_magic  = SLOS_RMAGIC;
-	dir_rec.rec_blkno = cur_dir_ptr;
-	dir_rec.rec_num = 0;
-	dir_rec.rec_data = DISKPTR_NULL;
-	memcpy(&dir_rec.rec_internal_data, &dir, sizeof(struct dirent));
-
-	// Write the record for the current directory
-	status = pwrite(fd, &dir_rec, bsize, cur_dir_ptr * bsize);
-	if (status < 0)
-	    goto error;
-
-	dir_rec.rec_blkno = prev_dir_ptr;
-	dir_rec.rec_num = 1;
-	dir.d_namlen = 2;
-	dir.d_reclen = sizeof(struct dirent);
-	stpcpy(dir.d_name, "..");
-	memcpy(&dir_rec.rec_internal_data, &dir, sizeof(struct dirent));
-
-	// Write the record the the previous directory
-	status = pwrite(fd, &dir_rec, bsize, prev_dir_ptr * bsize);
-	if (status < 0)
-	    goto error;
-
-	sb->sb_data.size -= blks;
-	status = pwrite(fd, sb, bsize, 0);
-	if (status < 0)
-	    goto error;
+	if (status < 0) {
+		perror("pwriteino");
+		free(broot);
+		free(sb);
+		return -1;
+	}
 
 	return 0;
-
-error:
-    perror("pwriteino");
-    free(broot);
-    free(sb);
-    return -1;
-
 }
 
 int

@@ -505,5 +505,5 @@ static moduledata_t moduleData = {
 };
 
 DECLARE_MODULE(sls, moduleData, SI_SUB_DRIVERS, SI_ORDER_MIDDLE);
-MODULE_DEPEND(sls, slsfs, 0, 0, 0);
+MODULE_DEPEND(sls, slos, 0, 0, 0);
 MODULE_VERSION(sls, 0);

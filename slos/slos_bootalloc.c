@@ -4,7 +4,6 @@
 #include "slos_bootalloc.h"
 #include "slos_internal.h"
 #include "slosmm.h"
-#include "slsfs.h"
 
 /* 
  * Creates a map of used blocks in the btree area. 
@@ -31,10 +30,8 @@ slos_bytemap(struct slos *slos, uint64_t rootblk, uint8_t *bytemap, int follow_v
 
 	/* Start from the root of the btree. */
 	error = bnode_read(slos, rootblk, &bnode);
-	if (error != 0) {
-	    DBUG("Error reading rootblk\n");
+	if (error != 0)
 	    goto error;
-	}
 
 	/* 
 	 * Mark the block as in-use and point the in-memory bnode there.
@@ -42,7 +39,7 @@ slos_bytemap(struct slos *slos, uint64_t rootblk, uint8_t *bytemap, int follow_v
 	 * bnodes at the end in order to avoid reading them in multiple times.
 	 */
 	if (bytemap[bnode->blkno] != 0) {
-	    DBUG("Block %ld found twice\n", bnode->blkno);
+	    printf("Block %ld found twice\n", bnode->blkno);
 	    error = EINVAL;
 	    goto error;
 	}
@@ -52,9 +49,8 @@ slos_bytemap(struct slos *slos, uint64_t rootblk, uint8_t *bytemap, int follow_v
 	/* Reach the leftmost node. */
 	while (bnode->external == BNODE_INTERNAL) {
 	    bparent = bnode;
-	    bnode = bnode_child(slos, bnode, 0);
+	    bnode = bnode_child(bnode, 0);
 	    if (bnode == NULL)
-		DBUG("Error bytemap no child\n");
 		goto error;
 
 	    /* Lazy update of parent pointers in the path. */
@@ -62,13 +58,12 @@ slos_bytemap(struct slos *slos, uint64_t rootblk, uint8_t *bytemap, int follow_v
 		bnode->parent.offset = bparent->blkno;
 		error = bnode_write(slos, bnode);
 		if (error != 0)
-		    DBUG("Error writing block\n");
 		    goto error;
 	    }
 	    
 	    /* If we have already found the bnode something is wrong. */
 	    if (bytemap[bnode->blkno] != 0) {
-		DBUG("Block %ld found twice\n", bnode->blkno);
+		printf("Block %ld found twice\n", bnode->blkno);
 		error = EINVAL;
 		goto error;
 	    }
@@ -90,9 +85,8 @@ slos_bytemap(struct slos *slos, uint64_t rootblk, uint8_t *bytemap, int follow_v
 		for (i = 0; i < bnode->size; i++) {
 		    bnode_getvalue(bnode, i, &diskptr);
 		    error = slos_bytemap(slos, diskptr.offset, bytemap, 0);
-		    if (error != 0) {
+		    if (error != 0)
 			goto error;
-		    }
 		}
 	    }
 
@@ -116,22 +110,20 @@ slos_bytemap(struct slos *slos, uint64_t rootblk, uint8_t *bytemap, int follow_v
 	     */
 	    if (boffset < bparent->size) {
 
-		bnode = bnode_child(slos, bparent, boffset + 1);
-		if (bnode == NULL) {
+		bnode = bnode_child(bparent, boffset + 1);
+		if (bnode == NULL)
 		    goto error;
-		}
 
 		/* Lazy update of parent pointers in the path. */
 		if (bnode->parent.offset != bparent->blkno) {
 		    bnode->parent.offset = bparent->blkno;
 		    error = bnode_write(slos, bnode);
-		    if (error != 0) {
+		    if (error != 0)
 			goto error;
-		    }
 		}
 
 		if (bytemap[bnode->blkno] != 0) {
-		    DBUG("Block %ld found twice\n", bnode->blkno);
+		    printf("Block %ld found twice\n", bnode->blkno);
 		    error = EINVAL;
 		    goto error;
 		}
@@ -142,7 +134,7 @@ slos_bytemap(struct slos *slos, uint64_t rootblk, uint8_t *bytemap, int follow_v
 		while (bnode->external == BNODE_INTERNAL) {
 		    bparent = bnode;
 
-		    bnode = bnode_child(slos, bnode, 0);
+		    bnode = bnode_child(bnode, 0);
 		    if (bnode == NULL)
 			goto error;
 
@@ -155,7 +147,7 @@ slos_bytemap(struct slos *slos, uint64_t rootblk, uint8_t *bytemap, int follow_v
 		    }
 
 		    if (bytemap[bnode->blkno] != 0) {
-			DBUG("Block %ld found twice\n", bnode->blkno);
+			printf("Block %ld found twice\n", bnode->blkno);
 			error = EINVAL;
 			goto error;
 		    }
@@ -210,12 +202,10 @@ slos_bootpopulate(struct slos *slos, struct slos_bootalloc *alloc)
 
 	/* Populate the bytemap with the offsets btree. */
 	error = slos_bytemap(slos, slos->slos_sb->sb_broot.offset, bytemap, 0);
-	if (error != 0) {
-	    DBUG("First bytemap error.\n");
+	if (error != 0)
 	    goto out;
-	}
 
-	DBUG("First bytemap done.\n");
+	printf("First bytemap done.\n");
 
 	/* 
 	 * Keep populating with the sizes btree, and all size buckets. The
@@ -224,9 +214,9 @@ slos_bootpopulate(struct slos *slos, struct slos_bootalloc *alloc)
 	 * one as well.
 	 */
 	error = slos_bytemap(slos, slos->slos_sb->sb_szroot.offset, bytemap, 1);
-	if (error != 0) {
+	if (error != 0)
 	    goto out;
-	}
+
 
 	/* 
 	 * We begin from the start of the allocator region because the bytemap
@@ -241,7 +231,7 @@ slos_bootpopulate(struct slos *slos, struct slos_bootalloc *alloc)
 	    if (bytemap[i] == 0)
 		alloc->stack[alloc->size++] = i;
 	    else {
-		DBUG("Block %d is in use\n", i);
+		printf("Block %d is in use\n", i);
 		alloc->bytemap[i] = 1;
 	    }
 	}
@@ -271,6 +261,7 @@ slos_bootinit(struct slos *slos)
 	alloc->size = 0;
 	alloc->stack = malloc(alloc->maxsize * sizeof(*alloc->stack), M_SLOS, M_WAITOK);
 
+    
 	/* Read the btree into memory to find unused space. */
 	error = slos_bootpopulate(slos, alloc);
 	if (error != 0) {
@@ -308,7 +299,6 @@ struct slos_diskptr
 slos_bootalloc(struct slos_bootalloc *alloc)
 {
 	uint64_t blkid;
-	struct slos_diskptr ptr;
 
 	/* Check if the bootstrap region is empty. */
 	if (alloc->size == 0) {
@@ -318,16 +308,14 @@ slos_bootalloc(struct slos_bootalloc *alloc)
 
 	/* Pop the element from the stack. */
 	blkid = alloc->stack[--alloc->size]; 
-	ptr = DISKPTR_BLOCK(blkid);
 
 	/* Update statistics. */
 	alloc->succeeded += 1;
 	if (alloc->bytemap[blkid] != 0)
-	    DBUG("ERROR: DOUBLE ALLOC FOR %ld\n", blkid);
+	    printf("ERROR: DOUBLE ALLOC FOR %ld\n", blkid);
 	alloc->bytemap[blkid] = 1;
-	DBUG("Allocating at offset %ld, of size %ld\n", ptr.offset, ptr.size);
 
-	return ptr;
+	return DISKPTR_BLOCK(blkid);
 }
 
 
@@ -338,10 +326,10 @@ slos_bootfree(struct slos_bootalloc *alloc, struct slos_diskptr diskptr)
 	if (diskptr.size == 0)
 	    return;
 	    
-	DBUG("Trying to free offset %ld, of size %ld\n", diskptr.offset, diskptr.size);
-	KASSERT(alloc->size <= alloc->maxsize, ("bootalloc_free in bounds"));
-	KASSERT(diskptr.size == 1, ("disk pointer is one block wide"));
-	KASSERT(alloc->bytemap[diskptr.offset] == 1, ("freeing unallocated block"));
+	KASSERT(alloc->size == alloc->maxsize, "bootalloc_free in bounds");
+	KASSERT(diskptr.size == 1, "disk pointer is one block wide");
+	KASSERT(diskptr.offset == 0, "disk pointer is block aligned");
+	KASSERT(alloc->bytemap[diskptr.offset] == 1, "freeing allocated block");
 
 	/* Push the element into the stack. */
 	alloc->stack[alloc->size++] = diskptr.offset;
@@ -355,9 +343,9 @@ slos_bootfree(struct slos_bootalloc *alloc, struct slos_diskptr diskptr)
 void
 slos_bootprint(struct slos_bootalloc *alloc)
 {
-	DBUG("Bootstrap allocator %p\n", alloc);
-	DBUG("Current Size: %lu\tMaximum Size: %lu\n", alloc->size, alloc->maxsize);
-	DBUG("Successful Allocs: %lu\tFailed Allocs: %lu\tFrees: %lu\n", 
+	printf("Bootstrap allocator %p\n", alloc);
+	printf("Current Size: %lu\tMaximum Size: %lu\n", alloc->size, alloc->maxsize);
+	printf("Successful Allocs: %lu\tFailed Allocs: %lu\tFrees: %lu\n", 
 		alloc->succeeded, alloc->failed, alloc->frees);
 }
 
@@ -432,7 +420,7 @@ slos_test_bootalloc(void)
 		 */
 		if (blkid == 0) {
 		    if (slos.slos_bootalloc->size != 0) {
-			DBUG("ERROR: Allocator has size %lu but failed\n", 
+			printf("ERROR: Allocator has size %lu but failed\n", 
 				slos.slos_bootalloc->size);
 			error = EINVAL;
 			goto out;
@@ -447,7 +435,7 @@ slos_test_bootalloc(void)
 		 * we get memory corruption and status is invalid.
 		 */
 		if (status[blkid] != UNALLOCATED && status[blkid] != FREED) {
-		    DBUG("ERROR: Allocated element %lu has status %d\n", 
+		    printf("ERROR: Allocated element %lu has status %d\n", 
 			    blkid, status[blkid]);
 		    error = EINVAL;
 		    goto out;
@@ -493,7 +481,7 @@ out:
 	}
 
 	if (total != slos.slos_bootalloc->maxsize - slos.slos_bootalloc->size) {
-	    DBUG("ERROR: Allocator is missing %lu blocks, but only %lu can be found\n",
+	    printf("ERROR: Allocator is missing %lu blocks, but only %lu can be found\n",
 		    total, slos.slos_bootalloc->maxsize - slos.slos_bootalloc->size);
 	    error = EINVAL;
 	}

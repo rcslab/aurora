@@ -35,7 +35,7 @@
 #include "slos_internal.h"
 #include "slos_io.h"
 #include "slosmm.h"
-#include "slsfs.h"
+
 
 /* 
  * Initialize a UIO for operation rwflag at offset off,
@@ -124,7 +124,7 @@ slos_uiozero(struct uio *auio, size_t xfersize)
 
 /* Read from the specified extent. */
 static int
-slos_read_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
+slos_read_disk(struct vnode *vp, struct slos_diskptr *diskptr, struct uio *uio)
 {
 	struct buf *bp;
 	uint64_t boff;
@@ -133,6 +133,7 @@ slos_read_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
 	uint64_t bytesinextent;
 	uint64_t sectorsperblock;
 	int error;
+
 	/* 
 	 * There is a distinction between logical 
 	 * blocks and physical sectors. Most disks
@@ -141,12 +142,12 @@ slos_read_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
 	 * block numbers given to the buffer cache 
 	 * correspond to 512 byte increments.
 	 */
-	sectorsperblock = slos->slos_sb->sb_bsize / slos->slos_sb->sb_ssize;
+	sectorsperblock = slos.slos_sb->sb_bsize / slos.slos_sb->sb_ssize;
 	/* XXX This doesn't work for sb_ssize != 512, find out why */
 
 	for (error = 0, bp = NULL; uio->uio_resid > 0; bp = NULL) {
 	    /* Check if the offset is still in the extent. */
-	    bytesinextent = (diskptr->size * slos->slos_sb->sb_bsize) - uio->uio_offset;
+	    bytesinextent = (diskptr->size * slos.slos_sb->sb_bsize) - uio->uio_offset;
 	    if (bytesinextent <= 0)
 		break;
 
@@ -156,7 +157,7 @@ slos_read_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
 	    boff = blkoff(slos, uio->uio_offset);
 
 	    /* Get the size to be transferred from the buffer. */
-	    xfersize = slos->slos_sb->sb_bsize - boff;
+	    xfersize = slos.slos_sb->sb_bsize - boff;
 
 	    /* Check if we need to read the full block. */
 	    if (uio->uio_resid < xfersize)
@@ -167,7 +168,7 @@ slos_read_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
 		xfersize = bytesinextent;
 
 	    /* Get the blocks from the buffer cache. */
-	    error = bread(slos->slos_vp, bno, slos->slos_sb->sb_bsize, 
+	    error = bread(slos.slos_vp, bno, slos.slos_sb->sb_bsize, 
 			    curthread->td_proc->p_ucred, &bp);
 	    if (error != 0) {
 		brelse(bp);
@@ -179,7 +180,7 @@ slos_read_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
 	     * If we got couldn't read as much as we needed,
 	     * make sure we don't read past valid data.
 	     */
-	    size = slos->slos_sb->sb_bsize - bp->b_resid;
+	    size = slos.slos_sb->sb_bsize - bp->b_resid;
 	    if (size < xfersize)
 		xfersize = size;
 
@@ -211,7 +212,7 @@ slos_read_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
 
 /* Write to an extent beginning from offset off for len bytes. */
 static int
-slos_write_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
+slos_write_disk(struct vnode *vp, struct slos_diskptr *diskptr, struct uio *uio)
 {
 	struct buf *bp;
 	uint64_t boff;
@@ -221,8 +222,6 @@ slos_write_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio
 	uint64_t sectorsperblock;
 	int error;
 
-	struct vnode *vp = slos->slos_vp;
-
 	/* 
 	 * There is a distinction between logical 
 	 * blocks and physical sectors. Most disks
@@ -231,7 +230,7 @@ slos_write_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio
 	 * block numbers given to the buffer cache correspond
 	 * to 512 byte increments.
 	 */
-	sectorsperblock = slos->slos_sb->sb_bsize / slos->slos_sb->sb_ssize;
+	sectorsperblock = slos.slos_sb->sb_bsize / slos.slos_sb->sb_ssize;
 
 	for (error = 0; uio->uio_resid > 0;) {
 
@@ -241,7 +240,7 @@ slos_write_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio
 	     */
 
 	    /* Check if the offset is still in the extent. */
-	    bytesinextent = (diskptr->size * slos->slos_sb->sb_bsize) - uio->uio_offset;
+	    bytesinextent = (diskptr->size * slos.slos_sb->sb_bsize) - uio->uio_offset;
 	    if (bytesinextent <= 0)
 		break;
 
@@ -250,7 +249,7 @@ slos_write_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio
 	    boff = blkoff(slos, uio->uio_offset);
 
 	    /* Get the size to be transferred from the buffer. */
-	    xfersize = slos->slos_sb->sb_bsize - boff;
+	    xfersize = slos.slos_sb->sb_bsize - boff;
 
 	    /* Check if we need to read the full block. */
 	    if (uio->uio_resid < xfersize)
@@ -260,7 +259,7 @@ slos_write_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio
 	    if (bytesinextent < xfersize)
 		xfersize = bytesinextent;
 
-	    bp = getblk(vp, bno, slos->slos_sb->sb_bsize, 0, 0, 0);
+	    bp = getblk(vp, bno, slos.slos_sb->sb_bsize, 0, 0, 0);
 	    if (bp == NULL)
 		break;
 
@@ -285,59 +284,61 @@ slos_write_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio
 }
 
 int
-slos_read(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
-{
-	struct uio *newuio;
-	size_t extent_size;
-	size_t file_offset;
-	int error;  
-	struct vnode *vp = slos->slos_vp;
-
-	if (!vn_isdisk(vp, &error)) {
-
-	    newuio = cloneuio(uio);
-
-	    /* Get the offset in the file which we're backing the FS with.  */
-	    file_offset = diskptr->offset * slos->slos_sb->sb_bsize;
-	    newuio->uio_offset = file_offset + uio->uio_offset;
-
-	    /* Truncate the size of the operation to fit into the extent. */
-	    extent_size = diskptr->size * slos->slos_sb->sb_bsize;
-	    newuio->uio_resid = min(uio->uio_resid, extent_size - uio->uio_offset);
-
-	    /* Issue the read itself. */
-	    error = VOP_READ(vp, newuio, 0, curthread->td_ucred);
-	    /* Increment the size of the original UIO. */
-	    uio->uio_resid = newuio->uio_resid;
-	    uio->uio_offset = newuio->uio_offset - file_offset;
-
-	    free(newuio, M_IOV);
-
-	    return error;
-	} else {
-
-	    return slos_read_disk(slos, diskptr, uio);
-	}
-}
-
-int
-slos_write(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
+slos_read(struct vnode *vp, struct slos_diskptr *diskptr, struct uio *uio)
 {
 	struct uio *newuio;
 	size_t extent_size;
 	size_t file_offset;
 	int error;
-	struct vnode *vp = slos->slos_vp;
 
-	if (!vn_isdisk(vp, &error)) {
+	switch (vp->v_type) {
+	case VREG:
 	    newuio = cloneuio(uio);
 
 	    /* Get the offset in the file which we're backing the FS with.  */
-	    file_offset = diskptr->offset * slos->slos_sb->sb_bsize;
+	    file_offset = diskptr->offset * slos.slos_sb->sb_bsize;
 	    newuio->uio_offset = file_offset + uio->uio_offset;
 
 	    /* Truncate the size of the operation to fit into the extent. */
-	    extent_size = diskptr->size * slos->slos_sb->sb_bsize;
+	    extent_size = diskptr->size * slos.slos_sb->sb_bsize;
+	    newuio->uio_resid = min(uio->uio_resid, extent_size - uio->uio_offset);
+
+	    /* Issue the read itself. */
+	    error = VOP_READ(vp, newuio, 0, curthread->td_ucred);
+
+	    /* Increment the size of the original UIO. */
+	    uio->uio_resid = newuio->uio_resid;
+	    uio->uio_offset = newuio->uio_offset - file_offset;
+
+	    free(newuio, M_IOV);
+	    return error;
+		
+	case VCHR:
+	    return slos_read_disk(vp, diskptr, uio);
+
+	default:
+	    return EINVAL;
+	}
+}
+
+int
+slos_write(struct vnode *vp, struct slos_diskptr *diskptr, struct uio *uio)
+{
+	struct uio *newuio;
+	size_t extent_size;
+	size_t file_offset;
+	int error;
+
+	switch (vp->v_type) {
+	case VREG:
+	    newuio = cloneuio(uio);
+
+	    /* Get the offset in the file which we're backing the FS with.  */
+	    file_offset = diskptr->offset * slos.slos_sb->sb_bsize;
+	    newuio->uio_offset = file_offset + uio->uio_offset;
+
+	    /* Truncate the size of the operation to fit into the extent. */
+	    extent_size = diskptr->size * slos.slos_sb->sb_bsize;
 	    newuio->uio_resid = min(uio->uio_resid, extent_size - uio->uio_offset);
 
 	    /* Issue the write itself. */
@@ -348,11 +349,13 @@ slos_write(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
 	    uio->uio_offset = newuio->uio_offset - file_offset;
 
 	    free(newuio, M_IOV);
-
 	    return error;
-	} else {
+		
+	case VCHR:
+	    return slos_write_disk(vp, diskptr, uio);
 
-	    return slos_write_disk(slos, diskptr, uio);
+	default:
+	    return EINVAL;
 	}
 }
 
@@ -380,9 +383,9 @@ slos_opblk(struct slos *slos, uint64_t blkno, void *buf, int write)
 	slos_uioinit(&auio, 0, (write != 0) ? UIO_WRITE : UIO_READ, &aiov, 1);
 
 	if (write != 0)
-	    error = slos_write(slos, &sbptr,  &auio);
+	    error = slos_write(slos->slos_vp, &sbptr,  &auio);
 	else 
-	    error = slos_read(slos, &sbptr,  &auio);
+	    error = slos_read(slos->slos_vp, &sbptr,  &auio);
 
 	return error;
 }
@@ -403,7 +406,7 @@ slos_writeblk(struct slos *slos, uint64_t blkno, void *buf)
 
 /* Read the superblock of the SLOS into the in-memory struct. */
 int
-slos_sbread(struct slos * slos)
+slos_sbread(void)
 {
 	struct slos_sb *sb;
 	struct buf *bp;
@@ -413,7 +416,7 @@ slos_sbread(struct slos * slos)
 	int error;
 
 	/* If we're backed by a file, just call VOP_READ. */
-	if (slos->slos_vp->v_type == VREG) {
+	if (slos.slos_vp->v_type == VREG) {
 	    sb = malloc(SLOS_FILEBLKSIZE, M_SLOS, M_WAITOK | M_ZERO);
 
 	    /* Read the first SLOS_FILEBLKSIZE bytes. */
@@ -422,18 +425,18 @@ slos_sbread(struct slos * slos)
 	    slos_uioinit(&auio, 0,UIO_READ, &aiov, 1);
 
 	    /* Issue the read. */
-	    error = VOP_READ(slos->slos_vp, &auio, 0, curthread->td_ucred);
+	    error = VOP_READ(slos.slos_vp, &auio, 0, curthread->td_ucred);
 	    if (error != 0) 
 		free(sb, M_SLOS);
 
 	    /* Make the superblock visible. */
-	    slos->slos_sb = sb;
+	    slos.slos_sb = sb;
 
 	    return error;
 	}
 
 	/* Lock needed to call vn_stat. */
-	error = vn_lock(slos->slos_vp, LK_EXCLUSIVE);
+	error = vn_lock(slos.slos_vp, LK_EXCLUSIVE);
 	if (error != 0) {
 	    printf("ERROR: Locking vnode failed with %d\n", error);
 	    return error;
@@ -444,8 +447,8 @@ slos_sbread(struct slos * slos)
 	 * for information like the block size, so we can't use them.
 	 * We instead do a stat call on the vnode to get it directly.
 	 */
-	error = vn_stat(slos->slos_vp, &st, NULL, NULL, curthread);
-	VOP_UNLOCK(slos->slos_vp, 0);
+	error = vn_stat(slos.slos_vp, &st, NULL, NULL, curthread);
+	VOP_UNLOCK(slos.slos_vp, 0);
 	if (error != 0) {
 	    return error;
 	}
@@ -457,7 +460,7 @@ slos_sbread(struct slos * slos)
 	 * the block size, we can't use them. We do a bread instead.
 	 */
 	/* Get the blocks from the buffer cache. */
-	error = bread(slos->slos_vp, 0, st.st_blksize, curthread->td_proc->p_ucred, &bp);
+	error = bread(slos.slos_vp, 0, st.st_blksize, curthread->td_proc->p_ucred, &bp);
 	if (error != 0) {
 	    free(sb, M_SLOS);
 	    return error;
@@ -474,7 +477,7 @@ slos_sbread(struct slos * slos)
 	} 
 
 	/* Make the superblock visible to the struct. */
-	slos->slos_sb = sb;
+	slos.slos_sb = sb;
 	return 0;
 }
 
@@ -515,7 +518,7 @@ slos_sbwrite(struct slos *slos)
 	 * our routines which make use of its fields. No need
 	 * for a raw block operation as in slos_sbread().
 	 */
-	error = slos_write(slos, &sbptr,  &auio);
+	error = slos_write(slos->slos_vp, &sbptr,  &auio);
 
 	return error;
 }
@@ -551,7 +554,7 @@ slos_testio_random(void)
 	char *vals;
 	
 	extents = malloc(sizeof(*extents) * EXTENTS, M_SLOS, M_WAITOK);
-	buf = malloc(sizeof(*buf) * slos->slos_sb->sb_bsize * MAXSIZE, M_SLOS, M_WAITOK);
+	buf = malloc(sizeof(*buf) * slos.slos_sb->sb_bsize * MAXSIZE, M_SLOS, M_WAITOK);
 	vals = malloc(sizeof(*vals) * EXTENTS, M_SLOS, M_WAITOK);
 
 	/* 
@@ -559,7 +562,7 @@ slos_testio_random(void)
 	 * We set it up so that we do not include the superblock
 	 * or the bootstrap allocator region.
 	 */
-	curmax = slos->slos_sb->sb_data.offset;
+	curmax = slos.slos_sb->sb_data.offset;
 
 	/* Get a random chunk of the disk for each extent. */
 	for (i = 0; i < EXTENTS; i++) {
@@ -577,7 +580,7 @@ slos_testio_random(void)
 	    /* Do the initial write on each extent. */
 	    for (i = 0; i < EXTENTS; i++) {
 		/* Fill up the buffer with the random letter. */
-		buflen = extents[i].size * slos->slos_sb->sb_bsize;
+		buflen = extents[i].size * slos.slos_sb->sb_bsize;
 		for (int j = 0; j < buflen; j++)
 		    buf[j] = vals[i];
 
@@ -588,7 +591,7 @@ slos_testio_random(void)
 		slos_uioinit(&auio, 0, UIO_WRITE, &aiov, 1);
 
 		/* Do the actual write. */
-		error = slos_write(slos->slos_vp, &extents[i], &auio);
+		error = slos_write(slos.slos_vp, &extents[i], &auio);
 		if (error != 0) {
 		    printf("ERROR: Error %d for slos_write\n", error);
 		    error = EINVAL;
@@ -601,7 +604,7 @@ slos_testio_random(void)
 	    /* Read the blocks back, making sure they are read correctly. */
 	    for (i = 0; i < EXTENTS; i++) {
 		/* Poison the buffer to make sure there's not stale data. */
-		buflen = extents[i].size * slos->slos_sb->sb_bsize;
+		buflen = extents[i].size * slos.slos_sb->sb_bsize;
 		for (int j = 0; j < buflen; j++)
 		    buf[j] = POISON;
 
@@ -612,7 +615,7 @@ slos_testio_random(void)
 		slos_uioinit(&auio, 0, UIO_READ, &aiov, 1);
 
 		/* Do the actual read. */
-		error = slos_read(slos->slos_vp, &extents[i], &auio);
+		error = slos_read(slos.slos_vp, &extents[i], &auio);
 		if (error != 0) {
 		    printf("ERROR: Error %d for slos_read\n", error);
 		    error = EINVAL;
@@ -633,7 +636,7 @@ slos_testio_random(void)
 
 out:
 	if (error != 0) {
-	    printf("Block size: %lu\n", slos->slos_sb->sb_bsize);
+	    printf("Block size: %lu\n", slos.slos_sb->sb_bsize);
 	    printf("Buffer values:\n");
 	    for (i = 0; i < EXTENTS; i++)
 		printf("%d: %c\n", i, vals[i]);
@@ -679,9 +682,9 @@ slos_testio_intraseg(void)
 	 * Get it from the data region to avoid overwriting
 	 * any nodes of the allocator btree or the superblock.
 	 */
-	extent.offset = slos->slos_sb->sb_data.offset;
+	extent.offset = slos.slos_sb->sb_data.offset;
 	extent.size = 1 + (random() % MAXSIZE);
-	buflen = extent.size * slos->slos_sb->sb_bsize;
+	buflen = extent.size * slos.slos_sb->sb_bsize;
 
 	buf = malloc(sizeof(*buf) * buflen,  M_SLOS, M_WAITOK);
 	vals = malloc(sizeof(*vals) * buflen,  M_SLOS, M_WAITOK);
@@ -702,7 +705,7 @@ slos_testio_intraseg(void)
 	    slos_uioinit(&auio, 0, UIO_WRITE, &aiov, 1);
 
 	    /* Do the actual write. */
-	    error = slos_write(slos->slos_vp, &extent, &auio);
+	    error = slos_write(slos.slos_vp, &extent, &auio);
 	    if (error != 0) {
 		printf("ERROR: Error %d for slos_write\n", error);
 		error = EINVAL;
@@ -722,7 +725,7 @@ slos_testio_intraseg(void)
 	    slos_uioinit(&auio, 0, UIO_READ, &aiov, 1);
 
 	    /* Do the actual read. */
-	    error = slos_read(slos->slos_vp, &extent, &auio);
+	    error = slos_read(slos.slos_vp, &extent, &auio);
 	    if (error != 0) {
 		printf("ERROR: Error %d for slos_read\n", error);
 		error = EINVAL;
@@ -744,7 +747,7 @@ slos_testio_intraseg(void)
 
 out:
 	if (error != 0) {
-	    printf("Block size: %lu\n", slos->slos_sb->sb_bsize);
+	    printf("Block size: %lu\n", slos.slos_sb->sb_bsize);
 	    printf("Buffer values:\n");
 	    for (i = 0; i < buflen; i++) {
 		printf("%c", buf[i]);

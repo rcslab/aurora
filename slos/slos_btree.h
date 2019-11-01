@@ -55,8 +55,6 @@ struct btree {
 
     uint64_t size;			    /* Total number of keys */
     uint64_t depth;			    /* Depth of the btree */
-
-    struct slos	*slos;
 };
 
 struct btree *btree_init(struct slos *slos, uint64_t blkno, int alloctype);

@@ -296,7 +296,7 @@ static void
 sls_checkpoint(struct proc *p, struct slspart *slsp)
 {
 	struct slskv_table *newtable = NULL, *table;
-	struct slos_node *vp;
+	struct slos_vnode *vp;
 	int error = 0;
 
 	SLS_DBG("Dump created\n");

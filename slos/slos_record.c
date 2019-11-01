@@ -1,5 +1,4 @@
 #include <sys/param.h>
-#include <sys/vnode.h>
 
 #include "../include/slos.h"
 #include "slos_alloc.h"
@@ -18,7 +17,7 @@ slos_recdread(struct slos *slos, uint64_t blkno, struct slos_record **rpp)
 	struct slos_record *rp;
 	int error;
 
-	rp = malloc(slos->slos_sb->sb_bsize, M_SLOS, M_WAITOK | M_ZERO);
+	rp = malloc(slos->slos_sb->sb_bsize, M_SLOS, M_WAITOK);
 	
 	/* Read the bnode from the disk. */
 	error = slos_readblk(slos, blkno, rp); 
@@ -56,34 +55,33 @@ slos_recdwrite(struct slos *slos, struct slos_record *rp)
  * appended to the inode. 
  */
 int 
-slos_rcreate(struct slos_node *vp, uint64_t rtype, uint64_t *rnop)
-{   
+slos_rcreate(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
+{	
 	struct slos_diskptr recordptr;
 	struct slos_diskptr dataptr = DISKPTR_NULL;
 	struct slos_record *rp = NULL;
 	struct bnode *bnode = NULL;
-	struct slos *slos = vp->vno_slos;
 	int error;
 
 	/* Lock the inode. */
 	mtx_lock(&vp->vno_mtx);
 
 	/* Get space on disk for the record itself. */
-	recordptr = slos_alloc(slos->slos_alloc, 1);
+	recordptr = slos_alloc(slos.slos_alloc, 1);
 	if (recordptr.offset == 0) {
 	    error = ENOSPC;
 	    goto error;
 	}
 	
 	/* Get space for the data offset btree root. */
-	dataptr = slos_alloc(slos->slos_alloc, 1);
+	dataptr = slos_alloc(slos.slos_alloc, 1);
 	if (dataptr.offset == 0) {
 	    error = ENOSPC;
 	    goto error;
 	}
 
 	/* Create the on-disk representation. */
-	rp = malloc(slos->slos_sb->sb_bsize, M_SLOS, M_WAITOK | M_ZERO);
+	rp = malloc(slos.slos_sb->sb_bsize, M_SLOS, M_WAITOK | M_ZERO);
 	rp->rec_type = rtype;
 	rp->rec_length = 0;
 	rp->rec_size = 0;
@@ -102,14 +100,14 @@ slos_rcreate(struct slos_node *vp, uint64_t rtype, uint64_t *rnop)
 	vp->vno_lastrec += 1;
 
 	/* Create the root of the data btree. */
-	bnode = bnode_alloc(slos, dataptr.offset, 
+	bnode = bnode_alloc(&slos, dataptr.offset, 
 		sizeof(struct slos_recentry), BNODE_EXTERNAL);
-	error = bnode_write(slos, bnode);
+	error = bnode_write(&slos, bnode);
 	if (error != 0)
 	    goto error;
 
 	/* Write the record out to the disk. */
-	error = slos_recdwrite(slos, rp);
+	error = slos_recdwrite(&slos, rp);
 	if (error != 0)
 	    goto error;
 
@@ -123,7 +121,7 @@ slos_rcreate(struct slos_node *vp, uint64_t rtype, uint64_t *rnop)
 	 * Export the updated inode (this includes possibly 
 	 * updating the root of the records btree if needed). 
 	 */
-	error = slos_vpexport(slos, vp);
+	error = slos_vpexport(&slos, vp);
 	if (error != 0) {
 	    printf("Could not export vp with error %d\n", error);
 	    goto error;
@@ -137,7 +135,9 @@ slos_rcreate(struct slos_node *vp, uint64_t rtype, uint64_t *rnop)
 
 	bnode_free(bnode);
 	free(rp, M_SLOS);
+
 	mtx_unlock(&vp->vno_mtx);
+
 
 	return 0;
 
@@ -147,8 +147,8 @@ error:
 	bnode_free(bnode);
 	free(rp, M_SLOS);
 
-	slos_free(slos->slos_alloc, dataptr);
-	slos_free(slos->slos_alloc, recordptr);
+	slos_free(slos.slos_alloc, dataptr);
+	slos_free(slos.slos_alloc, recordptr);
 
 	mtx_unlock(&vp->vno_mtx);
 
@@ -156,7 +156,7 @@ error:
 }
 
 int 
-slos_rremove(struct slos_node *vp, uint64_t rno)
+slos_rremove(struct slos_vnode *vp, uint64_t rno)
 {
 
 	/* XXX Place all data blocks to the GC */
@@ -167,19 +167,17 @@ slos_rremove(struct slos_node *vp, uint64_t rno)
 }
 
 int 
-slos_rread(struct slos_node *vp, uint64_t rno, struct uio *auio)
+slos_rread(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
 {
 	struct slos_recentry preventry, nextentry;
 	uint64_t prevoff, nextoff, startoff;
 	struct slos_diskptr recordptr;
+	struct slos_record *rp = NULL;
+	struct btree *data = NULL;
 	uint64_t oldresid, oldoff;
 	uint64_t holesize;
 	uint64_t size_read;
 	int error;
-
-	struct slos_record *rp = NULL;
-	struct btree *data = NULL;
-	struct slos *slos = vp->vno_slos;
 
 	mtx_lock(&vp->vno_mtx);
 
@@ -188,8 +186,8 @@ slos_rread(struct slos_node *vp, uint64_t rno, struct uio *auio)
 	if (error != 0)
 	    goto error;
 
-	/* Get the actual record data from the slos-> */
-	error = slos_recdread(slos, recordptr.offset, &rp);
+	/* Get the actual record data from the SLOS. */
+	error = slos_recdread(&slos, recordptr.offset, &rp);
 	if (error != 0)
 	    goto error;
 
@@ -200,7 +198,7 @@ slos_rread(struct slos_node *vp, uint64_t rno, struct uio *auio)
 	}
 
 	/* Create the in-memory btree of data offsets. */
-	data = btree_init(slos, rp->rec_data.offset, ALLOCMAIN);
+	data = btree_init(&slos, rp->rec_data.offset, ALLOCMAIN);
 
 	/* 
 	 * Keep reading until we either reach the end of the 
@@ -287,7 +285,7 @@ slos_rread(struct slos_node *vp, uint64_t rno, struct uio *auio)
 		startoff = auio->uio_offset;
 
 		/* Do the UIO itself, then revert the UIO resid and offset. */
-		error = slos_read(slos, &preventry.diskptr, auio);
+		error = slos_read(slos.slos_vp, &preventry.diskptr, auio);
 		if (error != 0)
 		    goto error;
 
@@ -315,19 +313,17 @@ error:
 }
 
 int 
-slos_rwrite(struct slos_node *vp, uint64_t rno, struct uio *auio)
+slos_rwrite(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
 {
 	struct slos_recentry leftentry, rightentry, curentry, unused;
+	struct slos_recentry newentry = {DISKPTR_NULL, 0, 0};
 	uint64_t newoff, leftoff, rightoff, curoff;
+	struct slos_diskptr newdata = DISKPTR_NULL;
+	struct slos_record *rp = NULL;
 	struct slos_diskptr recordptr;
 	uint64_t blksize, xfersize;
-	uint64_t oldresid;
-
-	struct slos_diskptr newdata = DISKPTR_NULL;
-	struct slos_recentry newentry = {DISKPTR_NULL, 0, 0};
-	struct slos_record *rp = NULL;
-	struct slos *slos = vp->vno_slos;
 	struct btree *data = NULL;
+	uint64_t oldresid;
 	int error = 0;
 
 	/* XXX HACK for special case. */
@@ -340,13 +336,13 @@ slos_rwrite(struct slos_node *vp, uint64_t rno, struct uio *auio)
 	if (error != 0)
 	    goto error;
 
-	/* Get the actual record data from the slos-> */
-	error = slos_recdread(slos, recordptr.offset, &rp);
+	/* Get the actual record data from the SLOS. */
+	error = slos_recdread(&slos, recordptr.offset, &rp);
 	if (error != 0)
 	    goto error;
 
 	/* Create the in-memory btree of data offsets. */
-	data = btree_init(slos, rp->rec_data.offset, ALLOCMAIN);
+	data = btree_init(&slos, rp->rec_data.offset, ALLOCMAIN);
 
 	/* 
 	 * While we haven't written everything yet, allocate enough
@@ -355,13 +351,13 @@ slos_rwrite(struct slos_node *vp, uint64_t rno, struct uio *auio)
 	 */
 	while (auio->uio_resid > 0) {
 	    /* Find the size of the new data in blocks. */
-	    blksize = auio->uio_resid / slos->slos_sb->sb_bsize;
-	    if ((auio->uio_resid % slos->slos_sb->sb_bsize) != 0)
+	    blksize = auio->uio_resid / slos.slos_sb->sb_bsize;
+	    if ((auio->uio_resid % slos.slos_sb->sb_bsize) != 0)
 		blksize += 1;
 
 	    /* Get as large an extent as possible. */
 	    newoff = auio->uio_offset;
-	    newdata = slos_alloc(slos->slos_alloc, blksize);
+	    newdata = slos_alloc(slos.slos_alloc, blksize);
 	    if (newdata.offset == 0) {
 		error = ENOSPC;
 		goto error;
@@ -371,7 +367,7 @@ slos_rwrite(struct slos_node *vp, uint64_t rno, struct uio *auio)
 	     * Fill up the newly allocated extent 
 	     * with as much data as possible.
 	     */
-	    xfersize = newdata.size * slos->slos_sb->sb_bsize;
+	    xfersize = newdata.size * slos.slos_sb->sb_bsize;
 	    if (xfersize > auio->uio_resid)
 		xfersize = auio->uio_resid;
 
@@ -388,7 +384,7 @@ slos_rwrite(struct slos_node *vp, uint64_t rno, struct uio *auio)
 	    auio->uio_resid = xfersize;
 
 	    do {
-		error = slos_write(slos, &newdata, auio);
+		error = slos_write(slos.slos_vp, &newdata, auio);
 		if (error != 0)
 		    goto error;
 
@@ -454,13 +450,13 @@ slos_rwrite(struct slos_node *vp, uint64_t rno, struct uio *auio)
 
 
 		    /* Hacky write */
-		    error = slos_write(slos, &leftentry.diskptr, hackuio);
+		    error = slos_write(slos.slos_vp, &leftentry.diskptr, hackuio);
 		    if (error != 0)
 			goto error;
 
 		    /* auio has already been fixed up, because we wrote into newentry. */
 		    /* We never used newentry, free */
-		    slos_free(slos->slos_alloc, newdata);
+		    slos_free(slos.slos_alloc, newdata);
 
 		    /* 
 		     * We were contained in one entry, so 
@@ -525,7 +521,7 @@ slos_rwrite(struct slos_node *vp, uint64_t rno, struct uio *auio)
 		 * we delete them. In the future, this code will be 
 		 * removed and freeing memory will be done by the GC.
 		 */
-		slos_free(slos->slos_alloc, curentry.diskptr);
+		slos_free(slos.slos_alloc, curentry.diskptr);
 		rp->rec_size -= curentry.diskptr.size;
 
 	    } 
@@ -598,7 +594,7 @@ slos_rwrite(struct slos_node *vp, uint64_t rno, struct uio *auio)
 	if (data->root != rp->rec_data.offset)
 	    rp->rec_data.offset = data->root;
 
-	error = slos_recdwrite(slos, rp);
+	error = slos_recdwrite(&slos, rp);
 	if (error != 0)
 	    goto error;
 
@@ -617,7 +613,7 @@ slos_rwrite(struct slos_node *vp, uint64_t rno, struct uio *auio)
 error:
 	
 	btree_discardelem(data);
-	slos_free(slos->slos_alloc, newdata);
+	slos_free(slos.slos_alloc, newdata);
 
 	if (data != NULL) {
 	    btree_keepelem(data);
@@ -642,13 +638,12 @@ error:
  * of an extent.
  */
 int
-slos_rseek(struct slos_node *vp, uint64_t rno, uint64_t offset, 
+slos_rseek(struct slos_vnode *vp, uint64_t rno, uint64_t offset, 
 	int flags, uint64_t *seekoffp, uint64_t *seeklenp)
 {
 	struct slos_recentry preventry, nextentry;
 	struct slos_record *rp = NULL;
 	struct slos_diskptr recordptr;
-	struct slos *slos = vp->vno_slos;
 	uint64_t prevoff, nextoff;
 	struct btree *data = NULL;
 	int error = 0;
@@ -667,13 +662,13 @@ slos_rseek(struct slos_node *vp, uint64_t rno, uint64_t offset,
 	if (error != 0)
 	    goto out;
 
-	/* Get the actual record data from the slos-> */
-	error = slos_recdread(slos, recordptr.offset, &rp);
+	/* Get the actual record data from the SLOS. */
+	error = slos_recdread(&slos, recordptr.offset, &rp);
 	if (error != 0)
 	    goto out;
 
 	/* Create the in-memory btree of data offsets. */
-	data = btree_init(slos, rp->rec_data.offset, ALLOCMAIN);
+	data = btree_init(&slos, rp->rec_data.offset, ALLOCMAIN);
 
 	if ((flags & SREC_SEEKHOLE) != 0) {
 	    /* 
@@ -777,13 +772,11 @@ out:
  * Right now these are the size and type.
  */
 int
-slos_rstat(struct slos_node *vp, uint64_t rno, struct slos_rstat *stat)
+slos_rstat(struct slos_vnode *vp, uint64_t rno, struct slos_rstat *stat)
 {
 	struct slos_diskptr ptr;
 	struct slos_record *rp;
 	int error;
-
-	struct slos *slos = vp->vno_slos;
 
 	mtx_lock(&vp->vno_mtx);
 
@@ -793,7 +786,7 @@ slos_rstat(struct slos_node *vp, uint64_t rno, struct slos_rstat *stat)
 	    return error;
 	}
 
-	error = slos_recdread(slos, ptr.offset, &rp);
+	error = slos_recdread(&slos, ptr.offset, &rp);
 	if (error != 0) {
 	    mtx_unlock(&vp->vno_mtx);
 	    return 0;
@@ -820,12 +813,11 @@ slos_rstat(struct slos_node *vp, uint64_t rno, struct slos_rstat *stat)
  * example finding the first or last record that has a specific type.
  */
 
-struct slos_record *
-slos_prevrec(struct slos_node *vp, uint64_t rno)
+static struct slos_record *
+slos_prevrec(struct slos_vnode *vp, uint64_t rno)
 {
 	struct slos_diskptr ptr;
 	struct slos_record *rp;
-	struct slos *slos = vp->vno_slos;
 	int error;
 
 	mtx_lock(&vp->vno_mtx);
@@ -840,7 +832,7 @@ slos_prevrec(struct slos_node *vp, uint64_t rno)
 	    return NULL;
 	}
 
-	error = slos_recdread(slos, ptr.offset, &rp);
+	error = slos_recdread(&slos, ptr.offset, &rp);
 	if (error != 0) {
 	    mtx_unlock(&vp->vno_mtx);
 	    return NULL;
@@ -852,14 +844,12 @@ slos_prevrec(struct slos_node *vp, uint64_t rno)
 
 }
 
-struct slos_record * 
-slos_nextrec(struct slos_node *vp, uint64_t rno)
+static struct slos_record* 
+slos_nextrec(struct slos_vnode *vp, uint64_t rno)
 {
 	struct slos_diskptr ptr;
 	struct slos_record *rp;
 	int error;
-
-	struct slos *slos = vp->vno_slos;
 
 	mtx_lock(&vp->vno_mtx);
 
@@ -873,7 +863,7 @@ slos_nextrec(struct slos_node *vp, uint64_t rno)
 	    return NULL;
 	}
 
-	error = slos_recdread(slos, ptr.offset, &rp);
+	error = slos_recdread(&slos, ptr.offset, &rp);
 	if (error != 0) {
 	    mtx_unlock(&vp->vno_mtx);
 	    return NULL;
@@ -886,12 +876,11 @@ slos_nextrec(struct slos_node *vp, uint64_t rno)
 
 }
 
-struct slos_record *
-slos_firstrec(struct slos_node *vp)
+static struct slos_record *
+slos_firstrec(struct slos_vnode *vp)
 {
 	struct slos_diskptr ptr;
 	struct slos_record *rp;
-	struct slos *slos = vp->vno_slos;
 	uint64_t rno;
 	int error;
 
@@ -904,7 +893,7 @@ slos_firstrec(struct slos_node *vp)
 	    return NULL;
 	}
 
-	error = slos_recdread(slos, ptr.offset, &rp);
+	error = slos_recdread(&slos, ptr.offset, &rp);
 	if (error != 0) {
 	    mtx_unlock(&vp->vno_mtx);
 	    return NULL;
@@ -916,14 +905,12 @@ slos_firstrec(struct slos_node *vp)
 }
 
 static struct slos_record *
-slos_lastrec(struct slos_node *vp)
+slos_lastrec(struct slos_vnode *vp)
 {
 	struct slos_diskptr ptr;
 	struct slos_record *rp;
 	uint64_t rno;
 	int error;
-
-	struct slos *slos = vp->vno_slos;
 
 	mtx_lock(&vp->vno_mtx);
 
@@ -934,7 +921,7 @@ slos_lastrec(struct slos_node *vp)
 	    return NULL;
 	}
 
-	error = slos_recdread(slos, ptr.offset, &rp);
+	error = slos_recdread(&slos, ptr.offset, &rp);
 	if (error != 0) {
 	    mtx_unlock(&vp->vno_mtx);
 	    return NULL;
@@ -946,7 +933,7 @@ slos_lastrec(struct slos_node *vp)
 }
 
 int
-slos_firstrno(struct slos_node *vp, uint64_t *rnop)
+slos_firstrno(struct slos_vnode *vp, uint64_t *rnop)
 {
 	struct slos_diskptr ptr;
 	uint64_t rno;
@@ -969,7 +956,7 @@ slos_firstrno(struct slos_node *vp, uint64_t *rnop)
 }
 
 int
-slos_lastrno(struct slos_node *vp, uint64_t *rnop)
+slos_lastrno(struct slos_vnode *vp, uint64_t *rnop)
 {
 	struct slos_diskptr ptr;
 	uint64_t rno;
@@ -992,7 +979,7 @@ slos_lastrno(struct slos_node *vp, uint64_t *rnop)
 }
 
 int
-slos_prevrno(struct slos_node *vp, uint64_t *rnop)
+slos_prevrno(struct slos_vnode *vp, uint64_t *rnop)
 {
 	struct slos_diskptr ptr;
 	uint64_t rno;
@@ -1018,7 +1005,7 @@ slos_prevrno(struct slos_node *vp, uint64_t *rnop)
 }
 
 int
-slos_nextrno(struct slos_node *vp, uint64_t *rnop)
+slos_nextrno(struct slos_vnode *vp, uint64_t *rnop)
 {
 	struct slos_diskptr ptr;
 	uint64_t rno;
@@ -1044,7 +1031,7 @@ slos_nextrno(struct slos_node *vp, uint64_t *rnop)
 }
 
 int
-slos_firstrno_typed(struct slos_node *vp, uint64_t rtype, uint64_t *rnop)
+slos_firstrno_typed(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
 {
 	struct slos_record *rp = NULL;	
 	uint64_t rno;
@@ -1072,7 +1059,7 @@ slos_firstrno_typed(struct slos_node *vp, uint64_t rtype, uint64_t *rnop)
 }
 
 int
-slos_lastrno_typed(struct slos_node *vp, uint64_t rtype, uint64_t *rnop)
+slos_lastrno_typed(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
 {
 	struct slos_record *rp = NULL;	
 	uint64_t rno;
@@ -1116,7 +1103,7 @@ slos_lastrno_typed(struct slos_node *vp, uint64_t rtype, uint64_t *rnop)
 int
 slos_test_record(void)
 {
-	struct slos_node *vp = NULL;
+	struct slos_vnode *vp = NULL;
 	uint64_t holesize, holeoff;
 	uint64_t seekoff, seeklen;
 	uint64_t offset, len;
@@ -1137,7 +1124,7 @@ slos_test_record(void)
 	result = malloc(OPSIZE, M_SLOS, M_WAITOK | M_ZERO);
 	
 	/* Set up the inode. */
-	error = slos_icreate(&slos, RECPID, VREG);
+	error = slos_icreate(&slos, RECPID);
 	if (error != 0)
 	    goto error;
 

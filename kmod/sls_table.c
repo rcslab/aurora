@@ -78,7 +78,7 @@ sls_isdata(uint64_t type) {
  * Reads in a metadata record representing one or more SLS info structs.
  */
 static int
-sls_readmeta_slos(struct slos_node *vp, uint64_t rno, struct slos_rstat stat,
+sls_readmeta_slos(struct slos_vnode *vp, uint64_t rno, struct slos_rstat stat,
 	struct slskv_table *table, void **recordp)
 {
 	struct iovec aiov;
@@ -126,7 +126,7 @@ sls_readmeta_slos(struct slos_node *vp, uint64_t rno, struct slos_rstat stat,
  * and stores it as a linked list of page runs. 
  */
 static int
-sls_readdata_slos(struct slos_node *vp, uint64_t rno, struct slos_rstat stat,
+sls_readdata_slos(struct slos_vnode *vp, uint64_t rno, struct slos_rstat stat,
 	struct slskv_table *metatable, struct slskv_table *datatable)
 	
 {
@@ -221,7 +221,7 @@ sls_readdata_slos(struct slos_node *vp, uint64_t rno, struct slos_rstat stat,
  * the record table.
  */
 int
-sls_read_slos(struct slos_node *vp, struct slskv_table **metatablep,
+sls_read_slos(struct slos_vnode *vp, struct slskv_table **metatablep,
 	struct slskv_table **datatablep)
 {
 	struct slskv_table *metatable, *datatable;
@@ -246,7 +246,7 @@ sls_read_slos(struct slos_node *vp, struct slskv_table **metatablep,
 
 	/* ------------ SLOS-Specific Part ------------ */
 
-	/* Traverse the whole node, grabbing all records. */
+	/* Traverse the whole vnode, grabbing all records. */
 	error = slos_firstrno(vp, &rno);
 	if (error != 0)
 	    goto error;
@@ -356,7 +356,7 @@ sls_contig_pages(vm_object_t obj, vm_page_t *page)
  * linked list of contiguous memory areas.
  */
 static int
-sls_objdata(struct slos_node *vp, uint64_t rno, vm_object_t obj)
+sls_objdata(struct slos_vnode *vp, uint64_t rno, vm_object_t obj)
 {
 	vm_page_t startpage, page;
 	size_t contig_len;
@@ -432,7 +432,7 @@ sls_objdata(struct slos_node *vp, uint64_t rno, vm_object_t obj)
  * The record is contiguous, and only has data in the beginning.
  */
 static int
-sls_writemeta_slos(struct slos_node *vp, struct sbuf *sb, uint64_t type, uint64_t *rnop)
+sls_writemeta_slos(struct slos_vnode *vp, struct sbuf *sb, uint64_t type, uint64_t *rnop)
 {
 	uint64_t rno;
 	struct iovec aiov;
@@ -480,7 +480,7 @@ sls_writemeta_slos(struct slos_node *vp, struct sbuf *sb, uint64_t type, uint64_
  * in the VM object.
  */
 static int
-sls_writedata_slos(struct slos_node *vp, struct sbuf *sb,
+sls_writedata_slos(struct slos_vnode *vp, struct sbuf *sb,
 	uint64_t type, struct slskv_table *objtable)
 {
 	struct slsvmobject *info;
@@ -526,7 +526,7 @@ sls_writedata_slos(struct slos_node *vp, struct sbuf *sb,
  * need to be sent to the SLOS.
  */
 int
-sls_write_slos(struct slos_node *vp, struct slskv_table *table, struct slskv_table *objtable)
+sls_write_slos(struct slos_vnode *vp, struct slskv_table *table, struct slskv_table *objtable)
 {
 	struct sbuf *sb;
 	uint64_t type;
@@ -884,7 +884,7 @@ out:
 int
 slstable_test(void)
 {
-	struct slos_node *vp = NULL;
+	struct slos_vnode *vp = NULL;
 	struct slskv_table *origtable = NULL, *backuptable = NULL;
 	struct slskv_table *datatable = NULL, *metatable = NULL;
 	struct slspagerun *pagerun, *tmppagerun;
@@ -898,7 +898,7 @@ slstable_test(void)
 	uint64_t type;
 	int error, i;
 
-	/* Create a node in the SLOS for testing. */
+	/* Create a vnode in the SLOS for testing. */
 	error = slos_icreate(&slos, VNODE_ID);
 	if (error != 0)
 	    return error;

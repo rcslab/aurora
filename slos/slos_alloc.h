@@ -21,7 +21,6 @@
 struct slos_blkalloc {
 	struct btree	*offsets;   /* A btree that maps region offsets to sizes */
 	struct btree	*sizes;	    /* A btree that maps sizes to region offsets */
-	struct slos	*slos;	    /* Slos that the blk allocator is allocating for */
 	uint64_t	succeeded;  /* Number of allocations succeeded */
 	uint64_t	partial;    /* Number of partially successful allocations */
 	uint64_t	failed;	    /* Number of allocations failed */
