@@ -13,40 +13,40 @@
 
 #include <sls.h>
 
-static struct option checkpoint_longopts[] = {
+static struct option partdel_longopts[] = {
 	{ "oid", required_argument, NULL, 'o' },
 	{ NULL,	no_argument, NULL, 0},
 };
 
 void
-checkpoint_usage(void)
+partdel_usage(void)
 {
-	printf("Usage: slsctl checkpoint <-p oid>\n");
+	printf("Usage: slsctl partdel -o oid\n");
 }
 
 int
-checkpoint_main(int argc, char* argv[])
+partdel_main(int argc, char* argv[])
 {
 	int oid = -1;
 	int opt;
 
-	while ((opt = getopt_long(argc, argv, "o:", checkpoint_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "o:", partdel_longopts, NULL)) != -1) {
 	    switch (opt) {
 	    case 'o':
 		oid = strtol(optarg, NULL, 10);
 		break;
 	    default:
-		checkpoint_usage();
+		partdel_usage();
 		return 0;
 	    }
 	}
 
 	if (optind != argc || oid == -1) {
-	    checkpoint_usage();
+	    partdel_usage();
 	    return 0;
 	}
 
-	if (sls_checkpoint(oid) < 0)
+	if (sls_partdel(oid) < 0)
 	    return 1;
 
 	return 0;

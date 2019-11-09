@@ -18,8 +18,10 @@ tests/llist/llist
 tests/memory/memory
 tests/mmap/mmap
 tests/multithread/multithread
+tests/pipes/pipes
 tests/print/print
 tests/register/register
+tests/sharemap/sharemap
 tests/signal/signal
 tests/sleep/sleep
 tests/unlink/unlink

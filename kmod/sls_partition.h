@@ -22,25 +22,30 @@
 #define SPROC_DETACHED	    2	/* Process has been detached */
 
 struct slspart {
-    /* XXX Change from PIDs to lists of PIDs */
-    uint64_t		    slsp_pid;	    /* PID of proc */
+    uint64_t		    slsp_oid;	    /* OID of the partition */
     uint64_t		    slsp_epoch;	    /* Current epoch, incremented after ckpt */
 
+    slsset		    *slsp_procs;    /* The processes that belong to this partition */
     int			    slsp_status;    /* Status of checkpoint */
     struct sls_attr	    slsp_attr;	    /* Parameters for checkpointing the process */
     int			    slsp_refcount;  /* Reference count for the process. */
     struct slskv_table	    *slsp_objects;  /* VM Objects created for the SLS */
+    /* XXX slsp_mtx member */
 
-    LIST_ENTRY(slspart) slsp_procs;	    /* List of checkpointed procs */
+    LIST_ENTRY(slspart)	    slsp_parts;	    /* List of active SLS partitions */
 };
 
 LIST_HEAD(slsp_list, slspart);
+
+struct slspart *slsp_find(uint64_t oid);
     
-struct slspart *slsp_find(pid_t pid);
-struct slspart *slsp_add(pid_t pid);
-void slsp_del(pid_t pid);
+int slsp_attach(uint64_t oid, pid_t pid);
+int slsp_detach(uint64_t oid, pid_t pid);
+
+int slsp_add(uint64_t oid, struct slspart **slspp);
+void slsp_del(uint64_t oid);
+
 void slsp_delall(void);
-void slsp_fini(struct slspart *slsp);
 
 void slsp_ref(struct slspart *slsp);
 void slsp_deref(struct slspart *slsp);

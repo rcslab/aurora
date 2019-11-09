@@ -1,5 +1,5 @@
 PROG= slsctl
-SRCS= slsctl.c attach.c detach.c checkpoint.c restore.c
+SRCS= slsctl.c attach.c partadd.c partdel.c checkpoint.c restore.c
 MAN=
 
 LDADD= -lsls -lsbuf

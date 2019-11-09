@@ -3,11 +3,12 @@
 
 #include <sys/param.h>
 
+#include <sys/condvar.h>
 #include <sys/fcntl.h>
+#include <sys/sdt.h>
 #include <sys/stat.h>
 #include <sys/syscallsubr.h>
 #include <sys/vnode.h>
-#include <sys/sdt.h>
 
 #include <vm/uma.h>
 #include <vm/vm.h>
@@ -22,15 +23,19 @@ extern size_t sls_contig_limit;
 
 struct sls_metadata {
 	int		    slsm_exiting;	/* Is the SLS being destroyed? */
-	struct slskv_table  *slsm_proctable;    /* All processes in the SLS */
-	struct cdev	    *slsm_cdev;	    /* The cdev that exposes the SLS' ops */
+	struct slskv_table  *slsm_parts;	/* All (OID, slsp) pairs in the SLS */
+	struct slskv_table  *slsm_procs;	/* All (PID, OID) pairs in the SLS */ 
+	struct cdev	    *slsm_cdev;		/* The cdev that exposes the SLS ops */
 
 	/* OSD Related members */
-	/* XXX Put the rectable and typetable in their own structure */
+	/* XXX Put the rectable and typetable in their own slsckpt_data structure */
 	struct slskv_table  *slsm_rectable;	/* Associates in-memory pointers to data */
 	struct slskv_table  *slsm_typetable;	/* Associates data with a record type */
 	struct vnode	    *slsm_osdvp;	/* The device that holds the SLOS */
-	struct slsosd	    *slsm_osd;	    /* Similar to struct mount, but for the SLOS */
+
+	int		    slsm_restoring;	/* Number of threads currently being restored */
+	struct mtx	    slsm_mtx;		/* Structure mutex. */
+	struct cv	    slsm_restcv;	/* Condition variable to signal that restoring is done */
 };
 
 /* The data needed to restore an SLS partition. */
@@ -80,14 +85,11 @@ sls_module_exiting(void)
 #endif /* SLS_DEBUG */
 
 struct sls_checkpointd_args {
-	struct proc *p;
 	struct slspart *slsp;
-	struct sls_backend backend;
 };
 
 struct sls_restored_args {
-	struct proc *p;
-	struct sls_backend backend;
+	uint64_t oid;
 };
 
 void sls_checkpointd(struct sls_checkpointd_args *args);

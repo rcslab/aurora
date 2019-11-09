@@ -17,8 +17,11 @@ int snapdel_main(int argc, char *argv[]);
 void attach_usage(void);
 int attach_main(int argc, char *argv[]);
 
-void detach_usage(void);
-int detach_main(int argc, char *argv[]);
+void partadd_usage(void);
+int partadd_main(int argc, char *argv[]);
+
+void partdel_usage(void);
+int partdel_main(int argc, char *argv[]);
 
 
 #endif /* _SLSCTL_H_ */

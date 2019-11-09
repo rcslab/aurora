@@ -208,19 +208,24 @@ static int
 slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid)
 {
 	struct slsfile info;
-	struct sbuf *sb;
+	struct sbuf *sb, *oldsb;
 	int error;
 
-	/* If we have already checkpointed this open file, return success. */
+	/* By default the SLS ID of the file is the file pointer. */
+	*slsid = (uint64_t) fp;
+	
+	/* 
+	 * If we have already checkpointed this open file, return success. 
+	 * The caller will add the SLS ID to its file descriptor table.
+	 */
 	if (slskv_find(slsm.slsm_rectable, (uint64_t) fp, (uintptr_t *) &sb) == 0)
-	    return 0;
+	    return (0);
 
 	info.type = fp->f_type;
 	info.flag = fp->f_flag;
 	info.offset = fp->f_offset;
 
 	info.magic = SLSFILE_ID;
-	*slsid = (uint64_t) fp;
 	info.slsid = *slsid;
 
 	sb = sbuf_new_auto();	
@@ -260,9 +265,9 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid)
 	     * pointer for deduplication, recheck whether we actually
 	     * need to checkpoint.
 	     */
-	    if (slskv_find(slsm.slsm_rectable, (uint64_t) slsid, (uintptr_t *) &sb) == 0) {
+	    if (slskv_find(slsm.slsm_rectable, (uint64_t) *slsid, (uintptr_t *) &oldsb) == 0) {
 		sbuf_delete(sb);
-		return 0;
+		return (0);
 	    }
 
 	    error = slsckpt_getpipe(p, fp, &info, sb);
@@ -379,6 +384,7 @@ slsrest_file(void *slsbacker, struct slsfile *info,
 
 	/* Get the open file from the table and add it to the hashtable. */
 	fp = curthread->td_proc->p_fd->fd_files->fdt_ofiles[fd].fde_file;
+	fp->f_flag = info->flag;
 
 	error = slskv_add(filetable, info->slsid, (uintptr_t) fp);
 	if (error != 0) {

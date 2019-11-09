@@ -83,9 +83,9 @@ slsckpt_pipe(struct proc *p, struct file *fp, struct sbuf *sb)
 	/* Write out the data. */
 	error = sbuf_bcat(sb, (void *) &info, sizeof(info));
 	if (error != 0)
-	    return error;
+	    return (error);
 
-	return 0;
+	return (0);
 }
 
 
@@ -107,8 +107,8 @@ slsrest_pipe(struct slskv_table *filetable, struct slspipe *ppinfo, int *fdp)
 	    localfd = filedes[1];
 	    peerfd = filedes[0];
 	} else {
-	    peerfd = filedes[0];
-	    localfd = filedes[1];
+	    localfd = filedes[0];
+	    peerfd = filedes[1];
 	}
 
 	/* 
@@ -119,6 +119,9 @@ slsrest_pipe(struct slskv_table *filetable, struct slspipe *ppinfo, int *fdp)
 	 */
 	peerfp = curthread->td_proc->p_fd->fd_files->fdt_ofiles[peerfd].fde_file;
 
+	printf("Pipe pair (%p, %p)\n", 
+		curthread->td_proc->p_fd->fd_files->fdt_ofiles[filedes[0]].fde_file, 
+		curthread->td_proc->p_fd->fd_files->fdt_ofiles[filedes[1]].fde_file);
 	/* 
 	 * We take the liberty here of using the pipe's SLS ID instead
 	 * of the file pointer. Since we have made it so at checkpoint
@@ -141,5 +144,5 @@ slsrest_pipe(struct slskv_table *filetable, struct slspipe *ppinfo, int *fdp)
 	/* The caller will take care of the local file descriptor the same way. */
 	*fdp = localfd; 
 
-	return 0;
+	return (0);
 }

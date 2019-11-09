@@ -12,10 +12,7 @@ void
 usage(void)
 {
 	printf("Usage: slsctl <command> [command args]\n");
-	printf("       slsctl checkpoint -p <PID> \n");
-	printf("       slsctl restore <-f <filename> | -m id>>\n");
-	printf("       slsctl attach -p pid -t <period> [-n iterations] <-f <filename> | -m> [-d]\n");
-	printf("       slsctl detach -p pid\n");
+	printf("Commands: partadd partdel attach checkpoint restore\n");
 }
 
 struct command {
@@ -23,10 +20,11 @@ struct command {
 	void(*usage)();
 	int(*cmd)(int, char **);
 } commandtable[] = {
+	{ "partadd",	&partadd_usage,	    &partadd_main},
+	{ "partdel",	&partdel_usage,	    &partdel_main},
+	{ "attach",	&attach_usage,	    &attach_main},
 	{ "checkpoint",	&checkpoint_usage,  &checkpoint_main },
 	{ "restore",	&restore_usage,	    &restore_main },
-	{ "attach",	&attach_usage,	    &attach_main},
-	{ "detach",	&detach_usage,      &detach_main},
 	{ NULL,		NULL,		    NULL }
 };
 

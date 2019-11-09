@@ -4,30 +4,19 @@
 #include <sys/ioccom.h>
 #include <sys/sbuf.h>
 
-/* An SLS backend for a process. */
-struct sls_backend {
-	int		bak_target; /* Type of backend */
-	union {
-	    struct sbuf	*bak_name;  /* Filename for file backends */
-	    uint64_t	bak_id;	    /* Identifier for all other backends */
-	};
-};
-
 /* The attributes of a process in the SLS. */
 struct sls_attr {
-	struct sls_backend  attr_backend;   /* Backend into which the process is checkpointed */
+	int		    attr_target;    /* Backend into which the process is checkpointed */
 	int		    attr_mode;	    /* Full checkpoints or one of the delta modes? */
 	int		    attr_period;    /* Checkpoint Period in ms */
 };
 
 struct sls_checkpoint_args {
-	pid_t	    pid;	    /* The PID of the process to be checkpointed. */
+	uint64_t	    oid;	    /* The OID of the partition to be checkpointed. */
 };
 
 struct sls_restore_args {
-	pid_t		    pid;	/* PID of the process on top of which we restore */
-	struct sls_backend  backend;	/* The backend where the SLS process is stored */
-	void		    *data;	/* Miscellaneous data possibly needed */
+	uint64_t	    oid;	/* OID of the partition being restored */
 };
 
 struct proc_param {
@@ -37,21 +26,29 @@ struct proc_param {
 };
 
 struct sls_attach_args {
-	pid_t		pid;	/* PID of process being attached to the SLS */
-	struct sls_attr attr;	/* Checkpointing parameters for the process */
-	void		*data;	/* Miscellaneous data possibly needed */
+	uint64_t	pid;	/* PID of process being attached to the SLS */
+	uint64_t	oid;	/* OID of the partition in which we add the process */
 };
 
-struct sls_detach_args {
-	pid_t pid;		/* PID of process being detached from the SLS */
+struct sls_partadd_args {
+	uint64_t	oid;	/* OID of the new partition. */
+	struct sls_attr attr;	/* Checkpointing parameters for the process */
+};
+
+
+struct sls_partdel_args {
+	uint64_t    oid;	/* OID of the partition to be detached from the SLS */
 };
 
 #define SLS_CHECKPOINT		_IOWR('d', 1, struct sls_checkpoint_args)
 #define SLS_RESTORE		_IOWR('d', 2, struct sls_restore_args)
 #define SLS_ATTACH		_IOWR('d', 3, struct sls_attach_args)
-#define SLS_DETACH		_IOWR('d', 4, struct sls_detach_args)
-#define SLS_FLUSH_COUNT		_IOR('d', 5, int)
-#define SLS_PROC		_IOWR('d', 6, struct proc_param)
+#define SLS_PARTADD		_IOWR('d', 4, struct sls_partadd_args)
+#define SLS_PARTDEL		_IOWR('d', 5, struct sls_partdel_args)
+
+/* XXX These aren't well-defined, remove them and replace w/ sysctls */
+#define SLS_FLUSH_COUNT		_IOR('d', 6, int)
+#define SLS_PROC		_IOWR('d', 7, struct proc_param)
 
 /* 
  * XXX Use an encoding to catch errors like 

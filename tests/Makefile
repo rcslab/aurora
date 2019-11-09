@@ -1,3 +1,5 @@
-SUBDIR = array compute fd llist memory mmap multithread register print signal sleep unlink
+SUBDIR = array compute fd fork llist memory mmap \
+	 multithread register pipes print sharemap \
+	signal sleep unlink
 
 .include <bsd.subdir.mk>

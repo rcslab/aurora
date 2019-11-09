@@ -508,7 +508,7 @@ sls_writedata_slos(struct slos_vnode *vp, struct sbuf *sb,
 	/* Get the shadow we created for the object from the table. */
 	error = slskv_find(objtable, (uint64_t) obj, (uintptr_t *) &newobj);
 	if (error != 0)
-	    return error;
+	    return 0;
 
 	/* Checkpoint the object. */
 	error = sls_objdata(vp, rno, obj);

@@ -23,11 +23,11 @@
  * zero to nonzero or vice versa.
  */
 int
-sls_checkpoint(int pid)
+sls_checkpoint(uint64_t oid)
 {
 	struct sls_checkpoint_args args;
 
-	args.pid = pid;
+	args.oid= oid;
 	if (sls_ioctl(SLS_CHECKPOINT, &args) != 0) {
 	    perror("sls_checkpoint");
 	    return -1;
@@ -38,21 +38,11 @@ sls_checkpoint(int pid)
 
 /* Restore a process stored in sls_backend on top of the process with PID pid. */
 int
-sls_restore(int pid, struct sls_backend backend)
+sls_restore(uint64_t oid)
 {
 	struct sls_restore_args args;
 
-	args.pid = pid;
-	args.backend = backend;
-	/* 
-	 * We cannot copy an sbuf to the kernel as-is,
-	 * so we have to expose the raw pointer.
-	 */
-	if (backend.bak_target == SLS_FILE) {
-	    args.data = sbuf_data(backend.bak_name);
-	    if (args.data == NULL)
-		return -1;
-	}
+	args.oid = oid;
 
 	if (sls_ioctl(SLS_RESTORE, &args) != 0) {
 	    perror("sls_restore");
@@ -68,22 +58,13 @@ sls_restore(int pid, struct sls_backend backend)
  * checkpointed via explicit calls to sls_checkpoint().
  */
 int
-sls_attach(int pid, const struct sls_attr attr)
+sls_attach(uint64_t oid, uint64_t pid)
 {
 	struct sls_attach_args args;
 
 	/* Setup the ioctl arguments. */
+	args.oid = oid;
 	args.pid = pid;
-	args.attr = attr;
-	/* 
-	 * We cannot copy an sbuf to the kernel as-is,
-	 * so we have to expose the raw pointer.
-	 */
-	if (attr.attr_backend.bak_target == SLS_FILE) {
-	    args.data = sbuf_data(attr.attr_backend.bak_name);
-	    if (args.data == NULL)
-		return -1;
-	}
 
 	if (sls_ioctl(SLS_ATTACH, &args) != 0) {
 	    perror("sls_attach");
@@ -94,18 +75,37 @@ sls_attach(int pid, const struct sls_attr attr)
 }
 
 /*
- * Detach a process from the SLS. If the process
+ * Add an empty partition to the SLS.
+ */
+int
+sls_partadd(uint64_t oid, const struct sls_attr attr)
+{
+	struct sls_partadd_args args;
+	int ret;
+
+	args.oid = oid;
+	args.attr = attr;
+	if (sls_ioctl(SLS_PARTADD, &args) != 0) {
+	    perror("sls_attach");
+	    return -1;
+	}
+
+	return 0;
+}
+
+/*
+ * Detach a partition from the SLS. If the partition 
  * is being checkpointed periodically, the 
  * checkpointing stops before detachment.
  */
 int
-sls_detach(int pid)
+sls_partdel(uint64_t oid)
 {
-	struct sls_detach_args args;
+	struct sls_partdel_args args;
 	int ret;
 
-	args.pid = pid;
-	if (sls_ioctl(SLS_DETACH, &args) != 0) {
+	args.oid = oid;
+	if (sls_ioctl(SLS_PARTDEL, &args) != 0) {
 	    perror("sls_attach");
 	    return -1;
 	}
@@ -114,41 +114,30 @@ sls_detach(int pid)
 }
 
 int
-sls_suspend(int pid)
+sls_suspend(uint64_t oid)
 {
 }
 
 int
-sls_resume(int pid)
+sls_resume(uint64_t oid)
 {
 }
 
 int
-sls_getattr(int pid, struct sls_attr *attr)
+sls_getattr(uint64_t oid, struct sls_attr *attr)
 {
 }
 
 int
-sls_setattr(int pid, const struct sls_attr *attr)
+sls_setattr(uint64_t oid, const struct sls_attr *attr)
 {
 }
 
 uint64_t
-sls_getckptid(int pid)
+sls_getckptid(uint64_t oid)
 {
 }
 
-int
-sls_enter()
-{
-    /* XXX We can't enter without specifying a valid sls_attr */
-}
-
-int
-sls_exit()
-{
-    return sls_detach(getpid());
-}
 
 bool
 sls_persistent()

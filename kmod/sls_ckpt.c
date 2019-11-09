@@ -45,15 +45,6 @@
 #include "sls_table.h"
 #include "sls_vmspace.h"
 
-#define SLS_SIG(p, sig) \
-	PROC_LOCK(p); \
-	kern_psignal(p, sig); \
-	PROC_UNLOCK(p); \
-
-#define SLS_CONT(p) SLS_SIG(p, SIGCONT)
-    
-#define SLS_STOP(p) SLS_SIG(p, SIGSTOP)
-
 #define SLS_PROCALIVE(proc) \
     (((proc)->p_state != PRS_ZOMBIE) && !((proc)->p_flag & P_WEXIT))
 
@@ -66,41 +57,75 @@ SDT_PROVIDER_DEFINE(sls);
 SDT_PROBE_DEFINE(sls, , , stopped);
 SDT_PROBE_DEFINE(sls, , , cont);
 
-static void slsckpt_stop(struct proc *p);
-static void sls_checkpoint(struct proc *p, struct slspart *slsp);
+static void slsckpt_stop(slsset *procset);
+static void sls_checkpoint(slsset *procset, struct slspart *slsp);
 static int slsckpt_metadata(struct proc *p, struct slspart *slsp);
 
 /*
  * Stop a process, and wait until it is truly not running. 
  */
 static void
-slsckpt_stop(struct proc *p)
+slsckpt_stop(slsset *procset)
 {
 	int threads_still_running;
+	struct slskv_iter iter;
 	struct thread *td;
+	struct proc *p;
 	
-	SLS_STOP(p);
+	/* Send a stop signal to all processes. */
+	iter = slskv_iterstart(procset);
+	while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
+	    PROC_LOCK(p);
+	    kern_psignal(p, SIGSTOP);
+	    PROC_UNLOCK(p);
+	}
 
 	threads_still_running = 1;
 	while (threads_still_running == 1) {
 	    threads_still_running = 0;
-	    PROC_LOCK(p);
-	    TAILQ_FOREACH(td, &p->p_threads, td_plist) {
-		if (TD_IS_RUNNING(td)) {
-		    threads_still_running = 1;
-		    break;
+	    
+	    iter = slskv_iterstart(procset);
+	    while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
+		PROC_LOCK(p);
+
+		/* If the process is dying we don't need to wait. */
+		if(!SLS_PROCALIVE(p))
+		    continue;
+
+		/* Check each thread separately, see if it's running. */
+		TAILQ_FOREACH(td, &p->p_threads, td_plist) {
+		    if (TD_IS_RUNNING(td)) {
+			threads_still_running = 1;
+			break;
+		    }
 		}
-	    }
-	    if(!SLS_PROCALIVE(p)) {
-		SLS_DBG("Proc trying to die, exiting stop\n");
+
 		PROC_UNLOCK(p);
-		break;
 	    }
-	    PROC_UNLOCK(p);
-	    pause_sbt("slsrun", 50 * SBT_1US, 0 , C_DIRECT_EXEC | C_CATCH);
+
+	    /* If not done yet, sleep for a while and try again. */
+	    if (threads_still_running != 0)
+		pause_sbt("slsrun", 50 * SBT_1US, 0 , C_DIRECT_EXEC | C_CATCH);
 	}
 }
 
+/* 
+ * Let all processes continue executing.  
+ */
+static void
+slsckpt_cont(slsset *procset)
+{
+	struct slskv_iter iter;
+	struct proc *p;
+
+	/* Send a stop signal to all processes. */
+	iter = slskv_iterstart(procset);
+	while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
+	    PROC_LOCK(p);
+	    kern_psignal(p, SIGCONT);
+	    PROC_UNLOCK(p);
+	}
+}
 
 /*
  * Get all the metadata of a process.
@@ -123,19 +148,24 @@ slsckpt_metadata(struct proc *p, struct slspart *slsp)
 
 	error = slsckpt_proc(p, sb);
 	if (error != 0) {
-	    SLS_DBG("Error: proc_ckpt failed with error code %d\n", error);
+	    SLS_DBG("Error: slsckpt_proc failed with error code %d\n", error);
 	    goto out;
 	}
 
 	error = slsckpt_vmspace(p, sb, slsp->slsp_attr.attr_mode);
 	if (error != 0) {
-	    SLS_DBG("Error: vmspace_ckpt failed with error code %d\n", error);
+	    SLS_DBG("Error: slsckpt_vmspace failed with error code %d\n", error);
 	    goto out;
 	}
 
+	/* 
+	 * XXX This has to be last right now, 
+	 * because the filedsec is not in its 
+	 * own record.
+	 */
 	error = slsckpt_filedesc(p, sb);
 	if (error != 0) {
-	    SLS_DBG("Error: fd_ckpt failed with error code %d\n", error);
+	    SLS_DBG("Error: slsckpt_filedesc failed with error code %d\n", error);
 	    goto out;
 	}
 
@@ -164,8 +194,8 @@ out:
 
 
 /*
- * Below are the two functions used for creating the shadows, slsobj_shadow()
- * and slsobj_collapse(). What slsobj_shadow does it take a reference on the
+ * Below are the two functions used for creating the shadows, slsckpt_shadow()
+ * and slsckpt_collapse(). What slsckpt_shadow does it take a reference on the
  * objects that are directly attached to the process' entries, and then create
  * a shadow for it. The entry's reference to the original object is transferred
  * to the shadow, while the new object gets another reference to the original.
@@ -190,10 +220,11 @@ out:
  * This causes any CoW objects shared among memory maps to split into two. 
  */
 static int 
-slsobj_shadow(struct proc *p, struct slskv_table *objtable, struct slskv_table *newtable)
+slsckpt_shadowone(struct proc *p, struct slskv_table *objtable, struct slskv_table *newtable)
 {
 	struct vm_map_entry *entry, *header;
 	struct slskv_table *table;
+	vm_ooffset_t offset;
 	vm_object_t obj, shadow;
 	int error;
 
@@ -202,12 +233,36 @@ slsobj_shadow(struct proc *p, struct slskv_table *objtable, struct slskv_table *
 	header = &p->p_vmspace->vm_map.header;
 	for (entry = header->next; entry != header; entry = entry->next) {
 		obj = entry->object.vm_object;
+		/* 
+		 * If the object is not anonymous, it is impossible to
+		 * shadow it in a logical way. If it is null, either the
+		 * entry is a guard entry, or it doesn't have any data yet.
+		 * In any case, we don't need to do anything.
+		 */
 		if (obj == NULL || obj->type != OBJT_DEFAULT)
 		    continue;
 		
-		/* Check if we have already shadowed the object. */
-		if (slskv_find(table, (uint64_t) obj, (uintptr_t *) &shadow) == 0)
+		/* 
+		 * Check if we have already shadowed the object. If we did, 
+		 * have the process' map point to the shadow instead of the
+		 * old object.
+		 */
+		if (slskv_find(table, (uint64_t) obj, (uintptr_t *) &shadow) == 0) {
+		    /* We share the created shadow with this map entry. */
+		    entry->object.vm_object = shadow;
+		    /* 
+		     * Because of the way we shadow (see below), we 
+		     * do not change the offset of the VM entry.
+		     */
+
+		    /* Remove the mappings so that the process rereads them. */
+		    pmap_remove(&p->p_vmspace->vm_pmap, entry->start, entry->end);
+
+		    /* Move the reference to the shadow from the original. */
+		    vm_object_reference(shadow);
+		    vm_object_deallocate(obj);
 		    continue;
+		}
 
 		/* 
 		 * We take a reference to the old object for ourselves.
@@ -215,8 +270,21 @@ slsobj_shadow(struct proc *p, struct slskv_table *objtable, struct slskv_table *
 		 * transferred to the shadow when the process faults.
 		 */
 		vm_object_reference(obj);
-		vm_object_shadow(&entry->object.vm_object, &entry->offset, 
-			entry->end - entry->start);
+
+		/*
+		 * Normally, we transfer the VM entry's offset to the
+		 * shadow, and have the entry have offset in the new
+		 * object. This poses problems if we assume different
+		 * entries with different offsets in the object, since
+		 * the first entry to be checkpointed would dictate
+		 * object alignment. As a result, we keep the entries'
+		 * offsets untouched, and have the shadow be at offset
+		 * 0 of its backer. Moreover, the shadow fully covers
+		 * the original object, since we can't know which parts
+		 * of it are in use just from one VM entry.
+		 */
+		offset = 0;
+		vm_object_shadow(&entry->object.vm_object, &offset, ptoa(obj->size));
 
 		/* Remove the mappings so that the process rereads them. */
 		pmap_remove(&p->p_vmspace->vm_pmap, entry->start, entry->end);
@@ -224,9 +292,12 @@ slsobj_shadow(struct proc *p, struct slskv_table *objtable, struct slskv_table *
 		/* Add them to the table for dumping later. */
 		error = slskv_add(table, (uint64_t) obj, (uintptr_t) entry->object.vm_object);
 		if (error != 0) {
-		    /* If we failed, undo the shadowing. */
+		    /* 
+		     * If we failed, something went wrong - we checked before
+		     * and the object was not in the table, so why did we fail?
+		     */
 		    vm_object_deallocate(obj);
-		    return error;
+		    return (EINVAL);
 		}
 
 		/* 
@@ -239,7 +310,7 @@ slsobj_shadow(struct proc *p, struct slskv_table *objtable, struct slskv_table *
 		 * objects from a previous checkpoint (the latter case) it is
 		 * non-NULL.
 		 */
-		if (newtable == NULL)
+		if (newtable != NULL)
 		    continue;
 
 		obj = obj->backing_object;
@@ -256,21 +327,45 @@ slsobj_shadow(struct proc *p, struct slskv_table *objtable, struct slskv_table *
 		    /* These objects have no shadows. */
 		    error = slskv_add(table, (uint64_t) obj, (uintptr_t) NULL);
 		    if (error != 0) {
-			/* If we failed, undo the shadowing. */
+			/* 
+			 * If we failed, we already have it in the table. Set
+			 * the object to null to break out of the while loop.
+			 */
 			vm_object_deallocate(obj);
-			return error;
+			obj = NULL;
+			continue;
 		    }
+
+		    obj = obj->backing_object;
 		}
 	}
 
-	return error;
+	return (0);
+}
+
+/* Collapse the backing objects of all processes under checkpoint. */
+static int 
+slsckpt_shadow(slsset *procset, struct slskv_table *objtable, struct slskv_table *newtable) 
+{
+	struct slskv_iter iter;
+	struct proc *p;
+	int error;
+
+	iter = slskv_iterstart(procset);
+	while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
+	    error = slsckpt_shadowone(p, objtable, newtable);
+	    if (error != 0)
+		return (error);
+	}
+
+	return (0);
 }
 
 /*
  * Collapse an object created by SLS into its parent.
  */
 static void
-slsobj_collapse(struct slskv_table *objtable)
+slsckpt_collapse(struct slskv_table *objtable)
 {
 	struct slskv_iter iter;
 	vm_object_t obj, shadow;
@@ -278,7 +373,7 @@ slsobj_collapse(struct slskv_table *objtable)
 	/* 
 	 * When collapsing, we do so by removing the 
 	 * reference of the original object we took in 
-	 * slsobj_shadow. After having done so, the
+	 * slsckpt_shadow. After having done so, the
 	 * object is left with one reference and one
 	 * shadow, so it can be collapsed with it.
 	 */
@@ -293,26 +388,30 @@ slsobj_collapse(struct slskv_table *objtable)
  * by the partition's processes.
  */
 static void 
-sls_checkpoint(struct proc *p, struct slspart *slsp)
+sls_checkpoint(slsset *procset, struct slspart *slsp)
 {
 	struct slskv_table *newtable = NULL, *table;
+	struct slskv_iter iter;
 	struct slos_vnode *vp;
+	struct proc *p;
 	int error = 0;
 
 	SLS_DBG("Dump created\n");
 
 	/* This causes the process to get detached from its terminal.*/
-	slsckpt_stop(p);
+	slsckpt_stop(procset);
 	SDT_PROBE0(sls, , ,stopped);
 	SLS_DBG("Process stopped\n");
 
-	/* Get all the metadata from the process. */
-	error = slsckpt_metadata(p, slsp);
-	if(error != 0) {
-	    SLS_DBG("Checkpointing failed\n");
-	    SLS_CONT(p);
-
-	    return;
+	/* Get the data from all processes in the partition. */
+	iter = slskv_iterstart(procset);
+	while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
+	    error = slsckpt_metadata(p, slsp);
+	    if(error != 0) {
+		SLS_DBG("Checkpointing failed\n");
+		slsckpt_cont(procset);
+		return;
+	    }
 	}
 
 	/* 
@@ -326,8 +425,10 @@ sls_checkpoint(struct proc *p, struct slspart *slsp)
 	 * matters when choosing which and how many elements to shadow. 
 	 */
 	error = slskv_create(&table, SLSKV_NOREPLACE);
-	if (error != 0)
+	if (error != 0) {
+	    slsckpt_cont(procset);
 	    goto out;
+	}
 
 	if (slsp->slsp_objects == NULL)
 	    slsp->slsp_objects = table;
@@ -336,26 +437,29 @@ sls_checkpoint(struct proc *p, struct slspart *slsp)
 
 
 	/* Shadow the objects to be dumped. */
-	error = slsobj_shadow(p, slsp->slsp_objects, newtable);
-	if (error != 0)
+	error = slsckpt_shadow(procset, slsp->slsp_objects, newtable);
+	if (error != 0) {
+	    SLS_DBG("shadowing failed with %d\n", error);
+	    slsckpt_cont(procset);
 	    goto out;
+	}
 
 	/* Let the process execute ASAP */
-	SLS_CONT(p);
+	slsckpt_cont(procset);
 	SDT_PROBE0(sls, , ,cont);
 
 	/* ------------ SLOS-Specific Part ------------ */
 
 	/* XXX TEMP so that we can checkpoint multiple times. */
-	slos_iremove(&slos, 1024);
+	slos_iremove(&slos, slsp->slsp_oid);
 
 	/* The dump itself. */
 	/* XXX Temporary until we change to multiple inodes per checkpoint. */
-	error = slos_icreate(&slos, 1024);
+	error = slos_icreate(&slos, slsp->slsp_oid);
 	if (error != 0)
 	    goto out;
 
-	vp = slos_iopen(&slos, 1024);
+	vp = slos_iopen(&slos, slsp->slsp_oid);
 	if (vp == NULL)
 	    goto out;
 
@@ -414,12 +518,12 @@ sls_checkpoint(struct proc *p, struct slspart *slsp)
 	    /* XXX For now we assume deep deltas. */
 	    case SLS_DELTA:
 	    case SLS_DEEP:
-		slsobj_collapse(slsp->slsp_objects);
+		slsckpt_collapse(slsp->slsp_objects);
 		slskv_destroy(slsp->slsp_objects);
 		slsp->slsp_objects = newtable;
 
 	    case SLS_SHALLOW:
-		slsobj_collapse(newtable);
+		slsckpt_collapse(newtable);
 		slskv_destroy(newtable);
 
 	    default:
@@ -434,11 +538,14 @@ out:
 	* shadows. As a result, we remove _all_ references we
 	* made, causing the shadows to collapse into the parents.
 	*/
-	if (slsp->slsp_attr.attr_mode == SLS_FULL)
-	    slsobj_collapse(slsp->slsp_objects);
+	if (slsp->slsp_attr.attr_mode == SLS_FULL) {
+	    slsckpt_collapse(slsp->slsp_objects);
+	    slskv_destroy(slsp->slsp_objects);
+	    slsp->slsp_objects = NULL;
+	}
 
 	slsp->slsp_epoch += 1;
-	SLS_DBG("Checkpointed process once\n");
+	SLS_DBG("Checkpointed partition once\n");
 }
 
 /*
@@ -449,46 +556,94 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 {
 	struct timespec tstart, tend;
 	long msec_elapsed, msec_left;
+	uint64_t pid, deadpid = 0;
+	struct slskv_iter iter;
+	slsset *procset = NULL;
+	struct proc *p;
+	int error;
 
 	SLS_DBG("Process active\n");
 	/* 
-	 * Check if the process is available for checkpointing. 
-	 * If not, silently exit - the process is already
-	 * being checkpointed due to a previous call. 
+	 * Check if the partition is available for checkpointing. 
+	 * If not, silently exit - the parition is already being
+	 * checkpointed due to a previous call. 
 	 */
 	if (atomic_cmpset_int(&args->slsp->slsp_status, SPROC_AVAILABLE, 
 		    SPROC_CHECKPOINTING) == 0) {
-	    SLS_DBG("Process %d in state %d\n", args->p->p_pid, args->slsp->slsp_status);
+	    SLS_DBG("Partition %ld in state %d\n", args->slsp->slsp_oid, args->slsp->slsp_status);
 	    goto out;
 
 	}
 
+	/* The set of processes we are going to checkpoint. */
+	error = slsset_create(&procset);
+	if (error != 0)
+	    goto out;
+
 	for (;;) {
 	    /* 
-	     * If the process has changed state, we have to stop
+	     * If the partition has changed state, we have to stop
 	     * checkpointing because it got detached from the SLS.
 	     */
 	    if (args->slsp->slsp_status != SPROC_CHECKPOINTING)
 		break;
 
+
 	    /* 
-	     * Check if the process we are trying to checkpoint is trying
-	     * to exit, if so not only drop the reference the daemon has, 
-	     * but also that of the SLS itself.
+	     * If deadpid is valid (!= 0), we need to remove it from the process set,
+	     * because the process it corresponds to is unavailable. We need to delay
+	     * the freeing until after we iterate through the slsset entry, due to
+	     * the latter's implementation.
 	     */
-	    if (!SLS_RUNNABLE(args->p, args->slsp)) {
-		SLS_DBG("Process %d no longer runnable\n", args->p->p_pid);
-		slsp_deref(args->slsp);
-		break;
+	    deadpid = 0;
+
+	    iter = slskv_iterstart(args->slsp->slsp_procs);
+	    while (slskv_itercont(&iter, &pid, (uintptr_t *) &pid) != SLSKV_ITERDONE) {
+
+		/* Remove the PID of the unavailable process from the set. */
+		if (deadpid != 0) {
+		    slsset_del(args->slsp->slsp_procs, deadpid);
+		    slsset_del(slsm.slsm_procs, deadpid);
+
+		    deadpid = 0;
+		}
+
+		/*
+		 * Get a hold of the process to be checkpointed, bringing its 
+		 * thread stack to memory and preventing it from exiting.
+		 */
+		error = pget(pid, PGET_WANTREAD, &p);
+		/* 
+		 * Check if the process we are trying to checkpoint is trying
+		 * to exit, if so not only drop the reference the daemon has, 
+		 * but also that of the SLS itself.
+		 */
+		if (error != 0 || !SLS_RUNNABLE(p, args->slsp)) {
+		    SLS_DBG("Process %ld no longer runnable\n", pid);
+		    deadpid = pid;
+		    continue;
+		}
+
+
+		/* Add it to the set of processes to be checkpointed. */
+		error = slsset_add(procset, (uint64_t) p);
+		if (error != 0)
+		    goto out;
+
+		/* XXX Check if a process has children. If it did, put them in the SLS. */
 	    }
+
 
 	    /* Checkpoint the process once. */
 	    nanotime(&tstart);
-	    sls_checkpoint(args->p, args->slsp);
+	    sls_checkpoint(procset, args->slsp);
 	    nanotime(&tend);
 
 	    args->slsp->slsp_epoch += 1;
 
+	    /* Release all checkpointed processes. */
+	    while (slsset_pop(procset, (uint64_t *) &p) == 0)
+		PRELE(p);
 
 	    /* If the interval is 0, checkpointing is non-periodic. Finish up. */
 	    if (args->slsp->slsp_attr.attr_period == 0)
@@ -514,15 +669,33 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	SLS_DBG("Stopped checkpointing\n");
 
 out:
+	/* Cleanup the old object table. */
+	if (args->slsp->slsp_objects != NULL) {
+	    slsckpt_collapse(args->slsp->slsp_objects);
+	    slskv_destroy(args->slsp->slsp_objects);
+	    args->slsp->slsp_objects = NULL;
+	}
 
-	printf("Checkpointing for process %d done.\n", args->p->p_pid);
+	/* Cleanup any dead PIDs still around. */
+	if (deadpid != 0) {
+	    slsset_del(args->slsp->slsp_procs, deadpid);
+	    slsset_del(slsm.slsm_procs, deadpid);
+	    deadpid = 0;
+	}
+
+	printf("Checkpointing for partition %ld done.\n", args->slsp->slsp_oid);
 
 	/* Drop the reference we got for the SLS process. */
 	slsp_deref(args->slsp);
 
-	/* Also release the reference for the FreeBSD process. */
-	PRELE(args->p);
+	if (procset != NULL) {
+	    /* Release any process references gained. */
+	    while (slsset_pop(procset, (uint64_t *) &p) == 0)
+		PRELE(p);
+	    slsset_destroy(procset);
+	}
 
+	/* XXX Maybe destroy the partition? Makes sense. */
 
 	/* Free the arguments passed to the kthread. */
 	free(args, M_SLSMM);

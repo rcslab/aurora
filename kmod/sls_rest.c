@@ -1,6 +1,7 @@
 #include <sys/types.h>
 
 #include <sys/capsicum.h>
+#include <sys/condvar.h>
 #include <sys/conf.h>
 #include <sys/fcntl.h>
 #include <sys/file.h>
@@ -17,6 +18,7 @@
 #include <sys/ptrace.h>
 #include <sys/queue.h>
 #include <sys/rwlock.h>
+#include <sys/sched.h>
 #include <sys/shm.h>
 #include <sys/signalvar.h>
 #include <sys/stat.h>
@@ -24,6 +26,7 @@
 #include <sys/syscallsubr.h>
 #include <sys/time.h>
 #include <sys/uio.h>
+#include <sys/unistd.h>
 
 
 #include <machine/param.h>
@@ -227,45 +230,163 @@ slsrest_dokevents(struct proc *p, struct slskv_table *kevtable)
 	return (0);
 }
 
+/* Struct used to set the arguments after forking. */
+struct slsrest_metadata_args {
+	char *buf;
+	size_t buflen;
+	struct slsrest_data *restdata;
+};
+
 /*
  * Restore a process' local data (threads, VM map, file descriptor table).
  */
-static int
-slsrest_metadata(struct proc *p,  char **bufp, 
-	size_t *buflenp, struct slsrest_data *restdata)
+static void 
+slsrest_metadata(void *args)	
 {
+	struct slsrest_data *restdata;
+	struct proc *p;
+	size_t buflen;
 	int error;
+	char *buf;
+
+	/* We always work on the current process. */
+	p = curproc;
+	printf("New process is %d\n", p->p_pid);
+	PROC_LOCK(p);
+	kern_psignal(p, SIGSTOP);
+
+	/* 
+	 * Transfer the arguments to the stack and free the 
+	 * struct we used to carry them to the new process. 
+	 */
+
+	buf = ((struct slsrest_metadata_args *) args)->buf;
+	buflen = ((struct slsrest_metadata_args *) args)->buflen;
+	restdata = ((struct slsrest_metadata_args *) args)->restdata;
+
+	free(args, M_SLSMM);
 	
 	/* 
 	 * Restore CPU state, file state, and memory 
 	 * state, parsing the buffer at each step. 
 	 */
-	error = slsrest_doproc(p, bufp, buflenp);
+	error = slsrest_doproc(p, &buf, &buflen);
 	if (error != 0)
-	    return (error);
+	    goto error; 
 
-	error = slsrest_dovmspace(p, bufp, buflenp, restdata->objtable);
+	error = slsrest_dovmspace(p, &buf, &buflen, restdata->objtable);
 	if (error != 0)
-	    return (error);
+	    goto error; 
 
-	error = slsrest_dofiledesc(p, bufp, buflenp, restdata->filetable);
+	error = slsrest_dofiledesc(p, &buf, &buflen, restdata->filetable);
 	if (error != 0)
-	    return (error);
+	    goto error; 
 
 	error = slsrest_dokevents(p, restdata->kevtable);
 	if (error != 0)
-	    return (error);
+	    goto error; 
+
+	kern_psignal(p, SIGCONT);
+	PROC_UNLOCK(p);
 
 	/* 
-	 * XXX Right now we can only restore on top of
-	 * _one_ process. When we are able to do multiple
-	 * processes at once, we will have a reasonable
-	 * key. For now, it doesn't matter.
+	 * We're done restoring. If we were the 
+	 * last restoree, notify the parent. 
 	 */
-	error = slskv_add(restdata->proctable, 0UL, (uintptr_t) p);
+	mtx_lock(&slsm.slsm_mtx);
+	slsm.slsm_restoring -= 1;
+	if (slsm.slsm_restoring == 0)
+	    cv_signal(&slsm.slsm_restcv);
+
+	/* 
+	 * Do we need a key for this?
+	 */
+	error = slskv_add(restdata->proctable, (uint64_t) p, (uintptr_t) p);
+	if (error != 0)
+	    SLS_DBG("Error: Could not add process %p to table\n", p);
+
+	mtx_unlock(&slsm.slsm_mtx);
+
+	kthread_exit();
+
+	panic("Having the kthread exit failed");
+
+	return;
+
+error:
+	PROC_UNLOCK(p);
+
+	printf("Boom\n");
+	mtx_lock(&slsm.slsm_mtx);
+	slsm.slsm_restoring -= 1;
+	if (slsm.slsm_restoring == 0)
+	    cv_signal(&slsm.slsm_restcv);
+	mtx_unlock(&slsm.slsm_mtx);
+
+	exit1(curthread, error, 0);
+}
+
+static int
+slsrest_fork(char *buf, size_t buflen, struct slsrest_data *restdata)
+{
+	struct fork_req fr;
+	struct thread *td;
+	struct proc *p2;
+	struct slsrest_metadata_args *args;
+	int error;
+	
+	bzero(&fr, sizeof(fr));
+
+	/* 
+	 * Copy the file table to the new process, 
+	 * and do not schedule it just yet.
+	 */
+	fr.fr_flags = RFFDG | RFPROC | RFSTOPPED | RFNOWAIT;
+	fr.fr_procp = &p2;
+
+	error = fork1(curthread, &fr);
 	if (error != 0)
 	    return (error);
-	
+
+
+	args = malloc(sizeof(*args), M_SLSMM, M_WAITOK);
+	args->buf = buf;
+	args->buflen = buflen;
+	args->restdata = restdata;
+
+	/* 
+	 * The only thread we have in the new process is
+	 * is a clone of this one, so we just set it up
+	 * to keep executing from slsrest_metadata.
+	 */
+	PROC_LOCK(p2);
+	/* Turn it from a kernel process into a regular one. */
+	p2->p_flag &= ~(P_SYSTEM | P_KPROC);
+	td = FIRST_THREAD_IN_PROC(p2);
+	td->td_pflags |= TDP_KTHREAD;
+	thread_lock(td);
+	PROC_UNLOCK(p2);
+
+	/* 
+	 * Set the function to be executed in the kernel for the 
+	 * process' new kthread.
+	 */
+	cpu_fork_kthread_handler(td, slsrest_metadata, (void *) args);
+
+	/* Set the thread to be runnable, specify its priorities. */
+	TD_SET_CAN_RUN(td);
+	sched_prio(td, PVM);
+	sched_user_prio(td, PUSER);
+
+	/* Actually add it to the scheduler. */
+	sched_add(td, SRQ_BORING);
+	thread_unlock(td);
+
+	/* Note down the fact that one more process is being restored. */
+	mtx_lock(&slsm.slsm_mtx);
+	slsm.slsm_restoring += 1;
+	mtx_unlock(&slsm.slsm_mtx);
+
 	return (0);
 }
 
@@ -464,7 +585,7 @@ error:
 }
 
 static int
-sls_rest(struct proc *p, struct sls_backend backend)
+sls_rest(struct proc *p, uint64_t oid)
 {
 	struct slskv_table *metatable = NULL, *datatable = NULL;
 	struct slsrest_data *restdata;
@@ -487,7 +608,7 @@ sls_rest(struct proc *p, struct sls_backend backend)
 	SLS_DBG("Opening inode\n");
 
 	/* XXX Temporary until we change to multiple inodes per checkpoint. */
-	vp = slos_iopen(&slos, 1024);
+	vp = slos_iopen(&slos, oid);
 	if (vp == NULL)
 	    return EIO; 
 
@@ -555,17 +676,25 @@ sls_rest(struct proc *p, struct sls_backend backend)
 	    buf = (char *) record;
 	    buflen = st->len;
 
-	    error = slsrest_metadata(p,  &buf, &buflen, restdata);
+	    error = slsrest_fork(buf, buflen, restdata);
 	    if (error != 0)
 		goto out;
+	    /* XXX Clone proc and do the restore in there */
 
 	}
 
-	SLS_DBG("Done\n");
 	kern_psignal(p, SIGCONT);
+	PROC_UNLOCK(p);
+
+	/* Wait until all processes are done restoring. */
+	mtx_lock(&slsm.slsm_mtx);
+	while (slsm.slsm_restoring > 0)
+	    cv_wait(&slsm.slsm_restcv, &slsm.slsm_mtx);
+	mtx_unlock(&slsm.slsm_mtx);
+
+	SLS_DBG("Done\n");
 
 out:
-	PROC_UNLOCK(p);
 
 	/* The tables in restdata only hold key-value pairs, cleanup is easy. */
 	/* XXX Causes problems, find out why */
@@ -606,27 +735,13 @@ sls_restored(struct sls_restored_args *args)
 	int error;
 
 	/* Restore the old process. */
-	error = sls_rest(args->p, args->backend);
+	error = sls_rest(curproc, args->oid);
 	if (error != 0)
 	    printf("Error: sls_rest failed with %d\n", error);
 
-	PRELE(args->p);
-
-	/* If we restored from a file, release the sbuf with the name. */
-	if (args->backend.bak_target == SLS_FILE)
-	    sbuf_delete(args->backend.bak_name);
+	/* Free the arguments */
 	free(args, M_SLSMM);
 
-	/* Release the reference to the SLS device */
-	dev_relthread(slsm.slsm_cdev, 1);
-
-	/* 
-	 * If something went wrong destroy the whole
-	 * process, otherwise have this thread exit.
-	 * The restored threads will keep on executing.
-	 */
-	if (error != 0)
-	    exit1(curthread, error, 0);
-	else
-	    kthread_exit();
+	return;
+	//kproc_exit(error);
 }

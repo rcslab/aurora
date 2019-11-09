@@ -136,7 +136,7 @@ slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value)
 	    LIST_FOREACH(kv, bucket, next) {
 		/* We found the key, so we cannot insert. */
 		if (kv->key == key) {
-		    uma_zfree(slskv_zone, kv);
+		    uma_zfree(slskv_zone, newkv);
 		    mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 		    return (EINVAL);
 		}

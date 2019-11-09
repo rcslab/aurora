@@ -1,6 +1,7 @@
 #include <sys/types.h>
 
 #include <sys/conf.h>
+#include <sys/imgact.h>
 #include <sys/malloc.h>
 #include <sys/pcpu.h>
 #include <sys/proc.h>
@@ -50,6 +51,9 @@ slsckpt_thread(struct thread *td, struct sbuf *sb)
 	return 0;
 }
 
+/* This function in non-static but is not defined in any header. */
+void exec_setregs(struct thread *td, struct image_params *imgp, u_long stack);
+
 /*
  * Set the state of all threads of the process. This function
  * takes and leaves the process locked. The slsthread struct pointer
@@ -61,8 +65,21 @@ sls_thread_create(struct thread *td, void *thunk)
 {
 	int error = 0;
 	struct slsthread *slsthread = (struct slsthread *) thunk;
-
+	struct image_params img;
+	
 	PROC_LOCK(td->td_proc);
+	
+	/* 
+	 * We need to reset the threads' system registers as if
+	 * we were calling execve(). For that, we need to call
+	 * exec_setregs(), used during the syscall; the signature
+	 * is a bit clumsy for our cases, since we do not have a
+	 * process image, and only need one field from that struct,
+	 * which we overwrite later anyway.
+	 */
+	img.entry_addr = td->td_frame->tf_rip;
+	exec_setregs(td, &img, td->td_frame->tf_rsp);
+
 	error = proc_write_regs(td, &slsthread->regs);
 	if (error != 0)
 	    goto done;
@@ -80,6 +97,7 @@ sls_thread_create(struct thread *td, void *thunk)
 done:
 
 	PROC_UNLOCK(td->td_proc);
+
 	return error;
 }
 
@@ -135,6 +153,9 @@ slsckpt_proc(struct proc *p, struct sbuf *sb)
 }
 
 
+/* XXX Find a better way to include system call vectors. */
+extern struct sysentvec elf64_freebsd_sysvec;
+
 /*
  * Set the process state, including file descriptors, sockets, and metadata
  * like PIDs. This function takes and leaves the process locked.
@@ -150,6 +171,9 @@ slsrest_proc(struct proc *p, struct slsproc *slsproc)
 
 	oldsigacts = p->p_sigacts;
 	p->p_sigacts = newsigacts;
+	/* Restore the standard syscall vector.*/
+	/* XXX Allow for arbitrary syscall vectors. */
+	p->p_sysent = &elf64_freebsd_sysvec;
 	sigacts_free(oldsigacts);
 
 	return 0;
