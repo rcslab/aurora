@@ -28,7 +28,6 @@
 #include <sys/uio.h>
 #include <sys/unistd.h>
 
-
 #include <machine/param.h>
 #include <machine/reg.h>
 #include <machine/vmparam.h>
@@ -76,7 +75,8 @@ slsrest_dothread(struct proc *p, char **bufp, size_t *buflenp)
 }
 
 static int
-slsrest_doproc(struct proc *p, char **bufp, size_t *buflenp)
+slsrest_doproc(struct proc *p, char **bufp, size_t *buflenp, 
+	struct slsrest_data *restdata)
 {
 	struct slsproc slsproc; 
 	int error, i;
@@ -85,7 +85,7 @@ slsrest_doproc(struct proc *p, char **bufp, size_t *buflenp)
 	if (error != 0)
 	    return (error);
 
-	error = slsrest_proc(p, &slsproc);
+	error = slsrest_proc(p, &slsproc, restdata);
 	if (error != 0)
 	    return (error);
 
@@ -94,6 +94,13 @@ slsrest_doproc(struct proc *p, char **bufp, size_t *buflenp)
 	    if (error != 0)
 		return (error);
 	}
+
+	/* 
+	 * Save the old process - new process pairs.
+	 */
+	error = slskv_add(restdata->proctable, (uint64_t) slsproc.slsid, (uintptr_t) p);
+	if (error != 0)
+	    SLS_DBG("Error: Could not add process %p to table\n", p);
 
 	return (0);
 }
@@ -129,6 +136,10 @@ slsrest_dofile(struct slsrest_data *restdata, char **bufp, size_t *buflenp)
 
 	case DTYPE_SOCKET:
 	    free(data, M_SLSMM);
+	    break;
+
+	case DTYPE_PTS:
+	    printf("Got here at least? Maybe?\n");
 	    break;
 
 	default:
@@ -251,7 +262,6 @@ slsrest_metadata(void *args)
 
 	/* We always work on the current process. */
 	p = curproc;
-	printf("New process is %d\n", p->p_pid);
 	PROC_LOCK(p);
 	kern_psignal(p, SIGSTOP);
 
@@ -270,7 +280,7 @@ slsrest_metadata(void *args)
 	 * Restore CPU state, file state, and memory 
 	 * state, parsing the buffer at each step. 
 	 */
-	error = slsrest_doproc(p, &buf, &buflen);
+	error = slsrest_doproc(p, &buf, &buflen, restdata); 
 	if (error != 0)
 	    goto error; 
 
@@ -296,14 +306,12 @@ slsrest_metadata(void *args)
 	mtx_lock(&slsm.slsm_mtx);
 	slsm.slsm_restoring -= 1;
 	if (slsm.slsm_restoring == 0)
-	    cv_signal(&slsm.slsm_restcv);
+	    cv_signal(&slsm.slsm_proccv);
 
-	/* 
-	 * Do we need a key for this?
-	 */
-	error = slskv_add(restdata->proctable, (uint64_t) p, (uintptr_t) p);
-	if (error != 0)
-	    SLS_DBG("Error: Could not add process %p to table\n", p);
+
+	/* Sleep until all sessions and controlling terminals are restored. */
+	while (slsm.slsm_restoring >= 0)
+	    cv_wait(&slsm.slsm_donecv, &slsm.slsm_mtx);
 
 	mtx_unlock(&slsm.slsm_mtx);
 
@@ -316,11 +324,11 @@ slsrest_metadata(void *args)
 error:
 	PROC_UNLOCK(p);
 
-	printf("Boom\n");
+	printf("Error %d while restoring process\n", error);
 	mtx_lock(&slsm.slsm_mtx);
 	slsm.slsm_restoring -= 1;
 	if (slsm.slsm_restoring == 0)
-	    cv_signal(&slsm.slsm_restcv);
+	    cv_signal(&slsm.slsm_proccv);
 	mtx_unlock(&slsm.slsm_mtx);
 
 	exit1(curthread, error, 0);
@@ -355,22 +363,13 @@ slsrest_fork(char *buf, size_t buflen, struct slsrest_data *restdata)
 	args->restdata = restdata;
 
 	/* 
-	 * The only thread we have in the new process is
-	 * is a clone of this one, so we just set it up
-	 * to keep executing from slsrest_metadata.
-	 */
-	PROC_LOCK(p2);
-	/* Turn it from a kernel process into a regular one. */
-	p2->p_flag &= ~(P_SYSTEM | P_KPROC);
-	td = FIRST_THREAD_IN_PROC(p2);
-	td->td_pflags |= TDP_KTHREAD;
-	thread_lock(td);
-	PROC_UNLOCK(p2);
-
-	/* 
 	 * Set the function to be executed in the kernel for the 
 	 * process' new kthread.
 	 */
+	td = FIRST_THREAD_IN_PROC(p2);
+	thread_lock(td);
+	KASSERT((td->td_flags & TDP_KTHREAD) != 0, "thread not a kernel thread");
+
 	cpu_fork_kthread_handler(td, slsrest_metadata, (void *) args);
 
 	/* Set the thread to be runnable, specify its priorities. */
@@ -525,6 +524,15 @@ slsrest_fini(struct slsrest_data *restdata)
 	slsset *kevset;
 	void *slskev; 
 
+	cv_destroy(&restdata->pgrpcv);
+	mtx_destroy(&restdata->pgrpmtx);
+
+	if (restdata->sesstable != NULL)
+	    slskv_destroy(restdata->sesstable);
+
+	if (restdata->pgidtable != NULL)
+	    slskv_destroy(restdata->pgidtable);
+
 	if (restdata->objtable != NULL)
 	    slskv_destroy(restdata->objtable);
 
@@ -575,6 +583,16 @@ slsrest_init(struct slsrest_data **restdatap)
 	if (error != 0)
 	    goto error;
 
+	error = slskv_create(&restdata->pgidtable, SLSKV_NOREPLACE);
+	if (error != 0)
+	    goto error;
+	
+	error = slskv_create(&restdata->sesstable, SLSKV_NOREPLACE);
+	if (error != 0)
+	    goto error;
+
+	mtx_init(&restdata->pgrpmtx, "SLS pgrp mutex", NULL, MTX_DEF);
+	cv_init(&restdata->pgrpcv, "SLS pgrp cv");
 	
 	*restdatap = restdata;
 	return (0);
@@ -599,6 +617,10 @@ sls_rest(struct proc *p, uint64_t oid)
 	char *buf;
 	int error;
 
+	printf("ORIGINAL PID: %d PGID: %d SID: %d\n", 
+		curproc->p_pid, 
+		curproc->p_pgrp->pg_id,
+		curproc->p_session->s_sid);
 	/* Bring in the checkpoints from the backend. */
 	error = slsrest_init(&restdata);
 	if (error != 0)
@@ -689,7 +711,13 @@ sls_rest(struct proc *p, uint64_t oid)
 	/* Wait until all processes are done restoring. */
 	mtx_lock(&slsm.slsm_mtx);
 	while (slsm.slsm_restoring > 0)
-	    cv_wait(&slsm.slsm_restcv, &slsm.slsm_mtx);
+	    cv_wait(&slsm.slsm_proccv, &slsm.slsm_mtx);
+
+	/* We push the counter below 0 and restore all sessions. */
+	slsm.slsm_restoring -= 1;
+	cv_broadcast(&slsm.slsm_donecv);
+
+
 	mtx_unlock(&slsm.slsm_mtx);
 
 	SLS_DBG("Done\n");
@@ -697,7 +725,6 @@ sls_rest(struct proc *p, uint64_t oid)
 out:
 
 	/* The tables in restdata only hold key-value pairs, cleanup is easy. */
-	/* XXX Causes problems, find out why */
 	slsrest_fini(restdata);
 
 	/* Cleanup the tables used for bringing the data in memory. */
@@ -734,6 +761,7 @@ sls_restored(struct sls_restored_args *args)
 {
 	int error;
 
+	slsm.slsm_restoring = 0;
 	/* Restore the old process. */
 	error = sls_rest(curproc, args->oid);
 	if (error != 0)
@@ -743,5 +771,4 @@ sls_restored(struct sls_restored_args *args)
 	free(args, M_SLSMM);
 
 	return;
-	//kproc_exit(error);
 }

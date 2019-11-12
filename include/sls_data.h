@@ -1,9 +1,13 @@
 #ifndef _SLS_DATA_H_
 #define _SLS_DATA_H_
 
+#include <sys/param.h>
+
 #include <sys/pcpu.h>
 #include <sys/proc.h>
 #include <sys/sbuf.h>
+#include <sys/tty.h>
+#include <sys/ttycom.h>
 
 #include <machine/param.h>
 #include <machine/pcb.h>
@@ -19,6 +23,8 @@ struct slsproc {
 	uint64_t slsid;
 	size_t nthreads;
 	pid_t pid;
+	pid_t pgid;
+	pid_t sid;
 	struct sigacts sigacts;
 };
 
@@ -48,6 +54,15 @@ struct slsvmspace {
 	caddr_t vm_daddr;
 	caddr_t vm_maxsaddr;
 	int nentries;
+};
+
+#define SLSSESSION_ID 0x736c730b
+struct slssession {
+	uint64_t magic;
+	uint64_t slsid;
+	uint64_t tty;
+	uint64_t sid;
+	uint64_t leader;
 };
 
 #define SLSVMOBJECT_ID 0x7abc7303
@@ -111,10 +126,9 @@ struct slsfiledesc {
 	/* TODO jdir */
 
 	u_short fd_cmask;
-	/* XXX Should these go to 1? */
 	int fd_holdcnt;
-	/* TODO: kqueue list? */
 
+	/* XXX Get any buffered data */
 };
 
 #define SLSPIPE_ID  0x736c7499
@@ -123,6 +137,7 @@ struct slspipe {
 	uint64_t    slsid;	/* Unique SLS ID */
 	uint64_t    iswriteend;	/* Is this the write end? */
 	uint64_t    peer;	/* The SLS ID of the other end */
+	/* XXX Get data */
 };
 
 #define SLSKQUEUE_ID  0x736c7265
@@ -130,6 +145,7 @@ struct slskqueue {
 	uint64_t    magic;
 	uint64_t    slsid;	/* Unique SLS ID */
 	uint64_t    numevents;
+	/* XXX In-flight knotes */
 };
 
 #define SLSKEVENT_ID  0x736c7115
@@ -184,6 +200,32 @@ struct slssock {
 		uint16_t ie_fport;
 		uint16_t ie_lport;
 	} inp_inc;
+};
+
+
+#define SLSPTS_ID  0x736c7269
+struct slspts {
+	uint64_t magic;
+	uint64_t slsid;
+
+	/* 
+	 * Find out if it's the master or the
+	 * slave side. If it's the slave side
+	 * we only need the peer's ID.
+	 */
+	uint64_t ismaster;
+	uint64_t peerid;
+
+	int drainwait;
+	struct termios termios;
+	struct winsize winsize;
+	unsigned int column;
+	unsigned int writepos;
+	struct termios termios_init_in;
+	struct termios termios_lock_in;
+	struct termios termios_init_out;
+	struct termios termios_lock_out;
+	/* XXX Get any buffered data */
 };
 
 #endif /* _SLS_DATA_H_ */

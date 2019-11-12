@@ -21,9 +21,11 @@
 #include <vm/vm_map.h>
 
 #include "sls_data.h"
+#include "sls_kv.h"
+#include "sls_internal.h"
 
 int slsckpt_proc(struct proc *p, struct sbuf *sb);
-int slsrest_proc(struct proc *p, struct slsproc *slsproc);
+int slsrest_proc(struct proc *p, struct slsproc *slsproc, struct slsrest_data *restdata);
 int slsrest_thread(struct proc *p, struct slsthread *slsthread);
 
 

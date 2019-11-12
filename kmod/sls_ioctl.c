@@ -88,34 +88,20 @@ static int
 sls_restore(struct sls_restore_args *args)
 {
 	struct sls_restored_args *restd_args = NULL;
-	int error = 0;
 
 	/* Set up the arguments for the restore. */
 	restd_args = malloc(sizeof(*restd_args), M_SLSMM, M_WAITOK);
 	restd_args->oid = args->oid;
 
 	/* 
-	 * While for sls_checkpoint we can assign the worker
-	 * thread to init, for restore we need to have the
-	 * thread in the process on top of which we restore.
+	 * The sls_restored function can alternatively
+	 * be called as a separate kernel process, but
+	 * this poses its own set of problems, so we
+	 * use it directly for now.
 	 */
-
 	sls_restored(restd_args);
 
 	return (0);
-	/*
-	error = kproc_create((void(*)(void *)) sls_restored, 
-	    restd_args, NULL, 0, 0, "sls_restored");
-	if (error != 0)
-	    goto error;
-
-	return (error);
-
-error:
-	    */
-
-	free(restd_args, M_SLSMM);
-	return (error);
 }
 
 /* Add a process to an SLS partition, allowing it to be checkpointed. */
@@ -281,7 +267,8 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	    bzero(&slsm, sizeof(slsm));
 
 	    mtx_init(&slsm.slsm_mtx, "SLS main mutex", NULL, MTX_DEF);
-	    cv_init(&slsm.slsm_restcv, "SLS restore lock");
+	    cv_init(&slsm.slsm_proccv, "SLS process restore lock");
+	    cv_init(&slsm.slsm_donecv, "SLS general restore lock");
 
 	    slskv_zone = uma_zcreate("SLS table pairs", 
 		    sizeof(struct slskv_pair), NULL, NULL, NULL, 
@@ -358,7 +345,8 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	    if (slskv_zone!= NULL)
 		uma_zdestroy(slskv_zone);
 
-	    cv_destroy(&slsm.slsm_restcv);
+	    cv_destroy(&slsm.slsm_donecv);
+	    cv_destroy(&slsm.slsm_proccv);
 	    mtx_destroy(&slsm.slsm_mtx);
 
 	    printf("SLS Unloaded.\n");

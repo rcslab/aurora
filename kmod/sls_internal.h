@@ -35,15 +35,20 @@ struct sls_metadata {
 
 	int		    slsm_restoring;	/* Number of threads currently being restored */
 	struct mtx	    slsm_mtx;		/* Structure mutex. */
-	struct cv	    slsm_restcv;	/* Condition variable to signal that restoring is done */
+	struct cv	    slsm_proccv;	/* Condition variable for when all processes are restored */
+	struct cv	    slsm_donecv;	/* Condition variable to signal that processes can execute */
 };
 
 /* The data needed to restore an SLS partition. */
 struct slsrest_data {
-	struct slskv_table *objtable;	/* Holds the new VM Objects, indexed by ID */
-	struct slskv_table *proctable;	/* Holds the process records, indexed by ID */
-	struct slskv_table *filetable;	/* Holds the new files, indexed by ID */
-	struct slskv_table *kevtable;	/* Holds the kevents for a kq, indexed by kq */
+	struct slskv_table  *objtable;	/* Holds the new VM Objects, indexed by ID */
+	struct slskv_table  *proctable;	/* Holds the process records, indexed by ID */
+	struct slskv_table  *filetable;	/* Holds the new files, indexed by ID */
+	struct slskv_table  *kevtable;	/* Holds the kevents for a kq, indexed by kq */
+	struct slskv_table  *pgidtable;	/* Holds the old-new process group ID pairs */
+	struct slskv_table  *sesstable;	/* Holds the old-new session ID pairs */
+	struct cv	    pgrpcv;	/* Used as a barrier while creating pgroups */
+	struct mtx	    pgrpmtx;	/* Used alongside the cv above */
 };
 
 extern struct sls_metadata slsm;

@@ -178,6 +178,24 @@ slsload_pipe(struct slspipe *slspipe, char **bufp, size_t *bufsizep)
 }
 
 static int
+slsload_pts(struct slspts *slspts, char **bufp, size_t *bufsizep)
+{
+	int error; 
+
+	/* Read in the kqueue itself. */
+	error = sls_info(slspts, sizeof(*slspts), bufp, bufsizep);
+	if (error != 0)
+	    return (error);
+
+	if (slspts->magic != SLSPTS_ID) {
+	    SLS_DBG("magic mismatch, %lx vs %x\n", slspts->magic, SLSPTS_ID);
+	    return (EINVAL);
+	}
+
+	return (0);
+}
+
+static int
 slsload_vnode(struct sbuf **path, char **bufp, size_t *bufsizep)
 {
 	int error;
@@ -236,6 +254,11 @@ slsload_file(struct slsfile *slsfile, void **data, char **bufp, size_t *bufsizep
 	case DTYPE_SOCKET:
 	    *data = malloc(sizeof(struct slssock), M_SLSMM, M_WAITOK);
 	    error = slsload_socket((struct slssock *) *data, bufp, bufsizep);
+	    break;
+
+	case DTYPE_PTS:
+	    *data = malloc(sizeof(struct slspts), M_SLSMM, M_WAITOK);
+	    error = slsload_pts((struct slspts *) *data, bufp, bufsizep);
 	    break;
 
 	default:

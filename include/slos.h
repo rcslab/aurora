@@ -101,6 +101,7 @@ struct slos_inode {
 
 #define SLOSREC_INVALID	    0x00000000	/* Record is invalid */
 #define SLOSREC_PROC	    0x00000001	/* Record holds process-local info */
+#define SLOSREC_SESS	    0x00000002	/* Record holds process-local info */
 #define SLOSREC_MEM	    0x00000003	/* Record holds info related to a vmspace */
 #define SLOSREC_VMOBJ	    0x00000005	/* Record holds info for an object */
 #define SLOSREC_FILE	    0x00000006  /* Record holds info for a file */
