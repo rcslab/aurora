@@ -59,53 +59,43 @@ SDT_PROBE_DEFINE(sls, , , cont);
 
 static void slsckpt_stop(slsset *procset);
 static void sls_checkpoint(slsset *procset, struct slspart *slsp);
-static int slsckpt_metadata(struct proc *p, struct slspart *slsp);
+static int slsckpt_metadata(struct proc *p, struct slspart *slsp, slsset *procset);
 
 /*
- * Stop a process, and wait until it is truly not running. 
+ * Stop the processes, and wait until they are truly not running. 
  */
 static void
 slsckpt_stop(slsset *procset)
 {
-	int threads_still_running;
 	struct slskv_iter iter;
 	struct thread *td;
 	struct proc *p;
 	
-	/* Send a stop signal to all processes. */
 	iter = slskv_iterstart(procset);
 	while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
+	    /* Force all threads to the kernel-user boundary. */
 	    PROC_LOCK(p);
-	    kern_psignal(p, SIGSTOP);
+	    thread_single(p, SINGLE_ALLPROC);
 	    PROC_UNLOCK(p);
 	}
 
-	threads_still_running = 1;
-	while (threads_still_running == 1) {
-	    threads_still_running = 0;
-	    
-	    iter = slskv_iterstart(procset);
-	    while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
-		PROC_LOCK(p);
-
-		/* If the process is dying we don't need to wait. */
-		if(!SLS_PROCALIVE(p))
-		    continue;
-
-		/* Check each thread separately, see if it's running. */
-		TAILQ_FOREACH(td, &p->p_threads, td_plist) {
-		    if (TD_IS_RUNNING(td)) {
-			threads_still_running = 1;
-			break;
-		    }
-		}
-
-		PROC_UNLOCK(p);
+	/* 
+	 * Wait until all threads have been suspended exactly on the boundary. These two 
+	 * loops are decoupled so that we do not wait for each process to stop separately
+	 * before stopping the rest.
+	 */
+	iter = slskv_iterstart(procset);
+	while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
+	    PROC_LOCK(p);
+	    FOREACH_THREAD_IN_PROC(p, td) {
+		thread_lock(td);
+		KASSERT((td->td_flags & TDF_BOUNDARY) != 0,
+		    ("td %p not on boundary", td));
+		KASSERT(TD_IS_SUSPENDED(td),
+		    ("td %p is not suspended", td));
+		thread_unlock(td);
 	    }
-
-	    /* If not done yet, sleep for a while and try again. */
-	    if (threads_still_running != 0)
-		pause_sbt("slsrun", 50 * SBT_1US, 0 , C_DIRECT_EXEC | C_CATCH);
+	    PROC_UNLOCK(p);
 	}
 }
 
@@ -118,12 +108,10 @@ slsckpt_cont(slsset *procset)
 	struct slskv_iter iter;
 	struct proc *p;
 
-	/* Send a stop signal to all processes. */
 	iter = slskv_iterstart(procset);
 	while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
-	    PROC_LOCK(p);
-	    kern_psignal(p, SIGCONT);
-	    PROC_UNLOCK(p);
+	    /* Free each process from the boundary. */
+	    thread_single_end(p, SINGLE_ALLPROC);
 	}
 }
 
@@ -131,7 +119,7 @@ slsckpt_cont(slsset *procset)
  * Get all the metadata of a process.
  */
 static int
-slsckpt_metadata(struct proc *p, struct slspart *slsp)
+slsckpt_metadata(struct proc *p, struct slspart *slsp, slsset *procset)
 {
 	struct sbuf *sb;
 	int error = 0;
@@ -146,7 +134,7 @@ slsckpt_metadata(struct proc *p, struct slspart *slsp)
 
 	sb = sbuf_new_auto();
 
-	error = slsckpt_proc(p, sb);
+	error = slsckpt_proc(p, sb, procset);
 	if (error != 0) {
 	    SLS_DBG("Error: slsckpt_proc failed with error code %d\n", error);
 	    goto out;
@@ -398,15 +386,13 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 
 	SLS_DBG("Dump created\n");
 
-	/* This causes the process to get detached from its terminal.*/
-	slsckpt_stop(procset);
 	SDT_PROBE0(sls, , ,stopped);
 	SLS_DBG("Process stopped\n");
 
 	/* Get the data from all processes in the partition. */
 	iter = slskv_iterstart(procset);
 	while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
-	    error = slsckpt_metadata(p, slsp);
+	    error = slsckpt_metadata(p, slsp, procset);
 	    if(error != 0) {
 		SLS_DBG("Checkpointing failed\n");
 		slsckpt_cont(procset);
@@ -559,7 +545,8 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	uint64_t pid, deadpid = 0;
 	struct slskv_iter iter;
 	slsset *procset = NULL;
-	struct proc *p;
+	struct proc *p, *pchild;
+	int new_procs;
 	int error;
 
 	SLS_DBG("Process active\n");
@@ -580,6 +567,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	if (error != 0)
 	    goto out;
 
+
 	for (;;) {
 	    /* 
 	     * If the partition has changed state, we have to stop
@@ -587,7 +575,6 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	     */
 	    if (args->slsp->slsp_status != SPROC_CHECKPOINTING)
 		break;
-
 
 	    /* 
 	     * If deadpid is valid (!= 0), we need to remove it from the process set,
@@ -612,6 +599,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		 * Get a hold of the process to be checkpointed, bringing its 
 		 * thread stack to memory and preventing it from exiting.
 		 */
+		printf("Getting pid %lu\n", pid);
 		error = pget(pid, PGET_WANTREAD, &p);
 		/* 
 		 * Check if the process we are trying to checkpoint is trying
@@ -619,7 +607,9 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		 * but also that of the SLS itself.
 		 */
 		if (error != 0 || !SLS_RUNNABLE(p, args->slsp)) {
-		    SLS_DBG("Process %ld no longer runnable\n", pid);
+		    SLS_DBG("Getting a process %ld failed\n", pid);
+		    /* Drop the reference taken by pget. */
+		    PRELE(p);
 		    deadpid = pid;
 		    continue;
 		}
@@ -630,12 +620,60 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		if (error != 0)
 		    goto out;
 
-		/* XXX Check if a process has children. If it did, put them in the SLS. */
 	    }
+
+	    nanotime(&tstart);
+	    /* 
+	     * If we recursively checkpoint, we don't actually enter the children
+	     * into the SLS permanently, but only checkpoint them in this iteration.
+	     * This only matters if the parent dies, in which case the children will
+	     * not be checkpointed anymore; this makes sense because we mainly want
+	     * the children because they might be part of the state of the parent,
+	     * if we actually care about them we can add them to the SLS.
+	     */
+
+	    do { 
+		/* If we're not recursively checkpointing, abort the search. */
+		if (args->recurse == 0)
+		    break;
+
+		/* Assume there are no new children. */
+		new_procs = 0;
+
+		/* 
+		 * Stop all processes in the set. This causes them
+		 * to get detached from their terminals.
+		 */
+		slsckpt_stop(procset);
+		iter = slskv_iterstart(procset);
+		while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
+		    /* 
+		     * Check every process if it had a 
+		     * new child while we were checking.
+		     */ 
+		    LIST_FOREACH(pchild, &p->p_children, p_sibling) {
+			if (slskv_find(procset, (uint64_t) pchild, (uintptr_t *) &pchild) != 0) {
+			    /* We found a child that didn't exist before. */
+			    new_procs += 1;
+
+			    PHOLD(pchild);
+			    /* 
+			     * Here we're adding to the set while we're iterating it.
+			     * While whether we will iterate through the new element
+			     * is undefined, we will go through the set again in the
+			     * next iteration of the outer while, so it's safe.
+			     */
+			    error = slsset_add(procset, (uint64_t) pchild);
+			    if (error != 0)
+				goto out;
+
+			}
+		    }
+		}
+	    } while (new_procs > 0);
 
 
 	    /* Checkpoint the process once. */
-	    nanotime(&tstart);
 	    sls_checkpoint(procset, args->slsp);
 	    nanotime(&tend);
 
@@ -694,8 +732,6 @@ out:
 		PRELE(p);
 	    slsset_destroy(procset);
 	}
-
-	/* XXX Maybe destroy the partition? Makes sense. */
 
 	/* Free the arguments passed to the kthread. */
 	free(args, M_SLSMM);

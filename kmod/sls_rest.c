@@ -25,6 +25,7 @@
 #include <sys/systm.h>
 #include <sys/syscallsubr.h>
 #include <sys/time.h>
+#include <sys/tty.h>
 #include <sys/uio.h>
 #include <sys/unistd.h>
 
@@ -75,17 +76,26 @@ slsrest_dothread(struct proc *p, char **bufp, size_t *buflenp)
 }
 
 static int
-slsrest_doproc(struct proc *p, char **bufp, size_t *buflenp, 
-	struct slsrest_data *restdata)
+slsrest_doproc(struct proc *p, uint64_t daemon, char **bufp, 
+	size_t *buflenp, struct slsrest_data *restdata)
 {
 	struct slsproc slsproc; 
+	struct sbuf *name;
 	int error, i;
 
-	error = slsload_proc(&slsproc, bufp, buflenp);
+	error = slsload_proc(&slsproc, &name, bufp, buflenp);
 	if (error != 0)
 	    return (error);
 
-	error = slsrest_proc(p, &slsproc, restdata);
+	/* 
+	 * Save the old process - new process pairs.
+	 */
+	printf("Adding %lx, %p\n", slsproc.slsid, p);
+	error = slskv_add(restdata->proctable, (uint64_t) slsproc.slsid, (uintptr_t) p);
+	if (error != 0)
+	    SLS_DBG("Error: Could not add process %p to table\n", p);
+
+	error = slsrest_proc(p, name, daemon, &slsproc, restdata);
 	if (error != 0)
 	    return (error);
 
@@ -94,13 +104,6 @@ slsrest_doproc(struct proc *p, char **bufp, size_t *buflenp,
 	    if (error != 0)
 		return (error);
 	}
-
-	/* 
-	 * Save the old process - new process pairs.
-	 */
-	error = slskv_add(restdata->proctable, (uint64_t) slsproc.slsid, (uintptr_t) p);
-	if (error != 0)
-	    SLS_DBG("Error: Could not add process %p to table\n", p);
 
 	return (0);
 }
@@ -139,7 +142,6 @@ slsrest_dofile(struct slsrest_data *restdata, char **bufp, size_t *buflenp)
 	    break;
 
 	case DTYPE_PTS:
-	    printf("Got here at least? Maybe?\n");
 	    break;
 
 	default:
@@ -241,10 +243,62 @@ slsrest_dokevents(struct proc *p, struct slskv_table *kevtable)
 	return (0);
 }
 
+/* 
+ * Remove /dev/pts devices without accompanying struct ttys.
+ */
+static int
+slsrest_ttyfixup(struct proc *p)
+{
+	struct file *fp, *pttyfp;
+	struct tty *tp;
+	int fd;
+
+	/* 
+	 * Get the terminal on top of which the restore process is running. 
+	 * CAREFUL: We assume that the parent is the restore process, and it
+	 * therefore has a file at fd 0 that can be used as a terminal.
+	 */
+	FILEDESC_XLOCK(p->p_pptr->p_fd);
+	pttyfp = p->p_pptr->p_fd->fd_files->fdt_ofiles[0].fde_file;
+	fhold(pttyfp);
+	FILEDESC_XUNLOCK(p->p_pptr->p_fd);
+
+	FILEDESC_XLOCK(p->p_fd);
+	for (fd = 0; fd <= p->p_fd->fd_lastfile; fd++) {
+	    /* Only care about used descriptor table slots. */
+	    if (!fdisused(p->p_fd, fd))
+		continue;
+
+	    /* If we're a tty, try to see if the master side is still there. */
+	    fp = p->p_fd->fd_files->fdt_ofiles[fd].fde_file;
+	    if ((fp->f_type == DTYPE_VNODE) && 
+		(fp->f_vnode->v_type == VCHR) && 
+		(fp->f_vnode->v_rdev->si_devsw->d_flags & D_TTY) != 0) {
+
+		tp = fp->f_vnode->v_rdev->si_drv1;
+		if (!tty_gone(tp))
+		    continue;
+
+		/* 
+		 * The master is gone, replace the file 
+		 * with the parent's tty device and 
+		 * adjust hold counts.
+		 */
+		fdrop(fp, curthread);
+		fhold(pttyfp);
+		_finstall(p->p_fd, pttyfp, fd, O_CLOEXEC, NULL);
+	    }
+	}
+	FILEDESC_XUNLOCK(p->p_fd);
+
+	return (0);
+}
+
 /* Struct used to set the arguments after forking. */
 struct slsrest_metadata_args {
 	char *buf;
 	size_t buflen;
+	uint64_t daemon;
 	struct slsrest_data *restdata;
 };
 
@@ -255,6 +309,7 @@ static void
 slsrest_metadata(void *args)	
 {
 	struct slsrest_data *restdata;
+	uint64_t daemon;
 	struct proc *p;
 	size_t buflen;
 	int error;
@@ -272,6 +327,7 @@ slsrest_metadata(void *args)
 
 	buf = ((struct slsrest_metadata_args *) args)->buf;
 	buflen = ((struct slsrest_metadata_args *) args)->buflen;
+	daemon = ((struct slsrest_metadata_args *) args)->daemon;
 	restdata = ((struct slsrest_metadata_args *) args)->restdata;
 
 	free(args, M_SLSMM);
@@ -280,7 +336,7 @@ slsrest_metadata(void *args)
 	 * Restore CPU state, file state, and memory 
 	 * state, parsing the buffer at each step. 
 	 */
-	error = slsrest_doproc(p, &buf, &buflen, restdata); 
+	error = slsrest_doproc(p, daemon, &buf, &buflen, restdata); 
 	if (error != 0)
 	    goto error; 
 
@@ -296,7 +352,6 @@ slsrest_metadata(void *args)
 	if (error != 0)
 	    goto error; 
 
-	kern_psignal(p, SIGCONT);
 	PROC_UNLOCK(p);
 
 	/* 
@@ -313,11 +368,29 @@ slsrest_metadata(void *args)
 	while (slsm.slsm_restoring >= 0)
 	    cv_wait(&slsm.slsm_donecv, &slsm.slsm_mtx);
 
+	/* 
+	 * If the original applications are running on a terminal,
+	 * then the master side is not included in the checkpoint. Since
+	 * in that case it doesn't make much sense restoring the terminal,
+	 * we instead pass the original restore process' terminal as an
+	 * argument.
+	 */
 	mtx_unlock(&slsm.slsm_mtx);
+
+	PROC_LOCK(p);
+	error = slsrest_ttyfixup(p);
+	if (error != 0)
+	    SLS_DBG("tty_fixup failed with %d\n", error);
+	//kern_psignal(p, SIGCONT);
+
+	PROC_UNLOCK(p);
 
 	kthread_exit();
 
+
 	panic("Having the kthread exit failed");
+
+	PROC_UNLOCK(p);
 
 	return;
 
@@ -335,7 +408,8 @@ error:
 }
 
 static int
-slsrest_fork(char *buf, size_t buflen, struct slsrest_data *restdata)
+slsrest_fork(uint64_t daemon, char *buf, size_t buflen, 
+	struct slsrest_data *restdata)
 {
 	struct fork_req fr;
 	struct thread *td;
@@ -349,7 +423,7 @@ slsrest_fork(char *buf, size_t buflen, struct slsrest_data *restdata)
 	 * Copy the file table to the new process, 
 	 * and do not schedule it just yet.
 	 */
-	fr.fr_flags = RFFDG | RFPROC | RFSTOPPED | RFNOWAIT;
+	fr.fr_flags = RFFDG | RFPROC | RFSTOPPED;
 	fr.fr_procp = &p2;
 
 	error = fork1(curthread, &fr);
@@ -359,6 +433,7 @@ slsrest_fork(char *buf, size_t buflen, struct slsrest_data *restdata)
 
 	args = malloc(sizeof(*args), M_SLSMM, M_WAITOK);
 	args->buf = buf;
+	args->daemon = daemon;
 	args->buflen = buflen;
 	args->restdata = restdata;
 
@@ -368,7 +443,7 @@ slsrest_fork(char *buf, size_t buflen, struct slsrest_data *restdata)
 	 */
 	td = FIRST_THREAD_IN_PROC(p2);
 	thread_lock(td);
-	KASSERT((td->td_flags & TDP_KTHREAD) != 0, "thread not a kernel thread");
+	KASSERT((td->td_flags & TDP_KTHREAD) != 0, ("thread not a kernel thread"));
 
 	cpu_fork_kthread_handler(td, slsrest_metadata, (void *) args);
 
@@ -523,9 +598,11 @@ slsrest_fini(struct slsrest_data *restdata)
 	uint64_t kq;
 	slsset *kevset;
 	void *slskev; 
+	uint64_t slsid;
+	struct file *fp;
 
-	cv_destroy(&restdata->pgrpcv);
-	mtx_destroy(&restdata->pgrpmtx);
+	cv_destroy(&restdata->proccv);
+	mtx_destroy(&restdata->procmtx);
 
 	if (restdata->sesstable != NULL)
 	    slskv_destroy(restdata->sesstable);
@@ -539,8 +616,14 @@ slsrest_fini(struct slsrest_data *restdata)
 	if (restdata->proctable != NULL)
 	    slskv_destroy(restdata->proctable);
 
-	if (restdata->filetable != NULL)
+	if (restdata->filetable != NULL) {
+	    while (slskv_pop(restdata->filetable, &slsid, (uintptr_t *) &fp) == 0) {
+		//SLS_DBG("Count for %p is %d\n", fp, fp->f_count);
+		fdrop(fp, curthread);
+	    }
+
 	    slskv_destroy(restdata->filetable);
+	}
 
 	/* Each value in the table is a set of kevents. */
 	if (restdata->kevtable != NULL) {
@@ -591,8 +674,8 @@ slsrest_init(struct slsrest_data **restdatap)
 	if (error != 0)
 	    goto error;
 
-	mtx_init(&restdata->pgrpmtx, "SLS pgrp mutex", NULL, MTX_DEF);
-	cv_init(&restdata->pgrpcv, "SLS pgrp cv");
+	mtx_init(&restdata->procmtx, "SLS proc mutex", NULL, MTX_DEF);
+	cv_init(&restdata->proccv, "SLS proc cv");
 	
 	*restdatap = restdata;
 	return (0);
@@ -603,7 +686,7 @@ error:
 }
 
 static int
-sls_rest(struct proc *p, uint64_t oid)
+sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 {
 	struct slskv_table *metatable = NULL, *datatable = NULL;
 	struct slsrest_data *restdata;
@@ -617,10 +700,6 @@ sls_rest(struct proc *p, uint64_t oid)
 	char *buf;
 	int error;
 
-	printf("ORIGINAL PID: %d PGID: %d SID: %d\n", 
-		curproc->p_pid, 
-		curproc->p_pgrp->pg_id,
-		curproc->p_session->s_sid);
 	/* Bring in the checkpoints from the backend. */
 	error = slsrest_init(&restdata);
 	if (error != 0)
@@ -653,7 +732,7 @@ sls_rest(struct proc *p, uint64_t oid)
 
 	/*
 	* XXX We don't actually need that, right? We're overwriting ourselves,
-	* so we definitely don't want to stop.
+	* so we de/initely don't want to stop.
 	*/
 	/* XXX Refactor to account for multiple processes. */
 	PROC_LOCK(p);
@@ -698,12 +777,13 @@ sls_rest(struct proc *p, uint64_t oid)
 	    buf = (char *) record;
 	    buflen = st->len;
 
-	    error = slsrest_fork(buf, buflen, restdata);
+	    error = slsrest_fork(daemon, buf, buflen, restdata);
 	    if (error != 0)
 		goto out;
 	    /* XXX Clone proc and do the restore in there */
 
 	}
+
 
 	kern_psignal(p, SIGCONT);
 	PROC_UNLOCK(p);
@@ -715,6 +795,17 @@ sls_rest(struct proc *p, uint64_t oid)
 
 	/* We push the counter below 0 and restore all sessions. */
 	slsm.slsm_restoring -= 1;
+
+	/* 
+	 * The tables in restdata only hold key-value pairs, cleanup is easy. 
+	 * Note that we have to cleanup the filetable before we let the
+	 * processes keep executing, since by doing so we mark all master
+	 * terminals that weren't actually used as gone, and we need 
+	 * that for slsrest_ttyfixup().
+	 */
+	slsrest_fini(restdata);
+
+	/* Restore all sessions. */
 	cv_broadcast(&slsm.slsm_donecv);
 
 
@@ -723,9 +814,6 @@ sls_rest(struct proc *p, uint64_t oid)
 	SLS_DBG("Done\n");
 
 out:
-
-	/* The tables in restdata only hold key-value pairs, cleanup is easy. */
-	slsrest_fini(restdata);
 
 	/* Cleanup the tables used for bringing the data in memory. */
 	if (metatable != NULL) {
@@ -763,7 +851,7 @@ sls_restored(struct sls_restored_args *args)
 
 	slsm.slsm_restoring = 0;
 	/* Restore the old process. */
-	error = sls_rest(curproc, args->oid);
+	error = sls_rest(curproc, args->oid, args->daemon);
 	if (error != 0)
 	    printf("Error: sls_rest failed with %d\n", error);
 

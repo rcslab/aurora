@@ -30,6 +30,7 @@ int
 attach_main(int argc, char* argv[]) {
 	int pid_set, oid_set;
 	uint64_t pid, oid;
+	bool isrecursive = false;
 	int error;
 	int opt;
 

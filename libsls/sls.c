@@ -23,12 +23,14 @@
  * zero to nonzero or vice versa.
  */
 int
-sls_checkpoint(uint64_t oid)
+sls_checkpoint(uint64_t oid, bool recurse)
 {
 	struct sls_checkpoint_args args;
 
 	args.oid= oid;
-	if (sls_ioctl(SLS_CHECKPOINT, &args) != 0) {
+	args.recurse = recurse ? 1 : 0;
+
+	if (sls_ioctl(SLS_CHECKPOINT, &args) < 0) {
 	    perror("sls_checkpoint");
 	    return -1;
 	}
@@ -38,13 +40,14 @@ sls_checkpoint(uint64_t oid)
 
 /* Restore a process stored in sls_backend on top of the process with PID pid. */
 int
-sls_restore(uint64_t oid)
+sls_restore(uint64_t oid, bool daemon)
 {
 	struct sls_restore_args args;
 
 	args.oid = oid;
+	args.daemon = daemon ? 1 : 0;
 
-	if (sls_ioctl(SLS_RESTORE, &args) != 0) {
+	if (sls_ioctl(SLS_RESTORE, &args) < 0) {
 	    perror("sls_restore");
 	    return -1;
 	}

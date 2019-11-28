@@ -147,14 +147,16 @@ slsrest_socket(struct slssock *info, struct slsfile *finfo, int *fdp)
 	    return error;
 	}
 
-	/* XXX Pick max backlog right now, find the actual one later. */
-	error = kern_listen(curthread, fd, 511);
-	if (error != 0) {
-	    kern_close(curthread, fd);
-	    free(sa, M_SLSMM);
-	    return error;
-	}
+	if (info->type == SOCK_STREAM) {
+	    /* XXX Pick max backlog right now, find the actual one later. */
+	    error = kern_listen(curthread, fd, 511);
+	    if (error != 0) {
+		kern_close(curthread, fd);
+		free(sa, M_SLSMM);
+		return error;
+	    }
 
+	}
 	kern_fcntl_freebsd(curthread, fd, F_SETFL, O_RDWR | O_NONBLOCK);
 	free(sa, M_SLSMM);
 

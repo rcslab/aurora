@@ -19,13 +19,17 @@
 
 #define SLSPROC_ID 0x736c7301
 struct slsproc {
-	uint64_t magic;
-	uint64_t slsid;
-	size_t nthreads;
-	pid_t pid;
-	pid_t pgid;
-	pid_t sid;
-	struct sigacts sigacts;
+	uint64_t	magic;	    /* Magic value */
+	uint64_t	slsid;	    /* Unique object ID */
+	size_t		nthreads;   /* Threads in a process */
+	pid_t		pid;	    /* PID of the process */
+	pid_t		pgid;	    /* ID of the process group */
+	uint64_t	pptr;	    /* Unique object ID of the parent proc */
+	uint64_t	pgrpwait;   /* Should we wait for the process group
+				       to be rebuilt? */
+	pid_t		sid;	    /* Session ID */
+	struct sigacts sigacts;	    /* Signal handling info */
+	char	    name[MAXCOMLEN + 1]; /* Name of the process */
 };
 
 #define SLSTHREAD_ID 0x736c7302

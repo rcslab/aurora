@@ -67,10 +67,10 @@ slsp_attach(uint64_t oid, pid_t pid)
 	    return (EINVAL);
 
 	error = slskv_add(slsm.slsm_procs, pid, (uintptr_t) oid);
-	KASSERT(error == 0, "PID already in the SLS");
+	KASSERT(error == 0, ("PID already in the SLS"));
 
 	error = slsset_add(slsp->slsp_procs, pid);
-	KASSERT(error == 0, "PID already in the partition");
+	KASSERT(error == 0, ("PID already in the partition"));
 	
 	return (0);
 }

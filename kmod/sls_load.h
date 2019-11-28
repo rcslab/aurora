@@ -6,7 +6,7 @@
 #include "sls_kv.h"
 
 int slsload_thread(struct slsthread *thread_info, char **bufp, size_t *bufsizep);
-int slsload_proc(struct slsproc *proc_info, char **bufp, size_t *bufsizep);
+int slsload_proc(struct slsproc *proc_info, struct sbuf **namep, char **bufp, size_t *bufsizep);
 int slsload_file(struct slsfile *file, void **data, char **bufp, size_t *bufsizep);
 int slsload_filedesc(struct slsfiledesc *filedesc, char **bufp, size_t *bufsizep, struct slskv_table **fdtable);
 int slsload_vmobject(struct slsvmobject *obj, char **bufp, size_t *bufsizep);

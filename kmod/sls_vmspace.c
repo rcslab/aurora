@@ -214,7 +214,6 @@ slsrest_vmentry_file(struct vm_map *map, struct slsvmentry *entry, struct slskv_
 	    goto done;
 	}
 
-
 	rprot = entry->protection & (VM_PROT_READ | VM_PROT_WRITE);
 	if (rprot == VM_PROT_WRITE)
 	    flags = O_WRONLY;

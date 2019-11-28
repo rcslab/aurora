@@ -78,7 +78,7 @@ slsload_thread(struct slsthread *slsthread, char **bufp, size_t *bufsizep)
 
 /* Functions that load parts of the state. */
 int 
-slsload_proc(struct slsproc *slsproc, char **bufp, size_t *bufsizep)
+slsload_proc(struct slsproc *slsproc, struct sbuf **namep, char **bufp, size_t *bufsizep)
 {
 	int error;
 
@@ -91,6 +91,10 @@ slsload_proc(struct slsproc *slsproc, char **bufp, size_t *bufsizep)
 	    return (EINVAL);
 	}
 
+	error = slsload_path(namep, bufp, bufsizep);
+	if (error != 0)
+	    return (error);
+	
 	return (0);
 }
 

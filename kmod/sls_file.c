@@ -90,6 +90,7 @@ slsrest_vnode(struct sbuf *path, struct slsfile *info, int *fdp)
 	int fd;
 
 	filepath = sbuf_data(path);
+	printf("File path %s\n", filepath);
 
 	/* XXX Permissions/flags. Also, is O_CREAT reasonable? */
 	error = kern_openat(curthread, AT_FDCWD, filepath, 
@@ -136,7 +137,6 @@ slsckpt_pts_mst(struct proc *p, struct tty *pts, struct sbuf *sb)
 	slspts.termios_lock_in = pts->t_termios_lock_in;
 	slspts.termios_lock_out = pts->t_termios_lock_out;
 
-	printf("(MST) local %lx, peer %lx\n", slspts.slsid, slspts.peerid);
 	/* Add it to the record. */
 	error = sbuf_bcat(sb, (void *) &slspts, sizeof(slspts));
 	if (error != 0)
@@ -157,7 +157,6 @@ slsckpt_pts_slv(struct proc *p, struct vnode *vp, struct sbuf *sb)
 	slspts.ismaster = 0;
 	/* Our peer has the tty's pointer as its ID. */
 	slspts.peerid = (uint64_t) vp->v_rdev->si_drv1;
-	printf("(SLV) local %lx, peer %lx\n", slspts.slsid, slspts.peerid);
 
 	/* We don't need anything else, it's in the master's record. */
 
@@ -196,6 +195,7 @@ slsrest_pts(struct slskv_table *filetable,  struct slspts *slspts, int *fdp)
 	    goto error;
     
 	tty = masterfp->f_data;
+	/*
 	tty->t_drainwait = slspts->drainwait;
 	tty->t_termios = slspts->termios;
 	tty->t_winsize = slspts->winsize;
@@ -205,8 +205,9 @@ slsrest_pts(struct slskv_table *filetable,  struct slspts *slspts, int *fdp)
 	tty->t_termios_init_out = slspts->termios_init_out;
 	tty->t_termios_lock_in = slspts->termios_lock_in;
 	tty->t_termios_lock_out = slspts->termios_lock_out;
+	*/
 
-	/* Set the file pointer to be nonblocking. */
+	/* Set the file pointer to be nonblocking. XXX Why? */
 	error = kern_fcntl(curthread, masterfd, F_SETFL, O_NONBLOCK);
 	if (error != 0)
 	    goto error;
@@ -261,7 +262,7 @@ slsrest_pts(struct slskv_table *filetable,  struct slspts *slspts, int *fdp)
 	}
 
 	/* We got an extra reference, release it as in posix_openpt(). */
-	//fdrop(fp, curthread);
+	fdrop(masterfp, curthread);
 
 	return (0);
 
@@ -452,7 +453,9 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid)
 	     * restore time. We therefore use a struct slspts instead
 	     * of a name to represent it.
 	     */
-	    if (fp->f_vnode->v_type == VREG) {
+	    if (fp->f_vnode->v_type == VREG || 
+		((fp->f_vnode->v_type == VCHR) && 
+		 ((fp->f_vnode->v_rdev->si_devsw->d_flags & D_TTY) == 0))) {
 		/* If it's a regular file we go down the normal path. */
 		error = slsckpt_getvnode(p, fp, &info, sb);
 		if (error != 0)
@@ -572,6 +575,7 @@ int
 slsrest_file(void *slsbacker, struct slsfile *info, 
 	struct slskv_table *filetable, struct slskv_table *kqtable)
 {
+	struct slspts *pts;
 	struct file *fp;
 	uintptr_t pipe;
 	uint64_t slsid;
@@ -644,8 +648,7 @@ slsrest_file(void *slsbacker, struct slsfile *info,
 	    slsid = ((struct slspts *) slsbacker)->slsid;
 	    if (slskv_find(filetable, slsid, &pipe) == 0)
 		return (0);
-	    struct slspts *pts = (struct slspts *) slsbacker;
-	    printf("(LOCAL, PEER) (%lx, %lx)\n", pts->slsid, pts->peerid);
+	    pts = (struct slspts *) slsbacker;
 
 	    error = slsrest_pts(filetable, (struct slspts *) slsbacker, &fd);
 	    if (error != 0)
@@ -747,6 +750,13 @@ slsckpt_filedesc(struct proc *p, struct sbuf *sb)
 		    ((fp->f_vnode->v_rdev->si_devsw->d_flags & D_TTY) != 0))
 		    break;
 
+		/* 
+		 * XXX Make sure /dev/{zero,null,random} are ok here
+		 * unify the code path with that of the hpet0. 
+		 */
+		if (fp->f_vnode->v_type == VCHR)
+		    break;
+
 		/* Handle only regular vnodes for now. */
 		if (fp->f_vnode->v_type != VREG)
 		    continue;
@@ -763,17 +773,22 @@ slsckpt_filedesc(struct proc *p, struct sbuf *sb)
 	    case DTYPE_SOCKET:
 		so = (struct socket *) fp->f_data;
 
-		/* Only restore listening IPv4 TCP sockets. */
-		if (so->so_type != SOCK_STREAM)
-		    continue;
+		/* Internet sockets are allowed. */
+		if (so->so_proto->pr_domain->dom_family == AF_INET)
+		    break;
 
-		if (so->so_proto->pr_protocol != IPPROTO_TCP)
-		    continue;
+		/* UNIX sockets are also allowed. */
+		if (so->so_proto->pr_domain->dom_family == AF_UNIX)
+		    break;
 
-		if (so->so_proto->pr_domain->dom_family != AF_INET)
-		    continue;
+		/* 
+		 * XXX Protocols we might need to support in the future:
+		 * AF_INET6, AF_NETGRAPH. If we put networking-focused
+		 * applications in the SLS, also AF_ARP, AF_LINK maybe?
+		 */
 
-		break;
+		/* Anything else isn't. */
+		continue;
 
 	    case DTYPE_PTS:
 		/* Pseudoterminals are ok. */
@@ -823,6 +838,7 @@ done:
 	return (error);
 }
 
+
 int
 slsrest_filedesc(struct proc *p, struct slsfiledesc info, 
 	struct slskv_table *fdtable, struct slskv_table *filetable)
@@ -841,14 +857,8 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc info,
 	/* 
 	 * Create the new file descriptor table. It has 
 	 * the same size as the old one, but it's empty.
-	 *
-	 * XXX Right now we inherit the stdout fds from the
-	 * parent, so processes like tmux don't work correctly.
-	 * They don't work at all right now, though, so we keep
-	 * it that way to be able to see the output of our
-	 * restored programs.
 	 */
-	error = fdcopy_remapped(p->p_fd, stdfds, 3, &newfdp);
+	error = fdcopy_remapped(p->p_fd, stdfds, 0, &newfdp);
 	if (error != 0)
 	    return (error);
 	fdinstall_remapped(curthread, newfdp);
@@ -869,11 +879,6 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc info,
 
 	/* Attach the appropriate open files to the descriptor table. */
 	while (slskv_pop(fdtable, (uint64_t *) &fd, (uintptr_t *) &slsid) == 0) {
-	    /* XXX See above */
-	    if (fd < 3)
-		continue;
-
-
 	    /* Get the restored open file from the ID. */
 	    error = slskv_find(filetable, slsid, (uint64_t *) &fp);
 	    if (error != 0)
@@ -889,7 +894,6 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc info,
 
 	    /* Get a reference to the open file for the table and install it. */
 	    fhold(fp);
-	    printf("(fd, fp) (%d, %p)\n", fd, fp);
 	    /* 
 	     * XXX Keep the UF_EXCLOSE flag with the entry somehow, 
 	     * maybe using bit ops? Then again, O_CLOEXEC is most

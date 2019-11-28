@@ -2,9 +2,11 @@
 #define _SLS_H_
 
 #include <sys/param.h>
+#include <sys/lock.h>
 
 #include <sys/condvar.h>
 #include <sys/fcntl.h>
+#include <sys/mutex.h>
 #include <sys/sdt.h>
 #include <sys/stat.h>
 #include <sys/syscallsubr.h>
@@ -47,8 +49,8 @@ struct slsrest_data {
 	struct slskv_table  *kevtable;	/* Holds the kevents for a kq, indexed by kq */
 	struct slskv_table  *pgidtable;	/* Holds the old-new process group ID pairs */
 	struct slskv_table  *sesstable;	/* Holds the old-new session ID pairs */
-	struct cv	    pgrpcv;	/* Used as a barrier while creating pgroups */
-	struct mtx	    pgrpmtx;	/* Used alongside the cv above */
+	struct cv	    proccv;	/* Used as a barrier while creating pgroups */
+	struct mtx	    procmtx;	/* Used alongside the cv above */
 };
 
 extern struct sls_metadata slsm;
@@ -91,10 +93,12 @@ sls_module_exiting(void)
 
 struct sls_checkpointd_args {
 	struct slspart *slsp;
+	uint64_t recurse;
 };
 
 struct sls_restored_args {
 	uint64_t oid;
+	uint64_t daemon;
 };
 
 void sls_checkpointd(struct sls_checkpointd_args *args);

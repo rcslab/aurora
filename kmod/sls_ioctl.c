@@ -72,6 +72,7 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	/* Set up the arguments. */
 	ckptd_args = malloc(sizeof(*ckptd_args), M_SLSMM, M_WAITOK);
 	ckptd_args->slsp = slsp;
+	ckptd_args->recurse = args->recurse;
 
 	/* Create the daemon. */
 	error = kthread_add((void(*)(void *)) sls_checkpointd, 
@@ -92,12 +93,13 @@ sls_restore(struct sls_restore_args *args)
 	/* Set up the arguments for the restore. */
 	restd_args = malloc(sizeof(*restd_args), M_SLSMM, M_WAITOK);
 	restd_args->oid = args->oid;
+	restd_args->daemon = args->daemon;
 
 	/* 
 	 * The sls_restored function can alternatively
 	 * be called as a separate kernel process, but
 	 * this poses its own set of problems, so we
-	 * use it directly for now.
+	 * use it directly. 
 	 */
 	sls_restored(restd_args);
 

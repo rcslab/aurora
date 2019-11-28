@@ -12,11 +12,13 @@ struct sls_attr {
 };
 
 struct sls_checkpoint_args {
-	uint64_t	    oid;	    /* The OID of the partition to be checkpointed. */
+	uint64_t	    oid;	/* The OID of the partition to be checkpointed. */
+	uint64_t	    recurse;    /* Should we checkpoint all children of attached processes? */
 };
 
 struct sls_restore_args {
-	uint64_t	    oid;	/* OID of the partition being restored */
+	uint64_t	    oid;    /* OID of the partition being restored */
+	uint64_t	    daemon; /* Restore the partition as a daemon */
 };
 
 struct proc_param {
@@ -26,8 +28,8 @@ struct proc_param {
 };
 
 struct sls_attach_args {
-	uint64_t	pid;	/* PID of process being attached to the SLS */
-	uint64_t	oid;	/* OID of the partition in which we add the process */
+	uint64_t	pid;	    /* PID of process being attached to the SLS */
+	uint64_t	oid;	    /* OID of the partition in which we add the process */
 };
 
 struct sls_partadd_args {

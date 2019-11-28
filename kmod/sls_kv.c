@@ -153,15 +153,18 @@ slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value)
 	    LIST_FOREACH_SAFE(kv, bucket, next, tmpkv) {
 		/* 
 		 * We found an old instance of the key.
-		 * Remove it and erase it and its value. 
+		 * Update the key-value pair in place.
 		 */
 		if (kv->key == key) {
-		    LIST_REMOVE(kv, next);
-		    uma_zfree(slskv_zone, kv);
+		    kv->value = value;
+		    mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+
+		    uma_zfree(slskv_zone, newkv);
+		    return (0);
 		}
 	    }
 
-	    /* We destroyed all old instances, insert the new one. */
+	    /* There were no old instances, add the key. */
 	    LIST_INSERT_HEAD(bucket, newkv, next);
 	    table->elems += 1;
 
@@ -378,7 +381,7 @@ slskv_deserial(char *buf, size_t len, struct slskv_table **tablep)
 	/* Get the replacement policy of the table first. */
 	memcpy(&repl_policy, &buf[len - sizeof(repl_policy)], sizeof(repl_policy));
 
-	KASSERT(buf != NULL, "buffer is not finalized");
+	KASSERT(buf != NULL, ("buffer is not finalized"));
 
 	error = slskv_create(&table, repl_policy);
 	if (error != 0)
