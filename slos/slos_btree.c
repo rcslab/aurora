@@ -3,12 +3,14 @@
 #include <sys/queue.h>
 #include <sys/systm.h>
 
+#include <slos.h>
+#include <slsfs.h>
+
+#include "slos_bnode.h"
 #include "slos_alloc.h"
 #include "slos_bootalloc.h"
 #include "slos_btree.h"
-#include "slos_internal.h"
 #include "slos_io.h"
-
 #include "slosmm.h"
 
 /* Initialize an in-memory btree. */
@@ -21,17 +23,18 @@ btree_init(struct slos *slos, uint64_t blkno, int alloctype)
 	btree->size = 0;
 	btree->depth = 1;
 	btree->alloctype = alloctype;
+	btree->slos = slos;
 	LIST_INIT(&btree->btreeq);
 
 	btree->root = blkno;
-
 	return btree;
 }
 
 static uint64_t 
-btree_blkget(struct slos *slos,struct btree *btree)
+btree_blkget(struct btree *btree)
 {
 	struct slos_diskptr diskptr;
+	struct slos *slos = btree->slos;
 
 	if (btree->alloctype == ALLOCBOOT)
 	    diskptr = slos_bootalloc(slos->slos_bootalloc);
@@ -45,8 +48,9 @@ btree_blkget(struct slos *slos,struct btree *btree)
 }
 
 static void 
-btree_blkput(struct slos *slos, struct btree *btree, uint64_t blkno)
+btree_blkput(struct btree *btree, uint64_t blkno)
 {
+	struct slos *slos = btree->slos;
 	if (btree->alloctype == ALLOCBOOT)
 	    slos_bootfree(slos->slos_bootalloc, DISKPTR_BLOCK(blkno));
 	else
@@ -78,7 +82,7 @@ btree_discardelem(struct btree *btree)
 
 	LIST_FOREACH_SAFE(cur, &btree->btreeq, entries, tmp) {
 	    LIST_REMOVE(cur, entries);
-	    btree_blkput(&slos, btree, cur->bnode->blkno);
+	    btree_blkput(btree, cur->bnode->blkno);
 	    bnode_free(cur->bnode);
 	    free(cur, M_SLOS);
 	}
@@ -148,9 +152,10 @@ int
 btree_empty(struct btree *btree, int *is_empty)
 {
 	struct bnode *broot;
+	struct slos *slos = btree->slos;
 	int error;
 
-	error = bnode_read(&slos, btree->root, &broot);
+	error = bnode_read(slos, btree->root, &broot);
 	if (error != 0)
 	    return error;
 
@@ -161,22 +166,20 @@ btree_empty(struct btree *btree, int *is_empty)
 	return 0;
 }
 
-/*
- * Return the lowest key/value pair in the btree.
- */
 int
-btree_first(struct btree *btree, uint64_t *key, void *value)
+btree_last(struct btree *btree, uint64_t *key, void *value)
 {
 	struct bnode *bnode, *bparent;
+	struct slos *slos = btree->slos;
 	int error = 0;
 
-	error = bnode_read(&slos, btree->root, &bnode);
+	error = bnode_read(slos, btree->root, &bnode);
 	if (error != 0)
 	    return error;
 
 	bparent = bnode;
 	while (bnode->external == BNODE_INTERNAL) {
-	    bnode = bnode_child(bnode, 0);
+	    bnode = bnode_child(slos, bnode, bnode->size);
 	    if (bnode == NULL) {
 		bnode_free(bparent);
 		return EINVAL;
@@ -185,7 +188,68 @@ btree_first(struct btree *btree, uint64_t *key, void *value)
 	    /* Lazy update of parent pointers in the path. */
 	    if (bnode->parent.offset != bparent->blkno) {
 		bnode->parent.offset = bparent->blkno;
-		error = bnode_write(&slos, bnode);
+		error = bnode_write(slos, bnode);
+		if (error != 0) {
+		    bnode_free(bparent);
+		    error = EIO;
+		    goto out;
+		}
+	    }
+
+	    /* Free the parent pointer (if it's not the root) */
+	    bnode_free(bparent);
+	    bparent = bnode;
+	}
+
+	/* Empty tree */
+	if (bnode->size == 0) {
+	    bnode_free(bnode);
+	    return EINVAL;
+	}
+
+	error = bnode_getkey(bnode, bnode->size - 1, key);
+	if (error != 0)
+	    goto out;
+
+	error = bnode_getvalue(bnode, bnode->size - 1, value);
+	if (error != 0)
+	    goto out;
+
+out:
+	/* Free the in-memory bnode. */
+	bnode_free(bnode);
+
+	return error;
+}
+
+/*
+ * Return the lowest key/value pair in the btree.
+ */
+int
+btree_first(struct btree *btree, uint64_t *key, void *value)
+{
+	struct bnode *bnode, *bparent;
+	struct slos *slos = btree->slos;
+	int error = 0;
+
+	KASSERT(key != NULL, ("Null Key"));
+
+	error = bnode_read(slos, btree->root, &bnode);
+	if (error != 0)
+	    return error;
+
+	bparent = bnode;
+	while (bnode->external == BNODE_INTERNAL) {
+	    bnode = bnode_child(slos, bnode, 0);
+	    if (bnode == NULL) {
+		bnode_free(bparent);
+		return EINVAL;
+	    }
+
+	    /* Lazy update of parent pointers in the path. */
+	    if (bnode->parent.offset != bparent->blkno) {
+		bnode->parent.offset = bparent->blkno;
+		error = bnode_write(slos, bnode);
 		if (error != 0) {
 		    bnode_free(bparent);
 		    error = EIO;
@@ -208,10 +272,11 @@ btree_first(struct btree *btree, uint64_t *key, void *value)
 	if (error != 0)
 	    goto out;
 
-	error = bnode_getvalue(bnode, 0, value);
-	if (error != 0)
-	    goto out;
-
+	if (value != NULL) {
+	    error = bnode_getvalue(bnode, 0, value);
+	    if (error != 0)
+		goto out;
+	}
 out:
 	/* Free the in-memory bnode. */
 	bnode_free(bnode);
@@ -226,11 +291,12 @@ static struct bnode *
 btree_candidate(struct btree *btree, uint64_t key)
 {
 	struct bnode *bnode, *bparent;
+	struct slos *slos = btree->slos;
 	uint64_t bkey;
 	size_t nextoff;
 	int error;
 	
-	error = bnode_read(&slos, btree->root, &bnode);
+	error = bnode_read(slos, btree->root, &bnode);
 	if (error != 0)
 	    return NULL;
 
@@ -245,7 +311,7 @@ btree_candidate(struct btree *btree, uint64_t key)
 
 	    /* Follow the path to the key. */
 	    bparent = bnode;
-	    bnode = bnode_child(bnode, nextoff);
+	    bnode = bnode_child(slos, bnode, nextoff);
 	    if (bnode == NULL) {
 		bnode_free(bparent);
 		return NULL;
@@ -254,7 +320,7 @@ btree_candidate(struct btree *btree, uint64_t key)
 	    /* Lazy update of parent pointers in the path. */
 	    if (bnode->parent.offset != bparent->blkno) {
 		bnode->parent.offset = bparent->blkno;
-		error = bnode_write(&slos, bnode);
+		error = bnode_write(slos, bnode);
 		if (error != 0) {
 		    bnode_free(bnode);
 		    bnode_free(bparent);
@@ -277,9 +343,11 @@ int
 btree_keymin(struct btree *btree, uint64_t *key, void *value)
 {
 	struct bnode *bnode, *bparent, *bchild;
+	struct slos *slos = btree->slos;
 	uint64_t bkey;
 	size_t boffset;
 	int error = 0, i;
+
 
 	/* Get the only node that could contain the key. */
 	bnode = btree_candidate(btree, *key);
@@ -291,6 +359,7 @@ btree_keymin(struct btree *btree, uint64_t *key, void *value)
 	    bnode_free(bnode);
 	    return EINVAL;
 	}
+
 
 	/* 
 	 * If all keys in the node are larger than the argument,
@@ -321,7 +390,7 @@ btree_keymin(struct btree *btree, uint64_t *key, void *value)
 		 * to the bnode, fixing up any
 		 * stale parent pointers.
 		 */
-		bparent = bnode_parent(bnode);
+		bparent = bnode_parent(slos, bnode);
 		if (bparent == NULL) {
 		    error = EIO;
 		    goto out;
@@ -340,7 +409,7 @@ btree_keymin(struct btree *btree, uint64_t *key, void *value)
 	     * Here we don't fix any stale parent pointers,
 	     * because we won't need them for this operation.
 	     */
-	    bchild = bnode_child(bnode, boffset - 1);
+	    bchild = bnode_child(slos, bnode, boffset - 1);
 	    if (bchild == NULL) {
 		error = EIO;
 		goto out;
@@ -351,7 +420,7 @@ btree_keymin(struct btree *btree, uint64_t *key, void *value)
 
 	    /* Go down the right side of the subtree. */
 	    while (bnode->external == BNODE_INTERNAL) {
-		bchild = bnode_child(bnode, bnode->size);
+		bchild = bnode_child(slos, bnode, bnode->size);
 		if (bchild == NULL) {
 		    error = EIO;
 		    goto out;
@@ -408,6 +477,7 @@ int
 btree_keymax(struct btree *btree, uint64_t *key, void *value)
 {
 	struct bnode *bnode, *bparent, *bchild;
+	struct slos *slos = btree->slos;
 	uint64_t bkey;
 	size_t boffset;
 	int error = 0, i;
@@ -431,8 +501,9 @@ btree_keymax(struct btree *btree, uint64_t *key, void *value)
 	 * is what we're looking for.
 	 */
 	error = bnode_getkey(bnode, bnode->size - 1, &bkey);
-	if (error != 0)
+	if (error != 0) {
 	    return EINVAL;
+	}
 
 	if (bkey < *key) {
 	    do {
@@ -449,7 +520,7 @@ btree_keymax(struct btree *btree, uint64_t *key, void *value)
 		    goto out;
 		}
 
-		bparent = bnode_parent(bnode);
+		bparent = bnode_parent(slos, bnode);
 		if (bparent == NULL) {
 		    error = EIO;
 		    goto out;
@@ -469,7 +540,7 @@ btree_keymax(struct btree *btree, uint64_t *key, void *value)
 	     * Here we don't fix any stale parent pointers,
 	     * because we won't need them for this operation.
 	     */
-	    bchild = bnode_child(bnode, boffset + 1);
+	    bchild = bnode_child(slos, bnode, boffset + 1);
 	    if (bchild == NULL) {
 		error = EIO;
 		goto out;
@@ -480,7 +551,7 @@ btree_keymax(struct btree *btree, uint64_t *key, void *value)
 
 	    /* Go down the left subtere. */
 	    while (bnode->external == BNODE_INTERNAL) {
-		bchild = bnode_child(bnode, 0);
+		bchild = bnode_child(slos, bnode, 0);
 		if (bchild == NULL) {
 		    error = EIO;
 		    goto out;
@@ -567,6 +638,7 @@ bnode_split(struct btree *btree, struct bnode **bnode)
 	struct bnode *bright = NULL, *bleft = NULL;
 	struct bnode *bparent = NULL, *broot = NULL;
 	struct slos_diskptr bptr;
+	struct slos *slos = btree->slos;
 	uint64_t bkey;
 	int error = 0, i;
 	daddr_t blkleft = 0, blkright = 0, blkroot = 0;
@@ -587,19 +659,19 @@ bnode_split(struct btree *btree, struct bnode **bnode)
 	 * Allocate on-disk blocks for 
 	 * any bnodes we might create.
 	 */
-	blkleft = btree_blkget(&slos, btree);
+	blkleft = btree_blkget(btree);
 	if (blkleft == 0) {
 	    error = ENOSPC;
 	    goto error;
 	}
 
-	blkright = btree_blkget(&slos, btree);
+	blkright = btree_blkget(btree);
 	if (blkright == 0) {
 	    error = ENOSPC;
 	    goto error;
 	}
 
-	blkroot = btree_blkget(&slos, btree);
+	blkroot = btree_blkget(btree);
 	if (blkroot == 0) {
 	    error = ENOSPC;
 	    goto error;
@@ -609,20 +681,20 @@ bnode_split(struct btree *btree, struct bnode **bnode)
 	 * Create the bnodes that will 
 	 * replace the original. 
 	 */
-	bleft = bnode_copy(&slos, blkleft, *bnode);
+	bleft = bnode_copy(slos, blkleft, *bnode);
 	if (bleft == NULL) {
 	    error = EIO;
 	    goto error;
 	}
 
-	bright = bnode_alloc(&slos, blkright, (*bnode)->vsize, (*bnode)->external);
+	bright = bnode_alloc(slos, blkright, (*bnode)->vsize, (*bnode)->external);
 	if (bright == NULL) {
 	    error = EIO;
 	    goto error;
 	}
 	bright->parent = (*bnode)->parent;
 
-	broot = bnode_alloc(&slos, blkroot, (*bnode)->vsize, BNODE_INTERNAL);
+	broot = bnode_alloc(slos, blkroot, (*bnode)->vsize, BNODE_INTERNAL);
 	if (broot == NULL) {
 	    error = EIO;
 	    goto error;
@@ -708,10 +780,10 @@ bnode_split(struct btree *btree, struct bnode **bnode)
 
 	    /* We didn't need to create a new root. */
 	    bnode_free(broot);
-	    btree_blkput(&slos, btree, blkroot);
+	    btree_blkput(btree, blkroot);
 
 	    /* Attach the new node to the parent */
-	    bparent = bnode_parent(*bnode);
+	    bparent = bnode_parent(slos, *bnode);
 	    if (bparent == NULL) {
 		error = EIO;
 		goto error;
@@ -753,12 +825,12 @@ bnode_split(struct btree *btree, struct bnode **bnode)
 	 * bnode that was split is
 	 * left untouched.
 	 */
-	error = bnode_write(&slos, bleft);
+	error = bnode_write(slos, bleft);
 	if (error != 0) {
 	    error = EIO;
 	    goto error;
 	}
-	error = bnode_write(&slos, bright);
+	error = bnode_write(slos, bright);
 	if (error != 0) {
 	    error = EIO;
 	    goto error;
@@ -784,13 +856,13 @@ error:
 	 * resources allocated for the split. 
 	 */
 	if (blkleft != 0)
-	    btree_blkput(&slos, btree, blkleft);
+	    btree_blkput(btree, blkleft);
 
 	if (blkright != 0)
-	    btree_blkput(&slos, btree, blkright);
+	    btree_blkput(btree, blkright);
 
 	if (blkroot != 0)
-	    btree_blkput(&slos, btree, blkroot);
+	    btree_blkput(btree, blkroot);
 
 	bnode_free(bleft);
 	bnode_free(bright);
@@ -809,6 +881,7 @@ static int
 btree_add(struct btree *btree, uint64_t key, void *value, void *oldval)
 {
 	struct bnode *bnode;
+	struct slos *slos = btree->slos;
 	uint64_t bkey;
 	int error = 0, i;
 
@@ -840,7 +913,7 @@ btree_add(struct btree *btree, uint64_t key, void *value, void *oldval)
 		 */
 		bnode_getvalue(bnode, i, oldval);
 		bnode_putvalue(bnode, i, value);
-		bnode_write(&slos, bnode);
+		bnode_write(slos, bnode);
 		bnode_free(bnode);
 
 		btree->last_op = OPOVERWRITE;
@@ -893,7 +966,7 @@ btree_add(struct btree *btree, uint64_t key, void *value, void *oldval)
 	 * sized. Overwrite the old value, and, if the parent
 	 * is a new root, update the superblock.
 	 */
-	error = bnode_write(&slos, bnode);
+	error = bnode_write(slos, bnode);
 	if (error != 0) {
 	    bnode_free(bnode);
 	    return error;
@@ -961,6 +1034,7 @@ bnode_borrow(struct btree *btree, struct bnode **bnode)
 {
 	struct bnode *bleft = NULL, *bright = NULL, *bparent = NULL;
 	struct bnode *bleftcopy = NULL, *brightcopy = NULL;
+	struct slos *slos = btree->slos;
 	daddr_t blkleft = 0, blkright = 0;
 	struct slos_diskptr bptr;
 	uint64_t bkey, key;
@@ -970,24 +1044,23 @@ bnode_borrow(struct btree *btree, struct bnode **bnode)
 
 	int error = 0;
 
-	KASSERT(2 * bnode->size < bnode->bsize, "bnode needs to borrow");
-
+	KASSERT(2 * (*bnode)->size < (*bnode)->bsize, ("bnode needs to borrow"));
 
 	bval = malloc((*bnode)->vsize, M_SLOS, M_WAITOK);
 
-	blkleft = btree_blkget(&slos, btree);
+	blkleft = btree_blkget(btree);
 	if (blkleft == 0) {
 	    error = ENOSPC;
 	    goto error;
 	}
 
-	blkright = btree_blkget(&slos, btree);
+	blkright = btree_blkget(btree);
 	if (blkright == 0) {
 	    error = ENOSPC;
 	    goto error;
 	}
 
-	bparent = bnode_parent(*bnode);
+	bparent = bnode_parent(slos, *bnode);
 	if (bparent == NULL) {
 	    error = EIO;
 	    goto error;
@@ -1000,10 +1073,10 @@ bnode_borrow(struct btree *btree, struct bnode **bnode)
 	 */
 	boffset = bnode_parentoff(*bnode, bparent);
 
-	KASSERT(boffset < bnode->size + 1, "bnode found");
+	KASSERT(boffset < ((*bnode)->size + 1), ("bnode found"));
 
 	if (boffset > 0) {
-	    bleft = bnode_child(bparent, boffset - 1);
+	    bleft = bnode_child(slos, bparent, boffset - 1);
 	    if (bleft == NULL) {
 		error = EIO;
 		goto error;
@@ -1011,7 +1084,7 @@ bnode_borrow(struct btree *btree, struct bnode **bnode)
 	}
 
 	if (boffset < bparent->size) {
-	    bright = bnode_child(bparent, boffset + 1);
+	    bright = bnode_child(slos, bparent, boffset + 1);
 	    if (bright == NULL) {
 		error = EIO;
 		goto error;
@@ -1029,14 +1102,14 @@ bnode_borrow(struct btree *btree, struct bnode **bnode)
 	    /* Save the direction from which we're borrowing. */
 	    pickedleft = 1;
 
-	    bleftcopy = bnode_copy(&slos, blkleft, bleft);
+	    bleftcopy = bnode_copy(slos, blkleft, bleft);
 	    if (bleftcopy == NULL) {
 		error = EIO;
 		goto error;
 	    }
 	    bleftcopy->parent.offset = bparent->blkno;
 	    
-	    brightcopy = bnode_copy(&slos, blkright, *bnode);
+	    brightcopy = bnode_copy(slos, blkright, *bnode);
 	    if (brightcopy == NULL) {
 		error = EIO;
 		goto error;
@@ -1085,14 +1158,14 @@ bnode_borrow(struct btree *btree, struct bnode **bnode)
 	    * If we couldn't borrow left, try to borrow right.
 	    */
 
-	    bleftcopy = bnode_copy(&slos, blkleft, *bnode);
+	    bleftcopy = bnode_copy(slos, blkleft, *bnode);
 	    if (bleftcopy == NULL) {
 		error = EIO;
 		goto error;
 	    }
 	    bleftcopy->parent.offset = bparent->blkno;
 	    
-	    brightcopy = bnode_copy(&slos, blkright, bright);
+	    brightcopy = bnode_copy(slos, blkright, bright);
 	    if (brightcopy == NULL) {
 		error = EIO;
 		goto error;
@@ -1133,10 +1206,10 @@ bnode_borrow(struct btree *btree, struct bnode **bnode)
 	     */
 
 	    if (blkleft != 0)
-		btree_blkput(&slos, btree, blkleft);
+		btree_blkput(btree, blkleft);
 
 	    if (blkright != 0)
-		btree_blkput(&slos, btree, blkright);
+		btree_blkput(btree, blkright);
 
 	    bnode_free(bleft);
 	    bnode_free(bright);
@@ -1148,11 +1221,11 @@ bnode_borrow(struct btree *btree, struct bnode **bnode)
 	}
 
 	/* write the new copies. */
-	error = bnode_write(&slos, bleftcopy);
+	error = bnode_write(slos, bleftcopy);
 	if (error != 0)
 	    goto error;
 
-	error = bnode_write(&slos, brightcopy);
+	error = bnode_write(slos, brightcopy);
 	if (error != 0)
 	    goto error;
 
@@ -1204,10 +1277,10 @@ error:
 	 * resources allocated for the borrow. 
 	 */
 	if (blkleft != 0)
-	    btree_blkput(&slos, btree, blkleft);
+	    btree_blkput(btree, blkleft);
 
 	if (blkright != 0)
-	    btree_blkput(&slos, btree, blkright);
+	    btree_blkput(btree, blkright);
 
 	bnode_free(bleft);
 	bnode_free(bright);
@@ -1222,6 +1295,7 @@ static int
 bnode_merge(struct btree *btree, struct bnode **bnode)
 {
 	struct bnode *bleft = NULL, *bright = NULL, *bnew = NULL, *bparent = NULL;
+	struct slos *slos = btree->slos;
 	size_t boffset;
 	daddr_t blkid = 0;
 	uint64_t key;
@@ -1235,13 +1309,13 @@ bnode_merge(struct btree *btree, struct bnode **bnode)
 	 * Allocate on-disk blocks for 
 	 * any bnodes we might create.
 	 */
-	blkid = btree_blkget(&slos, btree);
+	blkid = btree_blkget(btree);
 	if (blkid == 0) {
 	    error = ENOSPC;
 	    goto error;
 	}
 
-	bparent = bnode_parent(*bnode);
+	bparent = bnode_parent(slos, *bnode);
 	if (bparent == NULL) {
 	    error = EIO;
 	    goto error;
@@ -1254,7 +1328,7 @@ bnode_merge(struct btree *btree, struct bnode **bnode)
 	 */
 	boffset = bnode_parentoff(*bnode, bparent);
 
-	KASSERT(boffset != (*bnode)->parent->size + 1, "node is in parent");
+	KASSERT(boffset != (*bnode)->parent.size + 1, ("node is in parent"));
 
 	/*
 	 * Otherwise, we have siblings. Thankfully, merging two
@@ -1272,7 +1346,7 @@ bnode_merge(struct btree *btree, struct bnode **bnode)
 
 
 	if (boffset == bparent->size) {
-	    bleft = bnode_child(bparent, boffset - 1);
+	    bleft = bnode_child(slos, bparent, boffset - 1);
 	    if (bleft == NULL) {
 		error = EIO;
 		goto error;
@@ -1286,14 +1360,14 @@ bnode_merge(struct btree *btree, struct bnode **bnode)
 	} else {
 	    bleft = *bnode;
 
-	    bright = bnode_child(bparent, boffset + 1);
+	    bright = bnode_child(slos, bparent, boffset + 1);
 	    if (bright == NULL) {
 		error = EIO;
 		goto error;
 	    }
 	}
 
-	bnew = bnode_copy(&slos, blkid, bleft);
+	bnew = bnode_copy(slos, blkid, bleft);
 	if (bnew == NULL) {
 	    error = EIO;
 	    goto error;
@@ -1333,7 +1407,7 @@ bnode_merge(struct btree *btree, struct bnode **bnode)
 	}
 
 	/* write the new nodes. */
-	error = bnode_write(&slos, bnew);
+	error = bnode_write(slos, bnew);
 	if (error != 0)
 	    goto error;
 
@@ -1366,7 +1440,7 @@ error:
 	 */
 
 	if (blkid != 0)
-	    btree_blkput(&slos, btree, blkid);
+	    btree_blkput(btree, blkid);
 
 	bnode_free(bnew);
 	bnode_free(bparent);
@@ -1384,13 +1458,20 @@ int
 btree_delete(struct btree *btree, uint64_t key)
 {
 	struct bnode *bnode;
+	struct slos *slos = btree->slos;
 	uint64_t bkey;
 	int error, i; 
 
 	btree_clearflags(btree);
 
 	/* Get the only node that could contain the key. */
+	
 	bnode = btree_candidate(btree, key);
+	if (bnode == NULL) {
+	    DBUG("Error Retrieving bnode candidate in delete\n");
+	    return EIO;
+	}
+
 	for (i = 0; i < bnode->size; i++) {
 	    bnode_getkey(bnode,i ,&bkey);
 	    if (key < bkey) {
@@ -1452,7 +1533,7 @@ btree_delete(struct btree *btree, uint64_t key)
 	 * had a key deleted without needing
 	 * merging.
 	 */
-	bnode_write(&slos, bnode);
+	bnode_write(slos, bnode);
 
 
 	/* 

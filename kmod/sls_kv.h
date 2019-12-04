@@ -84,6 +84,7 @@ slsset_find(slsset *table, uint64_t key)
 
 	return (slskv_find(table, key, &nothing));
 }
+
 inline int
 slsset_add(slsset *table, uint64_t key)
 {

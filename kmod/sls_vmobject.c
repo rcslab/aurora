@@ -25,6 +25,7 @@
 #include <vm/uma.h>
 
 #include <slos.h>
+#include <slos_record.h>
 
 #include "sls_internal.h"
 #include "sls_kv.h"
@@ -164,6 +165,7 @@ slsrest_vmobject(struct slsvmobject *info, struct slskv_table *objtable,
 
 	    PROC_UNLOCK(curthread->td_proc);
 	    error = sls_path_to_vn(info->path, &vp);
+	    SLS_DBG("path %s vp %p\n", sbuf_data(info->path), vp);
 	    PROC_LOCK(curthread->td_proc);
 	    if (error != 0) 
 		return error;

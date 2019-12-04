@@ -1,11 +1,10 @@
 #include <sys/param.h>
-
 #include <sys/queue.h>
 
+#include "slos_bnode.h"
 #include "slos_alloc.h"
 #include "slos_bootalloc.h"
 #include "slos_btree.h"
-#include "slos_internal.h"
 #include "slos_io.h"
 #include "slosmm.h"
 
@@ -22,6 +21,7 @@ slos_alloc_init(struct slos *slos)
 	/* Get the dual btrees from the disk. */
 	alloc->offsets = btree_init(slos, slos->slos_sb->sb_broot.offset, ALLOCBOOT);
 	alloc->sizes = btree_init(slos, slos->slos_sb->sb_szroot.offset, ALLOCBOOT);
+	alloc->slos = slos;
 	
 	/* Make the allocator visible. */
 	slos->slos_alloc = alloc;
@@ -84,7 +84,7 @@ slos_delbucket(struct slos_blkalloc *alloc, uint64_t offset, uint64_t size)
 	if (error != 0)
 	    goto error;
 
-	bucket = btree_init(&slos, diskptr.offset, ALLOCBOOT);
+	bucket = btree_init(alloc->slos, diskptr.offset, ALLOCBOOT);
 	if (bucket == NULL) {
 	    error = EIO;
 	    goto error;
@@ -105,15 +105,15 @@ slos_delbucket(struct slos_blkalloc *alloc, uint64_t offset, uint64_t size)
 	    if (error != 0)
 		goto error;
 
-	    if (alloc->sizes->root != slos.slos_sb->sb_szroot.offset) {
-		slos.slos_sb->sb_szroot.offset = alloc->sizes->root;
-		error = slos_sbwrite(&slos);
+	    if (alloc->sizes->root != alloc->slos->slos_sb->sb_szroot.offset) {
+		alloc->slos->slos_sb->sb_szroot.offset = alloc->sizes->root;
+		error = slos_sbwrite(alloc->slos);
 		if (error != 0)
 		    goto error;
 
 	    }
 
-	    slos_bootfree(slos.slos_bootalloc, diskptr);
+	    slos_bootfree(alloc->slos->slos_bootalloc, diskptr);
 
 	} else if (bucket->root != diskptr.offset) {
 	    /* If we have a new root, update the sizes btree. */
@@ -159,14 +159,14 @@ slos_addbucket(struct slos_blkalloc *alloc, uint64_t offset, uint64_t size)
 	error = btree_search(alloc->sizes, size, &diskptr);
 	if (error == EINVAL) {
 	    /* Allocate space on disk. */
-	    diskptr = slos_bootalloc(slos.slos_bootalloc);
+	    diskptr = slos_bootalloc(alloc->slos->slos_bootalloc);
 	    if (diskptr.offset == 0)
 		return ENOSPC;
 
 	    /* Manually create the new root. */
-	    broot = bnode_alloc(&slos, diskptr.offset, sizeof(uint64_t), BNODE_EXTERNAL);
+	    broot = bnode_alloc(alloc->slos, diskptr.offset, sizeof(uint64_t), BNODE_EXTERNAL);
 
-	    error = bnode_write(&slos, broot);
+	    error = bnode_write(alloc->slos, broot);
 	    bnode_free(broot);
 	    if (error != 0) 
 		goto error;
@@ -177,7 +177,7 @@ slos_addbucket(struct slos_blkalloc *alloc, uint64_t offset, uint64_t size)
 	    goto error;
 	}
 
-	bucket = btree_init(&slos, diskptr.offset, ALLOCBOOT);
+	bucket = btree_init(alloc->slos, diskptr.offset, ALLOCBOOT);
 	if (bucket == NULL) {
 	    error = EIO;
 	    goto error;
@@ -193,9 +193,9 @@ slos_addbucket(struct slos_blkalloc *alloc, uint64_t offset, uint64_t size)
 		goto error;
 
 	    /* If the sizes btree root split, update the superblock. */
-	    if (alloc->sizes->root != slos.slos_sb->sb_szroot.offset) {
-		slos.slos_sb->sb_szroot.offset = alloc->sizes->root;
-		error = slos_sbwrite(&slos);
+	    if (alloc->sizes->root != alloc->slos->slos_sb->sb_szroot.offset) {
+		alloc->slos->slos_sb->sb_szroot.offset = alloc->sizes->root;
+		error = slos_sbwrite(alloc->slos);
 		if (error != 0)
 		    goto error;
 	    }
@@ -269,12 +269,13 @@ error:
 struct slos_diskptr
 slos_alloc(struct slos_blkalloc *alloc, uint64_t origsize)
 {
-	struct btree *bucket = NULL;
-	uint64_t offset = 0xaa, unused = 0xbb;
-	uint64_t size, pastsize;
+	uint64_t size, pastsize, offset;
 	struct slos_diskptr diskptr, bucketptr;
 	int partial;
 	int error;
+
+	struct btree *bucket;
+	struct slos *slos = alloc->slos;
 
 	/* 
 	 * Fail if asked for a region of size 0.
@@ -328,20 +329,15 @@ retry:
 	}
 
 	/* Get the bucket for the given size. */
-	bucket = btree_init(&slos, bucketptr.offset, ALLOCBOOT);
+	bucket = btree_init(slos, bucketptr.offset, ALLOCBOOT);
 	if (bucket == NULL)
 	    return DISKPTR_BLOCK(0);
 
 
 	/* Randomly grab an offset. */
-	error = btree_first(bucket, &offset, &unused);
+	error = btree_first(bucket, &offset, NULL);
 	if (error != 0)
 	    goto error;
-
-	if (offset != unused)
-	    goto error;
-
-
 
 	/* 
 	 * To avoid inconsistency between the brees, we first 
@@ -416,9 +412,9 @@ retry:
 
 
 	/* If the offsets btree changed root, update the superblock. */
-	if (alloc->offsets->root != slos.slos_sb->sb_broot.offset) {
-	    slos.slos_sb->sb_broot.offset = alloc->offsets->root;
-	    error = slos_sbwrite(&slos);
+	if (alloc->offsets->root != slos->slos_sb->sb_broot.offset) {
+	    slos->slos_sb->sb_broot.offset = alloc->offsets->root;
+	    error = slos_sbwrite(slos);
 	    if (error != 0)
 		goto error;
 	}
@@ -460,6 +456,7 @@ slos_free(struct slos_blkalloc *alloc, struct slos_diskptr diskptr)
 	uint64_t minoffset, maxoffset;
 	uint64_t minsize, maxsize;
 	uint64_t offset, size;
+	struct slos * slos = alloc->slos;
 	int error;
 
 	offset = diskptr.offset;
@@ -529,9 +526,9 @@ slos_free(struct slos_blkalloc *alloc, struct slos_diskptr diskptr)
 	    goto error;
 	
 	/* If the offsets btree changed root, update the superblock. */
-	if (alloc->offsets->root != slos.slos_sb->sb_broot.offset) {
-	    slos.slos_sb->sb_broot.offset = alloc->offsets->root;
-	    error = slos_sbwrite(&slos);
+	if (alloc->offsets->root != slos->slos_sb->sb_broot.offset) {
+	    slos->slos_sb->sb_broot.offset = alloc->offsets->root;
+	    error = slos_sbwrite(slos);
 	    if (error != 0)
 		goto error;
 	}

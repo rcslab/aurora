@@ -37,9 +37,8 @@
 #include "sls_vmspace.h"
 
 #include <slos.h>
-#include "../slos/slos_inode.h"
-#include "../slos/slos_io.h"
-#include "../slos/slos_record.h"
+#include <slos_record.h>
+#include <slos_io.h>
 
 /* 
  * Read an info struct from the buffer, if there is enough data,

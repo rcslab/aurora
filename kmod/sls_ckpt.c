@@ -35,6 +35,8 @@
 #include <vm/uma.h>
 
 #include <slos.h>
+#include <slos_inode.h>
+#include <slos_record.h>
 #include <sls_data.h>
 
 #include "sls_internal.h"
@@ -380,7 +382,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 {
 	struct slskv_table *newtable = NULL, *table;
 	struct slskv_iter iter;
-	struct slos_vnode *vp;
+	struct slos_node *vp;
 	struct proc *p;
 	int error = 0;
 
@@ -441,7 +443,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 
 	/* The dump itself. */
 	/* XXX Temporary until we change to multiple inodes per checkpoint. */
-	error = slos_icreate(&slos, slsp->slsp_oid);
+	error = slos_icreate(&slos, slsp->slsp_oid, 0);
 	if (error != 0)
 	    goto out;
 

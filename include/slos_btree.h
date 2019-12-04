@@ -5,8 +5,6 @@
 
 #include <sys/queue.h>
 
-#include "slos_internal.h"
-
 /* Opcodes for the btree operations. */
 #define OPINSERT    0
 #define OPDELETE    1
@@ -25,6 +23,12 @@ struct belem {
 };
 
 LIST_HEAD(btreeq, belem);
+
+#define BTREE_KEY_FOREACH(btree, key, val) \
+    key = 0; \
+    for (int err##btree = btree_keymin(btree, &key, &val); \
+	    err##btree == 0; \
+	    key = key + 1, err##btree = btree_keymin(btree, &key, &val)) \
 
 /* An in-memory structure for a btree. */
 struct btree {
@@ -55,6 +59,8 @@ struct btree {
 
     uint64_t size;			    /* Total number of keys */
     uint64_t depth;			    /* Depth of the btree */
+
+    struct slos	*slos;
 };
 
 struct btree *btree_init(struct slos *slos, uint64_t blkno, int alloctype);
@@ -63,6 +69,7 @@ void btree_destroy(struct btree *btree);
 struct bnode *btree_bnode(struct btree *btree, uint64_t key);
 int btree_empty(struct btree *btree, int *is_empty);
 int btree_first(struct btree *btree, uint64_t *key, void *value);
+int btree_last(struct btree *btree, uint64_t *key, void *value);
 int btree_search(struct btree *btree, uint64_t key, void *value);
 int btree_insert(struct btree *btree, uint64_t key, void *value);
 int btree_delete(struct btree *btree, uint64_t key);

@@ -3,7 +3,11 @@
 #define _SLOS_H_
 
 #include <sys/uuid.h>
-
+#include <sys/param.h>
+#include <sys/types.h>
+#include <sys/lock.h>
+#include <sys/lockmgr.h>
+#include <sys/mutex.h>
 /*
  * SLOS Pointer
  */
@@ -32,11 +36,35 @@ struct slos_diskptr {
 #define SLOS_MAJOR_VERSION	1
 #define SLOS_MINOR_VERSION	4
 
+#define SLOS_LOCK(slos) (lockmgr(&slos->slos_lock, LK_EXCLUSIVE, &slos->slos_mtx))
+#define SLOS_UNLOCK(slos) (lockmgr(&slos->slos_lock, LK_RELEASE, &slos->slos_mtx))
+
 /*
  * Object store flags
  */
 #define SLOS_FLAG_TRIM	0x00000001 /* TRIM Support */
 #define SLOS_FLAG_HASH	0x00000002 /* Checksum Support */
+
+struct slos {
+	SLIST_ENTRY(slos)	next_slos;
+
+	struct vnode		*slos_vp;	/* The vnode for the disk device */
+	struct slos_sb		*slos_sb;	/* The superblock of the filesystem */
+	struct slos_bootalloc	*slos_bootalloc;/* The bootstrap alloc for the device */
+	struct slos_blkalloc	*slos_alloc;    /* The allocator for the device */
+	struct g_consumer	*slos_cp;	/* The geom consumer used to talk to disk */
+	struct g_provider	*slos_pp;	/* The geom producer */ 
+	struct mtx		slos_mtx;	/* Mutex for SLOS-wide operations */
+	struct btree		*slos_inodes;	/* An index of all inodes */
+	struct slos_vhtable	*slos_vhtable;	/* Table of opened vnodes */
+	struct lock		slos_lock;	/* Sleepable lock */
+};
+
+/* Get the intra-block position of an offset for the given SLOS. */
+#define blkoff(slos, off)   (off % slos->slos_sb->sb_bsize)
+
+/* Get the block number of the offset for the given SLOS. */
+#define blkno(slos, off)    (off / slos->slos_sb->sb_bsize)
 
 /*
  * SLOS Superblock
@@ -66,84 +94,8 @@ struct slos_sb {
 	uint64_t		sb_mtime;	/* last mounted */
 };
 
-
+extern struct slos slos;
 /* Inode flags */
-#define SLOSINO_DIRTY	0x00000001
-
-/* Magic for each inode. */
-#define SLOS_IMAGIC	0x51051A1CUL
-
-/* Maximum length of the inode name. */
-#define SLOS_NAMELEN	64
-
-/*
- * SLSOSD Inode
- *
- * Each inode represents a single object in our store.  Each object contains 
- * one or more records that contain the actual file data.
- */
-struct slos_inode {
-	int64_t			ino_pid;		/* process id */
-	int64_t			ino_uid;		/* user id */
-	int64_t			ino_gid;		/* group id */
-	u_char			ino_procname[64];	/* process name */
-
-	uint64_t		ino_ctime;		/* creation time */
-	uint64_t		ino_mtime;		/* last modification time */
-
-	uint64_t		ino_blk;		/* on-disk position */
-	uint64_t		ino_lastrec;		/* last record */
-	struct slos_diskptr	ino_records;		/* btree of records */
-
-	uint64_t		ino_flags;		/* inode flags */
-	uint64_t		ino_magic;		/* magic for finding errors */
-};
-
-#define SLOSREC_INVALID	    0x00000000	/* Record is invalid */
-#define SLOSREC_PROC	    0x00000001	/* Record holds process-local info */
-#define SLOSREC_SESS	    0x00000002	/* Record holds process-local info */
-#define SLOSREC_MEM	    0x00000003	/* Record holds info related to a vmspace */
-#define SLOSREC_VMOBJ	    0x00000005	/* Record holds info for an object */
-#define SLOSREC_FILE	    0x00000006  /* Record holds info for a file */
-#define SLOSREC_PIPE	    0x00000007	/* Record holds info for a pipe */
-#define SLOSREC_KQUEUE	    0x00000008	/* Record holds info for a kqueue */
-#define SLOSREC_SOCKET	    0x00000009	/* Record holds info for a socket */
-#define SLOSREC_VNODE	    0x0000000a	/* Record holds info for a vnode */
-
-/* XXX Factor out */
-#define SLOSREC_FDESC	    0x000000a0	/* Record holds a file descriptor*/
-#define SLOSREC_DATA	    0x000000a1
-#define SLOSREC_FILENAME    0x000000a2
-
-
-#define SLOS_RMAGIC	    0x51058A1CUL
-
-/*
- * SLSOSD Record
- *
- * Every object consists of one or more records.
- */
-struct slos_record {
-	uint32_t		rec_type;	/* record type */
-	uint64_t		rec_length;	/* record data length in bytes */
-	uint64_t		rec_size;	/* record data size in blocks */
-	uint64_t		rec_magic;	/* record magic */
-	uint64_t		rec_num;	/* record number in the inode */
-	uint64_t		rec_blkno;	/* on-disk position of record */
-	struct slos_diskptr	rec_data;	/* root of record data btree */
-};
-
-/* 
- * An entry into the record data btree. It is needed because the data written
- * in the extent may be unaligned both at the start and at the end, and so we
- * need the offsets of the beginning and end of actual data in the btree. By
- * using the start and end fields, we can also calculate the real size in bytes.
- */
-struct slos_recentry {
-	struct slos_diskptr diskptr;	/* The disk pointer of the backing extent. */
-	uint64_t offset;		/* The in-extent offset where data starts. */
-	uint64_t len;			/* The length of actual data in bytes. */
-};
 
 #endif /* _SLOS_H_ */
 

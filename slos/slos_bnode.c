@@ -4,8 +4,11 @@
 #include <sys/systm.h>
 #include <sys/uio.h>
 
+#include <slos.h>
+#include <slos_bnode.h>
+#include <slsfs.h>
+
 #include "slos_bootalloc.h"
-#include "slos_internal.h"
 #include "slos_io.h"
 #include "slosmm.h"
 
@@ -375,7 +378,7 @@ bnode_print(struct bnode *bnode)
 	uint64_t key;
 	int i;
 
-	printf("Bnode %lu (%p), Size %d External %s Root %s\n", bnode->blkno, bnode,
+	DBUG("Bnode %lu (%p), Size %d External %s Root %s\n", bnode->blkno, bnode,
 		bnode->size, bnode->external == BNODE_EXTERNAL ? "yes" : "no",
 		bnode->parent.offset == bnode->blkno ? "yes" : "no");
 
@@ -392,10 +395,10 @@ bnode_print(struct bnode *bnode)
 		bnode_getptr(bnode, i, &diskptr);
 		if (i < bnode->size) {
 		    bnode_getkey(bnode, i, &key);
-		    printf("(%lu: (%lu, %lu))\t", key, diskptr.offset,
+		    DBUG("(%lu: (%lu, %lu))\t", key, diskptr.offset,
 			    diskptr.size);
 		} else {
-		    printf("(NONE: (%lu, %lu))\t", diskptr.offset,
+		    DBUG("(NONE: (%lu, %lu))\t", diskptr.offset,
 			    diskptr.size);
 
 		}
@@ -409,12 +412,12 @@ bnode_print(struct bnode *bnode)
 	    for (i = 0; i < size; i++) {
 		bnode_getkey(bnode, i, &key);
 		bnode_getvalue(bnode, i, value);
-		printf("(%lu: %lu)\t",  key, *((uint64_t *) value));
+		DBUG("(%lu: %lu)\t",  key, *((uint64_t *) value));
 	    }
 
 	    free(value, M_SLOS);
 	} 
-	printf("\n");
+	DBUG("\n");
 }
 
 /*
@@ -431,12 +434,16 @@ bnode_read(struct slos *slos, daddr_t blkno, struct bnode **bnodep)
 	/* Read the bnode from the disk. */
 	error = slos_readblk(slos, blkno, bnode); 
 	if (error != 0) {
+	    DBUG("Readblk error\n");
 	    free(bnode, M_SLOS);
+	    *bnodep = NULL;
 	    return error;
 	}
 
 	if (bnode->magic != SLOS_BMAGIC) {
+	    DBUG("Wrong magic number\n");
 	    free(bnode, M_SLOS);
+	    *bnodep = NULL;
 	    return EINVAL;
 	}
 
@@ -510,7 +517,7 @@ bnode_inbounds(struct bnode *bnode, size_t offset)
 
 /* Get an in-memory bnode for the child of node bparent at offset. */
 struct bnode *
-bnode_child(struct bnode *bparent, size_t offset)
+bnode_child(struct slos *slos, struct bnode *bparent, size_t offset)
 {
 	struct bnode *bchild; 
 	struct slos_diskptr diskptr;
@@ -524,7 +531,7 @@ bnode_child(struct bnode *bparent, size_t offset)
 	if (error != 0)
 	    return NULL;
 
-	error = bnode_read(&slos, diskptr.offset, &bchild);
+	error = bnode_read(slos, diskptr.offset, &bchild);
 	if (error != 0)
 	    return NULL;
 	
@@ -537,12 +544,12 @@ bnode_child(struct bnode *bparent, size_t offset)
  * don't create another version if it is the parent.
  * */
 struct bnode *
-bnode_parent(struct bnode *bchild)
+bnode_parent(struct slos * slos, struct bnode *bchild)
 {
 	struct bnode *bparent; 
 	int error;
 
-	error = bnode_read(&slos, bchild->parent.offset, &bparent);
+	error = bnode_read(slos, bchild->parent.offset, &bparent);
 	if (error != 0)
 	    return NULL;
 	

@@ -3,11 +3,13 @@
 #include <sys/sbuf.h>
 #include <sys/time.h>
 
-#include "../include/slos.h"
+#include <slos.h>
+#include <slos_inode.h>
+#include <slsfs.h>
+
 #include "slos_alloc.h"
 #include "slos_btree.h"
-#include "slos_inode.h"
-#include "slos_internal.h"
+#include "slos_bnode.h"
 #include "slos_io.h"
 #include "slosmm.h"
 
@@ -68,15 +70,15 @@ slos_vhtable_fini(struct slos *slos)
  * Find a vnode corresponding to the given PID. This function takes
  * in the SLOS locked, and leaves it so.
  */
-struct slos_vnode *
+struct slos_node *
 slos_vhtable_find(struct slos *slos, uint64_t pid)
 {
 	struct slos_vnlist *bucket;
-	struct slos_vnode *vp;
+	struct slos_node *vp;
 
 	bucket = &slos->slos_vhtable->vh_table[pid & slos->slos_vhtable->vh_hashmask];
-	LIST_FOREACH(vp, bucket, vno_entries) {
-	    if (vp->vno_pid == pid)
+	LIST_FOREACH(vp, bucket, sn_entries) {
+	    if (vp->sn_pid == pid)
 		return vp;
 	}
 	
@@ -88,13 +90,13 @@ slos_vhtable_find(struct slos *slos, uint64_t pid)
  * in the SLOS locked, and leaves it so.
  */
 void
-slos_vhtable_add(struct slos *slos, struct slos_vnode *vp)
+slos_vhtable_add(struct slos *slos, struct slos_node *vp)
 {
 	struct slos_vnlist *bucket;
 
 	bucket = 
-	    &slos->slos_vhtable->vh_table[vp->vno_pid & slos->slos_vhtable->vh_hashmask];
-	LIST_INSERT_HEAD(bucket, vp, vno_entries);
+	    &slos->slos_vhtable->vh_table[vp->sn_pid & slos->slos_vhtable->vh_hashmask];
+	LIST_INSERT_HEAD(bucket, vp, sn_entries);
 }
 
 /* 
@@ -102,7 +104,7 @@ slos_vhtable_add(struct slos *slos, struct slos_vnode *vp)
  * in the SLOS locked, and leaves it so.
  */
 void
-slos_vhtable_remove(struct slos *slos, struct slos_vnode *vp)
+slos_vhtable_remove(struct slos *slos, struct slos_node *vp)
 {
 	/* 
 	 * All vnodes are in the hashtable, so
@@ -111,7 +113,7 @@ slos_vhtable_remove(struct slos *slos, struct slos_vnode *vp)
 	 * What would be nice is a static assertion
 	 * that the vnode is indeed in the hashtable.
 	 */
-	LIST_REMOVE(vp, vno_entries);
+	LIST_REMOVE(vp, sn_entries);
 }
 
 /*
@@ -163,11 +165,11 @@ slos_iwrite(struct slos *slos, struct slos_inode *ino)
  * Create the in-memory vnode from the on-disk inode.
  * The inode needs to have no existing vnode in memory.
  */
-struct slos_vnode *
+struct slos_node *
 slos_vpimport(struct slos *slos, uint64_t inoblk)
 {
 	struct slos_inode *ino;
-	struct slos_vnode *vp;
+	struct slos_node *vp;
 	int error;
 
 	/* Read the inode from disk. */
@@ -175,63 +177,61 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 	if (error != 0)
 	    return NULL;
 
-	vp = malloc(sizeof(*vp), M_SLOS, M_WAITOK | M_ZERO);
+	vp = malloc(sizeof(struct slos_node), M_SLOS, M_WAITOK | M_ZERO);
 	/* 
 	 * Move each field separately, 
 	 * translating between the two. 
 	 */
-	vp->vno_pid = ino->ino_pid;
-	vp->vno_uid = ino->ino_uid;
-	vp->vno_gid = ino->ino_gid;
-	memcpy(vp->vno_procname, ino->ino_procname, SLOS_NAMELEN);
+	vp->sn_ino = ino;
+	vp->sn_pid = ino->ino_pid;
+	vp->sn_uid = ino->ino_uid;
+	vp->sn_gid = ino->ino_gid;
+	memcpy(vp->sn_procname, ino->ino_procname, SLOS_NAMELEN);
 
-	vp->vno_ctime = ino->ino_ctime;
-	vp->vno_mtime = ino->ino_mtime;
+	vp->sn_ctime = ino->ino_ctime;
+	vp->sn_mtime = ino->ino_mtime;
 
 	/* Initialize the records btree. */
-	vp->vno_records = btree_init(slos, ino->ino_records.offset, ALLOCMAIN);
-	if (vp->vno_records == NULL) {
+	vp->sn_records = btree_init(slos, ino->ino_records.offset, ALLOCMAIN);
+	if (vp->sn_records == NULL) {
 	    free(ino, M_SLOS);
 	    free(vp, M_SLOS);
 	    return NULL;
 	}
 
-	vp->vno_blk = ino->ino_blk;
-	vp->vno_lastrec = ino->ino_lastrec;
+	vp->sn_blk = ino->ino_blk;
+	vp->sn_slos = slos;
 
-	vp->vno_status = SLOS_VALIVE;
+	vp->sn_status = SLOS_VALIVE;
 	/* The refcount will be incremented by the caller. */
-	vp->vno_refcnt = 0;
+	vp->sn_refcnt = 0;
 	/* Add to the open vnode hashtable. */
 	slos_vhtable_add(slos, vp);
 	/* Initialize the mutex used by record operations. */
-	mtx_init(&vp->vno_mtx, "slosvno", NULL, MTX_DEF);
-
-	free(ino, M_SLOS);
+	mtx_init(&vp->sn_mtx, "slosvno", NULL, MTX_DEF);
 
 	return vp;
 }
 
 /* Export an updated vnode into the on-disk inode. */
 int
-slos_vpexport(struct slos *slos, struct slos_vnode *vp)
+slos_vpexport(struct slos *slos, struct slos_node *vp)
 {
 	struct slos_inode *ino;
 	int error;
 
 	/* Bring in the inode from the disk. */
-	error = slos_iread(slos, vp->vno_blk, &ino);
+	error = slos_iread(slos, vp->sn_blk, &ino);
 	if (error != 0)
 	    return error;
 
 	/* Update the inode's mutable elements. */ 
-	ino->ino_ctime = vp->vno_ctime;
-	ino->ino_mtime = vp->vno_mtime;
+	ino->ino_ctime = vp->sn_ctime;
+	ino->ino_mtime = vp->sn_mtime;
 
-	memcpy(ino->ino_procname, vp->vno_procname, SLOS_NAMELEN);
+	memcpy(ino->ino_procname, vp->sn_procname, SLOS_NAMELEN);
 
-	ino->ino_lastrec = vp->vno_lastrec;
-	ino->ino_records = DISKPTR(vp->vno_records->root, 1);
+	ino->ino_records = DISKPTR(vp->sn_records->root, 1);
 
 	/* Write the inode back to the disk. */
 	error = slos_iwrite(slos, ino);
@@ -240,30 +240,33 @@ slos_vpexport(struct slos *slos, struct slos_vnode *vp)
 	    return error;
 	}
 
-	free(ino, M_SLOS);
+	free(vp->sn_ino, M_SLOS);
+	vp->sn_ino = ino;
 	return 0;
 }
 
 /* Free an in-memory vnode. */
-static void
-slos_vpfree(struct slos *slos, struct slos_vnode *vp)
+void
+slos_vpfree(struct slos *slos, struct slos_node *vp)
 {
 	/* Remove the vnode from the hashtable. */
 	slos_vhtable_remove(slos, vp);
 
 	/* Free its resources. */
-	mtx_destroy(&vp->vno_mtx);
+	mtx_lock(&vp->sn_mtx);
+	mtx_destroy(&vp->sn_mtx);
 
 	/* Destroy the in-memory records btree. */
-	btree_discardelem(vp->vno_records);
-	btree_destroy(vp->vno_records);
+	btree_discardelem(vp->sn_records);
+	btree_destroy(vp->sn_records);
 
+	free(vp->sn_ino, M_SLOS);
 	free(vp, M_SLOS);
 }
 
 /* Free the on-disk resources for an inode. */
 static void
-slos_ifree(struct slos *slos, struct slos_vnode *vp)
+slos_ifree(struct slos *slos, struct slos_node *vp)
 {
 	uint64_t prevroot;
 	int error;
@@ -276,7 +279,7 @@ slos_ifree(struct slos *slos, struct slos_vnode *vp)
 	 */
 
 	/* Remove the inode from the inodes btree. */
-	error = btree_delete(slos->slos_inodes, vp->vno_pid);
+	error = btree_delete(slos->slos_inodes, vp->sn_pid);
 	if (error != 0)
 	    goto error;
 
@@ -313,10 +316,10 @@ slos_ifree(struct slos *slos, struct slos_vnode *vp)
 	 */
 
 	/* Give the root node of the btree back to the allocator. */
-	slos_free(slos->slos_alloc, DISKPTR_BLOCK(vp->vno_records->root));
+	slos_free(slos->slos_alloc, DISKPTR_BLOCK(vp->sn_records->root));
 
 	/* Free the inode itself. */
-	slos_free(slos->slos_alloc, DISKPTR_BLOCK(vp->vno_blk));
+	slos_free(slos->slos_alloc, DISKPTR_BLOCK(vp->sn_blk));
 
 	/* 
 	 * Remove the in-memory resources. 
@@ -330,7 +333,7 @@ slos_ifree(struct slos *slos, struct slos_vnode *vp)
 
 	return;
 error:
-	btree_keepelem(vp->vno_records);
+	btree_keepelem(vp->sn_records);
 	btree_keepelem(slos->slos_inodes);
 
 	/* 
@@ -342,15 +345,17 @@ error:
 
 /* Create an inode for the process with the given PID. */
 int
-slos_icreate(struct slos *slos, uint64_t pid)
+slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 {
 	struct slos_inode *ino = NULL;
 	struct bnode *bnode = NULL;
 	struct slos_diskptr diskptr = DISKPTR_NULL;
 	struct slos_diskptr recptr = DISKPTR_NULL;
 	uint64_t prevroot;
-	struct timeval tv;
+	struct timespec tv;
 	int error;
+
+	vfs_timestamp(&tv);
 
 	/* Initialize inode block */
 	mtx_lock(&slos->slos_mtx);
@@ -359,6 +364,7 @@ slos_icreate(struct slos *slos, uint64_t pid)
 	 * Search the inodes btree for an existing 
 	 * inode with the same key.
 	 */
+	DBUG("iCreate Allocation search - %lu\n", pid);
 	error = btree_search(slos->slos_inodes, pid, &diskptr);
 	if (error == 0) {
 	    /* 
@@ -367,12 +373,16 @@ slos_icreate(struct slos *slos, uint64_t pid)
 	     */
 	    diskptr = DISKPTR_NULL;
 	    error = EINVAL;
+	    DBUG("iCreate Allocation pid found\n");
 	    goto error;
 	} else if (error != 0 && error != EINVAL) {
+	    DBUG("iCreate Allocation other error\n");
 	    goto error;
 	}
 
+	DBUG("iCreate Allocation - Diskptr\n");
 	diskptr = slos_alloc(slos->slos_alloc, 1);
+	DBUG("Diskptr allocated - %ld , %ld\n", diskptr.offset, diskptr.size);
 	if (diskptr.offset == 0) {
 	    error = ENOSPC;
 	    goto error;
@@ -386,18 +396,23 @@ slos_icreate(struct slos *slos, uint64_t pid)
 	ino = malloc(slos->slos_sb->sb_bsize, M_SLOS, M_WAITOK);
 	ino->ino_pid = pid;
 
-	getmicrotime(&tv);
-	ino->ino_ctime = (1000 * 1000 * tv.tv_sec) + tv.tv_usec;
-	ino->ino_mtime = (1000 * 1000 * tv.tv_sec) + tv.tv_usec;
+	ino->ino_ctime = tv.tv_sec;
+	ino->ino_ctime_nsec = tv.tv_nsec;
+	ino->ino_mtime = tv.tv_sec;
+	ino->ino_mtime_nsec = tv.tv_nsec;
+	ino->ino_link_num = 0;
 
-	ino->ino_lastrec = 0;
 	ino->ino_flags = 0;
 	ino->ino_blk = diskptr.offset;
 	ino->ino_magic = SLOS_IMAGIC;
+	ino->ino_mode = mode;
+	ino->ino_asize = 0;
+	ino->ino_size = 0;
 
-	
 	/* Get a block for the records btree. */
+	DBUG("iCreate Allocation - Recptr\n");
 	recptr = slos_alloc(slos->slos_alloc, 1);
+	DBUG("Recptr allocated - %ld , %ld\n", recptr.offset, recptr.size);
 	if (recptr.offset == 0) {
 	    error = ENOSPC;
 	    goto error;
@@ -465,7 +480,7 @@ error:
 int
 slos_iremove(struct slos *slos, uint64_t pid)
 {
-	struct slos_vnode *vp;
+	struct slos_node *vp;
 	struct slos_diskptr inoptr; 
 	int error;
 
@@ -496,42 +511,47 @@ slos_iremove(struct slos *slos, uint64_t pid)
 		return EIO;
 	    }
 	    /* Free both in-memory and on-disk resources. */
+	    mtx_unlock(&slos->slos_mtx);
 	    slos_ifree(slos, vp);
 
+	    return (0);
 	} else {
 	    /* 
 	     * If there are still open inodes, we have to
 	     * wait until they are done to free the resources.
 	     * Mark the vnode as being deleted. 
 	     */
-	    vp->vno_status = SLOS_VDEAD;
+	    vp->sn_status = SLOS_VDEAD;
 
 	}
 
 	mtx_unlock(&slos->slos_mtx);
 
-	return 0;
+	return (0);
 }
 
 /*
  * Open a vnode corresponding
  * to an on-disk inode. 
  */
-struct slos_vnode *
+struct slos_node *
 slos_iopen(struct slos *slos, uint64_t pid)
 {
-	struct slos_vnode *vp = NULL;
+	DBUG("Opening Inode %lu\n", pid);
+	struct slos_node *vp = NULL;
 	struct slos_diskptr inoptr;
 	int error;
 
-	mtx_lock(&slos->slos_mtx);
-
+	/* We should not hold this essentially global lock in this object. We can run into a 
+	 * scenario where when we search through the btree, we end up having to sleep while
+	 * we wait for the buffer, current fix is to allow sleeping on this lock*/
+	SLOS_LOCK(slos);
 	vp = slos_vhtable_find(slos, pid);
 	if (vp != NULL) {
 	    /* Found, update refcount and return. */
-	    vp->vno_refcnt += 1;
-	    mtx_unlock(&slos->slos_mtx);
-
+	    vp->sn_refcnt += 1;
+	    DBUG("Found vp in slos\n");
+	    SLOS_UNLOCK(slos);
 	    return vp;
 	}
 
@@ -541,20 +561,22 @@ slos_iopen(struct slos *slos, uint64_t pid)
 	 */
 	error = btree_search(slos->slos_inodes, pid, &inoptr);
 	if (error != 0) {
-	    mtx_unlock(&slos->slos_mtx);
+	    DBUG("Could not find %lu in btree\n", pid);
+	    SLOS_UNLOCK(slos);
 	    return NULL;
 	}
 
 	/* Create a vnode for the inode. */
+	DBUG("Creating vnode from disk\n");
 	vp = slos_vpimport(slos, inoptr.offset);
 	if (vp == NULL) {
-	    mtx_unlock(&slos->slos_mtx);
+	    DBUG("Could not create vnode for %lu\n", pid);
+	    SLOS_UNLOCK(slos);
 	    return NULL;
 	}
+	vp->sn_refcnt += 1;
+	SLOS_UNLOCK(slos);
 
-	vp->vno_refcnt += 1;
-
-	mtx_unlock(&slos->slos_mtx);
 	return vp; 
 }
 
@@ -562,34 +584,36 @@ slos_iopen(struct slos *slos, uint64_t pid)
  * Close an open vnode.
  */
 int
-slos_iclose(struct slos *slos, struct slos_vnode *vp)
+slos_iclose(struct slos *slos, struct slos_node *vp)
 {
 	int error;
 
-	mtx_lock(&slos->slos_mtx);
-
+	SLOS_LOCK(slos);
 	/* Export the disk inode if it's still alive. */
-	if (vp->vno_status == SLOS_VALIVE) {
+	if (vp->sn_status == SLOS_VALIVE) {
 	    error = slos_vpexport(slos, vp);
 	    if (error != 0) {
-		mtx_unlock(&slos->slos_mtx);
+		SLOS_UNLOCK(slos);
 		return error;
 	    }
 	}
+	SLOS_UNLOCK(slos);
 
-	vp->vno_refcnt -= 1;
-	if (vp->vno_refcnt == 0) {
+	mtx_lock(&vp->sn_mtx);
+	vp->sn_refcnt -= 1;
+	mtx_unlock(&vp->sn_mtx);
+	if (vp->sn_refcnt == 0) {
 	    /* The file has been deleted, free it. */
-	    if (vp->vno_status == SLOS_VDEAD) {
+	    if (vp->sn_status == SLOS_VDEAD) {
 		/* Free both the inode and the vnode. */
+		DBUG("iclose vdead\n");
 		slos_ifree(slos, vp);
 	    } else {
 		/* Destroy only the in-memory vnode. */
+		DBUG("iclose vpfree\n");
 		slos_vpfree(slos, vp);
 	    }
 	} 
-
-	mtx_unlock(&slos->slos_mtx);
 
 	return 0;
 }
@@ -599,7 +623,7 @@ slos_iclose(struct slos *slos, struct slos_vnode *vp)
  * statistics about the inode.
  */
 /* XXX Fix prototype */
-struct slos_vnode *
+struct slos_node *
 slos_istat(struct slos *slos, uint64_t ino)
 {
 	/* XXX Implement */
@@ -615,7 +639,7 @@ slos_istat(struct slos *slos, uint64_t ino)
  */
 struct slos_viter {
 	uint64_t nextpid;
-	struct slos_vnode *curvp;
+	struct slos_node *curvp;
 };
 
 static struct slos_viter *
@@ -630,10 +654,10 @@ slos_viter_begin(struct slos *slos)
 	return viter;
 }
 
-static struct slos_vnode *
+static struct slos_node *
 slos_viter_iter(struct slos *slos, struct slos_viter *viter)
 {
-	struct slos_vnode *vp;
+	struct slos_node *vp;
 	struct slos_diskptr inoptr;
 	int error;
 
@@ -684,6 +708,40 @@ slos_viter_end(struct slos *slos, struct slos_viter *viter)
 	return 0;
 }
 
+// We assume the svp struct is locked
+void 
+slos_timechange(struct slos_node *svp)
+{
+    struct timespec ts;
+    struct slos_inode *ino;
+
+    ino = svp->sn_ino;
+
+    vfs_timestamp(&ts);
+    svp->sn_ctime = ts.tv_sec;
+    svp->sn_mtime = ts.tv_sec;
+    ino->ino_ctime = ts.tv_sec;
+    ino->ino_ctime_nsec = ts.tv_nsec;
+    ino->ino_mtime = ts.tv_sec;
+    ino->ino_mtime_nsec = ts.tv_nsec;
+}
+
+int 
+slos_iupdate(struct slos_node *svp)
+{
+    struct slos_inode *ino;
+    int error;
+
+    mtx_lock(&svp->sn_mtx);
+    ino = svp->sn_ino;
+    slos_timechange(svp);
+    error = slos_iwrite(svp->sn_slos, ino);
+    mtx_unlock(&svp->sn_mtx);
+
+    return error;
+}
+
+
 #ifdef SLOS_TESTS
 
 /*
@@ -710,7 +768,7 @@ slos_viter_end(struct slos *slos, struct slos_viter *viter)
 int
 slos_test_inode(void)
 {
-	struct slos_vnode *vp;
+	struct slos_node *vp;
 	struct slos_viter *viter;
 	uint8_t *pids, *open;
 	int operation;
@@ -749,11 +807,11 @@ slos_test_inode(void)
 	    if (vp == NULL)
 		break;
 
-	    pids[vp->vno_pid] = VNOTAKEN;
-	    memcpy(names[vp->vno_pid], vp->vno_procname, 
-		    sizeof(*names[vp->vno_pid]) * SLOS_NAMELEN);
+	    pids[vp->sn_pid] = VNOTAKEN;
+	    memcpy(names[vp->sn_pid], vp->sn_procname, 
+		    sizeof(*names[vp->sn_pid]) * SLOS_NAMELEN);
 
-	    printf("(%ld) %s\n", vp->vno_pid, vp->vno_procname);
+	    printf("(%ld) %s\n", vp->sn_pid, vp->sn_procname);
 	}
 	slos_viter_end(&slos, viter);
 
@@ -777,18 +835,18 @@ slos_test_inode(void)
 
 		/* If it is already open, it must have a valid name. */
 		if (open[pid] > 0) {
-		    if (strncmp(vp->vno_procname, names[pid], TESTLEN) != 0) {
+		    if (strncmp(vp->sn_procname, names[pid], TESTLEN) != 0) {
 			printf("ERROR: PID %ld has name %s, expected %s", 
-				pid, vp->vno_procname, names[pid]);
+				pid, vp->sn_procname, names[pid]);
 			break;
 		    }
 		}
 
 		/* Give the process a new name. */
 		for (j = 0; j < TESTLEN; j++) 
-		    vp->vno_procname[j] = '0' + (random() % 9);
-		vp->vno_procname[j] = '\0';
-		strncpy(names[pid], vp->vno_procname, TESTLEN + 1);
+		    vp->sn_procname[j] = '0' + (random() % 9);
+		vp->sn_procname[j] = '\0';
+		strncpy(names[pid], vp->sn_procname, TESTLEN + 1);
 
 		open[pid] += 1;
 		opens += 1;
@@ -811,9 +869,9 @@ slos_test_inode(void)
 		    break;
 		}
 
-		if (strncmp(vp->vno_procname, names[pid], TESTLEN) != 0) {
+		if (strncmp(vp->sn_procname, names[pid], TESTLEN) != 0) {
 		    printf("ERROR: PID %ld has name %s, expected %s", 
-			    pid, vp->vno_procname, names[pid]);
+			    pid, vp->sn_procname, names[pid]);
 		    break;
 		}
 
@@ -856,9 +914,9 @@ slos_test_inode(void)
 
 		/* Give the process a new name. */
 		for (j = 0; j < TESTLEN; j++) 
-		    vp->vno_procname[j] = '0' + (random() % 9);
-		vp->vno_procname[j] = '\0';
-		strncpy(names[pid], vp->vno_procname, TESTLEN);
+		    vp->sn_procname[j] = '0' + (random() % 9);
+		vp->sn_procname[j] = '\0';
+		strncpy(names[pid], vp->sn_procname, TESTLEN);
 
 		error = slos_iclose(&slos, vp);
 		if (error != 0) {
@@ -898,19 +956,19 @@ slos_test_inode(void)
 		break;
 
 	    /* We only care about alive nodes. */
-	    if (vp->vno_status == SLOS_VALIVE)
-		printf("(%ld) %s\n", vp->vno_pid, vp->vno_procname);
+	    if (vp->sn_status == SLOS_VALIVE)
+		printf("(%ld) %s\n", vp->sn_pid, vp->sn_procname);
 
 	    /* 
 	     * Close all open vnodes so that we 
 	     * can clean up the vhtable.
 	     */
-	    pid = vp->vno_pid;
+	    pid = vp->sn_pid;
 	    while (open[pid] > 0) {
 		error = slos_iclose(&slos, vp);
 		if (error != 0) {
 		    printf("ERROR: slos_iclose for PID %ld failed with %d", 
-			    vp->vno_pid, error);
+			    vp->sn_pid, error);
 		    break;
 		}
 

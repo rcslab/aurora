@@ -11,17 +11,19 @@
 #include <sys/proc.h>
 #include <sys/stat.h>
 #include <sys/vnode.h>
+#include <sys/priority.h>
 
 #include <geom/geom.h>
 #include <geom/geom_vfs.h>
 
+#include <slos.h>
+#include <slos_inode.h>
+#include <slos_btree.h>
+#include <slos_record.h>
+
 #include "slos_alloc.h"
-#include "slos_internal.h"
-#include "slos_inode.h"
 #include "slos_bootalloc.h"
-#include "slos_btree.h"
 #include "slos_io.h"
-#include "slos_record.h"
 #include "slosmm.h"
 
 MALLOC_DEFINE(M_SLOS, "slos", "SLOS");
@@ -91,7 +93,7 @@ slos_vpclose(void)
 {
 	int error;
 
-	error = vn_close(slos.slos_vp, FREAD | FWRITE, 
+	error = vn_close(slos.slos_vp, FREAD, 
 		curthread->td_proc->p_ucred, curthread);
 
 	slos.slos_vp = NULL;
@@ -119,7 +121,6 @@ slos_itreeclose(struct slos *slos)
 	btree_destroy(slos->slos_inodes);
 }
 
-
 static int
 slosHandler(struct module *inModule, int inEvent, void *inArg) {
 	int error = 0;
@@ -130,6 +131,7 @@ slosHandler(struct module *inModule, int inEvent, void *inArg) {
 
 		/* Set up the global SLOS mutex. */
 		mtx_init(&slos.slos_mtx, "slosmtx", NULL, MTX_DEF);
+		lockinit(&slos.slos_lock, PVFS, "sloslock", VLKTIMEOUT, LK_NOSHARE);
 
 		/* Open the device for writing. */
 		error = slos_path_to_vnode("/dev/vtbd1", &slos.slos_vp);
@@ -140,16 +142,20 @@ slosHandler(struct module *inModule, int inEvent, void *inArg) {
 		 * Open the consumer, associate the vnode's bufobj with it. 
 		 * Only needed if we actually use a device for the filesystem.
 		 */
-		if (slos.slos_vp->v_type == VCHR) {
+		if (vn_isdisk(slos.slos_vp, &error)) {
 		    g_topology_lock();
 		    error = g_vfs_open(slos.slos_vp, &slos.slos_cp, "slos", 1);
+		    slos.slos_pp = g_dev_getprovider(slos.slos_vp->v_rdev);
 		    g_topology_unlock();
-		    if (error != 0)
+		    if (error != 0) 
 			return error;
 		}
+
+		if (error) 
+		    return error;
 		
 		/* Read in the superblock. */
-		error = slos_sbread();
+		error = slos_sbread(&slos);
 		if (error != 0) {
 		    printf("ERROR: slos_sbread failed with %d\n", error);
 		    return error;
@@ -181,7 +187,6 @@ slosHandler(struct module *inModule, int inEvent, void *inArg) {
 		    printf("ERROR: slos_vhtable_init failed with %d\n", error);
 		    return error;
 		}
-
 
 		printf("SLOS Loaded.\n");
 
@@ -218,7 +223,6 @@ slosHandler(struct module *inModule, int inEvent, void *inArg) {
 		if (slos.slos_inodes != NULL)
 		    slos_itreeclose(&slos);
 
-
 		/* Tear down the main allocator. */
 		slos_alloc_destroy(&slos);
 
@@ -233,16 +237,20 @@ slosHandler(struct module *inModule, int inEvent, void *inArg) {
 		if (slos.slos_cp != NULL) {
 		    g_topology_lock();
 		    g_vfs_close(slos.slos_cp);
+		    dev_ref(slos.slos_vp->v_rdev);
 		    g_topology_unlock();
 		}
 
 		/* Close the devfs vnode. */
 		if (slos.slos_vp != NULL) {
-		    error = slos_vpclose();
+		    // vdrop instead of close as we did not increment writecount of vnode, we 
+		    // incremented use count on namei operation.
+		    vdrop(slos.slos_vp);
 		    if (error != 0)
 			printf("ERROR: slos_vpclose() failed with %d\n", error);
 		}
 
+		lockdestroy(&slos.slos_lock);
 		mtx_unlock(&slos.slos_mtx);
 
 		/* Destroy the mutex. */

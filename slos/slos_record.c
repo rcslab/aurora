@@ -1,14 +1,24 @@
 #include <sys/param.h>
+#include <sys/vnode.h>
 
-#include "../include/slos.h"
+#include <slsfs.h>
+#include <slos.h>
+#include <slos_record.h>
+#include <slos_inode.h>
+
+#include "slos_bnode.h"
 #include "slos_alloc.h"
 #include "slos_btree.h"
-#include "slos_inode.h"
-#include "slos_internal.h"
 #include "slos_io.h"
-#include "slos_record.h"
 #include "slosmm.h"
 
+
+int 
+slos_freerec(struct slos_record *rec)
+{
+    free(rec, M_SLOS);
+    return (0);
+}
 
 /* Read a record from the OSD. */
 static int
@@ -17,7 +27,7 @@ slos_recdread(struct slos *slos, uint64_t blkno, struct slos_record **rpp)
 	struct slos_record *rp;
 	int error;
 
-	rp = malloc(slos->slos_sb->sb_bsize, M_SLOS, M_WAITOK);
+	rp = malloc(slos->slos_sb->sb_bsize, M_SLOS, M_WAITOK | M_ZERO);
 	
 	/* Read the bnode from the disk. */
 	error = slos_readblk(slos, blkno, rp); 
@@ -28,6 +38,7 @@ slos_recdread(struct slos *slos, uint64_t blkno, struct slos_record **rpp)
 
 	/* If we can't read the magic, we read something that's not an inode. */
 	if (rp->rec_magic != SLOS_RMAGIC) {
+	    DBUG("Magic not good\n");
 	    free(rp, M_SLOS);
 	    return EINVAL;
 	}
@@ -48,71 +59,72 @@ slos_recdwrite(struct slos *slos, struct slos_record *rp)
 	return slos_writeblk(slos, rp->rec_blkno, rp); 
 }
 
-/* 
- * Add a record to the inode specified. 
- * A record is an extent with metadata
- * attached to it. Records are always
- * appended to the inode. 
- */
 int 
-slos_rcreate(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
-{	
+slos_rcreate(struct slos_node *vp, uint64_t rtype, uint64_t *rnop)
+{   
 	struct slos_diskptr recordptr;
 	struct slos_diskptr dataptr = DISKPTR_NULL;
 	struct slos_record *rp = NULL;
 	struct bnode *bnode = NULL;
+	struct slos *slos = vp->sn_slos;
 	int error;
+	uint64_t rno;
 
+	KASSERT(slos != NULL, ("Slos is null"));
+
+	error = slos_lastrno(vp, &rno);
+	if (error == EIO) {
+	    return error;
+	} else if (error == EINVAL) {
+	    rno = 0;
+	}
+
+	DBUG("Last record found %lu\n", rno);
 	/* Lock the inode. */
-	mtx_lock(&vp->vno_mtx);
+	mtx_lock(&vp->sn_mtx);
 
 	/* Get space on disk for the record itself. */
-	recordptr = slos_alloc(slos.slos_alloc, 1);
+	recordptr = slos_alloc(slos->slos_alloc, 1);
 	if (recordptr.offset == 0) {
 	    error = ENOSPC;
 	    goto error;
 	}
 	
 	/* Get space for the data offset btree root. */
-	dataptr = slos_alloc(slos.slos_alloc, 1);
+	/* XXX
+	 * We can defer this can't we? We shouldn't allocate for an empty btree,
+	 * we should make the create as fast as possible, as rcreates are going to happen,
+	 * without data every being written to the record.  Another option allocate once,
+	 * but of size 2, and have dataptr and record ptr share the allocation */
+	dataptr = slos_alloc(slos->slos_alloc, 1);
 	if (dataptr.offset == 0) {
 	    error = ENOSPC;
 	    goto error;
 	}
 
 	/* Create the on-disk representation. */
-	rp = malloc(slos.slos_sb->sb_bsize, M_SLOS, M_WAITOK | M_ZERO);
+	rp = malloc(slos->slos_sb->sb_bsize, M_SLOS, M_WAITOK | M_ZERO);
 	rp->rec_type = rtype;
 	rp->rec_length = 0;
 	rp->rec_size = 0;
 	rp->rec_magic = SLOS_RMAGIC;
 	rp->rec_blkno = recordptr.offset;
 	rp->rec_data = dataptr;
-	rp->rec_num = vp->vno_lastrec + 1;
-
-	/* 
-	 * Advance the "last record" pointer. 
-	 * Even if record creation fails later
-	 * in the function, it doesn't matter 
-	 * because we need record numbers to 
-	 * be ascending, not consecutive.
-	 */
-	vp->vno_lastrec += 1;
-
+	rp->rec_num = rno + 1;
 	/* Create the root of the data btree. */
-	bnode = bnode_alloc(&slos, dataptr.offset, 
+	bnode = bnode_alloc(slos, dataptr.offset, 
 		sizeof(struct slos_recentry), BNODE_EXTERNAL);
-	error = bnode_write(&slos, bnode);
+	error = bnode_write(slos, bnode);
 	if (error != 0)
 	    goto error;
 
 	/* Write the record out to the disk. */
-	error = slos_recdwrite(&slos, rp);
+	error = slos_recdwrite(slos, rp);
 	if (error != 0)
 	    goto error;
 
 	/* Add the record to the records btree. */
-	error = btree_insert(vp->vno_records, rp->rec_num, &DISKPTR_BLOCK(rp->rec_blkno));
+	error = btree_insert(vp->sn_records, rp->rec_num, &DISKPTR_BLOCK(rp->rec_blkno));
 	if (error != 0) {
 	    goto error;
 	}
@@ -121,7 +133,7 @@ slos_rcreate(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
 	 * Export the updated inode (this includes possibly 
 	 * updating the root of the records btree if needed). 
 	 */
-	error = slos_vpexport(&slos, vp);
+	error = slos_vpexport(slos, vp);
 	if (error != 0) {
 	    printf("Could not export vp with error %d\n", error);
 	    goto error;
@@ -131,65 +143,95 @@ slos_rcreate(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
 	*rnop = rp->rec_num;
 	
 	/* Everything went well, clean up the btree. */
-	btree_discardelem(vp->vno_records);
+	btree_discardelem(vp->sn_records);
 
 	bnode_free(bnode);
 	free(rp, M_SLOS);
-
-	mtx_unlock(&vp->vno_mtx);
-
+	mtx_unlock(&vp->sn_mtx);
 
 	return 0;
 
 error:
-	btree_keepelem(vp->vno_records);
+	btree_keepelem(vp->sn_records);
 
 	bnode_free(bnode);
 	free(rp, M_SLOS);
 
-	slos_free(slos.slos_alloc, dataptr);
-	slos_free(slos.slos_alloc, recordptr);
+	slos_free(slos->slos_alloc, dataptr);
+	slos_free(slos->slos_alloc, recordptr);
 
-	mtx_unlock(&vp->vno_mtx);
+	mtx_unlock(&vp->sn_mtx);
 
 	return error;
 }
 
+/* Pass the record, we assume the caller will free record entry */
 int 
-slos_rremove(struct slos_vnode *vp, uint64_t rno)
+slos_rremove(struct slos_node *vp, struct slos_record *record)
 {
+	struct slos *slos = vp->sn_slos;
+	struct slos_blkalloc *alloc = slos->slos_alloc;
+	struct btree *rec_btree = btree_init(slos, record->rec_data.offset, ALLOCMAIN);
+	int error;
+	uint64_t key;
+	struct slos_diskptr val;
+	/* Free each piece of data in the data btree ondisk*/
+	BTREE_KEY_FOREACH(rec_btree, key, val) {
+	    slos_free(alloc, val);
+	    error = btree_delete(rec_btree, key);
+	    if (error) {
+		DBUG("Problem deleting key value pair in vnode %lu, record %lu, %lu", 
+			vp->sn_pid, record->rec_num, key);
+		break;
+	    }
+	}
 
-	/* XXX Place all data blocks to the GC */
-	/* XXX Free the btree itself */
-	/* XXX Free the record block itself */
+	if (error)
+	    return (error);
 
-	return EINVAL;
+	/* Remove the record from vnode */
+	error = btree_delete(vp->sn_records, record->rec_num);
+	if (error) {
+	    panic("We should have this key\n");
+	    return (error);
+	}
+
+	/* Free the btree itself ondisk and memory */
+	slos_free(alloc, record->rec_data);
+	btree_destroy(rec_btree);
+	/* Free the record block itself */
+	slos_free(alloc, DISKPTR_BLOCK(record->rec_blkno));
+	
+	return error;
 }
 
 int 
-slos_rread(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
+slos_rread(struct slos_node *vp, uint64_t rno, struct uio *auio)
 {
 	struct slos_recentry preventry, nextentry;
 	uint64_t prevoff, nextoff, startoff;
 	struct slos_diskptr recordptr;
-	struct slos_record *rp = NULL;
-	struct btree *data = NULL;
 	uint64_t oldresid, oldoff;
 	uint64_t holesize;
 	uint64_t size_read;
 	int error;
 
-	mtx_lock(&vp->vno_mtx);
+	struct slos_record *rp = NULL;
+	struct btree *data = NULL;
+	struct slos *slos = vp->sn_slos;
+
+	mtx_lock(&vp->sn_mtx);
 
 	/* Get the record we want from the inode's btree. */
-	error = btree_search(vp->vno_records, rno, &recordptr);
+	error = btree_search(vp->sn_records, rno, &recordptr);
 	if (error != 0)
 	    goto error;
 
-	/* Get the actual record data from the SLOS. */
-	error = slos_recdread(&slos, recordptr.offset, &rp);
-	if (error != 0)
+	/* Get the actual record data from the slos-> */
+	error = slos_recdread(slos, recordptr.offset, &rp);
+	if (error != 0) {
 	    goto error;
+	}
 
 	/* Error out if we are reading past the end of the file. */
 	if (auio->uio_offset >= rp->rec_length) {
@@ -198,7 +240,7 @@ slos_rread(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
 	}
 
 	/* Create the in-memory btree of data offsets. */
-	data = btree_init(&slos, rp->rec_data.offset, ALLOCMAIN);
+	data = btree_init(slos, rp->rec_data.offset, ALLOCMAIN);
 
 	/* 
 	 * Keep reading until we either reach the end of the 
@@ -285,7 +327,7 @@ slos_rread(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
 		startoff = auio->uio_offset;
 
 		/* Do the UIO itself, then revert the UIO resid and offset. */
-		error = slos_read(slos.slos_vp, &preventry.diskptr, auio);
+		error = slos_read(slos, &preventry.diskptr, auio);
 		if (error != 0)
 		    goto error;
 
@@ -297,52 +339,77 @@ slos_rread(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
 	}
 
 	free(rp, M_SLOS);
-	mtx_unlock(&vp->vno_mtx);
+	mtx_unlock(&vp->sn_mtx);
 
 	btree_destroy(data);
 
 	return 0;
 error:
+	DBUG("Error reading record %lu, %d\n", rno, error);
 	if (data != NULL)
 	    btree_destroy(data);
 
 	free(rp, M_SLOS);
-	mtx_unlock(&vp->vno_mtx);
+	mtx_unlock(&vp->sn_mtx);
 
 	return error;
 }
 
-int 
-slos_rwrite(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
+static int
+slos_rupdate(struct slos_node *vp, uint64_t rno, struct uio *auio)
 {
-	struct slos_recentry leftentry, rightentry, curentry, unused;
-	struct slos_recentry newentry = {DISKPTR_NULL, 0, 0};
+
+    struct slos_record *rec;
+    int error;
+
+    error = slos_getrec(vp, rno, &rec);
+    if (error)
+	goto update_err;
+
+    uiomove(rec->rec_internal_data, auio->uio_resid, auio);
+    error = slos_recdwrite(vp->sn_slos, rec);
+
+update_err:
+    if(rec != NULL) {
+	free(rec, M_SLOS);
+    }
+
+    return (error);
+}
+
+int 
+slos_rwrite(struct slos_node *vp, uint64_t rno, struct uio *auio)
+{
+	struct slos_recentry leftentry, rightentry, curentry;
 	uint64_t newoff, leftoff, rightoff, curoff;
-	struct slos_diskptr newdata = DISKPTR_NULL;
-	struct slos_record *rp = NULL;
 	struct slos_diskptr recordptr;
 	uint64_t blksize, xfersize;
-	struct btree *data = NULL;
 	uint64_t oldresid;
+
+	struct slos_diskptr newdata = DISKPTR_NULL;
+	struct slos_recentry newentry = {DISKPTR_NULL, 0, 0};
+	struct slos_record *rp = NULL;
+	struct slos *slos = vp->sn_slos;
+	struct btree *data = NULL;
 	int error = 0;
 
 	/* XXX HACK for special case. */
 	struct uio *hackuio = cloneuio(auio);
 
-	mtx_lock(&vp->vno_mtx);
+	mtx_lock(&vp->sn_mtx);
 
 	/* Get the record we want from the inode's btree. */
-	error = btree_search(vp->vno_records, rno, &recordptr);
+	error = btree_search(vp->sn_records, rno, &recordptr);
 	if (error != 0)
 	    goto error;
 
-	/* Get the actual record data from the SLOS. */
-	error = slos_recdread(&slos, recordptr.offset, &rp);
+	/* Get the actual record data from the slos-> */
+	error = slos_recdread(slos, recordptr.offset, &rp);
 	if (error != 0)
 	    goto error;
 
 	/* Create the in-memory btree of data offsets. */
-	data = btree_init(&slos, rp->rec_data.offset, ALLOCMAIN);
+	data = btree_init(slos, rp->rec_data.offset, ALLOCMAIN);
 
 	/* 
 	 * While we haven't written everything yet, allocate enough
@@ -351,13 +418,13 @@ slos_rwrite(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
 	 */
 	while (auio->uio_resid > 0) {
 	    /* Find the size of the new data in blocks. */
-	    blksize = auio->uio_resid / slos.slos_sb->sb_bsize;
-	    if ((auio->uio_resid % slos.slos_sb->sb_bsize) != 0)
+	    blksize = auio->uio_resid / slos->slos_sb->sb_bsize;
+	    if ((auio->uio_resid % slos->slos_sb->sb_bsize) != 0)
 		blksize += 1;
 
 	    /* Get as large an extent as possible. */
 	    newoff = auio->uio_offset;
-	    newdata = slos_alloc(slos.slos_alloc, blksize);
+	    newdata = slos_alloc(slos->slos_alloc, blksize);
 	    if (newdata.offset == 0) {
 		error = ENOSPC;
 		goto error;
@@ -367,7 +434,7 @@ slos_rwrite(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
 	     * Fill up the newly allocated extent 
 	     * with as much data as possible.
 	     */
-	    xfersize = newdata.size * slos.slos_sb->sb_bsize;
+	    xfersize = newdata.size * slos->slos_sb->sb_bsize;
 	    if (xfersize > auio->uio_resid)
 		xfersize = auio->uio_resid;
 
@@ -384,7 +451,7 @@ slos_rwrite(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
 	    auio->uio_resid = xfersize;
 
 	    do {
-		error = slos_write(slos.slos_vp, &newdata, auio);
+		error = slos_write(slos, &newdata, auio);
 		if (error != 0)
 		    goto error;
 
@@ -450,13 +517,13 @@ slos_rwrite(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
 
 
 		    /* Hacky write */
-		    error = slos_write(slos.slos_vp, &leftentry.diskptr, hackuio);
+		    error = slos_write(slos, &leftentry.diskptr, hackuio);
 		    if (error != 0)
 			goto error;
 
 		    /* auio has already been fixed up, because we wrote into newentry. */
 		    /* We never used newentry, free */
-		    slos_free(slos.slos_alloc, newdata);
+		    slos_free(slos->slos_alloc, newdata);
 
 		    /* 
 		     * We were contained in one entry, so 
@@ -474,7 +541,7 @@ slos_rwrite(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
 		    */
 		    /* The new end is such that the length is newoff - leftoff. */
 		    leftentry.len = newoff - leftoff;
-		    error = btree_overwrite(data, leftoff, &leftentry, &unused);
+		    error = btree_overwrite(data, leftoff, &leftentry, NULL);
 		    if (error != 0)
 			goto error;
 
@@ -521,7 +588,7 @@ slos_rwrite(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
 		 * we delete them. In the future, this code will be 
 		 * removed and freeing memory will be done by the GC.
 		 */
-		slos_free(slos.slos_alloc, curentry.diskptr);
+		slos_free(slos->slos_alloc, curentry.diskptr);
 		rp->rec_size -= curentry.diskptr.size;
 
 	    } 
@@ -594,7 +661,7 @@ slos_rwrite(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
 	if (data->root != rp->rec_data.offset)
 	    rp->rec_data.offset = data->root;
 
-	error = slos_recdwrite(&slos, rp);
+	error = slos_recdwrite(slos, rp);
 	if (error != 0)
 	    goto error;
 
@@ -603,7 +670,7 @@ slos_rwrite(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
 
 	free(rp, M_SLOS);
 
-	mtx_unlock(&vp->vno_mtx);
+	mtx_unlock(&vp->sn_mtx);
 
 	/* XXX HACK */
 	free(hackuio, M_IOV);
@@ -613,7 +680,7 @@ slos_rwrite(struct slos_vnode *vp, uint64_t rno, struct uio *auio)
 error:
 	
 	btree_discardelem(data);
-	slos_free(slos.slos_alloc, newdata);
+	slos_free(slos->slos_alloc, newdata);
 
 	if (data != NULL) {
 	    btree_keepelem(data);
@@ -621,12 +688,35 @@ error:
 	}
 
 	free(rp, M_SLOS);
-	mtx_unlock(&vp->vno_mtx);
+	mtx_unlock(&vp->sn_mtx);
 
 	/* XXX HACK */
 	free(hackuio, M_IOV);
 
 	return error;
+}
+
+/* Assuming vnode must will be locked on entry into this function */
+int 
+slos_getrec(struct slos_node *vp, uint64_t rno, struct slos_record **rec)
+{
+	struct slos_diskptr recordptr;
+	struct slos_record *rp;
+	int error;
+
+	/* Get the record we want from the inode's btree. */
+	error = btree_search(vp->sn_records, rno, &recordptr);
+	if (error) 
+	   return (error);
+
+	/* Get the actual record data from the slos-> */
+	error = slos_recdread(vp->sn_slos, recordptr.offset, &rp);
+	if (error) 
+	   return (error);
+	
+	*rec = rp;
+
+	return (0);
 }
 
 /* 
@@ -638,12 +728,13 @@ error:
  * of an extent.
  */
 int
-slos_rseek(struct slos_vnode *vp, uint64_t rno, uint64_t offset, 
+slos_rseek(struct slos_node *vp, uint64_t rno, uint64_t offset, 
 	int flags, uint64_t *seekoffp, uint64_t *seeklenp)
 {
 	struct slos_recentry preventry, nextentry;
 	struct slos_record *rp = NULL;
 	struct slos_diskptr recordptr;
+	struct slos *slos = vp->sn_slos;
 	uint64_t prevoff, nextoff;
 	struct btree *data = NULL;
 	int error = 0;
@@ -655,20 +746,20 @@ slos_rseek(struct slos_vnode *vp, uint64_t rno, uint64_t offset,
 	else
 	    flags |= SREC_SEEKRIGHT;
 
-	mtx_lock(&vp->vno_mtx);
+	mtx_lock(&vp->sn_mtx);
 
 	/* Get the record we want from the inode's btree. */
-	error = btree_search(vp->vno_records, rno, &recordptr);
+	error = btree_search(vp->sn_records, rno, &recordptr);
 	if (error != 0)
 	    goto out;
 
-	/* Get the actual record data from the SLOS. */
-	error = slos_recdread(&slos, recordptr.offset, &rp);
+	/* Get the actual record data from the slos-> */
+	error = slos_recdread(slos, recordptr.offset, &rp);
 	if (error != 0)
 	    goto out;
 
 	/* Create the in-memory btree of data offsets. */
-	data = btree_init(&slos, rp->rec_data.offset, ALLOCMAIN);
+	data = btree_init(slos, rp->rec_data.offset, ALLOCMAIN);
 
 	if ((flags & SREC_SEEKHOLE) != 0) {
 	    /* 
@@ -759,7 +850,7 @@ slos_rseek(struct slos_vnode *vp, uint64_t rno, uint64_t offset,
 out:
 
 	free(rp, M_SLOS);
-	mtx_unlock(&vp->vno_mtx);
+	mtx_unlock(&vp->sn_mtx);
 
 	if (data != NULL)
 	    btree_destroy(data);
@@ -772,27 +863,29 @@ out:
  * Right now these are the size and type.
  */
 int
-slos_rstat(struct slos_vnode *vp, uint64_t rno, struct slos_rstat *stat)
+slos_rstat(struct slos_node *vp, uint64_t rno, struct slos_rstat *stat)
 {
 	struct slos_diskptr ptr;
 	struct slos_record *rp;
 	int error;
 
-	mtx_lock(&vp->vno_mtx);
+	struct slos *slos = vp->sn_slos;
 
-	error = btree_search(vp->vno_records, rno, &ptr);
+	mtx_lock(&vp->sn_mtx);
+
+	error = btree_search(vp->sn_records, rno, &ptr);
 	if (error != 0) {
-	    mtx_unlock(&vp->vno_mtx);
+	    mtx_unlock(&vp->sn_mtx);
 	    return error;
 	}
 
-	error = slos_recdread(&slos, ptr.offset, &rp);
+	error = slos_recdread(slos, ptr.offset, &rp);
 	if (error != 0) {
-	    mtx_unlock(&vp->vno_mtx);
+	    mtx_unlock(&vp->sn_mtx);
 	    return 0;
 	}
 
-	mtx_unlock(&vp->vno_mtx);
+	mtx_unlock(&vp->sn_mtx);
 
 	stat->type = rp->rec_type;
 	stat->len = rp->rec_length;
@@ -813,173 +906,191 @@ slos_rstat(struct slos_vnode *vp, uint64_t rno, struct slos_rstat *stat)
  * example finding the first or last record that has a specific type.
  */
 
-static struct slos_record *
-slos_prevrec(struct slos_vnode *vp, uint64_t rno)
+int 
+slos_prevrec(struct slos_node *vp, uint64_t rno, struct slos_record **record)
 {
 	struct slos_diskptr ptr;
 	struct slos_record *rp;
+	struct slos *slos = vp->sn_slos;
 	int error;
 
-	mtx_lock(&vp->vno_mtx);
+	mtx_lock(&vp->sn_mtx);
 
 	if (rno == 0)
-	    return NULL;
+	    mtx_unlock(&vp->sn_mtx);
+	    *record = NULL;
+	    return EINVAL;
 
 	rno = rno - 1;
-	error = btree_keymin(vp->vno_records, &rno, &ptr);
+	error = btree_keymin(vp->sn_records, &rno, &ptr);
 	if (error != 0) {
-	    mtx_unlock(&vp->vno_mtx);
-	    return NULL;
+	    mtx_unlock(&vp->sn_mtx);
+	    *record = NULL;
+	    return error;
 	}
 
-	error = slos_recdread(&slos, ptr.offset, &rp);
+	error = slos_recdread(slos, ptr.offset, &rp);
 	if (error != 0) {
-	    mtx_unlock(&vp->vno_mtx);
-	    return NULL;
+	    mtx_unlock(&vp->sn_mtx);
+	    *record = NULL;
+	    return error;
 	}
 
-	mtx_unlock(&vp->vno_mtx);
+	mtx_unlock(&vp->sn_mtx);
+	*record = rp;
 
-	return rp;
-
+	return (0);
 }
 
-static struct slos_record* 
-slos_nextrec(struct slos_vnode *vp, uint64_t rno)
+int
+slos_nextrec(struct slos_node *vp, uint64_t rno, struct slos_record ** record)
 {
 	struct slos_diskptr ptr;
 	struct slos_record *rp;
 	int error;
 
-	mtx_lock(&vp->vno_mtx);
+	struct slos *slos = vp->sn_slos;
 
-	if (rno == vp->vno_lastrec)
-	    return NULL;
+	mtx_lock(&vp->sn_mtx);
 
 	rno = rno + 1;
-	error = btree_keymax(vp->vno_records, &rno, &ptr);
+	error = btree_keymax(vp->sn_records, &rno, &ptr);
 	if (error != 0) {
-	    mtx_unlock(&vp->vno_mtx);
-	    return NULL;
+	    mtx_unlock(&vp->sn_mtx);
+	    *record = NULL;
+	    return error;
 	}
 
-	error = slos_recdread(&slos, ptr.offset, &rp);
+	error = slos_recdread(slos, ptr.offset, &rp);
 	if (error != 0) {
-	    mtx_unlock(&vp->vno_mtx);
-	    return NULL;
+	    mtx_unlock(&vp->sn_mtx);
+	    *record = NULL;
+	    return error;
 	}
 
-	mtx_unlock(&vp->vno_mtx);
+	mtx_unlock(&vp->sn_mtx);
+	*record = rp;
 
-	return rp;
+	return (0);
+}
 
+int
+slos_firstrec(struct slos_node *vp, struct slos_record ** record)
+{
+	struct slos_diskptr ptr;
+	struct slos_record *rp;
+	struct slos *slos = vp->sn_slos;
+	uint64_t rno;
+	int error;
 
+	mtx_lock(&vp->sn_mtx);
+
+	rno = 0;
+	error = btree_keymax(vp->sn_records, &rno, &ptr);
+	if (error != 0) {
+	    mtx_unlock(&vp->sn_mtx);
+
+	    return (EINVAL);
+	}
+
+	error = slos_recdread(slos, ptr.offset, &rp);
+	if (error != 0) {
+	    mtx_unlock(&vp->sn_mtx);
+
+	    return (EIO);
+	}
+
+	mtx_unlock(&vp->sn_mtx);
+	*record = rp;
+
+	return (0);
 }
 
 static struct slos_record *
-slos_firstrec(struct slos_vnode *vp)
+slos_lastrec(struct slos_node *vp)
 {
 	struct slos_diskptr ptr;
 	struct slos_record *rp;
 	uint64_t rno;
 	int error;
 
-	mtx_lock(&vp->vno_mtx);
+	struct slos *slos = vp->sn_slos;
 
-	rno = 0;
-	error = btree_keymax(vp->vno_records, &rno, &ptr);
-	if (error != 0) {
-	    mtx_unlock(&vp->vno_mtx);
-	    return NULL;
+	mtx_lock(&vp->sn_mtx);
+
+	error = slos_lastrno(vp, &rno);
+	if (error) {
+	    mtx_lock(&vp->sn_mtx);
+
+	    return (NULL);
 	}
 
-	error = slos_recdread(&slos, ptr.offset, &rp);
+	error = btree_keymin(vp->sn_records, &rno, &ptr);
 	if (error != 0) {
-	    mtx_unlock(&vp->vno_mtx);
-	    return NULL;
+	    mtx_unlock(&vp->sn_mtx);
+
+	    return (NULL);
 	}
 
-	mtx_unlock(&vp->vno_mtx);
-
-	return rp;
-}
-
-static struct slos_record *
-slos_lastrec(struct slos_vnode *vp)
-{
-	struct slos_diskptr ptr;
-	struct slos_record *rp;
-	uint64_t rno;
-	int error;
-
-	mtx_lock(&vp->vno_mtx);
-
-	rno = vp->vno_lastrec;
-	error = btree_keymin(vp->vno_records, &rno, &ptr);
+	error = slos_recdread(slos, ptr.offset, &rp);
 	if (error != 0) {
-	    mtx_unlock(&vp->vno_mtx);
-	    return NULL;
+	    mtx_unlock(&vp->sn_mtx);
+
+	    return (NULL);
 	}
 
-	error = slos_recdread(&slos, ptr.offset, &rp);
-	if (error != 0) {
-	    mtx_unlock(&vp->vno_mtx);
-	    return NULL;
-	}
+	mtx_unlock(&vp->sn_mtx);
 
-	mtx_unlock(&vp->vno_mtx);
-
-	return rp;
+	return (rp);
 }
 
 int
-slos_firstrno(struct slos_vnode *vp, uint64_t *rnop)
+slos_firstrno(struct slos_node *vp, uint64_t *rnop)
 {
 	struct slos_diskptr ptr;
 	uint64_t rno;
 	int error;
 
-	mtx_lock(&vp->vno_mtx);
+	mtx_lock(&vp->sn_mtx);
 
 	rno = 0;
-	error = btree_keymax(vp->vno_records, &rno, &ptr);
+	error = btree_keymax(vp->sn_records, &rno, &ptr);
 	if (error != 0) {
-	    mtx_unlock(&vp->vno_mtx);
+	    mtx_unlock(&vp->sn_mtx);
 	    return error;
 	}
 
 	*rnop = rno;
 
-	mtx_unlock(&vp->vno_mtx);
+	mtx_unlock(&vp->sn_mtx);
 
 	return 0;
 }
 
 int
-slos_lastrno(struct slos_vnode *vp, uint64_t *rnop)
+slos_lastrno(struct slos_node *vp, uint64_t *rnop)
 {
 	struct slos_diskptr ptr;
 	uint64_t rno;
 	int error;
 
-	mtx_lock(&vp->vno_mtx);
+	mtx_lock(&vp->sn_mtx);
 
-	rno = vp->vno_lastrec;
-	error = btree_keymin(vp->vno_records, &rno, &ptr);
+	error = btree_last(vp->sn_records, &rno, &ptr);
 	if (error != 0) {
-	    mtx_unlock(&vp->vno_mtx);
+	    mtx_unlock(&vp->sn_mtx);
 	    return error;
 	}
 
 	*rnop = rno;
 
-	mtx_unlock(&vp->vno_mtx);
+	mtx_unlock(&vp->sn_mtx);
 
 	return 0;
 }
 
 int
-slos_prevrno(struct slos_vnode *vp, uint64_t *rnop)
+slos_prevrno(struct slos_node *vp, uint64_t *rnop)
 {
 	struct slos_diskptr ptr;
 	uint64_t rno;
@@ -988,101 +1099,108 @@ slos_prevrno(struct slos_vnode *vp, uint64_t *rnop)
 	if (*rnop == 0)
 	    return EINVAL;
 
-	mtx_lock(&vp->vno_mtx);
+	mtx_lock(&vp->sn_mtx);
 
 	rno = *rnop - 1;
-	error = btree_keymin(vp->vno_records, &rno, &ptr);
+	error = btree_keymin(vp->sn_records, &rno, &ptr);
 	if (error != 0) {
-	    mtx_unlock(&vp->vno_mtx);
+	    mtx_unlock(&vp->sn_mtx);
 	    return error;
 	}
 
 	*rnop = rno;
 
-	mtx_unlock(&vp->vno_mtx);
+	mtx_unlock(&vp->sn_mtx);
 
 	return 0;
 }
 
 int
-slos_nextrno(struct slos_vnode *vp, uint64_t *rnop)
+slos_nextrno(struct slos_node *vp, uint64_t *rnop)
 {
 	struct slos_diskptr ptr;
 	uint64_t rno;
 	int error;
 
-	mtx_lock(&vp->vno_mtx);
-
-	if ((*rnop) == vp->vno_lastrec)
-	    return EINVAL;
+	mtx_lock(&vp->sn_mtx);
 
 	rno = *rnop + 1;
-	error = btree_keymax(vp->vno_records, &rno, &ptr);
+	error = btree_keymax(vp->sn_records, &rno, &ptr);
 	if (error != 0) {
-	    mtx_unlock(&vp->vno_mtx);
+	    mtx_unlock(&vp->sn_mtx);
 	    return error;
 	}
 
+	mtx_unlock(&vp->sn_mtx);
 	*rnop = rno;
-
-	mtx_unlock(&vp->vno_mtx);
 
 	return 0;
 }
 
 int
-slos_firstrno_typed(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
+slos_firstrno_typed(struct slos_node *vp, uint64_t rtype, uint64_t *rnop)
 {
 	struct slos_record *rp = NULL;	
 	uint64_t rno;
+	int error = 0;
 
-	mtx_lock(&vp->vno_mtx);
+	mtx_lock(&vp->sn_mtx);
 
-	rp = slos_firstrec(vp);
-	while (rp != NULL && rp->rec_type != rtype) {
+	error = slos_firstrec(vp, &rp);
+	if (error) {
+	    return (error);
+	}
+	while (rp != NULL && rp->rec_type != rtype && !error) {
 	    rno = rp->rec_num;
 	    free(rp, M_SLOS);
-	    rp = slos_nextrec(vp, rno);
+	    error = slos_nextrec(vp, rno, &rp);
+	}
+
+	if (error) {
+	    return (error);
 	}
 	
 	if (rp != NULL && rp->rec_type == rtype) {
 	    *rnop = rp->rec_num;
 	    free(rp, M_SLOS);
-	    mtx_unlock(&vp->vno_mtx);
+	    mtx_unlock(&vp->sn_mtx);
 
-	    return 0;
+	    return (0);
 	}
 
-	mtx_unlock(&vp->vno_mtx);
+	mtx_unlock(&vp->sn_mtx);
 
-	return EINVAL;
+	return (EINVAL);
 }
 
 int
-slos_lastrno_typed(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
+slos_lastrno_typed(struct slos_node *vp, uint64_t rtype, uint64_t *rnop)
 {
 	struct slos_record *rp = NULL;	
 	uint64_t rno;
+	int error = 0;
 
-	mtx_lock(&vp->vno_mtx);
+	mtx_lock(&vp->sn_mtx);
 
 	rp = slos_lastrec(vp);
-	while (rp != NULL && rp->rec_type != rtype) {
+	while (rp != NULL && rp->rec_type != rtype && !error) {
 	    rno = rp->rec_num;
 	    free(rp, M_SLOS);
-	    rp = slos_prevrec(vp, rno);
+	    error = slos_prevrec(vp, rno, &rp);
+	}
+	if (error) {
+	    return (error);
 	}
 
-	
 	if (rp != NULL && rp->rec_type == rtype) {
 	    *rnop = rp->rec_num;
 	    free(rp, M_SLOS);
-	    mtx_unlock(&vp->vno_mtx);
+	    mtx_unlock(&vp->sn_mtx);
 
 	    return 0;
 	}
 
-	mtx_unlock(&vp->vno_mtx);
+	mtx_unlock(&vp->sn_mtx);
 
 	return EINVAL;
 }
@@ -1103,7 +1221,7 @@ slos_lastrno_typed(struct slos_vnode *vp, uint64_t rtype, uint64_t *rnop)
 int
 slos_test_record(void)
 {
-	struct slos_vnode *vp = NULL;
+	struct slos_node *vp = NULL;
 	uint64_t holesize, holeoff;
 	uint64_t seekoff, seeklen;
 	uint64_t offset, len;
@@ -1124,7 +1242,7 @@ slos_test_record(void)
 	result = malloc(OPSIZE, M_SLOS, M_WAITOK | M_ZERO);
 	
 	/* Set up the inode. */
-	error = slos_icreate(&slos, RECPID);
+	error = slos_icreate(&slos, RECPID, VREG);
 	if (error != 0)
 	    goto error;
 

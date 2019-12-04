@@ -7,4 +7,4 @@
 
 MALLOC_DECLARE(M_SLOS);
 
-#endif /* _SLOSMM_H_ */
+#endif

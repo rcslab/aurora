@@ -205,6 +205,7 @@ slsrest_vmentry_file(struct vm_map *map, struct slsvmentry *entry, struct slskv_
 	    return error;
 
 	vp = (struct vnode *) object->handle;
+	SLS_DBG("vp %p\n", vp);
 	error = sls_vn_to_path(vp, &sb);
 	if (error != 0)
 	    return EINVAL;

@@ -4,8 +4,7 @@
 #include <sys/param.h>
 
 #include <sys/queue.h>
-
-#include "../include/slos.h"
+#include "slos.h"
 
 #define BNODE_INTERNAL 0
 #define BNODE_EXTERNAL 1
@@ -32,10 +31,6 @@ struct bnode {
 
 #ifdef _KERNEL
 
-#include "../slos/slos_internal.h"
-
-struct slos;
-
 int bnode_getkey(struct bnode *bnode, size_t offset, uint64_t *key);
 int bnode_getvalue(struct bnode *bnode, size_t offset, void *value);
 int bnode_getptr(struct bnode *bnode, size_t offset, struct slos_diskptr *diskptr);
@@ -61,8 +56,8 @@ struct bnode *bnode_alloc(struct slos *slos, uint64_t blkno, uint64_t vsize, int
 struct bnode *bnode_copy(struct slos *slos, uint64_t blkno, struct bnode *bnode);
 void bnode_free(struct bnode *bnode);
 
-struct bnode *bnode_parent(struct bnode *bnode);
-struct bnode *bnode_child(struct bnode *bnode, size_t offset);
+struct bnode *bnode_parent(struct slos * slos, struct bnode *bnode);
+struct bnode *bnode_child(struct slos * slos, struct bnode *bnode, size_t offset);
 
 int bnode_search(struct bnode *bnode, uint64_t key, void *value);
 

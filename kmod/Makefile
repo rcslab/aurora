@@ -7,11 +7,11 @@ SRCS	= sls_ioctl.c sls_vmspace.c sls_vmobject.c sls_proc.c sls_load.c \
 	    sls_partition.c sls_table.c sls_kv.c \
 	    imported_sls.c vnode_if.h
 
-CFLAGS	+= -DKDTRACE_HOOKS -DKLD_TIED -I../include -g -g3
-.ifdef DEBUGBUILD
-CFLAGS += -DINVARIANTS -DINVARIANT_SUPPORT -DDEBUG_LOCKS
+.ifdef WITH_DEBUG
+DEBUG_FLAGS += -g3 -DINVARIANTS -DINVARIANT_SUPPORT -DWITNESS -DDEBUG_LOCKS -DKDTRACE_HOOKS 
+WITH_CTF = 1
 .endif
 
-WITH_CTF = 1
+CFLAGS	+= -DKDTRACE_HOOKS -DKLD_TIED -I../include
 
 .include <bsd.kmod.mk>

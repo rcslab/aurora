@@ -44,6 +44,10 @@
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
+#include <slos.h>
+#include <slos_record.h>
+#include <slos_inode.h>
+
 #include "sls_data.h"
 #include "sls_file.h"
 #include "sls_ioctl.h"
@@ -56,7 +60,6 @@
 #include "sls_vmspace.h"
 
 #include "imported_sls.h"
-#include "../slos/slos_record.h"
 
 static int
 slsrest_dothread(struct proc *p, char **bufp, size_t *buflenp)
@@ -478,7 +481,6 @@ slsrest_shadow(vm_object_t shadow, vm_object_t source, vm_ooffset_t offset)
 	shadow->backing_object = source;
 	shadow->backing_object_offset = offset;
 
-
 	/* 
 	* If this is the first shadow, then we transfer the reference
 	* from the caller to the shadow, as done in vm_object_shadow.
@@ -497,7 +499,6 @@ slsrest_shadow(vm_object_t shadow, vm_object_t source, vm_ooffset_t offset)
 	shadow->pg_color = (source->pg_color + OFF_TO_IDX(offset)) &
 	    ((1 << (VM_NFREEORDER - 1)) - 1);
 #endif
-
 	VM_OBJECT_WUNLOCK(source);
 }
 
@@ -544,9 +545,9 @@ slsrest_vmobjects(struct slskv_table *metatable, struct slskv_table *datatable,
 	/* Second pass; link up the objects to their shadows. */
 	iter = slskv_iterstart(metatable);
 	while (slskv_itercont(&iter, (uint64_t *) &record, (uintptr_t *) &st) != SLSKV_ITERDONE) {
+
 	    if (st->type != SLOSREC_VMOBJ)
 		continue;
-
 	    /* 
 	     * Get the object restored for the given info struct. 
 	     * We take advantage of the fact that the VM object info
@@ -555,16 +556,18 @@ slsrest_vmobjects(struct slskv_table *metatable, struct slskv_table *datatable,
 	     */
 	    slsvmobjectp = (struct slsvmobject *) record; 
 	    error = slskv_find(objtable, slsvmobjectp->slsid, (uintptr_t *) &object);
-	    if (error != 0)
+	    if (error != 0) {
 		return (error);
+	    }
 
 	    /* Try to find a parent for the restored object, if it exists. */
 	    error = slskv_find(objtable, (uint64_t) slsvmobjectp->backer, (uintptr_t *) &parent);
-	    if (error != 0)
+	    if (error != 0) {
 		continue;
-	    
+	    }
 	    slsrest_shadow(object, parent, slsvmobjectp->backer_off);
 	}
+	SLS_DBG("Restoration of VM Objects\n");
 
 	return (0);
 }
@@ -693,7 +696,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	struct slspagerun *pagerun, *tmppagerun;
 	struct slsdata *slsdata;
 	struct slskv_iter iter;
-	struct slos_vnode *vp;
+	struct slos_node *vp;
 	struct slos_rstat *st;
 	size_t buflen;
 	void *record;
@@ -724,8 +727,10 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 
 	SLS_DBG("Closing inode\n");
 	error = slos_iclose(&slos, vp); 
-	if (error != 0)
+	if (error != 0) {
+	    SLS_DBG("Error closing\n");
 	    goto out;
+	}
 
 
 	/* ------------ End SLOS-Specific Part ------------ */
@@ -808,13 +813,11 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	/* Restore all sessions. */
 	cv_broadcast(&slsm.slsm_donecv);
 
-
 	mtx_unlock(&slsm.slsm_mtx);
 
 	SLS_DBG("Done\n");
 
 out:
-
 	/* Cleanup the tables used for bringing the data in memory. */
 	if (metatable != NULL) {
 	    while (slskv_pop(metatable, (uint64_t *) &record, (uintptr_t *) &st) == 0) {
@@ -839,7 +842,6 @@ out:
 	}
 
 
-	SLS_DBG("error %d\n", error);
 
 	return (error);
 }

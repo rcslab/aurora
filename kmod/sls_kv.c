@@ -24,7 +24,7 @@ slskv_create(struct slskv_table **tablep, enum slskv_policy policy)
 	struct slskv_table *table;
 	int i;
 
-	table = malloc(sizeof(*table), M_SLSMM, M_WAITOK);
+	table = malloc(sizeof(*table), M_SLSMM, M_WAITOK | M_ZERO);
 
 	/* Create the buckets using the existing kernel functions. */
 	table->buckets = hashinit(SLSKV_BUCKETS, M_SLSMM, &table->mask);

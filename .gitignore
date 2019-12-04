@@ -45,4 +45,8 @@ tools/slsdb/slsdb
 *~*
 *garbage*
 .nfs*
+go.sh
+ckpt.sh
+cleanup.sh
+offset.inc
 tags

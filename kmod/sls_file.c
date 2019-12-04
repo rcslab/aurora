@@ -49,6 +49,7 @@
 #include <vm/uma.h>
 
 #include <slos.h>
+#include <slos_record.h>
 #include <sls_data.h>
 
 #include "sls_file.h"
