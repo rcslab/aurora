@@ -503,7 +503,7 @@ sls_writedata_slos(struct slos_node *vp, struct sbuf *sb,
 	 * retrieve the object and grab its data.
 	 */
 	obj = (vm_object_t) info->slsid;
-	if (obj->type != OBJT_DEFAULT)
+	if ((obj->type != OBJT_DEFAULT && (obj->type != OBJT_SWAP)))
 	    return 0;
 
 	/* Get the shadow we created for the object from the table. */

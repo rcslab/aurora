@@ -22,6 +22,8 @@
 #include <sys/stat.h>
 #include <sys/syscallsubr.h>
 #include <sys/unistd.h>
+#include <sys/un.h>
+#include <sys/unpcb.h>
 #include <sys/vnode.h>
 
 /* XXX Pipe has to be after selinfo */
@@ -55,112 +57,327 @@
 
 #include "imported_sls.h"
 
+/* Get the address of a unix socket. */
+static int
+slsckpt_sock_un(struct socket *so, struct slssock *info)
+{
+	struct unpcb *unpcb;
+
+	unpcb = sotounpcb(so);
+	if (unpcb->unp_addr != NULL)
+	    memcpy(&info->un, unpcb->unp_addr, sizeof(info->un));
+
+
+	/* 
+	 * If we are a data socket, get the peer. There are
+	 * two possibilities: Either we are a stream data socket
+	 * or a datagram socket created using socketpair(), in which
+	 * case we do have a pair, or we are a listening stream socket
+	 * or a named datagram socket, in which case we don't.
+	 */
+	if (unpcb->unp_conn != NULL)
+	    info->unpeer = (uint64_t) unpcb->unp_conn->unp_socket;
+	info->bound = (unpcb->unp_vnode != NULL) ? 1 : 0;
+
+	return (0);
+}
+
+/* Get the address of an inet socket. */
+static int
+slsckpt_sock_in(struct socket *so, struct slssock *info)
+{
+	struct inpcb *inpcb;
+
+	inpcb = (struct inpcb *) so->so_pcb;
+
+	/* Get the local address. */
+	info->in.sin_family = AF_INET;
+	info->in.sin_port = inpcb->inp_inc.inc_ie.ie_lport;
+	info->in.sin_addr.s_addr = inpcb->inp_inc.inc_laddr.s_addr;
+	info->in.sin_len = sizeof(struct sockaddr_in);
+
+	/* Get general connection info. */
+	info->in_conninfo = inpcb->inp_inc;
+	info->bound = (inpcb->inp_flags & INP_INHASHLIST) ? 1 : 0;
+
+	/* INET sockets can never be anonymous, so they have no peers. */
+
+	return (0);
+}
+
 int
 slsckpt_socket(struct proc *p, struct socket *so, struct sbuf *sb)
 {
 	struct slssock info;
-	struct inpcb *inpcb;
 	int error;
 
-	inpcb = (struct inpcb *) so->so_pcb;
+	/* Zero out all fields. */
+	memset(&info, 0, sizeof(info));
 
-	/* 
-	 * XXX Right now we're using a small subset of these 
-	 * fields, but we are going to need them later. 
-	 */
 	info.magic = SLSSOCKET_ID;
 	info.slsid = (uint64_t) so;
 
+	/* Generic information about the socket type. */
 	info.family = so->so_proto->pr_domain->dom_family;
 	info.proto = so->so_proto->pr_protocol;
 	info.type = so->so_proto->pr_type;
-
+	info.state = so->so_state;
 	info.options = so->so_options;
-
-	info.vflag = inpcb->inp_vflag;
-	info.flags = inpcb->inp_flags;
-	info.flags2 = inpcb->inp_flags2;
-	info.ip_p = inpcb->inp_ip_p;
 	
-	info.inp_inc.inc_flags = inpcb->inp_inc.inc_flags;
-	info.inp_inc.inc_len = inpcb->inp_inc.inc_len;
-	info.inp_inc.inc_fibnum = inpcb->inp_inc.inc_fibnum;
-	info.inp_inc.ie_fport = inpcb->inp_inc.inc_ie.ie_fport;
-	info.inp_inc.ie_lport = inpcb->inp_inc.inc_ie.ie_lport;
+	/* Get the address depending on the type. */
+	switch (info.family) {
+	case AF_INET:
+	    error = slsckpt_sock_in(so, &info);
+	    break;
 
-	memcpy(info.inp_inc.ie_ufaddr, &inpcb->inp_inc.inc_faddr, 0x10);
-	memcpy(info.inp_inc.ie_uladdr, &inpcb->inp_inc.inc_laddr, 0x10);
+	case AF_LOCAL:
+	    error = slsckpt_sock_un(so, &info);
+	    break;
 
+	default:
+	    panic("%s: Unknown protocol family %d\n", __func__, info.family);
+	}
+
+	if (error != 0)
+	    return (error);
+
+	switch (info.type) {
+	case SOCK_STREAM:
+	case SOCK_SEQPACKET:
+	    info.backlog = so->sol_qlimit;
+	    break;
+
+	case SOCK_DGRAM:
+	case SOCK_RAW:
+	case SOCK_RDM:
+	    break;
+
+	default:
+	    panic("%s: Unknown protocol type %d\n", __func__, info.type);
+	}
+
+	/* Write it out to the SLS record. */
 	error = sbuf_bcat(sb, (void *) &info, sizeof(info));
 	if (error != 0)
-	    return error;
+	    return (error);
 
-	return 0;
+	return (0);
+}
+
+/* 
+ * Modified version of uipc_bindat() that supposes that the file used for the
+ * socket already exists (the original function assumes the opposite). The 
+ * function is also greatly simplified by the fact that the socket is also
+ * visible to us, so there are no races (XXX there _are_ new races that arise
+ * from the fact that we are binding to an existing file, but we assume
+ * that there is no interference from outside the SLS for now while restoring).
+ */
+static int
+slsrest_uipc_bindat(struct socket *so, struct sockaddr *nam)
+{
+	struct sockaddr_un *soun;
+	struct unpcb *unp;
+	struct vnode *vp;
+	struct sbuf *sb;
+	int error;
+
+	/* 
+	 * Checks in the original function are turned into KASSERTs, because
+	 * in our case we know only we can see the new socket, so a lot of
+	 * edge cases are impossible unless something is horribly wrong.
+	 */
+	KASSERT((nam->sa_family == AF_UNIX), ("socket is not unix socket"));
+
+	unp = sotounpcb(so);
+	KASSERT(unp != NULL, ("uipc_bind: unp == NULL"));
+
+	soun = (struct sockaddr_un *)nam;
+
+	KASSERT((soun->sun_len <= sizeof(struct sockaddr_un)), 
+		("socket path size too large"));
+	KASSERT((soun->sun_len > offsetof(struct sockaddr_un, sun_path)), 
+		("socket path size too small"));
+
+	sb = sbuf_new_auto();
+	sbuf_bcpy(sb, soun->sun_path, strnlen(soun->sun_path, UNADDR_MAX));
+
+	KASSERT(((unp->unp_flags & UNP_BINDING) == 0), "unix socket already binding");
+	KASSERT((unp->unp_vnode == NULL), "unix socket already bound");
+
+	error = sls_path_to_vn(sb, &vp);
+	if (error != 0) {
+	    sbuf_delete(sb);
+	    return (error);
+	}
+
+	soun = (struct sockaddr_un *) sodupsockaddr(nam, M_WAITOK);
+
+	VOP_LOCK(vp, LK_EXCLUSIVE);
+	/* Set up the internal vp state (used when calling connect()). */
+	VOP_UNP_BIND(vp, unp);
+
+	/* Finish intializing the socket itself. */
+	unp->unp_vnode = vp;
+	unp->unp_addr = soun;
+	VOP_UNLOCK(vp, 0);
+
+	sbuf_delete(sb);
+	return (0);
 }
 
 int
-slsrest_socket(struct slssock *info, struct slsfile *finfo, int *fdp)
+slsrest_socket(struct slskv_table *table, struct slssock *info, struct slsfile *finfo, int *fdp)
 {
-	struct sockaddr_in addr_in;
-	struct sockaddr *sa;
-	struct socket *so;
-	struct file *fp;
-	int fd;
+	struct sockaddr *addr;
+	struct socket *so, *sopeer;
+	struct file *fp, *peerfp;
+	struct unpcb *unpcb, *unpeerpcb;
+	int fd, peerfd = -1;
+	struct thread *td;
 	int error;
 
-	/* Open the socket. */
-	error = kern_socket(curthread, info->family, info->type, info->proto);
-	if (error != 0)
-	    return error;
+	td = curthread;
 
-	/* Move the socket to the correct position. */
-	fd = curthread->td_retval[0];
+	/* Create the new socket. */
+	error = kern_socket(td, info->family, info->type, info->proto);
+	if (error != 0)
+	    return (error);
+
+	fd = td->td_retval[0];
 
 	/* Reach into the file descriptor and get the socket. */
-	fp = curthread->td_proc->p_fd->fd_files->fdt_ofiles[fd].fde_file;
+	fp = td->td_proc->p_fd->fd_files->fdt_ofiles[fd].fde_file;
 	so = (struct socket *) fp->f_data;
 
-	/* Set up all the options again. */
+	/* Restore the socket's nonblocking/async state. */
+	if ((info->state & SS_ASYNC) != 0)
+	    kern_fcntl_freebsd(td, fd, F_SETFL, O_ASYNC);
+	if ((info->state & SS_NBIO) != 0)
+	    kern_fcntl_freebsd(td, fd, F_SETFL, O_NONBLOCK);
 
-	/* Do the same for the Internet protocol PCB. */
-	//so->so_options = info->options;
+	/*
+	 * XXX Set any other options we can.
+	 */
+	switch (info->family) {
+	case AF_INET:
+	    addr = (struct sockaddr *) &info->in;
 
-	sa = malloc(SOCK_MAXADDRLEN, M_SLSMM, M_WAITOK);
+	    /* Check if the socket is bound. */
+	    if (info->bound == 0)
+		break;
+	    /* 
+	    * We use bind() instead of setting the address directly because
+	    * we need to let the kernel know we are reserving the address.
+	    */
+	    error = kern_bindat(td, AT_FDCWD, fd, addr);
+	    if (error != 0)
+		goto error;
 
-	/* Zero the address structs. */
-	bzero(&addr_in, sizeof(addr_in));
-	bzero(sa, SOCK_MAXADDRLEN);
+	    break;
 
-	addr_in.sin_family = info->family;
-	addr_in.sin_port = info->inp_inc.ie_lport;
-	/* XXX Find a way to transfer the address if it exists. */
-	addr_in.sin_addr.s_addr = htonl(INADDR_ANY);
+	case AF_LOCAL:
+	    addr = (struct sockaddr *) &info->un;
+	    /* 
+	     * Check if the socket has a peer. If it does, then it is 
+	     * either a UNIX stream data socket, or it is a socket
+	     * created using socketpair(); in both cases, it has a peer,
+	     * so we create it alongside it.
+	     */
+	    if (info->unpeer != 0) {
 
-	/* Create the generic address. */
-	memcpy(sa, &addr_in, sizeof(addr_in));
-	sa->sa_len = sizeof(addr_in);
+		/* Create the socket peer. */
+		error = kern_socket(td, info->family, info->type, info->proto);
+		if (error != 0)
+		    goto error;
 
-	error = kern_bindat(curthread, AT_FDCWD, fd, sa);
-	if (error != 0) {
-	    kern_close(curthread, fd);
-	    free(sa, M_SLSMM);
-	    return error;
-	}
+		peerfd = td->td_retval[0];
+		peerfp = td->td_proc->p_fd->fd_files->fdt_ofiles[peerfd].fde_file;
+		sopeer = (struct socket *) peerfp->f_data;
 
-	if (info->type == SOCK_STREAM) {
-	    /* XXX Pick max backlog right now, find the actual one later. */
-	    error = kern_listen(curthread, fd, 511);
+		/* Restore the peer's 's nonblocking/async state. */
+		if ((info->state & SS_ASYNC) != 0)
+		    kern_fcntl_freebsd(td, peerfd, F_SETFL, O_ASYNC);
+		if ((info->state & SS_NBIO) != 0)
+		    kern_fcntl_freebsd(td, fd, F_SETFL, O_NONBLOCK);
+
+		/* Connect the two sockets. See kern_socketpair(). */
+		error = soconnect2(so, sopeer);
+		if (error != 0)
+		    goto error;
+
+		if (info->type == SOCK_DGRAM) {
+		    /* 
+		     * Datagram connections are asymetric, so 
+		     * repeat the process to the other direction.
+		     */
+		    error = soconnect2(sopeer, so);
+		    if (error != 0)
+			goto error;
+		} else if (so->so_proto->pr_flags & PR_CONNREQUIRED) {
+		    /* Use credentials to make the stream socket exclusive to the peer. */
+		    unpcb = sotounpcb(so);
+		    unpeerpcb = sotounpcb(sopeer);
+		    unp_copy_peercred(td, unpcb, unpeerpcb, unpcb);
+		}
+
+		break;
+	    } 
+
+	    /* 
+	     * We assume it is either a listening socket, or a 
+	     * datagram socket. The only case where we don't bind
+	     * is if it is a datagram client socket, in which case
+	     * we just leave it be.
+	     */
+	    if (info->bound == 0)
+		break;
+
+	    /* 
+	     * The bind() function for UNIX sockets makes assumptions 
+	     * that do not hold here, so we use our own custom version.
+	     */
+	    error = slsrest_uipc_bindat(so, addr);
 	    if (error != 0) {
-		kern_close(curthread, fd);
-		free(sa, M_SLSMM);
-		return error;
+		kern_close(td, fd);
+		return (error);
 	    }
 
+	    break;
+
+	default:
+	    panic("%s: Unknown protocol family %d\n", __func__, info->family);
+
 	}
-	kern_fcntl_freebsd(curthread, fd, F_SETFL, O_RDWR | O_NONBLOCK);
-	free(sa, M_SLSMM);
+
+	/* Check if we need to listen for incoming connections. */
+	if ((info->options & SO_ACCEPTCONN) != 0) {
+	    error = kern_listen(td, fd, info->backlog);
+	    if (error != 0)
+		goto error;
+	}
+
+	if (peerfd >= 0) {
+	    error = slskv_add(table, info->unpeer, (uintptr_t) peerfp);
+	    if (error != 0)
+		goto error;
+
+	    /* Get a hold for the table, before closing the fd. */
+	    if (!fhold(peerfp)) {
+		error = EBADF;
+		goto error;
+	    }
+
+	    kern_close(td, peerfd);
+	}
 
 	*fdp = fd;
 
-	return 0;
+	return (0);
+
+error:
+	if (peerfd >= 0)
+	    kern_close(td, peerfd);
+	kern_close(td, fd);
+
+	return (error);
 }

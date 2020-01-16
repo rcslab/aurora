@@ -146,6 +146,11 @@ slsrest_vmobject(struct slsvmobject *info, struct slskv_table *objtable,
 
 	switch (info->type) {
 	case OBJT_DEFAULT:
+	/* 
+	 * OBJT_SWAP is just a default object which has swapped, or is SYSV_SHM. 
+	 * Until we create our custom swapper, treat it as a clean object.
+	 */
+	case OBJT_SWAP:
 
 	    /* Simple vm_allocate*/
 	    object = vm_object_allocate(OBJT_DEFAULT, info->size);

@@ -3,6 +3,7 @@
 
 int sls_path_to_vn(struct sbuf *sb, struct vnode **vpp);
 int sls_vn_to_path(struct vnode *vp, struct sbuf **sb);
+int sls_path_append(const char *path, size_t len, struct sbuf *sb);
 int sls_vn_to_path_append(struct vnode *vp, struct sbuf *sb);
 
 #endif /* _PATH_H_ */

@@ -55,6 +55,7 @@
 #include "sls_load.h"
 #include "sls_mm.h"
 #include "sls_proc.h"
+#include "sls_sysv.h"
 #include "sls_table.h"
 #include "sls_vmobject.h"
 #include "sls_vmspace.h"
@@ -115,6 +116,7 @@ static int
 slsrest_dofile(struct slsrest_data *restdata, char **bufp, size_t *buflenp)
 {
 	struct slsfile slsfile;
+	struct sbuf *sb;
 	void *data;
 	int error;
 
@@ -122,8 +124,7 @@ slsrest_dofile(struct slsrest_data *restdata, char **bufp, size_t *buflenp)
 	if (error != 0)
 	    return (error);
 
-	error = slsrest_file(data, &slsfile, 
-		restdata->filetable, restdata->kevtable);
+	error = slsrest_file(data, &slsfile, restdata);
 	if (error != 0)
 	    return error;
 
@@ -136,6 +137,10 @@ slsrest_dofile(struct slsrest_data *restdata, char **bufp, size_t *buflenp)
 	    sbuf_delete((struct sbuf *) data);
 	    break;
 
+	case DTYPE_FIFO:
+	    sbuf_delete((struct sbuf *) data);
+	    break;
+
 	case DTYPE_PIPE:
 	    free(data, M_SLSMM);
 	    break;
@@ -145,6 +150,15 @@ slsrest_dofile(struct slsrest_data *restdata, char **bufp, size_t *buflenp)
 	    break;
 
 	case DTYPE_PTS:
+	    break;
+
+	case DTYPE_SHM:
+	    /* XXX Refactor the sb member somehow. */
+	    sb = ((struct slsposixshm *) data)->sb;
+	    if (sb != NULL)
+		sbuf_delete(sb);
+
+	    free(data, M_SLSMM);
 	    break;
 
 	default:
@@ -183,15 +197,16 @@ slsrest_dovmspace(struct proc *p, char **bufp, size_t *buflenp,
 {
 	struct slsvmentry slsvmentry;
 	struct slsvmspace slsvmspace;
+	struct shmmap_state *shmstate = NULL;
 	vm_map_t map;
 	int error, i;
 
 	/* Restore the VM space and its map. */
-	error = slsload_vmspace(&slsvmspace, bufp, buflenp);
+	error = slsload_vmspace(&slsvmspace, &shmstate, bufp, buflenp);
 	if (error != 0)
 	    goto out;
 
-	error = slsrest_vmspace(p, &slsvmspace);
+	error = slsrest_vmspace(p, &slsvmspace, shmstate);
 	if (error != 0)
 	    goto out;
 
@@ -211,8 +226,39 @@ slsrest_dovmspace(struct proc *p, char **bufp, size_t *buflenp,
 	}
 	
 out:
+	free(shmstate, M_SHM);
 
 	return (error);
+}
+
+static int
+slsrest_dosysvshm(char *buf, size_t bufsize, struct slskv_table *objtable)
+{
+	struct slssysvshm slssysvshm;
+	size_t numsegs;
+	int error, i;
+
+
+	/* 
+	 * The buffer only has segments in it, so its size must 
+	 * be a multiple of the struct we read into. 
+	 */
+	if (((bufsize % sizeof(slssysvshm)) != 0))
+		return (EINVAL);
+
+	/* Read each segment in, restoring metadata and attaching to the object. */
+	numsegs = bufsize / sizeof(slssysvshm);
+	for (i = 0; i < numsegs; i++) {
+	    error = slsload_sysvshm(&slssysvshm, &buf, &bufsize);
+	    if (error != 0)
+		return (error);
+
+	    error = slsrest_sysvshm(&slssysvshm, objtable);
+	    if (error != 0)
+		return (error);
+	}
+	
+	return (0);
 }
 
 /* Restore the kevents to the already restored kqueues. */
@@ -263,7 +309,8 @@ slsrest_ttyfixup(struct proc *p)
 	 */
 	FILEDESC_XLOCK(p->p_pptr->p_fd);
 	pttyfp = p->p_pptr->p_fd->fd_files->fdt_ofiles[0].fde_file;
-	fhold(pttyfp);
+	if (!fhold(pttyfp))
+	    goto error;
 	FILEDESC_XUNLOCK(p->p_pptr->p_fd);
 
 	FILEDESC_XLOCK(p->p_fd);
@@ -288,13 +335,18 @@ slsrest_ttyfixup(struct proc *p)
 		 * adjust hold counts.
 		 */
 		fdrop(fp, curthread);
-		fhold(pttyfp);
+		if (!fhold(pttyfp))
+		    goto error;
 		_finstall(p->p_fd, pttyfp, fd, O_CLOEXEC, NULL);
 	    }
 	}
 	FILEDESC_XUNLOCK(p->p_fd);
 
 	return (0);
+
+error:
+	FILEDESC_XUNLOCK(p->p_fd);
+	return (EBADF);
 }
 
 /* Struct used to set the arguments after forking. */
@@ -384,7 +436,7 @@ slsrest_metadata(void *args)
 	error = slsrest_ttyfixup(p);
 	if (error != 0)
 	    SLS_DBG("tty_fixup failed with %d\n", error);
-	//kern_psignal(p, SIGCONT);
+	kern_psignal(p, SIGCONT);
 
 	PROC_UNLOCK(p);
 
@@ -768,8 +820,20 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	if (error != 0)
 	    goto out;
 
-	SLS_DBG("Third pass\n");
+	iter = slskv_iterstart(metatable);
+	while (slskv_itercont(&iter, (uint64_t *) &record, (uintptr_t *) &st) != SLSKV_ITERDONE) {
+	    if (st->type != SLOSREC_SYSVSHM)
+		continue;
 
+	    buf = (char *) record;
+	    buflen = st->len;
+
+	    error = slsrest_dosysvshm(buf, buflen, restdata->objtable);
+	    if (error != 0)
+		goto out;
+	}
+
+	SLS_DBG("Third pass\n");
 	/* 
 	 * Fourth pass; restore processes. These depend on the objects 
 	 * restored above, which we pass through the object table.

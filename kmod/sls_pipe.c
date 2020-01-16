@@ -119,9 +119,6 @@ slsrest_pipe(struct slskv_table *filetable, struct slspipe *ppinfo, int *fdp)
 	 */
 	peerfp = curthread->td_proc->p_fd->fd_files->fdt_ofiles[peerfd].fde_file;
 
-	printf("Pipe pair (%p, %p)\n", 
-		curthread->td_proc->p_fd->fd_files->fdt_ofiles[filedes[0]].fde_file, 
-		curthread->td_proc->p_fd->fd_files->fdt_ofiles[filedes[1]].fde_file);
 	/* 
 	 * We take the liberty here of using the pipe's SLS ID instead
 	 * of the file pointer. Since we have made it so at checkpoint
@@ -136,7 +133,10 @@ slsrest_pipe(struct slskv_table *filetable, struct slspipe *ppinfo, int *fdp)
 	}
 
 	/* Get a reference on behalf of the hashtable. */
-	fhold(peerfp);
+	if (!fhold(peerfp)) {
+	    kern_close(curthread, peerfd);
+	    return (EBADF);
+	}
 
 	/* Remove it from this process and this fd. */
 	kern_close(curthread, peerfd);

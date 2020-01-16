@@ -13,17 +13,24 @@ shim/tests/test
 tests/array/array
 tests/compute/compute
 tests/fd/fd
+tests/fifo/fifo
 tests/fork/fork
 tests/llist/llist
 tests/memory/memory
 tests/mmap/mmap
 tests/multithread/multithread
 tests/pipes/pipes
+tests/posixshm/posixshm
 tests/print/print
 tests/register/register
 tests/sharemap/sharemap
 tests/signal/signal
 tests/sleep/sleep
+tests/socketpair/socketpair
+tests/sysvshm/sysvshm
+tests/tcplisten/tcplisten
+tests/udplisten/udplisten
+tests/unixlisten/unixlisten
 tests/unlink/unlink
 
 
@@ -50,3 +57,6 @@ ckpt.sh
 cleanup.sh
 offset.inc
 tags
+localsocket
+slsfifo
+slssysvshm

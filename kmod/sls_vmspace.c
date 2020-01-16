@@ -26,6 +26,7 @@
 
 #include <slos.h>
 
+#include "imported_sls.h"
 #include "sls_internal.h"
 #include "sls_kv.h"
 #include "sls_mm.h"
@@ -59,9 +60,9 @@ slsckpt_vmentry(struct vm_map_entry *entry, struct sbuf *sb)
 
 	error = sbuf_bcat(sb, (void *) &cur_entry, sizeof(cur_entry));
 	if (error != 0)
-	    return ENOMEM;
+	    return (ENOMEM);
 
-	return 0;
+	return (0);
 }
 
 int
@@ -87,11 +88,19 @@ slsckpt_vmspace(struct proc *p, struct sbuf *sb, long mode)
 	    .vm_daddr = vmspace->vm_daddr,
 	    .vm_maxsaddr = vmspace->vm_maxsaddr,
 	    .nentries = vm_map->nentries,
+	    .has_shm = ((vmspace->vm_shm != NULL) ? 1 : 0),
 	};
 
 	error = sbuf_bcat(sb, (void *) &slsvmspace, sizeof(slsvmspace));
 	if (error != 0)
-	    return error;
+	    return (error);
+
+	/* Get the table wholesale (it's not large, so just grab all of it). */
+	if (slsvmspace.has_shm != 0) {
+	    error = sbuf_bcat(sb, vmspace->vm_shm, shminfo.shmseg * sizeof(*vmspace->vm_shm));
+	    if (error != 0)
+		return (error);
+	}
 
 	/* Checkpoint all objects, including their ancestors. */
 	for (entry = vm_map->header.next; entry != &vm_map->header; 
@@ -102,9 +111,7 @@ slsckpt_vmspace(struct proc *p, struct sbuf *sb, long mode)
 
 		error = slsckpt_vmobject(p, obj);
 		if (error != 0) 
-		    return error;
-
-		/* XXX Don't always checkpoint all objects. */
+		    return (error);
 	    }
 	}
 
@@ -112,10 +119,10 @@ slsckpt_vmspace(struct proc *p, struct sbuf *sb, long mode)
 		entry = entry->next) {
 	    error = slsckpt_vmentry(entry, sb);
 	    if (error != 0)
-		return error;
+		return (error);
 	}
 
-	return 0;
+	return (0);
 }
 
 /*
@@ -150,12 +157,12 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 		    info->start, info->end, 
 		    info->protection, info->max_protection, 0);
 	if (error != 0)
-	    return error;
+	    return (error);
 
 	/* Get the entry from the map. */
 	contained = vm_map_lookup_entry(map, info->start, &entry);
 	if (contained == FALSE)
-	    return EINVAL;
+	    return (EINVAL);
 
 	entry->eflags = info->eflags;
 	entry->inheritance = info->inheritance;
@@ -184,7 +191,7 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 	entry->cred = NULL;
 	vm_map_unlock(map);
 
-	return 0;
+	return (0);
 
 }
 
@@ -202,13 +209,13 @@ slsrest_vmentry_file(struct vm_map *map, struct slsvmentry *entry, struct slskv_
 	/* If we have an object, it has to have been restored. */
 	error = slskv_find(objtable, (uint64_t) entry->obj, (uintptr_t *) &object);
 	if (error != 0)
-	    return error;
+	    return (error);
 
 	vp = (struct vnode *) object->handle;
 	SLS_DBG("vp %p\n", vp);
 	error = sls_vn_to_path(vp, &sb);
 	if (error != 0)
-	    return EINVAL;
+	    return (EINVAL);
 
 	if (entry->protection == VM_PROT_NONE) {
 	    error = EPERM;
@@ -253,7 +260,7 @@ done:
 	if (sb != NULL)
 	    sbuf_delete(sb);
 
-	return error;
+	return (error);
 }
 
 
@@ -271,6 +278,7 @@ slsrest_vmentry(struct vm_map *map, struct slsvmentry *entry, struct slskv_table
 	/* Jump table for restoring the entries. */
 	switch (entry->type) {
 	case OBJT_DEFAULT:
+	case OBJT_SWAP:
 	    return slsrest_vmentry_anon(map, entry, objtable);
 
 	case OBJT_PHYS:
@@ -290,22 +298,22 @@ slsrest_vmentry(struct vm_map *map, struct slsvmentry *entry, struct slskv_table
 	    error = kern_openat(curthread, AT_FDCWD, "/dev/hpet0",
 		    UIO_SYSSPACE, O_RDWR, S_IRWXU);
 	    if (error != 0)
-		return error;
+		return (error);
 
 	    fd = curthread->td_retval[0];
 	    error = kern_mmap(curthread, entry->start, entry->end - entry->start, 
 		    entry->protection, MAP_SHARED, fd, entry->offset);
 
 	    kern_close(curthread, fd);
-	    return error;
+	    return (error);
 
 	default:
-	    return EINVAL;
+	    return (EINVAL);
 	}
 }
 
 int
-slsrest_vmspace(struct proc *p, struct slsvmspace *info)
+slsrest_vmspace(struct proc *p, struct slsvmspace *info, struct shmmap_state *shmstate)
 {
 	struct vmspace *vmspace;
 	struct vm_map *vm_map;
@@ -314,10 +322,7 @@ slsrest_vmspace(struct proc *p, struct slsvmspace *info)
 	vmspace = p->p_vmspace;
 	vm_map = &vmspace->vm_map;
 
-	/*
-	 * Blow away the old address space, as done in exec_new_vmspace
-	 */
-	/* XXX We have to look further into how to handle System V shmem */
+	/* Blow away the old address space, as done in exec_new_vmspace. */
 	/* XXX Only FreeBSD binaries for now*/
 	shmexit(vmspace);
 	pmap_remove_pages(vmspace_pmap(vmspace));
@@ -338,5 +343,8 @@ slsrest_vmspace(struct proc *p, struct slsvmspace *info)
 	vmspace->vm_taddr = info->vm_daddr;
 	vmspace->vm_maxsaddr = info->vm_maxsaddr; 
 
-	return 0;
+	if (shmstate != NULL)
+	    vmspace->vm_shm = shmstate;
+
+	return (0);
 }

@@ -46,12 +46,12 @@ sls_vn_to_path(struct vnode *vp, struct sbuf **sbp)
 	error = vn_fullpath(curthread, vp, &fullpath, &freepath);
 	vrele(vp);
 	if (error != 0)
-	    goto sls_vn_to_path_error; 
+	    goto error; 
 
 	len = strnlen(fullpath, PATH_MAX);
 	error = sbuf_bcpy(sb, fullpath, len);
 	if (error != 0)
-	    goto sls_vn_to_path_error;
+	    goto error;
 
 	sbuf_finish(sb);
 
@@ -60,7 +60,7 @@ sls_vn_to_path(struct vnode *vp, struct sbuf **sbp)
 
 	return 0;
 
-sls_vn_to_path_error:
+error:
 
 	sbuf_delete(sb);
 	free(freepath, M_TEMP);
@@ -68,37 +68,49 @@ sls_vn_to_path_error:
 	return error;
 }
 
+int
+sls_path_append(const char *data, size_t len, struct sbuf *sb)
+{
+	uint64_t magic = SLSSTRING_ID;
+	int error; 
+
+	error = sbuf_bcat(sb, (void *) &(magic), sizeof(magic));
+	if (error != 0)
+	    return error;
+
+	error = sbuf_bcat(sb, (void *) &len, sizeof(len));
+	if (error != 0)
+	    return error;
+
+	error = sbuf_bcat(sb, data, len);
+	if (error != 0) 
+	    return error;
+
+
+	return 0;
+}
+
 int 
 sls_vn_to_path_append(struct vnode *vp, struct sbuf *sb)
 {
-	int magic = SLSSTRING_ID;
 	struct sbuf *path;
+	int error = 0;
 	char *data;
 	size_t len;
-	int error = 0;
 
 	error = sls_vn_to_path(vp, &path);
 	if (error != 0)
 	    return error;
 
-	error = sbuf_bcat(sb, (void *) &(magic), sizeof(magic));
-	if (error != 0)
-	    goto sls_vn_to_path_append_done;
-
-	len = sbuf_len(path);
-	error = sbuf_bcat(sb, (void *) &len, sizeof(len));
-	if (error != 0)
-	    goto sls_vn_to_path_append_done;
-
 	data = sbuf_data(path);
-	error = sbuf_bcat(sb, data, len);
-	if (error != 0) 
-	    goto sls_vn_to_path_append_done;
+	len = sbuf_len(path);
 
-sls_vn_to_path_append_done:
+	error = sls_path_append(data, len, sb);
+	/* No matter whether it succeeded, the cleanup is the same. */
+
 	sbuf_delete(path);
 
-	return error;
+	return (error);
 }
 
 /*

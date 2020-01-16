@@ -30,6 +30,7 @@
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
+#include "imported_sls.h"
 #include "sls_data.h"
 #include "sls_ioctl.h"
 #include "sls_load.h"
@@ -211,6 +212,18 @@ slsload_vnode(struct sbuf **path, char **bufp, size_t *bufsizep)
 }
 
 static int
+slsload_fifo(struct sbuf **path, char **bufp, size_t *bufsizep)
+{
+	int error;
+
+	error = slsload_path(path, bufp, bufsizep);
+	if (error != 0)
+	    return (error);
+
+	return (0);
+}
+
+static int
 slsload_socket(struct slssock *slssock, char **bufp, size_t *bufsizep)
 {
 	int error;
@@ -218,6 +231,36 @@ slsload_socket(struct slssock *slssock, char **bufp, size_t *bufsizep)
 	error = sls_info(slssock, sizeof(*slssock), bufp, bufsizep);
 	if (error != 0)
 	    return (error);
+
+	return (0);
+}
+
+
+static int
+slsload_posixshm(struct slsposixshm *slsposixshm, char **bufp, size_t *bufsizep)
+{
+	struct sbuf *sb;
+	int error;
+
+	error = sls_info(slsposixshm, sizeof(*slsposixshm), bufp, bufsizep);
+	if (error != 0)
+	    return (error);
+
+	if (slsposixshm->magic != SLSPOSIXSHM_ID) {
+	    SLS_DBG("magic mismatch, %lx vs %x\n", slsposixshm->magic, SLSPOSIXSHM_ID);
+	    return (EINVAL);
+	}
+
+	/* Initialize the pointer to the sb, and check if we actually have a path. */
+	slsposixshm->sb = NULL;
+	if (slsposixshm->is_anon != 0)
+	    return (0);
+
+	error = slsload_path(&sb, bufp, bufsizep);
+	if (error != 0)
+	    return (error);
+
+	slsposixshm->sb = sb;
 
 	return (0);
 }
@@ -241,6 +284,10 @@ slsload_file(struct slsfile *slsfile, void **data, char **bufp, size_t *bufsizep
 	    error = slsload_vnode((struct sbuf **) data, bufp, bufsizep);
 	    break;
 
+	case DTYPE_FIFO:
+	    error = slsload_fifo((struct sbuf **) data, bufp, bufsizep);
+	    break;
+
 	case DTYPE_KQUEUE:
 	    /* 
 	     * The data for the kqueue is both 
@@ -262,6 +309,11 @@ slsload_file(struct slsfile *slsfile, void **data, char **bufp, size_t *bufsizep
 	case DTYPE_PTS:
 	    *data = malloc(sizeof(struct slspts), M_SLSMM, M_WAITOK);
 	    error = slsload_pts((struct slspts *) *data, bufp, bufsizep);
+	    break;
+
+	case DTYPE_SHM:
+	    *data = malloc(sizeof(struct slsposixshm), M_SLSMM, M_WAITOK);
+	    error = slsload_posixshm((struct slsposixshm *) *data, bufp, bufsizep);
 	    break;
 
 	default:
@@ -349,15 +401,49 @@ slsload_vmentry(struct slsvmentry *entry, char **bufp, size_t *bufsizep)
 }
 
 int 
-slsload_vmspace(struct slsvmspace *vm, char **bufp, size_t *bufsizep)
+slsload_vmspace(struct slsvmspace *vm, struct shmmap_state **shmstatep, char **bufp, size_t *bufsizep)
 {
+	struct shmmap_state *shmstate = NULL;
+	size_t shmsize;
 	int error;
+
+	*shmstatep = NULL;
 
 	error = sls_info(vm, sizeof(*vm), bufp, bufsizep);
 	if (error != 0)
 	    return (error);
 
 	if (vm->magic != SLSVMSPACE_ID) {
+	    SLS_DBG("magic mismatch\n");
+	    return (EINVAL);
+	}
+
+	if (vm->has_shm != 0) {
+	    shmsize = sizeof(*shmstate) * shminfo.shmseg;
+	    shmstate = malloc(shmsize, M_SHM, M_WAITOK);
+
+	    error = sls_info(shmstate, shmsize, bufp, bufsizep);
+	    if (error != 0) {
+		free(shmstate, M_SHM);
+		return  (error);
+	    }
+	}
+
+	*shmstatep = shmstate;
+
+	return (0);
+}
+
+int 
+slsload_sysvshm(struct slssysvshm *shm, char **bufp, size_t *bufsizep)
+{
+	int error;
+
+	error = sls_info(shm, sizeof(*shm), bufp, bufsizep);
+	if (error != 0)
+	    return (error);
+
+	if (shm->magic != SLSSYSVSHM_ID) {
 	    SLS_DBG("magic mismatch\n");
 	    return (EINVAL);
 	}
@@ -371,7 +457,7 @@ slsload_path(struct sbuf **sbp, char **bufp, size_t *bufsizep)
 	int error;
 	size_t sblen;
 	char *path = NULL;
-	int magic;
+	uint64_t magic;
 	struct sbuf *sb = NULL;
 
 	error = sls_info(&magic, sizeof(magic), bufp, bufsizep);

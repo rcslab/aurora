@@ -95,7 +95,6 @@ struct slos_sb {
 };
 
 extern struct slos slos;
-/* Inode flags */
 
 #endif /* _SLOS_H_ */
 

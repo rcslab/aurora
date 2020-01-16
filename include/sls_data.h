@@ -6,8 +6,10 @@
 #include <sys/pcpu.h>
 #include <sys/proc.h>
 #include <sys/sbuf.h>
+#include <sys/socket.h>
 #include <sys/tty.h>
 #include <sys/ttycom.h>
+#include <sys/un.h>
 
 #include <machine/param.h>
 #include <machine/pcb.h>
@@ -16,6 +18,9 @@
 #include <vm/pmap.h>
 #include <vm/vm.h>
 #include <vm/vm_map.h>
+
+#include <netinet/in.h>
+#include <netinet/in_pcb.h>
 
 #define SLSPROC_ID 0x736c7301
 struct slsproc {
@@ -42,6 +47,7 @@ struct slsthread {
 	sigset_t sigmask;
 	sigset_t oldsigmask;
 	uint64_t fs_base;
+	uint64_t tf_err;
 };
 
 /* State of the vmspace, but also of its vm_map */
@@ -58,6 +64,7 @@ struct slsvmspace {
 	caddr_t vm_daddr;
 	caddr_t vm_maxsaddr;
 	int nentries;
+	int has_shm;
 };
 
 #define SLSSESSION_ID 0x736c730b
@@ -169,6 +176,7 @@ struct slssock {
 	/* SLS Object options */
 	uint64_t    magic;
 	uint64_t    slsid;	/* Unique SLS ID */
+	uint64_t    state ;	/* Flags */
 
 	/* Socket-wide options */
 	int16_t	    family;
@@ -176,34 +184,18 @@ struct slssock {
 	int16_t	    proto;
 	uint32_t    options;
 
-	/* Fields saved in VPS that do not make much sense to restore right now. */
-	/*
-	uint32_t    qlimit;
-	uint32_t    qstate;
-	int16_t	    state;
-	int32_t	    qlen;
-	int16_t	    incqlen;
-	*/
+	/* UNIX or INET addresses */
+	union {
+	    struct sockaddr_un un;
+	    struct sockaddr_in in;
+	};
 
-	/* Internet protocol-related options */
-	uint8_t	    vflag;
-	uint8_t	    ip_p;
-	uint8_t	    have_ppcb;
-	int32_t	    flags;
-	int32_t	    flags2;
+	uint64_t    unpeer;	/* UNIX socket peer */
+	uint64_t    bound;	/* Is the socket bound? */	
 
-	struct {
-		uint8_t inc_flags;
-		uint8_t inc_len;
-		uint16_t inc_fibnum;
-
-		uint8_t ie_ufaddr[0x10];
-
-		uint8_t ie_uladdr[0x10];
-
-		uint16_t ie_fport;
-		uint16_t ie_lport;
-	} inp_inc;
+	/* XXX Maybe encapsulate INET state? */
+	struct in_conninfo in_conninfo;
+	uint64_t    backlog;
 };
 
 
@@ -219,6 +211,7 @@ struct slspts {
 	 */
 	uint64_t ismaster;
 	uint64_t peerid;
+	uint64_t flags;
 
 	int drainwait;
 	struct termios termios;
@@ -231,5 +224,30 @@ struct slspts {
 	struct termios termios_lock_out;
 	/* XXX Get any buffered data */
 };
+
+#define SLSSYSVSHM_ID  0x736c7232
+struct slssysvshm {
+	uint64_t magic;
+	uint64_t slsid;
+	uint64_t shm_segsz;
+	mode_t mode;
+	key_t key;
+	int segnum;
+};
+
+#define SLSPOSIXSHM_ID  0x736c7232
+struct slsposixshm {
+	uint64_t    magic;
+	uint64_t    slsid;
+	mode_t	    mode;
+	uint64_t    object;
+	uint64_t    is_anon;
+	/* XXX Restore only, hacky. Refactor. */
+	struct sbuf *sb;
+
+	/* XXX Rangelocks? */
+};
+
+
 
 #endif /* _SLS_DATA_H_ */

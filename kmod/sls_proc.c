@@ -46,6 +46,7 @@ slsckpt_thread(struct thread *td, struct sbuf *sb)
 	slsthread.fs_base = td->td_pcb->pcb_fsbase;
 	slsthread.magic = SLSTHREAD_ID;
 	slsthread.slsid = (uint64_t) td;
+	slsthread.tf_err = td->td_frame->tf_err;
 
 	error = sbuf_bcat(sb, (void *) &slsthread, sizeof(slsthread));
 	if (error != 0)
@@ -96,6 +97,14 @@ sls_thread_create(struct thread *td, void *thunk)
 
 	set_pcb_flags(td->td_pcb, PCB_FULL_IRET);
 	td->td_pcb->pcb_fsbase = slsthread->fs_base;
+
+	td->td_frame->tf_err = slsthread->tf_err;
+	
+	/* 
+	 * If we are not in a syscall, tf_err should be 0, and so 
+	 * the call below should be a no-op.
+	 */
+	cpu_set_syscall_retval(td, ERESTART);
 
 done:
 
@@ -365,10 +374,8 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 	    }
 
 	    /* Check if our parent has been restored, if it exists. */
-	    printf("Checking %lx %lx\n", slsproc->slsid, slsproc->pptr);
 	    if ((slsproc->slsid != slsproc->pptr) &&
 		(slskv_find(restdata->proctable, slsproc->pptr, (uintptr_t *) &pptr) != 0)) {
-		printf("Woops\n");
 		cv_wait(&restdata->proccv, &restdata->procmtx);
 		continue;
 	    }
@@ -433,7 +440,7 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 
 	    printf("PPTR switcheroo\n");
 	    sx_xlock(&proctree_lock);
-	    proc_reparent(p, pptr);
+	    proc_reparent(p, pptr, 0);
 	    sx_xunlock(&proctree_lock);
 	}
 

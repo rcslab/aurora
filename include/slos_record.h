@@ -6,6 +6,7 @@
 
 struct slos_node;
 
+/* Inode flags */
 #define SLOSREC_INVALID	    0x00000000	/* Record is invalid */
 #define SLOSREC_PROC	    0x00000001	/* Record holds process-local info */
 #define SLOSREC_SESS	    0x00000002	/* Record holds process-local info */
@@ -16,6 +17,8 @@ struct slos_node;
 #define SLOSREC_KQUEUE	    0x00000008	/* Record holds info for a kqueue */
 #define SLOSREC_SOCKET	    0x00000009	/* Record holds info for a socket */
 #define SLOSREC_VNODE	    0x0000000a	/* Record holds info for a vnode */
+#define SLOSREC_SYSVSHM	    0x0000000b	/* Record holds info for SYSV shared memory */
+#define SLOSREC_POSIXSHM    0x0000000c	/* Record holds info for POSIX shared memory */
 
 /* XXX Factor out */
 #define SLOSREC_FDESC	    0x000000a0	/* Record holds a file descriptor*/

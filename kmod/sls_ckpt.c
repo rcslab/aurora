@@ -44,6 +44,7 @@
 #include "sls_ioctl.h"
 #include "sls_mm.h"
 #include "sls_proc.h"
+#include "sls_sysv.h"
 #include "sls_table.h"
 #include "sls_vmspace.h"
 
@@ -61,7 +62,8 @@ SDT_PROBE_DEFINE(sls, , , cont);
 
 static void slsckpt_stop(slsset *procset);
 static void sls_checkpoint(slsset *procset, struct slspart *slsp);
-static int slsckpt_metadata(struct proc *p, struct slspart *slsp, slsset *procset);
+static int slsckpt_metadata(struct proc *p, struct slspart *slsp, 
+	slsset *procset, struct slskv_table *objtable);
 
 /*
  * Stop the processes, and wait until they are truly not running. 
@@ -121,7 +123,7 @@ slsckpt_cont(slsset *procset)
  * Get all the metadata of a process.
  */
 static int
-slsckpt_metadata(struct proc *p, struct slspart *slsp, slsset *procset)
+slsckpt_metadata(struct proc *p, struct slspart *slsp, slsset *procset, struct slskv_table *objtable)
 {
 	struct sbuf *sb;
 	int error = 0;
@@ -134,6 +136,7 @@ slsckpt_metadata(struct proc *p, struct slspart *slsp, slsset *procset)
 	    goto out;
 	}
 
+	printf("Getting process %d\n", p->p_pid);
 	sb = sbuf_new_auto();
 
 	error = slsckpt_proc(p, sb, procset);
@@ -153,7 +156,7 @@ slsckpt_metadata(struct proc *p, struct slspart *slsp, slsset *procset)
 	 * because the filedsec is not in its 
 	 * own record.
 	 */
-	error = slsckpt_filedesc(p, sb);
+	error = slsckpt_filedesc(p, objtable, sb);
 	if (error != 0) {
 	    SLS_DBG("Error: slsckpt_filedesc failed with error code %d\n", error);
 	    goto out;
@@ -180,6 +183,37 @@ out:
 	}
 
 	return error;
+}
+
+/*
+ * In certain cases we cannot shadow objects, but instead have to copy
+ * them wholesale. This is because we cannot mend all references to the
+ * the objects, and the processes in the SLS can therefore access the 
+ * parent object while a dump is in progress. In that case, we clone the
+ * object and all of its data.
+ */
+static int
+slsckpt_objcopy(vm_object_t *dstp, vm_object_t src)
+{
+       vm_page_t srcpage, dstpage;
+       vm_object_t dst;
+       vm_page_t page;
+
+       dst = vm_object_allocate(src->type, src->size);
+       if (dst == NULL)
+           return (ENOMEM);
+
+       /* Loop around all pages of the shared object, copying them over. */
+       srcpage = TAILQ_FIRST(&src->memq);
+       for (int i = 0; i < src->resident_page_count; i++) {
+           dstpage = vm_page_grab(dst, srcpage->pindex, VM_ALLOC_WAITOK);
+           pmap_copy_page(srcpage, dstpage);
+           page = TAILQ_NEXT(srcpage, listq);
+       }
+
+       /* Export the new object to the caller. */
+       *dstp = dst;
+       return (0);
 }
 
 
@@ -229,9 +263,10 @@ slsckpt_shadowone(struct proc *p, struct slskv_table *objtable, struct slskv_tab
 		 * entry is a guard entry, or it doesn't have any data yet.
 		 * In any case, we don't need to do anything.
 		 */
-		if (obj == NULL || obj->type != OBJT_DEFAULT)
+		if (obj == NULL || ((obj->type != OBJT_DEFAULT) && 
+				    (obj->type != OBJT_SWAP)))
 		    continue;
-		
+
 		/* 
 		 * Check if we have already shadowed the object. If we did, 
 		 * have the process' map point to the shadow instead of the
@@ -304,7 +339,8 @@ slsckpt_shadowone(struct proc *p, struct slskv_table *objtable, struct slskv_tab
 		    continue;
 
 		obj = obj->backing_object;
-		while (obj != NULL && obj->type == OBJT_DEFAULT) {
+		while (obj != NULL && ((obj->type == OBJT_DEFAULT) || 
+					(obj->type == OBJT_SWAP))) {
 		    /* 
 		     * Take a reference to the object. We do this because
 		     * it's possible to move pages from an object to one of its 
@@ -367,6 +403,14 @@ slsckpt_collapse(struct slskv_table *objtable)
 	 * object is left with one reference and one
 	 * shadow, so it can be collapsed with it.
 	 */
+	/* 
+	 * XXX This probably does not work right now. Suppose we have an object directly
+	 * shared among processes; the at shadow time we got 2 references, not one.
+	 * We need to be able to reason about how many references we have. Moreover,
+	 * the shadow is still referred to by VM entries of the object. In that case,
+	 * we need to actually fix up the references while collapsing.
+	 */
+	/* XXX Don't forget the SYSV shared memory table! */
 	iter = slskv_iterstart(objtable);
 	while (slskv_itercont(&iter, (uint64_t *) &obj, (uintptr_t *) &shadow) != SLSKV_ITERDONE)
 	    vm_object_deallocate(obj);
@@ -391,17 +435,6 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	SDT_PROBE0(sls, , ,stopped);
 	SLS_DBG("Process stopped\n");
 
-	/* Get the data from all processes in the partition. */
-	iter = slskv_iterstart(procset);
-	while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
-	    error = slsckpt_metadata(p, slsp, procset);
-	    if(error != 0) {
-		SLS_DBG("Checkpointing failed\n");
-		slsckpt_cont(procset);
-		return;
-	    }
-	}
-
 	/* 
 	 * Check if there are objects from a previous iteration. 
 	 * If there are, we need to discern between them and those
@@ -423,6 +456,23 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	else 
 	    newtable = table;
 
+	/* Shadow SYSV shared memory. */
+	error = slsckpt_sysvshm(table);
+	if (error != 0) {
+	    slsckpt_cont(procset);
+	    goto out;
+	}
+
+	/* Get the data from all processes in the partition. */
+	iter = slskv_iterstart(procset);
+	while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
+	    error = slsckpt_metadata(p, slsp, procset, table);
+	    if(error != 0) {
+		SLS_DBG("Checkpointing failed\n");
+		slsckpt_cont(procset);
+		return;
+	    }
+	}
 
 	/* Shadow the objects to be dumped. */
 	error = slsckpt_shadow(procset, slsp->slsp_objects, newtable);

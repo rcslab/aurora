@@ -136,16 +136,16 @@ sls_vmspace_ckpt(struct proc *p, struct sbuf *sb, long mode)
 	vm_map_t vm_map;
 	struct vmspace *vmspace;
 	struct vm_map_entry *entry;
-	struct vmspace_info vmspace_info;
-	struct memckpt_info memory_info;
+	struct slsvmspace slsvmspace;
 	vm_object_t obj;
-	int error;
+	int error, i;
 
 	vmspace = p->p_vmspace;
 	vm_map = &vmspace->vm_map;
 
-	vmspace_info = (struct vmspace_info) {
+	slsvmspace = (struct vmspace_info) {
 	    .magic = SLS_VMSPACE_INFO_MAGIC,
+	    .slsid = (uint64_t) vmspace,
 	    .vm_swrss = vmspace->vm_swrss,
 	    .vm_tsize = vmspace->vm_tsize,
 	    .vm_dsize = vmspace->vm_dsize,
@@ -156,13 +156,7 @@ sls_vmspace_ckpt(struct proc *p, struct sbuf *sb, long mode)
 	    .nentries = vm_map->nentries,
 	};
 
-	memory_info = (struct memckpt_info) {
-	    .magic = SLS_MEMCKPT_INFO_MAGIC,
-	    .slsid = (uint64_t) vmspace,
-	    .vmspace = vmspace_info,
-	};
-
-	error = sbuf_bcat(sb, (void *) &memory_info, sizeof(memory_info));
+	error = sbuf_bcat(sb, (void *) &slsvmspace, sizeof(slsvmspace));
 	if (error != 0)
 	    return ENOMEM;
 
@@ -170,6 +164,12 @@ sls_vmspace_ckpt(struct proc *p, struct sbuf *sb, long mode)
 	/* Checkpoint all objects, including their ancestors. */
 	for (entry = vm_map->header.next; entry != &vm_map->header; 
 		entry = entry->next) {
+
+	    /* SYSV shared memory is a special case. */
+	    for (i = 0; i < shminfo.shmseg; i++) {
+		if (entry->start == p->p_vmspace->vm_shm[i].va)
+		    continue;
+	    }
 
 	    for (obj = entry->object.vm_object; obj != NULL; 
 		    obj = obj->backing_object) {
@@ -182,6 +182,12 @@ sls_vmspace_ckpt(struct proc *p, struct sbuf *sb, long mode)
 
 	for (entry = vm_map->header.next; entry != &vm_map->header;
 		entry = entry->next) {
+
+	    /* SYSV shared memory is a special case. */
+	    for (i = 0; i < shminfo.shmseg; i++) {
+		if (entry->start == p->p_vmspace->vm_shm[i].va)
+		    continue;
+
 	    error = sls_vmentry_ckpt(entry, sb);
 	    if (error != 0)
 		return error;
@@ -428,7 +434,6 @@ sls_vmentry_rest_file(struct vm_map *map, struct vm_map_entry_info *entry, struc
 	    goto sls_vmentry_rest_file_done;
 	}
 
-
 	rprot = entry->protection & (VM_PROT_READ | VM_PROT_WRITE);
 	if (rprot == VM_PROT_WRITE)
 	    flags = O_WRONLY;
@@ -519,7 +524,7 @@ sls_vmentry_rest(struct vm_map *map, struct vm_map_entry_info *entry, struct sls
 }
 
 int
-sls_vmspace_rest(struct proc *p, struct memckpt_info memckpt)
+sls_vmspace_rest(struct proc *p, struct slsvmspace *slsvmspace)
 {
 	struct vmspace *vmspace;
 	struct vm_map *vm_map;
@@ -544,13 +549,13 @@ sls_vmspace_rest(struct proc *p, struct memckpt_info memckpt)
 	vmspace = p->p_vmspace;
 
 	/* Copy vmspace state to the existing vmspace */
-	vmspace->vm_swrss = memckpt.vmspace.vm_swrss;
-	vmspace->vm_tsize = memckpt.vmspace.vm_tsize;
-	vmspace->vm_dsize = memckpt.vmspace.vm_dsize;
-	vmspace->vm_ssize = memckpt.vmspace.vm_ssize;
-	vmspace->vm_taddr = memckpt.vmspace.vm_taddr;
-	vmspace->vm_taddr = memckpt.vmspace.vm_daddr;
-	vmspace->vm_maxsaddr = memckpt.vmspace.vm_maxsaddr; 
+	vmspace->vm_swrss = slsvmspace->vm_swrss;
+	vmspace->vm_tsize = slsvmspace->vm_tsize;
+	vmspace->vm_dsize = slsvmspace->vm_dsize;
+	vmspace->vm_ssize = slsvmspace->vm_ssize;
+	vmspace->vm_taddr = slsvmspace->vm_taddr;
+	vmspace->vm_taddr = slsvmspace->vm_daddr;
+	vmspace->vm_maxsaddr = slsvmspace->vm_maxsaddr; 
 
 	return 0;
 }
