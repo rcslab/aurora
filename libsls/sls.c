@@ -3,6 +3,7 @@
 #include <sys/ioctl.h>
 #include <sys/sbuf.h>
 
+#include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
 #include <stdbool.h>
@@ -119,26 +120,36 @@ sls_partdel(uint64_t oid)
 int
 sls_suspend(uint64_t oid)
 {
+	errno = ENOSYS;
+	return -1;
 }
 
 int
 sls_resume(uint64_t oid)
 {
+	errno = ENOSYS;
+	return -1;
 }
 
 int
 sls_getattr(uint64_t oid, struct sls_attr *attr)
 {
+	errno = ENOSYS;
+	return -1;
 }
 
 int
 sls_setattr(uint64_t oid, const struct sls_attr *attr)
 {
+	errno = ENOSYS;
+	return -1;
 }
 
 uint64_t
 sls_getckptid(uint64_t oid)
 {
+	errno = ENOSYS;
+	return -1;
 }
 
 
@@ -156,11 +167,15 @@ sls_persistent()
 int
 sls_ffork(int fd)
 {
-
+	errno = ENOSYS;
+	return -1;
 }
+
 int
 sls_stat(int streamid, struct sls_stat *st)
 {
+	errno = ENOSYS;
+	return -1;
 }
 
 int
@@ -174,4 +189,3 @@ sls_barrier(int streamid)
 
     return 0;
 }
-
