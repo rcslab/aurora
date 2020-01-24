@@ -61,252 +61,6 @@
 
 #include "imported_sls.h"
 
-#define DEVFS_ROOT "/dev/"
-/* XXX Spin out individual operations to a new file. */
-
-/* -------------- VNODE OPERATIONS -------------- */
-
-/* Get the name of a vnode. This is the only information we need about it. */
-static int
-slsckpt_path(struct proc *p, struct vnode *vp, struct sbuf *sb)
-{
-	int error;
-
-	PROC_UNLOCK(p);
-	error = sls_vn_to_path_append(vp, sb);
-	PROC_LOCK(p);
-
-	/* 
-	 * XXX Make sure the unlinked file case is handled. 
-	 */
-	if (error == ENOENT)
-	    return (0);
-
-	return (0);
-}
-
-static int
-slsrest_path(struct sbuf *path, struct slsfile *info, int *fdp, int ispipe)
-{
-	char *filepath;
-	int error;
-	int fd;
-
-	filepath = sbuf_data(path);
-	printf("File path %s\n", filepath);
-
-	/* XXX Permissions/flags. Also, is O_CREAT reasonable? */
-	error = kern_openat(curthread, AT_FDCWD, filepath, 
-		UIO_SYSSPACE, O_RDWR, S_IRWXU);	
-	if (error != 0)
-	    return (error);
-
-	fd = curthread->td_retval[0];
-
-	/* Vnodes are seekable. Fix up the offset here. */
-	if (ispipe == 0) {
-	    error = kern_lseek(curthread, fd, info->offset, SEEK_SET);
-	    if (error != 0)
-		return (error);
-	}
-
-	/* Export the fd to the caller. */
-	*fdp = fd;
-
-	return (0);
-}
-
-/* -------------- END VNODE OPERATIONS -------------- */
-
-static int
-slsckpt_vnode(struct proc *p, struct vnode *vp, struct sbuf *sb)
-{
-	return slsckpt_path(p, vp, sb);
-}
-
-static int
-slsrest_vnode(struct sbuf *path, struct slsfile *info, int *fdp)
-{
-	return slsrest_path(path, info, fdp, 0);
-}
-
-static int
-slsckpt_fifo(struct proc *p, struct vnode *vp, struct sbuf *sb)
-{
-	return slsckpt_path(p, vp, sb);
-}
-
-static int
-slsrest_fifo(struct sbuf *path, struct slsfile *info, int *fdp)
-{
-	return slsrest_path(path, info, fdp, 1);
-}
-
-/* -------------- START PTS OPERATIONS -------------- */
-
-static int
-slsckpt_pts_mst(struct proc *p, struct tty *pts, struct sbuf *sb)
-{
-	struct slspts slspts;
-	int error;
-
-	/* Get the data from the PTY. */
-	slspts.magic = SLSPTS_ID;
-	slspts.slsid = (uint64_t) pts;
-	/* This is the master side of the pts. */
-	slspts.ismaster = 1;
-	/* We use the cdev as the peer's ID. */
-	slspts.peerid = (uint64_t) pts->t_dev;
-	slspts.drainwait = pts->t_drainwait;
-	slspts.termios = pts->t_termios;
-	slspts.winsize = pts->t_winsize;
-	slspts.writepos = pts->t_writepos;
-	slspts.termios_init_in = pts->t_termios_init_in;
-	slspts.termios_init_out = pts->t_termios_init_out;
-	slspts.termios_lock_in = pts->t_termios_lock_in;
-	slspts.termios_lock_out = pts->t_termios_lock_out;
-	slspts.flags = pts->t_flags;
-
-	/* Add it to the record. */
-	error = sbuf_bcat(sb, (void *) &slspts, sizeof(slspts));
-	if (error != 0)
-	    return (error);
-
-	return (0);
-}
-
-static int
-slsckpt_pts_slv(struct proc *p, struct vnode *vp, struct sbuf *sb)
-{
-	struct slspts slspts;
-	int error;
-
-	/* Get the data from the PTY. */
-	slspts.magic = SLSPTS_ID;
-	slspts.slsid = (uint64_t) vp->v_rdev;
-	slspts.ismaster = 0;
-	/* Our peer has the tty's pointer as its ID. */
-	slspts.peerid = (uint64_t) vp->v_rdev->si_drv1;
-
-	/* We don't need anything else, it's in the master's record. */
-
-	/* Add it to the record. */
-	error = sbuf_bcat(sb, (void *) &slspts, sizeof(slspts));
-	if (error != 0)
-	    return (error);
-
-	return (0);
-}
-
-/*
- * Modified version of sys_posix_openpt(). Restores 
- * both the master and the slave side of the pts. 
- */
-static int
-slsrest_pts(struct slskv_table *filetable,  struct slspts *slspts, int *fdp)
-{
-	struct file *masterfp, *slavefp;
-	int masterfd, slavefd;
-	struct tty *tty;
-	char *path;
-	int error;
-
-	/* 
-	 * We don't really want the fd, but all the other file
-	 * type restore routines create one, so we do too and
-	 * get it fixed up back in the common path.
-	 */
-	error = falloc(curthread, &masterfp, &masterfd, O_RDWR);
-	if (error != 0)
-	    return (error);
-
-	error = pts_alloc(O_RDWR|O_NOCTTY, curthread, masterfp);
-	if (error != 0)
-	    goto error;
-    
-	tty = masterfp->f_data;
-	/*
-	tty->t_drainwait = slspts->drainwait;
-	tty->t_termios = slspts->termios;
-	tty->t_winsize = slspts->winsize;
-	tty->t_column = slspts->column;
-	tty->t_writepos = slspts->writepos;
-	tty->t_termios_init_in = slspts->termios_init_in;
-	tty->t_termios_init_out = slspts->termios_init_out;
-	tty->t_termios_lock_in = slspts->termios_lock_in;
-	tty->t_termios_lock_out = slspts->termios_lock_out;
-	*/
-
-	KASSERT(((slspts->flags & TF_BUSY) != 0), ("PTS checkpointed while busy"));
-
-	/* Get the name of the slave side. */
-	path = malloc(PATH_MAX, M_SLSMM, M_WAITOK);
-	strlcpy(path, DEVFS_ROOT, sizeof(DEVFS_ROOT));
-	strlcat(path, devtoname(tty->t_dev), PATH_MAX);
-	
-	error = kern_openat(curthread, AT_FDCWD, path,
-		UIO_SYSSPACE, O_RDWR, S_IRWXU);
-	free(path, M_SLSMM);
-	if (error != 0)
-	    goto error;
-
-	/* As in the case of pipes, we add the peer to the table ourselves. */
-	slavefd = curthread->td_retval[0];
-	slavefp = curthread->td_proc->p_fd->fd_files->fdt_ofiles[slavefd].fde_file;
-
-	/* 
-	 * We always save the peer in this function, regardless of whether it's master. 
-	 * That's because the caller always looks at the slsid field, and combines it
-	 * with the fd that we return to it.
-	 */
-	if (slspts->ismaster != 0) {
-	    error = slskv_add(filetable, slspts->peerid, (uintptr_t) slavefp);
-	    if (error != 0) {
-		kern_close(curthread, slavefd);
-		goto error;
-	    }
-
-	    *fdp = masterfd;
-	    /* Get a reference on behalf of the hashtable. */
-	    if (!fhold(slavefp)) {
-		error = EBADF;
-		goto error;
-	    }
-	    /* Remove it from this process and this fd. */
-	    kern_close(curthread, slavefd);
-
-	} else {
-	    error = slskv_add(filetable, slspts->peerid, (uintptr_t) masterfp);
-	    if (error != 0) {
-		kern_close(curthread, slavefd);
-		return (error);
-	    }
-
-	    *fdp = slavefd;
-	    /* Get a reference on behalf of the hashtable. */
-	    if (!fhold(masterfp)) {
-		fdclose(curthread, masterfp, masterfd);
-		return (EBADF);
-	    }
-	    /* Remove it from this process and this fd. */
-	    kern_close(curthread, masterfd);
-
-	}
-
-	/* We got an extra reference, release it as in posix_openpt(). */
-	fdrop(masterfp, curthread);
-
-	return (0);
-
-error:
-
-	fdclose(curthread, masterfp, masterfd);
-	fdrop(masterfp, curthread);
-
-	return (error);
-}
-/* -------------- END PTS OPERATIONS -------------- */
-
 static int
 slsckpt_getvnode(struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
 {
@@ -483,40 +237,6 @@ slsckpt_getpts_slv(struct proc *p, struct file *fp, struct vnode *vp,
 	error = slsckpt_pts_slv(p, vp, sb);
 	if (error != 0)
 	    return (error);
-
-	return (0);
-}
-
-static int
-slsckpt_posixshm(struct shmfd *shmfd, struct sbuf *sb)
-{
-	struct slsposixshm slsposixshm;
-	uint64_t len;
-	int error;
-
-	slsposixshm.slsid = (uint64_t) shmfd;
-	slsposixshm.magic = SLSPOSIXSHM_ID;
-	slsposixshm.mode = shmfd->shm_mode;
-	slsposixshm.object = (uint64_t) shmfd->shm_object;
-	slsposixshm.is_anon = (shmfd->shm_path == NULL) ? 1 : 0;
-
-	/* 
-	 * While the shmfd is unique for the shared memory, and so
-	 * might be pointed to by multiple open files, the size of 
-	 * the metadata is small enough that we can checkpoint 
-	 * multiple times, and restore only once. 
-	 */
-	error = sbuf_bcat(sb, &slsposixshm, sizeof(slsposixshm));
-	if (error != 0) 
-	    return (error);
-
-	/* Write down the path, if it exists. */
-	if (shmfd->shm_path != NULL) {
-	    len = strnlen(shmfd->shm_path, PATH_MAX);
-	    error = sls_path_append(shmfd->shm_path, len, sb);
-	    if (error != 0)
-		return (error);
-	}
 
 	return (0);
 }
@@ -704,6 +424,7 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slskv_tabl
 	    /* Lookup whether we have already shadowed the object. */
 	    obj = ((struct shmfd *) fp->f_data)->shm_object;
 	    error = slskv_find(objtable, (uint64_t) obj, (uintptr_t *) &shadow);
+
 	    /* XXX Refactor into the main shadowing code. */
 	    /* 
 	     * If we already have a shadow, have the shared memory code point to it
@@ -757,6 +478,8 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slskv_tabl
 	    panic("invalid file type %d", fp->f_type);
 	}
 
+	sbuf_finish(sb);
+
 	/* Add the backing entities to the global tables. */
 	error = slskv_add(slsm.slsm_rectable, *slsid, (uintptr_t) sb);
 	if (error != 0)
@@ -780,67 +503,19 @@ error:
 
 }
 
-static int
-slsrest_posixshm(struct slsposixshm *info, struct slskv_table *objtable, int *fdp)
-{
-	vm_object_t oldobj, obj;
-	struct shmfd *shmfd;
-	char *path;
-	int error;
-	int fd;
-
-	printf("rest in\n");
-	/* First and foremost, go fetch the object backing the shared memory. */
-	error = slskv_find(objtable, info->object, (uintptr_t *) &obj);
-	if (error != 0)
-	    return (error);
-
-	path = (info->sb != NULL) ? sbuf_data(info->sb) : SHM_ANON;
-
-	/* First try to create the shared memory mapping. */
-	error = kern_shm_open(curthread, path, UIO_SYSSPACE, 
-		O_RDWR | O_CREAT | O_EXCL, info->mode, NULL);
-	if (error != 0) {
-	    /* Maybe it's already created then? */
-	    error = kern_shm_open(curthread, path, UIO_SYSSPACE,
-		    O_RDWR, info->mode, NULL);
-	    if (error != 0)
-		return (error);
-
-	    /* It was - return the fd and let the main code take care of the rest. */
-	    fd = curthread->td_retval[0];
-	    return (0);
-	}
-
-	/* Otherwise we just created it. */
-	fd = curthread->td_retval[0];
-
-	/* Change the shared memory segment to point to the restored data. */
-	shmfd = (struct shmfd *) curproc->p_fd->fd_files->fdt_ofiles[fd].fde_file->f_data;
-
-	vm_object_reference(obj);
-
-	oldobj = shmfd->shm_object;
-	shmfd->shm_object = obj;
-
-	vm_object_deallocate(oldobj);
-
-	*fdp = fd;
-	printf("rest out\n");
-
-	return (0);
-}
-
 int 
 slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdata)
 {
+	struct slspipe *slspipe;
+	struct pipe *pipepeer;
 	struct slspts *pts;
+	struct kqueue *kq;
+	struct vnode *vp;
 	struct file *fp;
 	uintptr_t peer;
 	uint64_t slsid;
 	void *kqdata;
 	int error;
-	void *kq;
 	int fd;
 
 	slsid = info->slsid;
@@ -850,6 +525,11 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 	    error = slsrest_vnode((struct sbuf *) slsbacker, info, &fd);
 	    if (error != 0)
 		return (error);
+
+	    fp = FDTOFP(curproc, fd);
+	    vp = fp->f_vnode;
+	    vref(vp);
+
 	    break;
 
 	case DTYPE_FIFO:
@@ -871,7 +551,8 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 	     * fully restored file descriptor table. We therefore keep
 	     * the set of kevents for the kqueue in a table until we need it.
 	     */
-	    kq = curproc->p_fd->fd_files->fdt_ofiles[fd].fde_file->f_data;
+	    fp = FDTOFP(curproc, fd);
+	    kq = fp->f_data;
 	    error = slskv_add(restdata->kevtable, (uint64_t) kq, (uintptr_t) slsbacker);
 	    if (error != 0)
 		return (error);
@@ -888,12 +569,24 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 	     * Because the rest of the filetable's data is indexed
 	     * by the ID held in the slsfile structure, we do an
 	     * extra check using the ID of slspipe. If we find it,
-	     * we have already restored the peer, and so we don't
-	     * need to do anything.
+	     * we have already restored the peer, and so we only need
+	     * to restore the data for the backer.
 	     */
-	    slsid = ((struct slspipe *) slsbacker)->slsid;
-	    if (slskv_find(restdata->filetable, slsid, &peer) == 0)
+	    slspipe = (struct slspipe *) slsbacker;
+	    slsid = slspipe->slsid;
+	    if (slskv_find(restdata->filetable, slsid, (uintptr_t *) &pipepeer) == 0) {
+		/* Restore the buffer's state. */
+		pipepeer->pipe_buffer.cnt = slspipe->pipebuf.cnt;
+		pipepeer->pipe_buffer.in = slspipe->pipebuf.in;
+		pipepeer->pipe_buffer.out = slspipe->pipebuf.out;
+		/* Check if the data fits in the newly created pipe. */
+		if (pipepeer->pipe_buffer.size < slspipe->pipebuf.cnt)
+		    return (EINVAL);
+
+		memcpy(pipepeer->pipe_buffer.buffer, slspipe->data, slspipe->pipebuf.cnt);
+
 		return (0);
+	    }
 
 	    error = slsrest_pipe(restdata->filetable, (struct slspipe *) slsbacker, &fd);
 	    if (error != 0)
@@ -902,15 +595,17 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 	    break;
 
 	case DTYPE_SOCKET:
+	    printf("Restoring socket?\n");
 	    /* Same as with pipes, check if we have already restored it. */
 	    slsid = ((struct slssock *) slsbacker)->slsid;
 	    if (slskv_find(restdata->filetable, slsid, &peer) == 0)
 		return (0);
 
-	    error = slsrest_socket(restdata->filetable, slsbacker, info, &fd);
+	    error = slsrest_socket(restdata->filetable, restdata->mbuftable, slsbacker, info, &fd);
 	    if (error != 0)
 		return (error);
 
+	    printf("Restored socket.\n");
 	    break;
 
 	case DTYPE_PTS:
@@ -919,7 +614,7 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 	     * Therefore, check whether we need to proceed.
 	     */
 	    slsid = ((struct slspts *) slsbacker)->slsid;
-	    if (slskv_find(restdata->filetable, slsid, &peer) == 0)
+	    if (slskv_find(restdata->filetable, slsid, &peer) == 0) 
 		return (0);
 	    pts = (struct slspts *) slsbacker;
 
@@ -941,8 +636,9 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 	}
 
 	/* Get the open file from the table and add it to the hashtable. */
-	fp = curthread->td_proc->p_fd->fd_files->fdt_ofiles[fd].fde_file;
+	fp = FDTOFP(curproc, fd);
 	fp->f_flag = info->flag;
+	fp->f_offset= info->offset;
 
 	error = slskv_add(restdata->filetable, info->slsid, (uintptr_t) fp);
 	if (error != 0) {
@@ -966,6 +662,80 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 	return (0);
 }
 
+static int
+slsckpt_file_supported(struct file *fp)
+{
+	struct socket *so;
+
+	switch (fp->f_type) {
+	case DTYPE_VNODE:
+	    /* 
+	     * An exception to the "only handle regular files" rule.
+	     * Used to handle slave PTYs, as mentioned in slsckpt_file(). 
+	     */
+	    if ((fp->f_vnode->v_type == VCHR) && 
+		((fp->f_vnode->v_rdev->si_devsw->d_flags & D_TTY) != 0))
+		return (1);
+
+	    /* 
+	     * XXX Make sure /dev/{zero,null,random} are ok here
+	     * unify the code path with that of the hpet0. 
+	     */
+	    if (fp->f_vnode->v_type == VCHR)
+		return (1);
+
+	    /* Handle only regular vnodes for now. */
+	    if (fp->f_vnode->v_type != VREG)
+		return (0);
+
+	    return (1);
+
+	case DTYPE_SOCKET:
+	    so = (struct socket *) fp->f_data;
+
+	    /* IPv4 and UNIX sockets are allowed. */
+	    if ((so->so_proto->pr_domain->dom_family == AF_INET) || 
+		(so->so_proto->pr_domain->dom_family == AF_UNIX))
+		return (1);
+
+	    /* Anything else isn't. */
+	    return (0);
+
+	    /* 
+	     * XXX Protocols we might need to support in the future:
+	     * AF_INET6, AF_NETGRAPH. If we put networking-focused
+	     * applications in the SLS, also AF_ARP, AF_LINK maybe?
+	     */
+
+	case DTYPE_DEV:
+	    /* Devices are accessed as VFS nodes. */
+	    return (0);
+
+	    /* 
+	     * Devices aren't exposed at this level, instead being
+	     * backed by special vnodes in the VFS. That means that
+	     * any open devices like /dev/null and /dev/zero will
+	     * be of DTYPE_VNODE, and will be properly checkpointed/
+	     * restored at that level (assuming they are stateless).
+	     * Looking at the code, it also seems like this device 
+	     * type is only used by the Linux compat layer.
+	     */
+
+	case DTYPE_FIFO:
+	case DTYPE_KQUEUE:
+	case DTYPE_PIPE:
+	case DTYPE_SHM:
+	case DTYPE_PTS:
+	    /* These types are always ok. */
+	    return (1);
+
+	default:
+	    /* Otherwise we ignore the file. */
+	    return (0);
+
+	}
+}
+
 int
 slsckpt_filedesc(struct proc *p, struct slskv_table *objtable, struct sbuf *sb)
 {
@@ -973,19 +743,22 @@ slsckpt_filedesc(struct proc *p, struct slskv_table *objtable, struct sbuf *sb)
 	struct slskv_table *fdtable;
 	struct filedesc *filedesc;
 	uint64_t slsid;
-	struct socket *so;
 	struct file *fp;
 	int error = 0;
 	int fd;
 
+	/* 
+	 * The table of file descriptors to be created. We use this instead
+	 * of an array for the file descriptor table.
+	 */
 	error = slskv_create(&fdtable, SLSKV_NOREPLACE);
 	if (error != 0)
 	    return (error);
 
 	filedesc = p->p_fd;
 
-	vhold(filedesc->fd_cdir);
-	vhold(filedesc->fd_rdir);
+	vhold(p->p_fd->fd_cdir);
+	vhold(p->p_fd->fd_rdir);
 
 	slsfiledesc.fd_cmask = filedesc->fd_cmask;
 	slsfiledesc.magic = SLSFILEDESC_ID;
@@ -996,114 +769,30 @@ slsckpt_filedesc(struct proc *p, struct slskv_table *objtable, struct sbuf *sb)
 	if (error != 0)
 	    goto done;
 
-	PROC_UNLOCK(p);
+	/* Get the current and root directories. XXX Get the jail directory if it exists. */
 	error = sls_vn_to_path_append(filedesc->fd_cdir, sb);
-	PROC_LOCK(p);
 	if (error) {
 	    SLS_DBG("Error: cdir sls_vn_to_path failed with code %d\n", error);
 	    goto done;
 	}
 
-	PROC_UNLOCK(p);
 	error = sls_vn_to_path_append(filedesc->fd_rdir, sb);
-	PROC_LOCK(p);
 	if (error) {
 	    SLS_DBG("Error: rdir sls_vn_to_path failed with code %d\n", error);
 	    goto done;
 	}
 
+	/* Scan the entries of the table for active file descriptors. */
 	for (fd = 0; fd <= filedesc->fd_lastfile; fd++) {
 	    if (!fdisused(filedesc, fd))
 		continue;
 
-	    fp = filedesc->fd_files->fdt_ofiles[fd].fde_file;
+	    KASSERT((filedesc == p->p_fd), ("wrong file descriptor table"));
+	    fp = FDTOFP(p, fd);
 
-	    /* 
-	     * XXX Right now we checkpoint a subset of all file types. 
-	     * Depending on what type the file is, put in some extra
-	     * checks to see if we should actually checkpoint it.
-	     */
-	    switch (fp->f_type) {
-	    case DTYPE_VNODE:
-		/* 
-		 * An exception to the "only handle regular files" rule.
-		 * Used to handle slave PTYs, as mentioned in slsckpt_file(). 
-		 */
-		if ((fp->f_vnode->v_type == VCHR) && 
-		    ((fp->f_vnode->v_rdev->si_devsw->d_flags & D_TTY) != 0))
-		    break;
-
-		/* 
-		 * XXX Make sure /dev/{zero,null,random} are ok here
-		 * unify the code path with that of the hpet0. 
-		 */
-		if (fp->f_vnode->v_type == VCHR)
-		    break;
-
-		/* Handle only regular vnodes for now. */
-		if (fp->f_vnode->v_type != VREG)
-		    continue;
-
-		break;
-
-	    case DTYPE_FIFO:
-		/* 
-		 * Fifos are allowed. They are virtually indistinguishable 
-		 * form vnodes, since they are fully described by their name.
-		 */
-		break;
-
-	    case DTYPE_KQUEUE:
-		/* Kqueues are fine. */
-		break;
-
-	    case DTYPE_PIPE:
-		/* Pipes are also fine. */
-		break;
-	    case DTYPE_SOCKET:
-		so = (struct socket *) fp->f_data;
-
-		/* Internet sockets are allowed. */
-		if (so->so_proto->pr_domain->dom_family == AF_INET)
-		    break;
-
-		/* UNIX sockets are also allowed. */
-		if (so->so_proto->pr_domain->dom_family == AF_UNIX)
-		    break;
-
-		/* 
-		 * XXX Protocols we might need to support in the future:
-		 * AF_INET6, AF_NETGRAPH. If we put networking-focused
-		 * applications in the SLS, also AF_ARP, AF_LINK maybe?
-		 */
-
-		/* Anything else isn't. */
+	    /* Check if the file is currently supported by SLS. */
+	    if (!slsckpt_file_supported(fp))
 		continue;
-
-	    case DTYPE_SHM:
-		/* POSIX shared memory is fine too. */
-		break;
-
-	    case DTYPE_PTS:
-		/* Pseudoterminals are ok. */
-		break;
-
-	    case DTYPE_DEV:
-		/* 
-		 * Devices _aren't_ exposed at this level, instead being
-		 * backed by special vnodes in the VFS. That means that
-		 * any open devices like /dev/null and /dev/zero will
-		 * be of DTYPE_VNODE, and will be properly checkpointed/
-		 * restored at that level (assuming they are stateless).
-		 * Looking at the code, it also seems like this device 
-		 * type is only used by the Linux compat layer.
-		 */
-		break;
-
-	    default:
-		continue;
-
-	    }
 
 	    /* Checkpoint the file structure itself. */
 	    error = slsckpt_file(p, fp, &slsid, objtable);
@@ -1159,7 +848,6 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc info,
 	    return (error);
 	fdinstall_remapped(curthread, newfdp);
 
-	PROC_UNLOCK(p);
 	error = kern_chdir(curthread, cdir, UIO_SYSSPACE);
 	if (error != 0)
 	    return (error);
@@ -1167,11 +855,9 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc info,
 	error = kern_chroot(curthread, rdir, UIO_SYSSPACE);
 	if (error != 0)
 	    return (error);
-	PROC_LOCK(p);
 
 	FILEDESC_XLOCK(newfdp);
 	newfdp->fd_cmask = info.fd_cmask;
-	FILEDESC_XUNLOCK(newfdp);
 
 	/* Attach the appropriate open files to the descriptor table. */
 	while (slskv_pop(fdtable, (uint64_t *) &fd, (uintptr_t *) &slsid) == 0) {
@@ -1184,15 +870,17 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc info,
 	    /* We restore the file _exactly_ at the same fd.*/
 	    error = fdalloc(curthread, fd, &res);
 	    if (error != 0)
-		return (error);
+		goto out;
 
-	    if (res != fd)
-		return (error);
+	    if (res != fd) {
+		error = EINVAL;
+		goto out;
+	    }
 
 	    /* Get a reference to the open file for the table and install it. */
 	    if (!fhold(fp)) {
-		slskv_destroy(fdtable);
-		return (EBADF);
+		error = EBADF;
+		goto out;
 	    }
 
 	    /* 
@@ -1205,7 +893,9 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc info,
 	    _finstall(p->p_fd, fp, fd, O_CLOEXEC, NULL);
 	}
 	
+out:
+	FILEDESC_XUNLOCK(newfdp);
 	slskv_destroy(fdtable);
 
-	return (0);
+	return (error);
 }

@@ -137,11 +137,14 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 	vm_offset_t vaddr;
 	boolean_t contained;
 	vm_object_t object;
+	int guard;
 	int error;
 
 	/* Find an object if it exists. */
 	if (slskv_find(objtable, (uint64_t) info->obj, (uintptr_t *) &object) != 0)
 	    object = NULL;
+	else
+	    vm_object_reference(object);
 
 	/* 
 	 * Unfortunately, vm_map_entry_create is static, and so is
@@ -153,16 +156,20 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 	 * proper arguments (mainly flags).
 	 */
 	vm_map_lock(map);
+	guard = (info->eflags & MAP_ENTRY_GUARD) ? MAP_CREATE_GUARD : 0;
 	error = vm_map_insert(map, object, info->offset, 
 		    info->start, info->end, 
-		    info->protection, info->max_protection, 0);
+		    info->protection, info->max_protection, guard);
 	if (error != 0)
-	    return (error);
+	    goto out;
+
 
 	/* Get the entry from the map. */
 	contained = vm_map_lookup_entry(map, info->start, &entry);
-	if (contained == FALSE)
-	    return (EINVAL);
+	if (contained == FALSE) {
+	    error = EINVAL;
+	    goto out;
+	}
 
 	entry->eflags = info->eflags;
 	entry->inheritance = info->inheritance;
@@ -177,8 +184,10 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 		vm_page_sbusy(page);
 
 		/* If the page is within the entry's bounds, add it to the map. */
+		VM_OBJECT_WLOCK(object);
 		error = pmap_enter(vm_map_pmap(map), vaddr, page, 
 			entry->protection, VM_PROT_READ, page->psind);
+		VM_OBJECT_WUNLOCK(object);
 		if (error != 0)
 		    printf("Error: pmap_enter_failed\n");
 
@@ -189,10 +198,13 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 
 	/* XXX restore cred if needed */
 	entry->cred = NULL;
+
+out:
 	vm_map_unlock(map);
 
-	return (0);
-
+	/* Go from Mach to Unix error codes. */
+	error = vm_mmap_to_errno(error);
+	return (error);
 }
 
 static int
@@ -252,6 +264,11 @@ slsrest_vmentry_file(struct vm_map *map, struct slsvmentry *entry, struct slskv_
 	error = kern_mmap(curthread, entry->start, entry->end - entry->start, 
 		entry->protection, flags, fd, entry->offset);
 
+	vref(vp);
+
+	if (entry->eflags & MAP_ENTRY_VN_EXEC)
+	    VOP_SET_TEXT(vp);
+
 done:
 
 	if (fd >= 0)
@@ -271,7 +288,7 @@ slsrest_vmentry(struct vm_map *map, struct slsvmentry *entry, struct slskv_table
 	int fd;
 
 	/* If it's a guard page use the code for anonymous/empty/physical entries. */
-	if (entry->obj == NULL)
+	if (entry->obj == NULL) 
 	    return slsrest_vmentry_anon(map, entry, objtable);
 
 

@@ -67,9 +67,8 @@ restore_main(int argc, char* argv[]) {
 	    return 0;
 	}
 
-	if ((error = sls_restore(oid, daemon)) < 0) {
+	if ((error = sls_restore(oid, daemon)) < 0)
 	    return 1;
-	}
 
 	/* 
 	 * Wait for all children. If we end up

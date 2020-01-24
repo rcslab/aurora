@@ -17,6 +17,7 @@
 #include <sys/ptrace.h>
 #include <sys/queue.h>
 #include <sys/rwlock.h>
+#include <sys/selinfo.h>
 #include <sys/shm.h>
 #include <sys/signalvar.h>
 #include <sys/stat.h>
@@ -24,6 +25,8 @@
 #include <sys/syscallsubr.h>
 #include <sys/time.h>
 #include <sys/uio.h>
+
+#include <sys/pipe.h>
 
 #include <vm/pmap.h>
 #include <vm/vm.h>
@@ -65,6 +68,14 @@ static void sls_checkpoint(slsset *procset, struct slspart *slsp);
 static int slsckpt_metadata(struct proc *p, struct slspart *slsp, 
 	slsset *procset, struct slskv_table *objtable);
 
+static inline long
+tonano(struct timespec tp)
+{
+    const long billion = 1000UL * 1000 * 1000;
+
+    return billion * tp.tv_sec + tp.tv_nsec;
+}
+
 /*
  * Stop the processes, and wait until they are truly not running. 
  */
@@ -72,33 +83,13 @@ static void
 slsckpt_stop(slsset *procset)
 {
 	struct slskv_iter iter;
-	struct thread *td;
 	struct proc *p;
 	
 	iter = slskv_iterstart(procset);
 	while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
 	    /* Force all threads to the kernel-user boundary. */
 	    PROC_LOCK(p);
-	    thread_single(p, SINGLE_ALLPROC);
-	    PROC_UNLOCK(p);
-	}
-
-	/* 
-	 * Wait until all threads have been suspended exactly on the boundary. These two 
-	 * loops are decoupled so that we do not wait for each process to stop separately
-	 * before stopping the rest.
-	 */
-	iter = slskv_iterstart(procset);
-	while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
-	    PROC_LOCK(p);
-	    FOREACH_THREAD_IN_PROC(p, td) {
-		thread_lock(td);
-		KASSERT((td->td_flags & TDF_BOUNDARY) != 0,
-		    ("td %p not on boundary", td));
-		KASSERT(TD_IS_SUSPENDED(td),
-		    ("td %p is not suspended", td));
-		thread_unlock(td);
-	    }
+	    thread_single(p, SINGLE_BOUNDARY);
 	    PROC_UNLOCK(p);
 	}
 }
@@ -115,7 +106,9 @@ slsckpt_cont(slsset *procset)
 	iter = slskv_iterstart(procset);
 	while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
 	    /* Free each process from the boundary. */
-	    thread_single_end(p, SINGLE_ALLPROC);
+	    PROC_LOCK(p);
+	    thread_single_end(p, SINGLE_BOUNDARY);
+	    PROC_UNLOCK(p);
 	}
 }
 
@@ -133,8 +126,10 @@ slsckpt_metadata(struct proc *p, struct slspart *slsp, slsset *procset, struct s
 	if (!SLS_PROCALIVE(p)) {
 	    SLS_DBG("proc trying to die, exiting ckpt\n");
 	    error = ESRCH;
+	    PROC_UNLOCK(p);
 	    goto out;
 	}
+	PROC_UNLOCK(p);
 
 	printf("Getting process %d\n", p->p_pid);
 	sb = sbuf_new_auto();
@@ -151,11 +146,7 @@ slsckpt_metadata(struct proc *p, struct slspart *slsp, slsset *procset, struct s
 	    goto out;
 	}
 
-	/* 
-	 * XXX This has to be last right now, 
-	 * because the filedsec is not in its 
-	 * own record.
-	 */
+	/* XXX This has to be last right now, because the filedesc is not in its own record. */
 	error = slsckpt_filedesc(p, objtable, sb);
 	if (error != 0) {
 	    SLS_DBG("Error: slsckpt_filedesc failed with error code %d\n", error);
@@ -175,7 +166,6 @@ slsckpt_metadata(struct proc *p, struct slspart *slsp, slsset *procset, struct s
 	    goto out;
 
 out:
-	PROC_UNLOCK(p);
 
 	if (error != 0) {
 	    slskv_del(slsm.slsm_rectable, (uint64_t) sb);
@@ -611,7 +601,6 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		    SPROC_CHECKPOINTING) == 0) {
 	    SLS_DBG("Partition %ld in state %d\n", args->slsp->slsp_oid, args->slsp->slsp_status);
 	    goto out;
-
 	}
 
 	/* The set of processes we are going to checkpoint. */
@@ -706,6 +695,14 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		    LIST_FOREACH(pchild, &p->p_children, p_sibling) {
 			if (slskv_find(procset, (uint64_t) pchild, (uintptr_t *) &pchild) != 0) {
 			    /* We found a child that didn't exist before. */
+
+			    /* 
+			     * Check if the child is still alive.
+			     * If it's exiting ignore its subtree.
+			     */
+			    if (!SLS_PROCALIVE(pchild))
+				continue;
+
 			    new_procs += 1;
 
 			    PHOLD(pchild);
@@ -724,6 +721,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		}
 	    } while (new_procs > 0);
 
+	    slsckpt_stop(procset);
 
 	    /* Checkpoint the process once. */
 	    sls_checkpoint(procset, args->slsp);

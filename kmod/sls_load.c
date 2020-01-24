@@ -87,7 +87,7 @@ slsload_proc(struct slsproc *slsproc, struct sbuf **namep, char **bufp, size_t *
 	    return (error);
 
 	if (slsproc->magic != SLSPROC_ID) {
-	    SLS_DBG("magic mismatch, %lu vs %d\n", slsproc->magic, SLSPROC_ID);
+	    SLS_DBG("magic mismatch, %lx vs %x\n", slsproc->magic, SLSPROC_ID);
 	    return (EINVAL);
 	}
 
@@ -178,7 +178,44 @@ slsload_pipe(struct slspipe *slspipe, char **bufp, size_t *bufsizep)
 	    return (EINVAL);
 	}
 
+	/* Get the pipe's data. */
+	slspipe->data = malloc(slspipe->pipebuf.cnt, M_SLSMM, M_WAITOK);
+	error = sls_info(slspipe->data, slspipe->pipebuf.cnt, bufp, bufsizep);
+	if (error != 0) {
+	    free(slspipe->data, M_SLSMM);
+	    return error;
+	}
+
 	return (0);
+}
+
+/* Get an array that is prefixed by its size. */
+static int
+slsload_sizedarray(void **datap, size_t *sizep, char **bufp, size_t *bufsizep)
+{
+	size_t size;
+	void *data;
+	int error;
+
+	/* Get the size of the data. */
+	error = sls_info(&size, sizeof(size), bufp, bufsizep);
+	if (error != 0)
+	    return (error);
+
+	/* Get the data itself. */
+	data = malloc(size, M_SLSMM, M_WAITOK);
+	error = sls_info(data, size, bufp, bufsizep);
+	if (error != 0) {
+	    free(data, M_SLSMM);
+	    return (error);
+	}
+
+	/* Externalize the data. */
+	*sizep = size;
+	*datap = data;
+
+	return (0);
+
 }
 
 static int
@@ -190,10 +227,27 @@ slsload_pts(struct slspts *slspts, char **bufp, size_t *bufsizep)
 	error = sls_info(slspts, sizeof(*slspts), bufp, bufsizep);
 	if (error != 0)
 	    return (error);
+	slspts->inq = NULL;
+	slspts->outq = NULL;
 
 	if (slspts->magic != SLSPTS_ID) {
 	    SLS_DBG("magic mismatch, %lx vs %x\n", slspts->magic, SLSPTS_ID);
 	    return (EINVAL);
+	}
+
+	/* No data if we're not the master. */
+	if (slspts->ismaster == 0)
+	    return (0);
+
+	error = slsload_sizedarray(&slspts->inq, &slspts->inqlen, bufp, bufsizep);
+	if (error != 0)
+	    return (error);
+
+	error = slsload_sizedarray(&slspts->outq, &slspts->outqlen, bufp, bufsizep);
+	if (error != 0) {
+	    /* The first allocation succeeded, undo it. */
+	    free(slspts->inq, M_SLSMM);
+	    return (error);
 	}
 
 	return (0);
@@ -448,6 +502,81 @@ slsload_sysvshm(struct slssysvshm *shm, char **bufp, size_t *bufsizep)
 	    return (EINVAL);
 	}
 
+	return (0);
+}
+
+int
+slsload_sockbuf(struct mbuf **mp, uint64_t *sbid , char **bufp, size_t *bufsizep)
+{
+	struct mbuf *lasthead, *lastrec;
+	struct mbuf *m, *headm;
+	struct slsmbuf slsmbuf;
+	int newrec;
+	int error;
+
+	newrec = 0;
+	m = headm = NULL;
+	lasthead = lastrec = NULL;
+	while (*bufsizep > 0) {
+	    printf("IN HERE\n");
+	    error = sls_info(&slsmbuf, sizeof(slsmbuf), bufp, bufsizep);
+	    if (error != 0)
+		return (error);
+
+	    if (slsmbuf.magic != SLSMBUF_ID) {
+		SLS_DBG("magic mismatch\n");
+		return (EINVAL);
+	    }
+
+	    /* Allocate the packet, checking if it's a header. */
+	    if (slsmbuf.flags & M_PKTHDR)
+		MGETHDR(m, M_WAITOK, slsmbuf.type);
+	    else
+		MGET(m, M_WAITOK, slsmbuf.type);
+
+	    /* If the buffer was a cluster, attach a new cluster to it. */
+	    if (slsmbuf.flags & M_EXT)
+		MCLGET(m, M_WAITOK);
+
+	    /* Copy the data into the mbuf. */
+	    error = sls_info(mtod(m, void *), slsmbuf.len, bufp, bufsizep);
+	    if (error != 0) {
+		while (headm != NULL) {
+		    m = headm;
+		    headm = headm->m_nextpkt;
+		    m_free(m);
+		}
+
+		return (error);
+	    }
+
+	    /* XXX Restore CMSGs, if they exist. */
+
+	    if (lasthead == NULL) {
+		/* If there is no mbuf head, we're the first one. */
+		lasthead = m;
+		lastrec = m;
+		headm = m;
+	    } else if (newrec != 0) {
+		/* Else check if we're a brand new message. */
+		lasthead->m_nextpkt = m;
+		lasthead = m;
+		newrec = 0;
+	    } else {
+		/* Otherwise just append to the end. */
+		lastrec->m_next = m;
+		lastrec = m;
+	    }
+
+	    /* New packet starting from the next buffer. */
+	    if (slsmbuf.flags & M_EOR)
+		newrec = 1;
+	}
+
+	/* Export the results to the caller. */
+	*sbid = slsmbuf.slsid;
+	*mp = headm;
+    
 	return (0);
 }
 

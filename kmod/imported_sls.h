@@ -4,6 +4,7 @@
 #include <sys/param.h>
 #include <sys/fnv_hash.h>
 #include <sys/mman.h>
+#include <sys/tty.h>
 #include <sys/uio.h>
 
 #include <vm/vm.h>
@@ -63,6 +64,21 @@ struct shm_mapping {
 
 extern u_long shm_hash;
 extern LIST_HEAD(, shm_mapping) *shm_dictionary;
+
+struct ttyoutq_block {
+	struct ttyoutq_block	*tob_next;
+	char			tob_data[TTYOUTQ_DATASIZE];
+};
+
+#define BMSIZE			32
+#define TTYINQ_QUOTESIZE	(TTYINQ_DATASIZE / BMSIZE)
+
+struct ttyinq_block {
+	struct ttyinq_block	*tib_prev;
+	struct ttyinq_block	*tib_next;
+	uint32_t		tib_quotes[TTYINQ_QUOTESIZE];
+	char			tib_data[TTYINQ_DATASIZE];
+};
 
 
 #endif /* _COPIED_FD_H */

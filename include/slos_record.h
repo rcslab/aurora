@@ -19,6 +19,7 @@ struct slos_node;
 #define SLOSREC_VNODE	    0x0000000a	/* Record holds info for a vnode */
 #define SLOSREC_SYSVSHM	    0x0000000b	/* Record holds info for SYSV shared memory */
 #define SLOSREC_POSIXSHM    0x0000000c	/* Record holds info for POSIX shared memory */
+#define SLOSREC_SOCKBUF	    0x0000000d	/* Record holds info for socket buffers */
 
 /* XXX Factor out */
 #define SLOSREC_FDESC	    0x000000a0	/* Record holds a file descriptor*/

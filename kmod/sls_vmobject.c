@@ -66,9 +66,7 @@ slsckpt_vmobject(struct proc *p, vm_object_t obj)
 	 * to find out how to map.
 	 */
 	if (obj->type == OBJT_VNODE) {
-	    PROC_UNLOCK(p);
 	    error = sls_vn_to_path_append((struct vnode *) obj->handle, sb);
-	    PROC_LOCK(p);
 	    if (error == ENOENT) {
 		printf("(BUG) Unlinked file found, ignoring for now\n");
 		return 0;
@@ -168,16 +166,17 @@ slsrest_vmobject(struct slsvmobject *info, struct slskv_table *objtable,
 	     * in vmentry_rest.
 	     */
 
-	    PROC_UNLOCK(curthread->td_proc);
 	    error = sls_path_to_vn(info->path, &vp);
-	    SLS_DBG("path %s vp %p\n", sbuf_data(info->path), vp);
-	    PROC_LOCK(curthread->td_proc);
 	    if (error != 0) 
 		return error;
 	    
-	    /* Get a reference for the vnode, since we're going to use it. */
-	    vhold(vp);
+	    /* 
+	     * Get a reference for the vnode, since we're going to use it. 
+	     * Do the same for the underlying object.
+	     */
+	    vref(vp);
 	    object = vp->v_object;
+	    vm_object_reference(object);
 	    break;
 
 	/* 
@@ -207,7 +206,6 @@ slsrest_vmobject(struct slsvmobject *info, struct slskv_table *objtable,
 	error = slskv_add(objtable, info->slsid, (uintptr_t) object);
 	if (error != 0)
 	    return error;
-
 
 	return 0;
 }

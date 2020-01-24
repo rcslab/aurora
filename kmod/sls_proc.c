@@ -31,6 +31,9 @@ slsckpt_thread(struct thread *td, struct sbuf *sb)
 	int error = 0;
 	struct slsthread slsthread;
 
+	PROC_LOCK(td->td_proc);
+	thread_lock(td);
+
 	error = proc_read_regs(td, &slsthread.regs);
 	if (error != 0)
 	    return error;
@@ -47,6 +50,9 @@ slsckpt_thread(struct thread *td, struct sbuf *sb)
 	slsthread.magic = SLSTHREAD_ID;
 	slsthread.slsid = (uint64_t) td;
 	slsthread.tf_err = td->td_frame->tf_err;
+
+	thread_unlock(td);
+	PROC_UNLOCK(td->td_proc);
 
 	error = sbuf_bcat(sb, (void *) &slsthread, sizeof(slsthread));
 	if (error != 0)
@@ -99,12 +105,6 @@ sls_thread_create(struct thread *td, void *thunk)
 	td->td_pcb->pcb_fsbase = slsthread->fs_base;
 
 	td->td_frame->tf_err = slsthread->tf_err;
-	
-	/* 
-	 * If we are not in a syscall, tf_err should be 0, and so 
-	 * the call below should be a no-op.
-	 */
-	cpu_set_syscall_retval(td, ERESTART);
 
 done:
 
@@ -139,6 +139,7 @@ slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset)
 	struct slsproc slsproc;
 	struct proc *pleader;
 
+	PROC_LOCK(p);
 	slsproc.nthreads = p->p_numthreads;
 	slsproc.pid = p->p_pid;
 	/* 
@@ -176,7 +177,11 @@ slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset)
 	 */
 	slsproc.pgid = p->p_pgid;
 	/* Try to find the process leader. */
+
+	PROC_UNLOCK(p);
 	error = pget(p->p_pgid, PGET_WANTREAD, &pleader);
+	PROC_LOCK(p);
+
 	if (error != 0) {
 	    /* It doesn't even exist, so the group is leaderless. */
 	    slsproc.pgrpwait = 0;
@@ -187,7 +192,11 @@ slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset)
 	    else
 		slsproc.pgrpwait = 0;
 
-	    PRELE(pleader);
+	    /* If we are the leader, we are already locked. */
+	    if (pleader == p)
+		_PRELE(pleader);
+	    else
+		PRELE(p);
 	}
 
 
@@ -204,25 +213,29 @@ slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset)
 	bcopy(sigacts, &slsproc.sigacts, offsetof(struct sigacts, ps_refcnt));
 	mtx_unlock(&sigacts->ps_mtx);
 
+	PROC_UNLOCK(p);
+
 	error = sbuf_bcat(sb, (void *) &slsproc, sizeof(slsproc));
 	if (error != 0)
-	    return ENOMEM;
+	    goto error;
 
 	/* Save the path of the executable. */
 	error = sls_vn_to_path_append(p->p_textvp, sb);
 	if (error != 0)
-	    return ENOMEM;
-	
+	    goto error;
+
 	/* Checkpoint each thread individually. */
 	FOREACH_THREAD_IN_PROC(p, td) {
-	    thread_lock(td);
 	    error = slsckpt_thread(td, sb);
-	    thread_unlock(td);
 	    if (error != 0)
-		return error;
+		return (error);
 	}
+	
+	return (0);
 
-	return 0;
+error:
+
+	return (error);
 }
 
 
@@ -275,19 +288,21 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 	KASSERT(!SESS_LEADER(p), ("process is a session leader"));
 	/* Check if we were the original session leader. */
 	if (slsproc->pid == slsproc->sid) {
-	    pgrp = malloc(sizeof(*pgrp), M_SESSION, M_WAITOK);
-	    sess = malloc(sizeof(*sess), M_PGRP, M_WAITOK);
+	    pgrp = malloc(sizeof(*pgrp), M_SESSION, M_WAITOK | M_ZERO);
+	    sess = malloc(sizeof(*sess), M_PGRP, M_WAITOK | M_ZERO);
 
 
 	    /* We are changing the process tree with this. */
+	    PROC_UNLOCK(p);
 	    sx_xlock(&proctree_lock);
 
 	    /* Create session. */
 	    error = enterpgrp(p, p->p_pid, pgrp, sess);
 	    sx_xunlock(&proctree_lock);
+	    PROC_LOCK(p);
 	    if (error != 0) {
-		free(pgrp, M_SLSMM);
-		free(sess, M_SLSMM);
+		free(pgrp, M_PGRP);
+		free(sess, M_SESSION);
 		return (error);
 	    }
 
@@ -316,17 +331,18 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 	} else if (slsproc->pid == slsproc->pgid) {
 	    if (daemon != 0) {
 
-		printf("PGID switcheroo\n");
 		/* Otherwise we just create a new pgrp if we were the group leader. */
-		pgrp = malloc(sizeof(*pgrp), M_SLSMM, M_WAITOK);
+		pgrp = malloc(sizeof(*pgrp), M_PGRP, M_WAITOK | M_ZERO);
 
 		/* Create just the pgrp. */
+		PROC_UNLOCK(p);
 		sx_xlock(&proctree_lock);
 		/* We are changing the process tree with this. */
 		error = enterpgrp(p, p->p_pid, pgrp, NULL);
 		sx_xunlock(&proctree_lock);
+		PROC_LOCK(p);
 		if (error != 0) {
-		    free(pgrp, M_SLSMM);
+		    free(pgrp, M_PGRP);
 		    return (error);
 		}
 
@@ -353,7 +369,6 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 
 	cv_broadcast(&restdata->proccv);
 
-	PROC_UNLOCK(p);
 	/* Do the thing, but have it be mutually exclusive w/ pgrp creation.  */
 	mtx_lock(&restdata->procmtx);
 	for (;;) {
@@ -383,7 +398,6 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 	    break;
 	}
 	mtx_unlock(&restdata->procmtx);
-	PROC_LOCK(p);
 
 	/* XXX Leaderless pgroups are not being migrated to a new pgroup. */
 	/* If we need to enter a pgroup, look it up in the tables and do it here. */
@@ -440,7 +454,7 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 
 	    printf("PPTR switcheroo\n");
 	    sx_xlock(&proctree_lock);
-	    proc_reparent(p, pptr, 0);
+	    proc_reparent(p, pptr, 1);
 	    sx_xunlock(&proctree_lock);
 	}
 

@@ -6,10 +6,13 @@
 #include <sys/pcpu.h>
 #include <sys/proc.h>
 #include <sys/sbuf.h>
+#include <sys/selinfo.h>
 #include <sys/socket.h>
 #include <sys/tty.h>
 #include <sys/ttycom.h>
 #include <sys/un.h>
+
+#include <sys/pipe.h>
 
 #include <machine/param.h>
 #include <machine/pcb.h>
@@ -138,17 +141,17 @@ struct slsfiledesc {
 
 	u_short fd_cmask;
 	int fd_holdcnt;
-
-	/* XXX Get any buffered data */
 };
 
 #define SLSPIPE_ID  0x736c7499
 struct slspipe {
-	uint64_t    magic;	/* Magic value */
-	uint64_t    slsid;	/* Unique SLS ID */
-	uint64_t    iswriteend;	/* Is this the write end? */
-	uint64_t    peer;	/* The SLS ID of the other end */
-	/* XXX Get data */
+	uint64_t	magic;	    /* Magic value */
+	uint64_t	slsid;	    /* Unique SLS ID */
+	uint64_t	iswriteend; /* Is this the write end? */
+	uint64_t	peer;	    /* The SLS ID of the other end */
+	struct pipebuf	pipebuf;    /* The pipe's buffer. */
+	/* XXX Valid only at restore time */
+	void *data;
 };
 
 #define SLSKQUEUE_ID  0x736c7265
@@ -196,6 +199,12 @@ struct slssock {
 	/* XXX Maybe encapsulate INET state? */
 	struct in_conninfo in_conninfo;
 	uint64_t    backlog;
+
+	uint64_t    rcvid;	/* SLS ID for receive buffer */
+	uint64_t    sndid;	/* SLS ID for send buffer */
+
+	uint64_t    peer_rcvid; /* SLS ID for peer's receive buffer */
+	uint64_t    peer_sndid; /* SLS ID for peer's send buffer */
 };
 
 
@@ -222,7 +231,11 @@ struct slspts {
 	struct termios termios_lock_in;
 	struct termios termios_init_out;
 	struct termios termios_lock_out;
-	/* XXX Get any buffered data */
+	/* XXX Valid only at restore time */
+	size_t inqlen;
+	size_t outqlen;
+	void *inq;
+	void *outq;
 };
 
 #define SLSSYSVSHM_ID  0x736c7232
@@ -235,19 +248,27 @@ struct slssysvshm {
 	int segnum;
 };
 
-#define SLSPOSIXSHM_ID  0x736c7232
+#define SLSPOSIXSHM_ID  0x736c7230
 struct slsposixshm {
 	uint64_t    magic;
 	uint64_t    slsid;
 	mode_t	    mode;
 	uint64_t    object;
 	uint64_t    is_anon;
-	/* XXX Restore only, hacky. Refactor. */
+	/* XXX Hacky. Turn into fixed-length name buffer. */
 	struct sbuf *sb;
 
 	/* XXX Rangelocks? */
 };
 
+#define SLSMBUF_ID  0x736c7245
+struct slsmbuf {
+	uint64_t    slsid;	/* Unique identifier for the sockbuf mbufs  */
+	uint64_t    magic;	/* Magic for helping debug parsing */
+	uint8_t	    type;	/* Type of mbuf (data, control...) */
+	uint64_t    flags;	/* Data-related flags */
+	size_t	    len;	/* Size of data */
+};
 
 
 #endif /* _SLS_DATA_H_ */

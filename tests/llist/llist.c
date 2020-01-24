@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #define ROW_SIZE 16
+#define ITERATIONS 1000000
 
 #define PAGE_SIZE 4096
 #define PAGE_MIDDLE(pages, i) (pages + (PAGE_SIZE * i) + (PAGE_SIZE / 2))
@@ -71,7 +72,7 @@ main(int argc, char *argv[]) {
 
 	clock_gettime(CLOCK_MONOTONIC, &tstart);
 	lastcnt = cnt = 0;
-	for (cur = head; true; cur = cur->next) {
+	for (cur = head; cnt < ITERATIONS; cur = cur->next) {
 	    if (cur == head) {
 		cnt++;
 		clock_gettime(CLOCK_MONOTONIC, &tnow);

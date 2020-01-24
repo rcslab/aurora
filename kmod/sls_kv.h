@@ -77,25 +77,9 @@ typedef struct slskv_table slsset;
 #define slsset_serial(table, sb) (slskv_serial(table, sb))
 #define slsset_deserial(buf, len, tablep) (slskv_serial(buf, len, tablep))
 
-inline int 
-slsset_find(slsset *table, uint64_t key)
-{
-	uintptr_t nothing;
-
-	return (slskv_find(table, key, &nothing));
-}
-
-inline int
-slsset_add(slsset *table, uint64_t key)
-{
-	return (slskv_add(table, key, (uintptr_t) key));
-}
-
-inline int
-slsset_pop(slsset *table, uint64_t *key)
-{
-	return (slskv_pop(table, key, (uintptr_t *) key));
-}
+int slsset_find(slsset *table, uint64_t key);
+int slsset_add(slsset *table, uint64_t key);
+int slsset_pop(slsset *table, uint64_t *key);
 
 #define SLSKV_ITERDONE 1
 

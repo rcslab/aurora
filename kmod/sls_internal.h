@@ -49,19 +49,14 @@ struct slsrest_data {
 	struct slskv_table  *kevtable;	/* Holds the kevents for a kq, indexed by kq */
 	struct slskv_table  *pgidtable;	/* Holds the old-new process group ID pairs */
 	struct slskv_table  *sesstable;	/* Holds the old-new session ID pairs */
+	struct slskv_table  *mbuftable;	/* Holds the mbufs used by processes */
 	struct cv	    proccv;	/* Used as a barrier while creating pgroups */
 	struct mtx	    procmtx;	/* Used alongside the cv above */
 };
 
 extern struct sls_metadata slsm;
 
-inline long
-tonano(struct timespec tp)
-{
-    const long billion = 1000UL * 1000 * 1000;
-
-    return billion * tp.tv_sec + tp.tv_nsec;
-}
+#define FDTOFP(p, fd) (p->p_fd->fd_files->fdt_ofiles[fd].fde_file)
 
 inline int
 sls_module_exiting(void)

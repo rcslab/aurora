@@ -271,8 +271,6 @@ slos_ifree(struct slos *slos, struct slos_node *vp)
 	uint64_t prevroot;
 	int error;
 
-	mtx_lock(&slos->slos_mtx);
-
 	/*
 	 * Detach both the inode and the vnode from 
 	 * the SLOS-wide indexes.
@@ -326,8 +324,6 @@ slos_ifree(struct slos *slos, struct slos_node *vp)
 	 */
 
 	slos_vpfree(slos, vp);
-
-	mtx_unlock(&slos->slos_mtx);
 
 	btree_discardelem(slos->slos_inodes);
 

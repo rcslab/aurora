@@ -89,7 +89,7 @@ sls_partadd(uint64_t oid, const struct sls_attr attr)
 	args.oid = oid;
 	args.attr = attr;
 	if (sls_ioctl(SLS_PARTADD, &args) != 0) {
-	    perror("sls_attach");
+	    perror("sls_partadd");
 	    return -1;
 	}
 
@@ -109,7 +109,7 @@ sls_partdel(uint64_t oid)
 
 	args.oid = oid;
 	if (sls_ioctl(SLS_PARTDEL, &args) != 0) {
-	    perror("sls_attach");
+	    perror("sls_partdel");
 	    return -1;
 	}
 

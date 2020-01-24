@@ -15,5 +15,6 @@ int slsload_vmentry(struct slsvmentry *entry, char **bufp, size_t *bufsizep);
 int slsload_vmspace(struct slsvmspace *vm, struct shmmap_state **shmstate, char **bufp, size_t *bufsizep);
 int slsload_path(struct sbuf **sbp, char **bufp, size_t *bufsizep); 
 int slsload_sysvshm(struct slssysvshm *shm, char **bufp, size_t *bufsizep);
+int slsload_sockbuf(struct mbuf **mp, uint64_t *sbid, char **bufp, size_t *bufsizep);
 
 #endif /* _SLS_LOAD_H_ */

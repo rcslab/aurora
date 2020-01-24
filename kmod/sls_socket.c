@@ -18,6 +18,7 @@
 #include <sys/sbuf.h>
 #include <sys/selinfo.h>
 #include <sys/shm.h>
+#include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/stat.h>
 #include <sys/syscallsubr.h>
@@ -47,7 +48,7 @@
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
-#include <slos.h>
+#include <slos_record.h>
 #include <sls_data.h>
 
 #include "sls_file.h"
@@ -57,11 +58,124 @@
 
 #include "imported_sls.h"
 
+/* 
+ * XXX Sendfile doesn't work, because there might be pageins in progress that
+ * cannot be tracked across restarts. We could fix this by monitoring pageins
+ * in progress from SLSFS, and restarting them together with the checkpoint.
+ */
+
+static int
+slsckpt_sockbuf(struct sockbuf *sockbuf)
+{
+	struct filedescent **fdescent;
+	struct mbuf *packetm, *m;
+	struct slsmbuf slsmbuf;
+	size_t datalen, clen;
+	struct cmsghdr *cm;
+	struct sbuf *sb;
+	int error, i;
+	int numfds;
+
+	sb = sbuf_new_auto();
+
+	/* 
+	 * Iterate through all packets. We don't worry about
+	 * denoting where each record ends, we can find out
+	 * by reading the mbuf flags and checking for M_EOR.
+	 */
+	for (packetm = sockbuf->sb_mb; packetm != NULL; 
+		packetm = packetm->m_nextpkt) {
+
+	    for (m = packetm; m != NULL; m = m->m_next) {
+		slsmbuf.magic = SLSMBUF_ID;
+		slsmbuf.slsid = (uint64_t) sockbuf;
+		/* We associate the mbufs with the socket buffer. */
+		slsmbuf.type = packetm->m_type;
+		slsmbuf.flags = packetm->m_flags;
+		slsmbuf.len = packetm->m_len;
+
+		/* Dump the metadata of the mbuf. */
+		sbuf_bcat(sb, &slsmbuf, sizeof(slsmbuf));
+
+		/* Get the data itself. */
+		sbuf_bcat(sb, mtod(m, caddr_t), slsmbuf.len);
+
+		/* 
+		 * If we just dumped a UNIX SCM_RIGHTS message, also dump the
+		 * filedescent it's pointing to, which holds pointers to the
+		 * file descriptors and their capabilities.
+		 */
+		if (m->m_type == MT_CONTROL) {
+		    /* Seems like there can be multiple messages in a control packet. */
+		    cm = mtod(m, struct cmsghdr *);
+		    clen = cm->cmsg_len;
+
+		    while (cm != NULL) {
+			/* We only care about passing file descriptors. */
+			if ((cm->cmsg_level == SOL_SOCKET) &&
+			    (cm->cmsg_type != SCM_RIGHTS)) {
+
+			    /* The data is a pointer to a bunch of filedescents. */
+			    fdescent = (struct filedescent **) CMSG_DATA(cm);
+			    datalen = (caddr_t) cm + cm->cmsg_len - (caddr_t) fdescent;
+			    numfds = datalen / sizeof(*fdescent);
+
+			    /* 
+			     * Dump the array of filedescents into the record. 
+			     * XXX This code makes the assumption that the file that
+			     * is being transferred is still open in some table.
+			     * This is not necessarily true, since the sender may
+			     * close the fd after sending it and before the receiver
+			     * gets the control message. We need to check the file table
+			     * if the file has been checkpointed, and if not, to 
+			     * checkpoint it ourselves.
+			     */
+			    sbuf_bcat(sb, &numfds, sizeof(numfds));
+			    for (i = 0; i < numfds; i++)
+				sbuf_bcat(sb, fdescent[i], sizeof(*fdescent[i]));
+			}
+
+			/* Check if there are any more messages in the mbuf. */
+			if (CMSG_SPACE(datalen) < clen) {
+			    /* If so, go further into the array. */
+			    clen -= CMSG_SPACE(datalen);
+			    cm = (struct cmsghdr *) ((caddr_t) cm + CMSG_SPACE(datalen));
+			} else {
+			    /* Otherwise we're done. */
+			    clen = 0;
+			    cm = NULL;
+			}
+		    }
+		}
+	    }
+	}
+
+	error = sbuf_finish(sb);
+	if (error != 0) {
+	    sbuf_delete(sb);
+	    return (error);
+	}
+
+	/* Add the new buffer to the tables. */
+	error = slskv_add(slsm.slsm_rectable, (uint64_t) sockbuf, (uintptr_t) sb);
+	if (error != 0) {
+	    sbuf_delete(sb);
+	    return (error);
+	}
+
+	error = slskv_add(slsm.slsm_typetable, (uint64_t) sb, (uintptr_t) SLOSREC_SOCKBUF);
+	if (error != 0)
+	    return (error);
+
+	return (0);
+}
+
 /* Get the address of a unix socket. */
 static int
 slsckpt_sock_un(struct socket *so, struct slssock *info)
 {
 	struct unpcb *unpcb;
+	struct socket *sopeer;
 
 	unpcb = sotounpcb(so);
 	if (unpcb->unp_addr != NULL)
@@ -75,8 +189,12 @@ slsckpt_sock_un(struct socket *so, struct slssock *info)
 	 * case we do have a pair, or we are a listening stream socket
 	 * or a named datagram socket, in which case we don't.
 	 */
-	if (unpcb->unp_conn != NULL)
-	    info->unpeer = (uint64_t) unpcb->unp_conn->unp_socket;
+	if (unpcb->unp_conn != NULL) {
+	    sopeer = unpcb->unp_conn->unp_socket;
+	    info->unpeer = (uint64_t) sopeer;
+	    info->peer_rcvid = (uint64_t) &sopeer->so_rcv;
+	    info->peer_sndid = (uint64_t) &sopeer->so_snd;
+	}
 	info->bound = (unpcb->unp_vnode != NULL) ? 1 : 0;
 
 	return (0);
@@ -161,6 +279,65 @@ slsckpt_socket(struct proc *p, struct socket *so, struct sbuf *sb)
 	if (error != 0)
 	    return (error);
 
+	/* Get the rcv and snd buffers if not empty,  add their IDs to the socket. */
+
+	if (so->so_rcv.sb_mbcnt != 0) {
+	    info.rcvid = (uint64_t) &so->so_rcv;
+	    error = slsckpt_sockbuf(&so->so_rcv);
+	    if (error != 0)
+		return (error);
+	} else {
+	    info.rcvid = 0;
+	}
+
+	if (so->so_snd.sb_mbcnt != 0) {
+	    info.sndid = (uint64_t) &so->so_snd;
+	    error = slsckpt_sockbuf(&so->so_snd);
+	    if (error != 0)
+		return (error);
+	} else {
+	    info.sndid = 0;
+	}
+
+	return (0);
+}
+
+static int
+slsrest_sockbuf(struct slskv_table *table, uint64_t sockbufid, struct sockbuf *sb)
+{
+	struct mbuf *m, *recm;
+	int error;
+
+	/* If the buffer is empty, we don't need to do anything else. */
+	if (sockbufid == 0)
+	    return (0);
+
+	/* 
+	 * Associate it with the buffer - it should be fully built already.
+	 * Directly set up the sockbuf, we can't risk getting side-effects
+	 * e.g. by internalizing MT_CONTROL, SCM_RIGHTS messages. 
+	 */
+	error = slskv_find(table, sockbufid, (uintptr_t *) &m);
+	if (error != 0)
+	    return (error);
+
+	/* If we had no data, we're done. */
+	if (m == NULL)
+	    return (0);
+
+	sb->sb_mb = m;
+	sb->sb_mbtail= m_last(m);
+
+	/* Adjust sockbuf state for the new mbuf chain. */
+	for (recm = m; recm != NULL; recm = m->m_nextpkt)  {
+	    /* The final value of the field will be that of the final record. */
+	    sb->sb_lastrecord = recm;
+
+	    /* Adjust bookkeeping.*/
+	    sballoc(sb, m);
+	}
+
+
 	return (0);
 }
 
@@ -201,8 +378,8 @@ slsrest_uipc_bindat(struct socket *so, struct sockaddr *nam)
 	sb = sbuf_new_auto();
 	sbuf_bcpy(sb, soun->sun_path, strnlen(soun->sun_path, UNADDR_MAX));
 
-	KASSERT(((unp->unp_flags & UNP_BINDING) == 0), "unix socket already binding");
-	KASSERT((unp->unp_vnode == NULL), "unix socket already bound");
+	KASSERT(((unp->unp_flags & UNP_BINDING) == 0), ("unix socket already binding"));
+	KASSERT((unp->unp_vnode == NULL), ("unix socket already bound"));
 
 	error = sls_path_to_vn(sb, &vp);
 	if (error != 0) {
@@ -226,7 +403,8 @@ slsrest_uipc_bindat(struct socket *so, struct sockaddr *nam)
 }
 
 int
-slsrest_socket(struct slskv_table *table, struct slssock *info, struct slsfile *finfo, int *fdp)
+slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
+	struct slssock *info, struct slsfile *finfo, int *fdp)
 {
 	struct sockaddr *addr;
 	struct socket *so, *sopeer;
@@ -246,7 +424,7 @@ slsrest_socket(struct slskv_table *table, struct slssock *info, struct slsfile *
 	fd = td->td_retval[0];
 
 	/* Reach into the file descriptor and get the socket. */
-	fp = td->td_proc->p_fd->fd_files->fdt_ofiles[fd].fde_file;
+	fp = FDTOFP(td->td_proc, fd);
 	so = (struct socket *) fp->f_data;
 
 	/* Restore the socket's nonblocking/async state. */
@@ -291,7 +469,7 @@ slsrest_socket(struct slskv_table *table, struct slssock *info, struct slsfile *
 		    goto error;
 
 		peerfd = td->td_retval[0];
-		peerfp = td->td_proc->p_fd->fd_files->fdt_ofiles[peerfd].fde_file;
+		peerfp = FDTOFP(td->td_proc, peerfd);
 		sopeer = (struct socket *) peerfp->f_data;
 
 		/* Restore the peer's 's nonblocking/async state. */
@@ -371,6 +549,26 @@ slsrest_socket(struct slskv_table *table, struct slssock *info, struct slsfile *
 	}
 
 	*fdp = fd;
+
+	/* Restore the data into the socket buffers. */
+	error = slsrest_sockbuf(sockbuftable, info->rcvid, &so->so_rcv);
+	if (error != 0)
+	    goto error;
+
+	error = slsrest_sockbuf(sockbuftable, info->sndid, &so->so_snd);
+	if (error != 0)
+	    goto error;
+
+	/* If we also created our peer, restore its buffers, too. */
+	if (sopeer != NULL) {
+	    error = slsrest_sockbuf(sockbuftable, info->peer_rcvid, &sopeer->so_rcv);
+	    if (error != 0)
+		goto error;
+
+	    error = slsrest_sockbuf(sockbuftable, info->peer_sndid, &sopeer->so_snd);
+	    if (error != 0)
+		goto error;
+	}
 
 	return (0);
 

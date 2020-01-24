@@ -218,9 +218,7 @@ slsrest_dovmspace(struct proc *p, char **bufp, size_t *buflenp,
 	    if (error != 0)
 		goto out;
 
-	    PROC_UNLOCK(p);
 	    error = slsrest_vmentry(map, &slsvmentry, objtable);
-	    PROC_LOCK(p);
 	    if (error != 0)
 		goto out;
 	}
@@ -237,7 +235,6 @@ slsrest_dosysvshm(char *buf, size_t bufsize, struct slskv_table *objtable)
 	struct slssysvshm slssysvshm;
 	size_t numsegs;
 	int error, i;
-
 
 	/* 
 	 * The buffer only has segments in it, so its size must 
@@ -261,6 +258,34 @@ slsrest_dosysvshm(char *buf, size_t bufsize, struct slskv_table *objtable)
 	return (0);
 }
 
+static int
+slsrest_dosockbuf(char *buf, size_t bufsize, struct slskv_table *table)
+{
+	struct mbuf *m, *errm;
+	uint64_t sbid;
+	int error;
+
+	error = slsload_sockbuf(&m, &sbid, &buf, &bufsize);
+	if (error != 0)
+	    return (error);
+
+	printf("Restored sockbuf %lx\n", sbid);
+
+	error = slskv_add(table, sbid, (uintptr_t) m);
+	if (error != 0) {
+	    errm = m;
+	    while (errm != NULL) {
+		m = errm;
+		errm = errm->m_nextpkt;
+		m_free(m);
+	    }
+
+	    return (error);
+	}
+
+	return (0);
+}
+
 /* Restore the kevents to the already restored kqueues. */
 static int
 slsrest_dokevents(struct proc *p, struct slskv_table *kevtable)
@@ -275,7 +300,7 @@ slsrest_dokevents(struct proc *p, struct slskv_table *kevtable)
 		continue;
 
 	    /* We only want kqueue-backed open files. */
-	    fp = p->p_fd->fd_files->fdt_ofiles[fd].fde_file;
+	    fp = FDTOFP(p, fd);
 	    if (fp->f_type != DTYPE_KQUEUE)
 		continue;
 
@@ -300,6 +325,7 @@ slsrest_ttyfixup(struct proc *p)
 {
 	struct file *fp, *pttyfp;
 	struct tty *tp;
+	int error;
 	int fd;
 
 	/* 
@@ -308,10 +334,12 @@ slsrest_ttyfixup(struct proc *p)
 	 * therefore has a file at fd 0 that can be used as a terminal.
 	 */
 	FILEDESC_XLOCK(p->p_pptr->p_fd);
-	pttyfp = p->p_pptr->p_fd->fd_files->fdt_ofiles[0].fde_file;
-	if (!fhold(pttyfp))
-	    goto error;
+	pttyfp = FDTOFP(p->p_pptr, 0);
+	error = fhold(pttyfp);
 	FILEDESC_XUNLOCK(p->p_pptr->p_fd);
+	if (error == 0) {
+	    return (EBADF);
+	}
 
 	FILEDESC_XLOCK(p->p_fd);
 	for (fd = 0; fd <= p->p_fd->fd_lastfile; fd++) {
@@ -320,7 +348,7 @@ slsrest_ttyfixup(struct proc *p)
 		continue;
 
 	    /* If we're a tty, try to see if the master side is still there. */
-	    fp = p->p_fd->fd_files->fdt_ofiles[fd].fde_file;
+	    fp = FDTOFP(p, fd);
 	    if ((fp->f_type == DTYPE_VNODE) && 
 		(fp->f_vnode->v_type == VCHR) && 
 		(fp->f_vnode->v_rdev->si_devsw->d_flags & D_TTY) != 0) {
@@ -334,9 +362,13 @@ slsrest_ttyfixup(struct proc *p)
 		 * with the parent's tty device and 
 		 * adjust hold counts.
 		 */
+		PROC_UNLOCK(p);
 		fdrop(fp, curthread);
+		PROC_LOCK(p);
+
 		if (!fhold(pttyfp))
 		    goto error;
+
 		_finstall(p->p_fd, pttyfp, fd, O_CLOEXEC, NULL);
 	    }
 	}
@@ -370,11 +402,6 @@ slsrest_metadata(void *args)
 	int error;
 	char *buf;
 
-	/* We always work on the current process. */
-	p = curproc;
-	PROC_LOCK(p);
-	kern_psignal(p, SIGSTOP);
-
 	/* 
 	 * Transfer the arguments to the stack and free the 
 	 * struct we used to carry them to the new process. 
@@ -386,12 +413,18 @@ slsrest_metadata(void *args)
 	restdata = ((struct slsrest_metadata_args *) args)->restdata;
 
 	free(args, M_SLSMM);
+
+	/* We always work on the current process. */
+	p = curproc;
+	PROC_LOCK(p);
+	kern_psignal(p, SIGSTOP);
 	
 	/* 
 	 * Restore CPU state, file state, and memory 
 	 * state, parsing the buffer at each step. 
 	 */
 	error = slsrest_doproc(p, daemon, &buf, &buflen, restdata); 
+	PROC_UNLOCK(p);
 	if (error != 0)
 	    goto error; 
 
@@ -407,7 +440,6 @@ slsrest_metadata(void *args)
 	if (error != 0)
 	    goto error; 
 
-	PROC_UNLOCK(p);
 
 	/* 
 	 * We're done restoring. If we were the 
@@ -420,7 +452,7 @@ slsrest_metadata(void *args)
 
 
 	/* Sleep until all sessions and controlling terminals are restored. */
-	while (slsm.slsm_restoring >= 0)
+	while (slsm.slsm_restoring >= 0) 
 	    cv_wait(&slsm.slsm_donecv, &slsm.slsm_mtx);
 
 	/* 
@@ -450,7 +482,6 @@ slsrest_metadata(void *args)
 	return;
 
 error:
-	PROC_UNLOCK(p);
 
 	printf("Error %d while restoring process\n", error);
 	mtx_lock(&slsm.slsm_mtx);
@@ -498,7 +529,6 @@ slsrest_fork(uint64_t daemon, char *buf, size_t buflen,
 	 */
 	td = FIRST_THREAD_IN_PROC(p2);
 	thread_lock(td);
-	KASSERT((td->td_flags & TDP_KTHREAD) != 0, ("thread not a kernel thread"));
 
 	cpu_fork_kthread_handler(td, slsrest_metadata, (void *) args);
 
@@ -655,9 +685,22 @@ slsrest_fini(struct slsrest_data *restdata)
 	void *slskev; 
 	uint64_t slsid;
 	struct file *fp;
+	struct mbuf *m, *headm;
 
 	cv_destroy(&restdata->proccv);
 	mtx_destroy(&restdata->procmtx);
+
+	if (restdata->mbuftable != NULL) {
+	    while (slskv_pop(restdata->mbuftable, &slsid, (uintptr_t *) &headm) == 0) {
+		while (headm != NULL) {
+		    m = headm;
+		    headm = headm->m_nextpkt;
+		    m_free(m);
+		}
+	    }
+
+	    slskv_destroy(restdata->mbuftable);
+	}
 
 	if (restdata->sesstable != NULL)
 	    slskv_destroy(restdata->sesstable);
@@ -729,6 +772,10 @@ slsrest_init(struct slsrest_data **restdatap)
 	if (error != 0)
 	    goto error;
 
+	error = slskv_create(&restdata->mbuftable, SLSKV_NOREPLACE);
+	if (error != 0)
+	    goto error;
+	
 	mtx_init(&restdata->procmtx, "SLS proc mutex", NULL, MTX_DEF);
 	cv_init(&restdata->proccv, "SLS proc cv");
 	
@@ -787,16 +834,6 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 
 	/* ------------ End SLOS-Specific Part ------------ */
 
-	/*
-	* XXX We don't actually need that, right? We're overwriting ourselves,
-	* so we de/initely don't want to stop.
-	*/
-	/* XXX Refactor to account for multiple processes. */
-	PROC_LOCK(p);
-	kern_psignal(p, SIGSTOP);
-
-	SLS_DBG("First pass\n");
-
 	/* 
 	 * Iterate through the metadata; each entry represents either 
 	 * a process, complete with threads, FDs, and a VM map, a VM
@@ -814,12 +851,26 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	if (error != 0)
 	    goto out;
 
-	SLS_DBG("Second pass\n");
+
+	/* Recreate all mbufs (to be inserted into socket buffers later). */
+	iter = slskv_iterstart(metatable);
+	while (slskv_itercont(&iter, (uint64_t *) &record, (uintptr_t *) &st) != SLSKV_ITERDONE) {
+	    if (st->type != SLOSREC_SOCKBUF)
+		continue;
+
+	    buf = (char *) record;
+	    buflen = st->len;
+
+	    error = slsrest_dosockbuf(buf, buflen, restdata->mbuftable);
+	    if (error != 0)
+		goto out;
+	}
 
 	error = slsrest_files(metatable, datatable, restdata);
 	if (error != 0)
 	    goto out;
 
+	/* Restore all memory segments. */
 	iter = slskv_iterstart(metatable);
 	while (slskv_itercont(&iter, (uint64_t *) &record, (uintptr_t *) &st) != SLSKV_ITERDONE) {
 	    if (st->type != SLOSREC_SYSVSHM)
@@ -833,7 +884,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 		goto out;
 	}
 
-	SLS_DBG("Third pass\n");
+
 	/* 
 	 * Fourth pass; restore processes. These depend on the objects 
 	 * restored above, which we pass through the object table.
@@ -849,13 +900,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	    error = slsrest_fork(daemon, buf, buflen, restdata);
 	    if (error != 0)
 		goto out;
-	    /* XXX Clone proc and do the restore in there */
-
 	}
-
-
-	kern_psignal(p, SIGCONT);
-	PROC_UNLOCK(p);
 
 	/* Wait until all processes are done restoring. */
 	mtx_lock(&slsm.slsm_mtx);

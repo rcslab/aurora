@@ -1044,7 +1044,7 @@ bnode_borrow(struct btree *btree, struct bnode **bnode)
 
 	int error = 0;
 
-	KASSERT(2 * (*bnode)->size < (*bnode)->bsize, ("bnode needs to borrow"));
+	KASSERT(2 * (*bnode)->size < (*bnode)->bsize, ("bnode does not need to borrow"));
 
 	bval = malloc((*bnode)->vsize, M_SLOS, M_WAITOK);
 
@@ -1073,7 +1073,7 @@ bnode_borrow(struct btree *btree, struct bnode **bnode)
 	 */
 	boffset = bnode_parentoff(*bnode, bparent);
 
-	KASSERT(boffset < ((*bnode)->size + 1), ("bnode found"));
+	KASSERT(boffset < (*bnode)->size + 1, ("bnode not found"));
 
 	if (boffset > 0) {
 	    bleft = bnode_child(slos, bparent, boffset - 1);
@@ -1328,7 +1328,7 @@ bnode_merge(struct btree *btree, struct bnode **bnode)
 	 */
 	boffset = bnode_parentoff(*bnode, bparent);
 
-	KASSERT(boffset != (*bnode)->parent.size + 1, ("node is in parent"));
+	KASSERT(boffset != (*bnode)->parent.size + 1, ("node is not in parent"));
 
 	/*
 	 * Otherwise, we have siblings. Thankfully, merging two

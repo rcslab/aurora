@@ -71,6 +71,7 @@ slsckpt_pipe(struct proc *p, struct file *fp, struct sbuf *sb)
 
 	info.magic = SLSPIPE_ID;
 	info.slsid = (uint64_t) pipe;
+	info.pipebuf = pipe->pipe_buffer;
 
 	/* 
 	 * We use the peer's address regardless of 
@@ -85,6 +86,12 @@ slsckpt_pipe(struct proc *p, struct file *fp, struct sbuf *sb)
 	if (error != 0)
 	    return (error);
 
+	error = sbuf_bcat(sb, pipe->pipe_buffer.buffer, pipe->pipe_buffer.cnt);
+	if (error != 0)
+	    return (error);
+
+	/* XXX Account for pipe direct mappings */
+
 	return (0);
 }
 
@@ -92,8 +99,9 @@ slsckpt_pipe(struct proc *p, struct file *fp, struct sbuf *sb)
 int
 slsrest_pipe(struct slskv_table *filetable, struct slspipe *ppinfo, int *fdp)
 {
-	struct file *peerfp;
+	struct file *fp, *peerfp;
 	int localfd, peerfd;
+	struct pipe *pipe;
 	int filedes[2];
 	int error;
 
@@ -111,13 +119,26 @@ slsrest_pipe(struct slskv_table *filetable, struct slspipe *ppinfo, int *fdp)
 	    peerfd = filedes[1];
 	}
 
+	fp = FDTOFP(curthread->td_proc, localfd);
+	pipe = (struct pipe *) fp->f_data; 
+
+	/* Restore the buffer's state. */
+	pipe->pipe_buffer.cnt = ppinfo->pipebuf.cnt;
+	pipe->pipe_buffer.in = ppinfo->pipebuf.in;
+	pipe->pipe_buffer.out = ppinfo->pipebuf.out;
+	/* Check if the data fits in the newly created pipe. */
+	if (pipe->pipe_buffer.size < ppinfo->pipebuf.cnt)
+	    return (EINVAL);
+
+	memcpy(pipe->pipe_buffer.buffer, ppinfo->data, ppinfo->pipebuf.cnt);
+
 	/* 
 	 * Grab the peer's file pointer, save it to the table. 
 	 * When we come across the peer's record later, we'll have
 	 * already restored it, and so we will just ignore it. We
 	 * thus avoid restoring the same pipe twice. 
 	 */
-	peerfp = curthread->td_proc->p_fd->fd_files->fdt_ofiles[peerfd].fde_file;
+	peerfp = FDTOFP(curthread->td_proc, peerfd);
 
 	/* 
 	 * We take the liberty here of using the pipe's SLS ID instead

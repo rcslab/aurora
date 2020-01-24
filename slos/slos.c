@@ -243,14 +243,17 @@ slosHandler(struct module *inModule, int inEvent, void *inArg) {
 
 		/* Close the devfs vnode. */
 		if (slos.slos_vp != NULL) {
-		    // vdrop instead of close as we did not increment writecount of vnode, we 
-		    // incremented use count on namei operation.
+		    /* 
+		     * We use vdrop instead of close as we did not increment writecount
+		     * of vnode, we incremented use count on namei operation.
+		     */
 		    vdrop(slos.slos_vp);
 		    if (error != 0)
 			printf("ERROR: slos_vpclose() failed with %d\n", error);
 		}
 
 		lockdestroy(&slos.slos_lock);
+
 		mtx_unlock(&slos.slos_mtx);
 
 		/* Destroy the mutex. */

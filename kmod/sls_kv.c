@@ -406,3 +406,23 @@ slskv_deserial(char *buf, size_t len, struct slskv_table **tablep)
 	
 	return (0);
 }
+
+int 
+slsset_find(slsset *table, uint64_t key)
+{
+	uintptr_t nothing;
+
+	return (slskv_find(table, key, &nothing));
+}
+
+int
+slsset_add(slsset *table, uint64_t key)
+{
+	return (slskv_add(table, key, (uintptr_t) key));
+}
+
+int
+slsset_pop(slsset *table, uint64_t *key)
+{
+	return (slskv_pop(table, key, (uintptr_t *) key));
+}
