@@ -73,8 +73,8 @@ struct slos_inode {
 
 	uint16_t		ino_mode;		/* mode */
 	uint64_t		ino_link_num;
-	uint64_t		ino_asize;
-	uint64_t		ino_size;
+	uint64_t		ino_asize;		/* Actual size of file on disk */
+	uint64_t		ino_size;		/* Size of file */
 };
 
 
@@ -111,7 +111,6 @@ struct slos_node *slos_istat(struct slos *slos, uint64_t inoblk);
 struct slos_node *slos_vpimport(struct slos *slos, uint64_t inoblk);
 int slos_vpexport(struct slos *slos, struct slos_node *vp);
 void slos_vpfree(struct slos *slos, struct slos_node *vp);
-
 int slos_test_inode(void);
 
 #endif /* _SLOS_INODE_H_ */

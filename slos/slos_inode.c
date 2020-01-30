@@ -360,7 +360,6 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 	 * Search the inodes btree for an existing 
 	 * inode with the same key.
 	 */
-	DBUG("iCreate Allocation search - %lu\n", pid);
 	error = btree_search(slos->slos_inodes, pid, &diskptr);
 	if (error == 0) {
 	    /* 
@@ -376,9 +375,7 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 	    goto error;
 	}
 
-	DBUG("iCreate Allocation - Diskptr\n");
 	diskptr = slos_alloc(slos->slos_alloc, 1);
-	DBUG("Diskptr allocated - %ld , %ld\n", diskptr.offset, diskptr.size);
 	if (diskptr.offset == 0) {
 	    error = ENOSPC;
 	    goto error;
@@ -406,9 +403,7 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 	ino->ino_size = 0;
 
 	/* Get a block for the records btree. */
-	DBUG("iCreate Allocation - Recptr\n");
 	recptr = slos_alloc(slos->slos_alloc, 1);
-	DBUG("Recptr allocated - %ld , %ld\n", recptr.offset, recptr.size);
 	if (recptr.offset == 0) {
 	    error = ENOSPC;
 	    goto error;
@@ -984,5 +979,4 @@ slos_test_inode(void)
 	
 	return error;
 }
-
 #endif /* SLOS_TESTS */

@@ -169,15 +169,17 @@ error:
 int 
 slos_rremove(struct slos_node *vp, struct slos_record *record)
 {
+	uint64_t key;
+	struct slos_recentry val;
+
 	struct slos *slos = vp->sn_slos;
 	struct slos_blkalloc *alloc = slos->slos_alloc;
 	struct btree *rec_btree = btree_init(slos, record->rec_data.offset, ALLOCMAIN);
 	int error;
-	uint64_t key;
-	struct slos_diskptr val;
+
 	/* Free each piece of data in the data btree ondisk*/
 	BTREE_KEY_FOREACH(rec_btree, key, val) {
-	    slos_free(alloc, val);
+	    slos_free(alloc, val.diskptr);
 	    error = btree_delete(rec_btree, key);
 	    if (error) {
 		DBUG("Problem deleting key value pair in vnode %lu, record %lu, %lu", 
@@ -186,8 +188,10 @@ slos_rremove(struct slos_node *vp, struct slos_record *record)
 	    }
 	}
 
-	if (error)
+	if (error) {
+	    DBUG("Error removing data from tree\n");
 	    return (error);
+	}
 
 	/* Remove the record from vnode */
 	error = btree_delete(vp->sn_records, record->rec_num);
@@ -989,14 +993,14 @@ slos_firstrec(struct slos_node *vp, struct slos_record ** record)
 	error = btree_keymax(vp->sn_records, &rno, &ptr);
 	if (error != 0) {
 	    mtx_unlock(&vp->sn_mtx);
-
+	    *record = NULL;
 	    return (EINVAL);
 	}
 
 	error = slos_recdread(slos, ptr.offset, &rp);
 	if (error != 0) {
 	    mtx_unlock(&vp->sn_mtx);
-
+	    *record = NULL;
 	    return (EIO);
 	}
 

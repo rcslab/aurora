@@ -315,7 +315,6 @@ retry:
 
 		return DISKPTR_BLOCK(0);
 	    }
-
 	    partial = 1;
 	} else if (error != 0)  {
 	    /* We had an actual error, abort. */

@@ -31,6 +31,7 @@ tests/tcplisten/tcplisten
 tests/udplisten/udplisten
 tests/unixlisten/unixlisten
 tests/unlink/unlink
+tests/slsfs/file
 
 
 tools/dumpcompose/dumpcompose
@@ -56,6 +57,9 @@ ckpt.sh
 cleanup.sh
 offset.inc
 tags
+compile_commands.json
+vnode_if*
+cscope.out
 localsocket
 slsfifo
 slssysvshm

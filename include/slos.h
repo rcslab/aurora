@@ -8,11 +8,19 @@
 #include <sys/lock.h>
 #include <sys/lockmgr.h>
 #include <sys/mutex.h>
+
+#ifdef WITH_DEBUG
+#define DBUG(fmt, ...) do {			    \
+    printf("(%s: Line %d) ", __FILE__, __LINE__);   \
+    printf(fmt, ##__VA_ARGS__);			    \
+    } while (0) 
+#else
+#define DBUG(fmt, ...) ((void)(0));
+#endif // WITH_DEBUG
+
 /*
  * SLOS Pointer
  */
-
-/* The on-disk version of a block pointer. */
 struct slos_diskptr {
 	/*uint64_t  _reserved;*/
 	uint64_t    offset;	/* The block offset of the first block of the region. */

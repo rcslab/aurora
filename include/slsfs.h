@@ -3,22 +3,17 @@
 
 struct slos;
 
-#ifdef WITH_DEBUG
-#define DBUG(fmt, ...) do {			    \
-    printf("(%s: Line %d) ", __FILE__, __LINE__);   \
-    printf(fmt, ##__VA_ARGS__);			    \
-    } while (0) 
-#else
-#define DBUG(fmt, ...)
-#endif // WITH_DEBUG
 
 #define SLOS_ROOT_INODE (100000)
 #define TOSMP(mp) ((struct slsfsmount *)(mp->mnt_data))
 #define MPTOSLOS(mp) ((TOSMP(mp)->sp_slos))
 #define SLSVP(vp) ((struct slos_node *)(vp->v_data))
+#define SLSVPSIZ(vp) (SLSINO(vp)->ino_size)
 #define SLSINO(svp) ((struct slos_inode *)(svp->sn_ino))
 #define	VPSLOS(vp) (SLSVP(vp)->sn_slos)
-#define SMPSLOS(smp) (mp->sdev->slos)
+#define SMPSLOS(mp) ((mp)->sdev->slos)
+#define SECTORSIZE(smp) ((smp)->sp_sdev->devblocksize)
+#define IOSIZE(svp) ((svp)->sn_slos->slos_sb->sb_bsize)
 
 #define SVINUM(sp) (SLSINO(sp)->ino_pid)
 #define VINUM(vp) (SVINUM(SLSVP(vp)))
@@ -34,7 +29,7 @@ struct slsfsmount {
     struct slos			*sp_slos;
     int				sp_ronly;
 
-    int (*sls_valloc)(struct vnode *, int, struct ucred *, struct vnode **);
+    int (*sls_valloc)(struct vnode *, mode_t, struct ucred *, struct vnode **);
 };
 
 struct slsfs_device {

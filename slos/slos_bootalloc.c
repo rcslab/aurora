@@ -327,7 +327,6 @@ slos_bootalloc(struct slos_bootalloc *alloc)
 	if (alloc->bytemap[blkid] != 0)
 	    DBUG("ERROR: DOUBLE ALLOC FOR %ld\n", blkid);
 	alloc->bytemap[blkid] = 1;
-	DBUG("Allocating at offset %ld, of size %ld\n", ptr.offset, ptr.size);
 
 	return ptr;
 }
@@ -340,7 +339,6 @@ slos_bootfree(struct slos_bootalloc *alloc, struct slos_diskptr diskptr)
 	if (diskptr.size == 0)
 	    return;
 	    
-	DBUG("Trying to free offset %ld, of size %ld\n", diskptr.offset, diskptr.size);
 	KASSERT(alloc->size <= alloc->maxsize, ("bootalloc_free in bounds"));
 	KASSERT(diskptr.size == 1, ("disk pointer is one block wide"));
 	KASSERT(alloc->bytemap[diskptr.offset] == 1, ("freeing unallocated block"));

@@ -76,7 +76,7 @@ int btree_delete(struct btree *btree, uint64_t key);
 void btree_print(struct btree *btree);
 
 int btree_overwrite(struct btree *btree, uint64_t key, void *value, void *pastval);
-int btree_keymin(struct btree *btree, uint64_t *key, void *value);
+int btree_keymin(struct btree * btree, uint64_t *key, void *value);
 int btree_keymax(struct btree *btree, uint64_t *key, void *value);
 
 void btree_addelem(struct btree *btree, struct bnode *bnode);
