@@ -164,7 +164,7 @@ slsp_detachall(struct slspart *slsp)
 	uint64_t pid;
 
 	/* Go through the PIDs resident in the partition, remove them. */
-	while (slsset_pop(slsp->slsp_procs, &pid) == 0)
+	SET_FOREACH_POP(slsp->slsp_procs, pid)
 	    slskv_del(slsm.slsm_procs, pid);
 
 	return (0);

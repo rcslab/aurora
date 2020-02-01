@@ -93,6 +93,25 @@ struct slskv_iter {
 struct slskv_iter slskv_iterstart(struct slskv_table *table);
 int slskv_itercont(struct slskv_iter *iter, uint64_t *key, uintptr_t *value);
 
+#define KV_FOREACH_POP(table, kvkey, kvvalue) \
+	_Static_assert(sizeof(kvkey) == sizeof(uint64_t), "popping into variable of the wrong size"); \
+	_Static_assert(sizeof(kvvalue) == sizeof(uintptr_t), "popping into variable of the wrong size"); \
+	while (slskv_pop(table, (uint64_t *) &kvkey, (uintptr_t *) &kvvalue) == 0)
+
+#define SET_FOREACH_POP(settable, setvalue) \
+	_Static_assert(sizeof(setvalue) == sizeof(uint64_t), "popping into variable of the wrong size"); \
+	while (slsset_pop(settable, (uint64_t *) &setvalue) == 0)
+
+#define KV_FOREACH(table, iter, kvkey, kvvalue) \
+	_Static_assert(sizeof(kvkey) == sizeof(uint64_t), "popping into variable of the wrong size"); \
+	_Static_assert(sizeof(kvvalue) == sizeof(uintptr_t), "popping into variable of the wrong size"); \
+	for (iter = slskv_iterstart(table); slskv_itercont(&iter, (uint64_t *) &kvkey, (uintptr_t *) &kvvalue) != SLSKV_ITERDONE;)
+
+#define KVSET_FOREACH(settable, iter, setvalue) \
+	_Static_assert(sizeof(setvalue) == sizeof(uint64_t), "popping into variable of the wrong size"); \
+	iter = slskv_iterstart(settable); \
+	for (iter = slskv_iterstart(settable); slskv_itercont(&iter, (uint64_t *) &setvalue, (uintptr_t *) &setvalue) != SLSKV_ITERDONE;)
+
 /* Zone for the wrapper struct around KV pairs, used to enter them into a table. */
 extern uma_zone_t slskv_zone;
 

@@ -148,7 +148,7 @@ slsrest_kevents(int fd, slsset *slskevs)
 	int error;
 
 	/* For each kqinfo, create a kevent and register it. */
-	while (slsset_pop(slskevs, (uint64_t *) &slskev) == 0) {
+	SET_FOREACH_POP(slskevs, slskev) {
 	    kev = malloc(sizeof(*kev), M_SLSMM, M_WAITOK);
 
 	    kev->ident = slskev->ident;

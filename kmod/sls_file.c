@@ -836,7 +836,8 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc info,
 	struct file *fp;
 	uint64_t slsid;
 	int error = 0;
-	int fd, res;
+	uint64_t fd;
+	int res;
 
 	cdir = sbuf_data(info.cdir);
 	rdir = sbuf_data(info.rdir);
@@ -862,7 +863,7 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc info,
 	newfdp->fd_cmask = info.fd_cmask;
 
 	/* Attach the appropriate open files to the descriptor table. */
-	while (slskv_pop(fdtable, (uint64_t *) &fd, (uintptr_t *) &slsid) == 0) {
+	KV_FOREACH_POP(fdtable, fd, slsid) {
 
 	    /* Get the restored open file from the ID. */
 	    error = slskv_find(filetable, slsid, (uint64_t *) &fp);

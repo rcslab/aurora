@@ -344,7 +344,7 @@ slskv_serial(struct slskv_table *table, struct sbuf *sb)
 
 	/* Iterate the hashtable, saving the key-value pairs. */
 	iter = slskv_iterstart(table);
-	while (slskv_pop(table, &key, &value) == 0) {
+	KV_FOREACH_POP(table, key, value) {
 	    error = sbuf_bcat(sb, (void *) &key, sizeof(key));
 	    if (error != 0)
 		return (error);

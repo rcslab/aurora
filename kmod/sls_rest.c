@@ -592,8 +592,7 @@ slsrest_dovmobjects(struct slskv_table *metatable, struct slskv_table *datatable
 	int error;
 
 	/* First pass; create of find all objects to be used. */
-	iter = slskv_iterstart(metatable);
-	while (slskv_itercont(&iter, (uint64_t *) &record, (uintptr_t *) &st) != SLSKV_ITERDONE) {
+	KV_FOREACH(metatable, iter, record, st) {
 	    buf = (char *) record;
 	    buflen = st->len;
 
@@ -622,8 +621,7 @@ slsrest_dovmobjects(struct slskv_table *metatable, struct slskv_table *datatable
 	}
 
 	/* Second pass; link up the objects to their shadows. */
-	iter = slskv_iterstart(metatable);
-	while (slskv_itercont(&iter, (uint64_t *) &record, (uintptr_t *) &st) != SLSKV_ITERDONE) {
+	KV_FOREACH(metatable, iter, record, st) {
 
 	    if (st->type != SLOSREC_VMOBJ)
 		continue;
@@ -659,8 +657,7 @@ slsrest_dofiles(struct slskv_table *metatable, struct slsrest_data *restdata)
 	void *record;
 	int error;
 
-	iter = slskv_iterstart(metatable);
-	while (slskv_itercont(&iter, (uint64_t *) &record, (uintptr_t *) &st) != SLSKV_ITERDONE) {
+	KV_FOREACH(metatable, iter, record, st) {
 	    if (st->type != SLOSREC_FILE)
 		continue;
 
@@ -686,7 +683,7 @@ slsrest_fini(struct slsrest_data *restdata)
 	mtx_destroy(&restdata->procmtx);
 
 	if (restdata->mbuftable != NULL) {
-	    while (slskv_pop(restdata->mbuftable, &slsid, (uintptr_t *) &headm) == 0) {
+	    KV_FOREACH_POP(restdata->mbuftable, slsid, headm) {
 		while (headm != NULL) {
 		    m = headm;
 		    headm = headm->m_nextpkt;
@@ -710,18 +707,16 @@ slsrest_fini(struct slsrest_data *restdata)
 	    slskv_destroy(restdata->proctable);
 
 	if (restdata->filetable != NULL) {
-	    while (slskv_pop(restdata->filetable, &slsid, (uintptr_t *) &fp) == 0) {
-		//SLS_DBG("Count for %p is %d\n", fp, fp->f_count);
+	    KV_FOREACH_POP(restdata->filetable, slsid, fp)
 		fdrop(fp, curthread);
-	    }
 
 	    slskv_destroy(restdata->filetable);
 	}
 
 	/* Each value in the table is a set of kevents. */
 	if (restdata->kevtable != NULL) {
-	    while (slskv_pop(restdata->kevtable, &kq, (uintptr_t *) &kevset) == 0) {
-		while (slsset_pop(kevset, (uint64_t *) &slskev) == 0)
+	    KV_FOREACH_POP(restdata->kevtable, kq, kevset) {
+		SET_FOREACH_POP(kevset, slskev)
 		    free(slskev, M_SLSMM);
 
 		slsset_destroy(kevset);
@@ -843,8 +838,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	    if (error != 0)
 		goto out;
 
-	    iter = slskv_iterstart(slsp->slsp_sckpt->sckpt_rectable);
-	    while (slskv_itercont(&iter, &slsid, (uintptr_t *) &rec) != SLSKV_ITERDONE) {
+	    KV_FOREACH(slsp->slsp_sckpt->sckpt_rectable, iter, slsid, rec) {
 
 		st = malloc(sizeof(*st), M_SLSMM, M_WAITOK);
 		st->type = rec->srec_type;
@@ -857,8 +851,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 		}
 	    }
 
-	    iter = slskv_iterstart(slsp->slsp_sckpt->sckpt_objtable);
-	    while (slskv_itercont(&iter, (uint64_t *) &obj, (uintptr_t *) &shadow) != SLSKV_ITERDONE) {
+	    KV_FOREACH(slsp->slsp_sckpt->sckpt_objtable, iter, obj, shadow) {
 		vm_object_reference(obj);
 
 		vm_object_t shadow = obj;
@@ -903,8 +896,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 
 
 	/* Recreate all mbufs (to be inserted into socket buffers later). */
-	iter = slskv_iterstart(metatable);
-	while (slskv_itercont(&iter, (uint64_t *) &record, (uintptr_t *) &st) != SLSKV_ITERDONE) {
+	KV_FOREACH(metatable, iter, record, st) {
 	    if (st->type != SLOSREC_SOCKBUF)
 		continue;
 
@@ -921,8 +913,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	    goto out;
 
 	/* Restore all memory segments. */
-	iter = slskv_iterstart(metatable);
-	while (slskv_itercont(&iter, (uint64_t *) &record, (uintptr_t *) &st) != SLSKV_ITERDONE) {
+	KV_FOREACH(metatable, iter, record, st) {
 	    if (st->type != SLOSREC_SYSVSHM)
 		continue;
 
@@ -939,8 +930,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	 * Fourth pass; restore processes. These depend on the objects 
 	 * restored above, which we pass through the object table.
 	 */
-	iter = slskv_iterstart(metatable);
-	while (slskv_itercont(&iter, (uint64_t *) &record, (uintptr_t *) &st) != SLSKV_ITERDONE) {
+	KV_FOREACH(metatable, iter, record, st) {
 	    if (st->type != SLOSREC_PROC)
 		continue;
 
@@ -980,7 +970,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 out:
 	/* Cleanup the tables used for bringing the data in memory. */
 	if ((metatable != NULL) && (slsp->slsp_attr.attr_target != SLS_MEM)) {
-	    while (slskv_pop(metatable, (uint64_t *) &record, (uintptr_t *) &st) == 0) {
+	    KV_FOREACH_POP(metatable, record, st) {
 		free(st, M_SLSMM);
 		free(record, M_SLSMM);
 	    }
@@ -989,7 +979,7 @@ out:
 	}
 	
 	if ((datatable != NULL) && (slsp->slsp_attr.attr_target != SLS_MEM)) {
-	    while (slskv_pop(datatable, (uint64_t *) &record, (uint64_t *) &slsdata) == 0) {
+	    KV_FOREACH_POP(datatable, record, slsdata) {
 		LIST_FOREACH_SAFE(pagerun, slsdata, next, tmppagerun) {
 		    LIST_REMOVE(pagerun, next);
 		    free(pagerun->data, M_SLSMM);

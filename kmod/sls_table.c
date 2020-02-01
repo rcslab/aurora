@@ -230,6 +230,37 @@ sls_readdata_slos(struct slos_node *vp, uint64_t rno, struct slos_rstat stat,
 	return 0;
 }
 
+static void
+sls_free_metatable(struct slskv_table *metatable)
+{
+	struct slos_rstat *st;
+	void *record;
+
+	KV_FOREACH_POP(metatable, record, st) {
+	    free(st, M_SLSMM);
+	    free(record, M_SLSMM);
+	}
+
+	slskv_destroy(metatable);
+}
+
+static void
+sls_free_datatable(struct slskv_table *datatable)
+{
+	struct slspagerun *pagerun, *tmp;
+	struct slsdata data;
+	void *record;
+
+	KV_FOREACH_POP(datatable, record, data) {
+	    LIST_FOREACH_SAFE(pagerun, &data, next, tmp) {
+		free(pagerun->data, M_SLSMM);
+		free(pagerun, M_SLSMM);
+	    }
+	}
+
+	slskv_destroy(datatable);
+}
+
 /*
  * Reads in a record from the SLOS and saves it in
  * the record table.
@@ -239,9 +270,7 @@ sls_read_slos(struct slos_node *vp, struct slskv_table **metatablep,
 	struct slskv_table **datatablep)
 {
 	struct slskv_table *metatable, *datatable;
-	struct slspagerun *pagerun, *tmp;
-	struct slos_rstat stat, *st;
-	struct slsdata data;
+	struct slos_rstat stat;
 	uint64_t rno;
 	void *record;
 	int error;
@@ -297,20 +326,8 @@ sls_read_slos(struct slos_node *vp, struct slskv_table **metatablep,
 
 error:
 
-	while (slskv_pop(metatable, (uint64_t *) &record, (uintptr_t *) &st) == 0) {
-	    free(st, M_SLSMM);
-	    free(record, M_SLSMM);
-	}
-
-	while (slskv_pop(datatable, (uint64_t *) &record, (uintptr_t *) &data) == 0) {
-	    LIST_FOREACH_SAFE(pagerun, &data, next, tmp) {
-		free(pagerun->data, M_SLSMM);
-		free(pagerun, M_SLSMM);
-	    }
-	}
-
-	slskv_destroy(metatable);
-	slskv_destroy(datatable);
+	sls_free_metatable(metatable);
+	sls_free_metatable(datatable);
 
 	return error;
 }
@@ -545,7 +562,7 @@ sls_write_slos(struct slos_node *vp, struct slsckpt_data *sckpt_data)
 	uint64_t rno;
 	int error;
 
-	while (slskv_pop(sckpt_data->sckpt_rectable, (uint64_t *) &slsid, (uintptr_t *) &rec) == 0) {
+	KV_FOREACH_POP(sckpt_data->sckpt_rectable, slsid, rec) {
 	    /* 
 	     * VM object records are special, since we need to dump 
 	     * actual memory along with the metadata.
@@ -975,7 +992,7 @@ slstable_test(void)
 	 * - Is the struct identical to the one in the original table?
 	 * - If the entry is a data entry, also check its data.
 	 */
-	while (slskv_pop(metatable, (uint64_t *) &record, (uintptr_t *) &st) == 0) {
+	KV_FOREACH_POP(metatable, record, st) {
 
 	    switch (st->type) {
 	    case SLOSREC_TESTMETA:
@@ -1013,7 +1030,7 @@ slstable_test(void)
 	}
 
 	lost_elements = 0;
-	while (slskv_pop(origtable, (uint64_t *) &sb, (uintptr_t *) &type) == 0) {
+	KV_FOREACH_POP(origtable, sb, type) {
 	    sbuf_delete(sb);
 	    lost_elements += 1;
 	}
@@ -1027,7 +1044,7 @@ slstable_test(void)
 out:
 	
 	if (origtable != NULL) {
-	    while (slskv_pop(origtable, (uint64_t *) &sb, (uintptr_t *) &type) == 0)
+	    KV_FOREACH_POP(origtable, sb, type)
 		sbuf_delete(sb);
 
 	    slskv_destroy(origtable);
@@ -1038,7 +1055,7 @@ out:
 	    slskv_destroy(backuptable);
 	
 	if (metatable != NULL) {
-	    while (slskv_pop(metatable, (uint64_t *) &record, (uintptr_t *) &st) == 0) {
+	    KV_FOREACH_POP(metatable, record, st) {
 		free(st, M_SLSMM);
 		free(record, M_SLSMM);
 	    }
@@ -1048,7 +1065,7 @@ out:
 
 	
 	if (datatable != NULL) {
-	    while (slskv_pop(datatable, (uint64_t *) &record, (uint64_t *) &slsdata) == 0) {
+	    KV_FOREACH_POP(datatable, record, slsdata) {
 		LIST_FOREACH_SAFE(pagerun, slsdata, next, tmppagerun) {
 		    LIST_REMOVE(pagerun, next);
 		    free(pagerun->data, M_SLSMM);

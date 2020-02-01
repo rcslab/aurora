@@ -93,9 +93,8 @@ slsckpt_stop(slsset *procset)
 	struct slskv_iter iter;
 	struct proc *p;
 	
-	iter = slskv_iterstart(procset);
-	while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
-	    /* Force all threads to the kernel-user boundary. */
+	KVSET_FOREACH(procset, iter, p) {
+	    /* Force all threads to the kernel-user boundary. */ 
 	    PROC_LOCK(p);
 	    thread_single(p, SINGLE_BOUNDARY);
 	    PROC_UNLOCK(p);
@@ -111,8 +110,7 @@ slsckpt_cont(slsset *procset)
 	struct slskv_iter iter;
 	struct proc *p;
 
-	iter = slskv_iterstart(procset);
-	while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
+	KVSET_FOREACH(procset, iter, p) {
 	    /* Free each process from the boundary. */
 	    PROC_LOCK(p);
 	    thread_single_end(p, SINGLE_BOUNDARY);
@@ -183,6 +181,35 @@ out:
 	}
 
 	return error;
+}
+
+
+/*
+ * Collapse an object created by SLS into its parent.
+ */
+static void
+slsckpt_collapse(struct slskv_table *objtable)
+{
+	struct slskv_iter iter;
+	vm_object_t obj, shadow;
+	
+	/* 
+	 * When collapsing, we do so by removing the 
+	 * reference of the original object we took in 
+	 * slsckpt_shadow. After having done so, the
+	 * object is left with one reference and one
+	 * shadow, so it can be collapsed with it.
+	 */
+	/* 
+	 * XXX This probably does not work right now. Suppose we have an object directly
+	 * shared among processes; the at shadow time we got 2 references, not one.
+	 * We need to be able to reason about how many references we have. Moreover,
+	 * the shadow is still referred to by VM entries of the object. In that case,
+	 * we need to actually fix up the references while collapsing.
+	 */
+	/* XXX Don't forget the SYSV shared memory table! */
+	KV_FOREACH(objtable, iter, obj, shadow) 
+	    vm_object_deallocate(obj);
 }
 
 /*
@@ -358,8 +385,7 @@ slsckpt_shadowone(struct proc *p, struct slskv_table *table, int is_fullckpt)
 error:
 
 	/* Deallocate only the shadows we have control over. */
-	while (slskv_pop(table, (uint64_t *) &obj, (uintptr_t *) &shadow) == 0)
-	    vm_object_deallocate(shadow);
+	slsckpt_collapse(table);
 
 	slskv_destroy(vmentry_table);
 
@@ -374,8 +400,7 @@ slsckpt_shadow(slsset *procset, struct slskv_table *table, int is_fullckpt)
 	struct proc *p;
 	int error;
 
-	iter = slskv_iterstart(procset);
-	while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
+	KVSET_FOREACH(procset, iter, p) {
 	    error = slsckpt_shadowone(p, table, is_fullckpt);
 	    if (error != 0)
 		return (error);
@@ -434,8 +459,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	SDT_PROBE0(sls, , , sysv);
 
 	/* Get the data from all processes in the partition. */
-	iter = slskv_iterstart(procset);
-	while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
+	KVSET_FOREACH(procset, iter, p) {
 	    error = slsckpt_metadata(p, slsp, procset, sckpt_data);
 	    if(error != 0) {
 		SLS_DBG("Checkpointing failed\n");
@@ -642,8 +666,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	     */
 	    deadpid = 0;
 
-	    iter = slskv_iterstart(args->slsp->slsp_procs);
-	    while (slskv_itercont(&iter, &pid, (uintptr_t *) &pid) != SLSKV_ITERDONE) {
+	    KVSET_FOREACH(args->slsp->slsp_procs, iter, pid) {
 
 		/* Remove the PID of the unavailable process from the set. */
 		if (deadpid != 0) {
@@ -653,17 +676,12 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		    deadpid = 0;
 		}
 
-		/*
-		 * Get a hold of the process to be checkpointed, bringing its 
-		 * thread stack to memory and preventing it from exiting.
-		 */
-		printf("Getting pid %lu\n", pid);
-		error = pget(pid, PGET_WANTREAD, &p);
 		/* 
 		 * Check if the process we are trying to checkpoint is trying
 		 * to exit, if so not only drop the reference the daemon has, 
 		 * but also that of the SLS itself.
 		 */
+		error = pget(pid, PGET_WANTREAD, &p);
 		if (error != 0 || !SLS_RUNNABLE(p, args->slsp)) {
 		    SLS_DBG("Getting a process %ld failed\n", pid);
 		    /* Drop the reference taken by pget. */
@@ -703,8 +721,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		 * to get detached from their terminals.
 		 */
 		slsckpt_stop(procset);
-		iter = slskv_iterstart(procset);
-		while (slskv_itercont(&iter, (uint64_t *) &p, (uintptr_t *) &p) != SLSKV_ITERDONE) {
+		KVSET_FOREACH(procset, iter, p) {
 		    /* 
 		     * Check every process if it had a 
 		     * new child while we were checking.
@@ -747,7 +764,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	    nanotime(&tend);
 
 	    /* Release all checkpointed processes. */
-	    while (slsset_pop(procset, (uint64_t *) &p) == 0)
+	    SET_FOREACH_POP(procset, p)
 		PRELE(p);
 
 	    /* If the interval is 0, checkpointing is non-periodic. Finish up. */
@@ -789,7 +806,7 @@ out:
 
 	if (procset != NULL) {
 	    /* Release any process references gained. */
-	    while (slsset_pop(procset, (uint64_t *) &p) == 0)
+	    SET_FOREACH_POP(procset, p)
 		PRELE(p);
 	    slsset_destroy(procset);
 	}
