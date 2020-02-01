@@ -16,7 +16,8 @@
 #define UNADDR_MAX (104)
 #define DEVFS_ROOT "/dev/"
 
-int slsckpt_socket(struct proc *p, struct socket *so, struct sbuf *sb);
+int slsckpt_socket(struct proc *p, struct socket *so, 
+	struct sbuf *sb, struct slsckpt_data *sckpt_data);
 int slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable, 
 	struct slssock *info, struct slsfile *finfo, int *fdp);
 
@@ -39,7 +40,7 @@ int slsrest_vnode(struct sbuf *path, struct slsfile *info, int *fdp);
 int slsckpt_fifo(struct proc *p, struct vnode *vp, struct sbuf *sb);
 int slsrest_fifo(struct sbuf *path, struct slsfile *info, int *fdp);
 
-int slsckpt_filedesc(struct proc *p, struct slskv_table *objtable, struct sbuf *sb);
+int slsckpt_filedesc(struct proc *p, struct slsckpt_data *sckpt_data, struct sbuf *sb);
 int slsrest_filedesc(struct proc *p, struct slsfiledesc info, 
 	struct slskv_table *fdtable, struct slskv_table *filetable);
 

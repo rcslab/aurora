@@ -329,7 +329,7 @@ slsload_file(struct slsfile *slsfile, void **data, char **bufp, size_t *bufsizep
 	    return (error);
 
 	if (slsfile->magic != SLSFILE_ID) {
-	    SLS_DBG("magic mismatch (%lx, expected %x", slsfile->magic, SLSFILE_ID);
+	    SLS_DBG("magic mismatch (%lx, expected %x)\n", slsfile->magic, SLSFILE_ID);
 	    return (EINVAL);
 	}
 

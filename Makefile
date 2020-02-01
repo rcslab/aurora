@@ -1,3 +1,3 @@
-SUBDIR = libsls kmod slos tests tools shim slsfs
+SUBDIR=libsls kmod slos tests tools shim slsfs
 
 .include <bsd.subdir.mk>

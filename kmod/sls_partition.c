@@ -33,6 +33,71 @@
 #include "sls_mm.h"
 #include "sls_partition.h"
 
+int
+slsckpt_create(struct slsckpt_data **sckpt_datap)
+{
+	struct slsckpt_data *sckpt_data = NULL;
+	int error;
+
+	sckpt_data = malloc(sizeof(*sckpt_data), M_SLSMM, M_WAITOK | M_ZERO);
+
+	error = slskv_create(&sckpt_data->sckpt_rectable, SLSKV_NOREPLACE);
+	if (error != 0)
+	    goto error;
+
+	error = slskv_create(&sckpt_data->sckpt_objtable, SLSKV_NOREPLACE);
+	if (error != 0)
+	    goto error;
+
+	*sckpt_datap = sckpt_data;
+
+	return (0);
+
+error:
+
+	if (sckpt_data != NULL) {
+	    slskv_destroy(sckpt_data->sckpt_objtable);
+	    slskv_destroy(sckpt_data->sckpt_rectable);
+	}
+
+	free(sckpt_data, M_SLSMM);
+
+	return (error);
+}
+
+void
+slsckpt_destroy(struct slsckpt_data *sckpt_data)
+{
+	vm_object_t obj, shadow;
+	struct sls_record *rec;
+	uint64_t slsid;
+
+	if (sckpt_data == NULL)
+	    return;
+
+	if (sckpt_data->sckpt_objtable != NULL) {
+	    while (slskv_pop(sckpt_data->sckpt_objtable, (uint64_t *) &obj, (uintptr_t *) &shadow) == 0)
+		/* Destroy exactly the shadows we have the sole reference for */
+		if (shadow != NULL)
+		    vm_object_deallocate(shadow);
+		else
+		    vm_object_deallocate(obj);
+	    
+	    slskv_destroy(sckpt_data->sckpt_objtable);
+	}
+
+	if (sckpt_data->sckpt_objtable != NULL) {
+	    while (slskv_pop(sckpt_data->sckpt_rectable, &slsid, (uintptr_t *) &rec) == 0) {
+		sbuf_delete(rec->srec_sb);
+		free(rec, M_SLSMM);
+	    }
+
+	    slskv_destroy(sckpt_data->sckpt_rectable);
+	}
+
+	free(sckpt_data, M_SLSMM);
+}
+
 /* Find a process in the SLS with the given PID. */
 struct slspart *
 slsp_find(uint64_t oid)
@@ -117,12 +182,9 @@ slsp_init(uint64_t oid, struct slspart **slspp)
 	/* Create the new partition. */
 	slsp = malloc(sizeof(*slsp), M_SLSMM, M_WAITOK | M_ZERO);
 	slsp->slsp_oid = oid;
-	slsp->slsp_status = 0;
-	slsp->slsp_epoch = 0;
 	/* The SLS module itself holds one reference to the partition. */
 	slsp->slsp_refcount = 1;
 	/* This pointer is set during checkpointing. */
-	slsp->slsp_objects = NULL;
 	/* XXX slsp->slsp_attr? We should define the backend at creation time. */
 
 	/* Create the set of held processes. */
@@ -162,6 +224,10 @@ slsp_fini(struct slspart *slsp)
 	    slskv_destroy(slsp->slsp_objects);
 	}
 
+	if (slsp->slsp_sckpt != NULL)
+	    slsckpt_destroy(slsp->slsp_sckpt);
+
+
 	free(slsp, M_SLSMM);
 }
 
@@ -199,7 +265,6 @@ slsp_add(uint64_t oid, struct slspart **slspp)
 	    return (error);
 	}
 
-	printf("Added %ld - %p\n", oid, slsp);
 	/* Export the partition to the caller. */
 	*slspp = slsp;
 

@@ -136,11 +136,9 @@ sls_partadd(struct sls_partadd_args *args)
 	struct slspart *slsp = NULL;
 	int error;
 	
-	/* 
-	 * We are only using the SLOS for now. Later we
-	 * will be able to use memory and the network.
-	 */
-	if (args->attr.attr_target != SLS_OSD)
+	/* We are only using the SLOS for now. Later we will be able to use the network. */
+	if ((args->attr.attr_target != SLS_OSD) &&
+	    (args->attr.attr_target != SLS_MEM))
 	    return (EINVAL);
 
 	/* 
@@ -296,14 +294,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	    if (error != 0)
 		return (error);
 
-	    error = slskv_create(&slsm.slsm_rectable, SLSKV_NOREPLACE);
-	    if (error != 0)
-		return (error);
-
-	    error = slskv_create(&slsm.slsm_typetable, SLSKV_NOREPLACE);
-	    if (error != 0)
-		return (error);
-
 	    slsm.slsm_cdev = 
 		make_dev(&slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "sls");
 
@@ -331,12 +321,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		destroy_dev(slsm.slsm_cdev);
 
 	    slsp_delall();
-
-	    if (slsm.slsm_typetable != NULL)
-		slskv_destroy(slsm.slsm_typetable);
-
-	    if (slsm.slsm_rectable != NULL)
-		slskv_destroy(slsm.slsm_rectable);
 
 	    if (slsm.slsm_parts != NULL)
 		slskv_destroy(slsm.slsm_parts);

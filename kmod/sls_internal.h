@@ -17,6 +17,7 @@
 #include <vm/vm_object.h>
 
 #include "sls_kv.h"
+#include "sls_mm.h"
 #include "sls_partition.h"
 
 SDT_PROVIDER_DECLARE(sls);
@@ -30,15 +31,23 @@ struct sls_metadata {
 	struct cdev	    *slsm_cdev;		/* The cdev that exposes the SLS ops */
 
 	/* OSD Related members */
-	/* XXX Put the rectable and typetable in their own slsckpt_data structure */
-	struct slskv_table  *slsm_rectable;	/* Associates in-memory pointers to data */
-	struct slskv_table  *slsm_typetable;	/* Associates data with a record type */
 	struct vnode	    *slsm_osdvp;	/* The device that holds the SLOS */
 
 	int		    slsm_restoring;	/* Number of threads currently being restored */
 	struct mtx	    slsm_mtx;		/* Structure mutex. */
 	struct cv	    slsm_proccv;	/* Condition variable for when all processes are restored */
 	struct cv	    slsm_donecv;	/* Condition variable to signal that processes can execute */
+};
+
+struct slsckpt_data {
+	struct slskv_table *sckpt_rectable;  /* In-memory records */
+	struct slskv_table *sckpt_objtable;  /* In-memory live VM Objects */
+};
+
+/* An in-memory version of an Aurora record. */
+struct sls_record {
+	struct sbuf *srec_sb;   /* The data of the record itself. */
+	uint64_t    srec_type;	/* The record type. */
 };
 
 /* The data needed to restore an SLS partition. */
@@ -56,6 +65,7 @@ struct slsrest_data {
 
 extern struct sls_metadata slsm;
 
+struct sls_record *sls_getrecord(struct sbuf *sb, uint64_t type);
 #define FDTOFP(p, fd) (p->p_fd->fd_files->fdt_ofiles[fd].fde_file)
 
 inline int
@@ -74,8 +84,7 @@ sls_module_exiting(void)
 	(OFF_TO_IDX(vaddr - entry_start + entry_offset))
 
 /* Macros for debugging messages */
-#define SLS_DEBUG
-#ifdef SLS_DEBUG
+#ifdef WITH_DEBUG
 #define SLS_DBG(fmt, ...) do {			    \
     printf("(%s: Line %d) ", __FILE__, __LINE__);   \
     printf(fmt, ##__VA_ARGS__);			    \
@@ -84,7 +93,7 @@ sls_module_exiting(void)
 #else
 #define SLS_DBG(fmt, ...) 
 #define sls_tmp(fmt, ...) panic("debug printf not removed")
-#endif /* SLS_DEBUG */
+#endif /* WITH_DEBUG */
 
 struct sls_checkpointd_args {
 	struct slspart *slsp;
@@ -94,10 +103,15 @@ struct sls_checkpointd_args {
 struct sls_restored_args {
 	uint64_t oid;
 	uint64_t daemon;
+	int target;
 };
+
+struct sls_getrecord;
 
 void sls_checkpointd(struct sls_checkpointd_args *args);
 void sls_restored(struct sls_restored_args *args);
 
+int slsckpt_create(struct slsckpt_data **sckpt_datap);
+void slsckpt_destroy(struct slsckpt_data *sckpt_data);
 #endif /* _SLS_H_ */
 

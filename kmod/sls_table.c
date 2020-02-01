@@ -62,6 +62,19 @@ static uint64_t sls_datastructs[] =  {
 #endif
 };
 
+/* Creates an in-memory Aurora record. */
+struct sls_record *
+sls_getrecord(struct sbuf *sb, uint64_t type)
+{
+	struct sls_record *rec;
+
+	rec = malloc(sizeof(*rec), M_SLSMM, M_WAITOK);
+	rec->srec_sb = sb;
+	rec->srec_type = type;
+
+	return (rec);
+}
+
 static int
 sls_isdata(uint64_t type) {
 
@@ -69,10 +82,10 @@ sls_isdata(uint64_t type) {
 
 	for (i = 0; i < sizeof(sls_datastructs) / sizeof(*sls_datastructs); i++) {
 	    if (sls_datastructs[i] == type)
-		return 1;
+		return (1);
 	}
 
-	return 0;
+	return (0);
 }
 
 /*
@@ -525,34 +538,28 @@ sls_writedata_slos(struct slos_node *vp, struct sbuf *sb,
  * need to be sent to the SLOS.
  */
 int
-sls_write_slos(struct slos_node *vp, struct slskv_table *table, struct slskv_table *objtable)
+sls_write_slos(struct slos_node *vp, struct slsckpt_data *sckpt_data)
 {
-	struct sbuf *sb;
-	uint64_t type;
+	struct sls_record *rec;
+	uint64_t slsid;
 	uint64_t rno;
 	int error;
 
-	while (slskv_pop(table, (uint64_t *) &sb, (uintptr_t *) &type) == 0) {
+	while (slskv_pop(sckpt_data->sckpt_rectable, (uint64_t *) &slsid, (uintptr_t *) &rec) == 0) {
 	    /* 
 	     * VM object records are special, since we need to dump 
 	     * actual memory along with the metadata.
 	     */
-
-	    /* ------------ SLOS-Specific Part ------------ */
-
-	    if (sls_isdata(type))
-		error = sls_writedata_slos(vp, sb, type, objtable);
+	    if (sls_isdata(rec->srec_type))
+		error = sls_writedata_slos(vp, rec->srec_sb, rec->srec_type, sckpt_data->sckpt_objtable);
 	    else 
-		error = sls_writemeta_slos(vp, sb, type, &rno);
+		error = sls_writemeta_slos(vp, rec->srec_sb, rec->srec_type, &rno);
 
 	    if (error != 0)
-		return error;
-
-
-	    /* ------------ End SLOS-Specific Part ------------ */
+		return (error);
 	}
 
-	return 0;
+	return (0);
 }
 
 

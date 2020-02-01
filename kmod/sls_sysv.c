@@ -19,19 +19,22 @@
  * whole space looking for valid segments.
  */
 int
-slsckpt_sysvshm(struct slskv_table *objtable)
+slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 {
 	struct slssysvshm slssysvshm;
 	vm_object_t obj, shadow;
+	struct sls_record *rec;
+	struct sbuf *sb = NULL;
 	vm_ooffset_t offset;
-	struct sbuf *sb;
 	int error, i;
-
-	sb = sbuf_new_auto();
 
 	for (i = 0; i < shmalloced; i++) {
 	    if ((shmsegs[i].u.shm_perm.mode & SHMSEG_ALLOCATED) == 0)
 		continue;
+
+	    /* Allocate an sbuf if we haven't already. */
+	    if (sb == NULL)
+		sb = sbuf_new_auto();
 
 	    /* Dump the metadata to the records table. */
 	    slssysvshm.magic = SLSSYSVSHM_ID;
@@ -66,19 +69,21 @@ slsckpt_sysvshm(struct slskv_table *objtable)
 
 	}
 
+	/* If we have no SYSV segments, don't store any data at all. */
+	if (sb == NULL)
+	    return (0);
+
 	error = sbuf_finish(sb);
 	if (error != 0)
 	    goto error;
 
-	error = slskv_add(slsm.slsm_rectable, (uint64_t) shmsegs, (uintptr_t) sb);
-	if (error != 0)
+	rec = sls_getrecord(sb, SLOSREC_SYSVSHM);
+	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) shmsegs, (uintptr_t) rec);
+	if (error != 0) {
+	    free(rec, M_SLSMM);
 	    goto error;
+	}
 
-	error = slskv_add(slsm.slsm_typetable, (uint64_t) sb, (uintptr_t) SLOSREC_SYSVSHM);
-	if (error != 0)
-	    goto error;
-
-	printf("Checkpointed\n");
 	return (0);
 error:
 	if (sb != NULL)

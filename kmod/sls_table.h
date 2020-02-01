@@ -11,6 +11,7 @@
 #include <slos.h>
 #include <slos_io.h>
 
+#include "sls_internal.h"
 #include "sls_kv.h"
 
 struct slos_node;
@@ -33,8 +34,7 @@ LIST_HEAD(slsdata, slspagerun);
 int sls_read_slos(struct slos_node *vp, struct slskv_table **metatablep,
 	struct slskv_table **datatablep);
 
-int sls_write_slos(struct slos_node *vp, struct slskv_table *table, 
-	struct slskv_table *objtable);
+int sls_write_slos(struct slos_node *vp, struct slsckpt_data *sckpt_data);
 
 /* Zone for the pageruns. */
 extern uma_zone_t slspagerun_zone;

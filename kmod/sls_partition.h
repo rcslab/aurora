@@ -1,5 +1,5 @@
-#ifndef _slspart_H_
-#define _slspart_H_
+#ifndef _SLSPART_H_
+#define _SLSPART_H_
 
 #include <sys/param.h>
 
@@ -15,6 +15,7 @@
 #include <sls_ioctl.h>
 
 #include "sls_kv.h"
+#include "sls_internal.h"
 
 /* Possible states of an slspart */
 #define	SPROC_AVAILABLE	    0	/* Process is not doing anything */
@@ -30,6 +31,7 @@ struct slspart {
     struct sls_attr	    slsp_attr;	    /* Parameters for checkpointing the process */
     int			    slsp_refcount;  /* Reference count for the process. */
     struct slskv_table	    *slsp_objects;  /* VM Objects created for the SLS */
+    struct slsckpt_data	    *slsp_sckpt;    /* In-memory checkpoint */
     /* XXX slsp_mtx member */
 
     LIST_ENTRY(slspart)	    slsp_parts;	    /* List of active SLS partitions */
@@ -51,4 +53,4 @@ void slsp_ref(struct slspart *slsp);
 void slsp_deref(struct slspart *slsp);
 
 
-#endif /* _slspart_H_ */
+#endif /* _SLSPART_H_ */

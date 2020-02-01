@@ -35,15 +35,23 @@
 #include "sls_vmobject.h"
 
 int 
-slsckpt_vmobject(struct proc *p, vm_object_t obj)
+slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_data, int target)
 {
 	struct slsvmobject cur_obj;
 	struct sbuf *sb;
+	struct sls_record *rec;
 	int error;
 
 	/* Find if we have already checkpointed the object. */
-	if (slskv_find(slsm.slsm_rectable, (uint64_t) obj, (uintptr_t *) &sb) == 0)
-	    return 0;
+	if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) obj, (uintptr_t *) &sb) == 0)
+	    return (0);
+
+	/* We don't need the anonymous objects for in-memory checkpointing. */
+	if (target == SLS_MEM) {
+	    if ((obj->type == OBJT_DEFAULT) || 
+		(obj->type == OBJT_SWAP))
+		return (0);
+	}
 
 	/* First time we come across it, create a buffer for the info struct. */
 	sb = sbuf_new_auto();
@@ -69,34 +77,33 @@ slsckpt_vmobject(struct proc *p, vm_object_t obj)
 	    error = sls_vn_to_path_append((struct vnode *) obj->handle, sb);
 	    if (error == ENOENT) {
 		printf("(BUG) Unlinked file found, ignoring for now\n");
-		return 0;
+		return (0);
 	    }
 
 	    if (error != 0)
 		goto error;
 	}
 
-
 	error = sbuf_finish(sb);
 	if (error != 0)
-	    return error;
-
-	error = slskv_add(slsm.slsm_rectable, (uint64_t) obj, (uintptr_t) sb);
-	if (error != 0)
 	    goto error;
 
-	error = slskv_add(slsm.slsm_typetable, (uint64_t) sb, (uintptr_t) SLOSREC_VMOBJ);
-	if (error != 0)
-	    goto error;
+	rec = sls_getrecord(sb, SLOSREC_VMOBJ);
 
-	return 0;
+	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) obj, (uintptr_t) rec);
+	if (error != 0) {
+	    free(rec, M_SLSMM);
+	    goto error;
+	}
+
+	return (0);
 
 error:
 
-	slskv_del(slsm.slsm_rectable, (uint64_t) obj);
+	slskv_del(sckpt_data->sckpt_rectable, (uint64_t) obj);
 	sbuf_delete(sb);
 
-	return error;
+	return (error);
 }
 
 static void
@@ -148,6 +155,7 @@ slsrest_vmobject(struct slsvmobject *info, struct slskv_table *objtable,
 	 * OBJT_SWAP is just a default object which has swapped, or is SYSV_SHM. 
 	 * Until we create our custom swapper, treat it as a clean object.
 	 */
+	    /* FALLTHROUGH */
 	case OBJT_SWAP:
 
 	    /* Simple vm_allocate*/
@@ -196,6 +204,7 @@ slsrest_vmobject(struct slsvmobject *info, struct slskv_table *objtable,
 	 */
 	case OBJT_PHYS:
 	    object = curthread->td_proc->p_sysent->sv_shared_page_obj;
+	    vm_object_reference(object);
 	    break;
 
 	default:

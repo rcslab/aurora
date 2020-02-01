@@ -53,54 +53,6 @@ slos_path_to_vnode(char *path, struct vnode **vpp)
 	return 0;
 }
 
-/*
- * Get the vnode corresponding to the disk device of the given name. 
- */
-static int
-slos_vpopen(char *path)
-{
-	struct nameidata nd;
-	int oflags;
-	int error;
-
-	NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_SYSSPACE, path, curthread);
-	oflags = FREAD | FWRITE;
-
-	error = vn_open_cred(&nd, &oflags, S_IRWXU | S_IRWXO, 
-		0, curthread->td_proc->p_ucred, NULL); 
-	if (error != 0)
-	    return error;
-
-	NDFREE(&nd, NDF_ONLY_PNBUF);
-
-	if (error != 0) {
-	    printf("ERROR: Could not find SLOS\n");
-	    return error;
-	}
-
-	VOP_UNLOCK(nd.ni_vp, 0);
-	    
-	slos.slos_vp = nd.ni_vp;
-
-	return 0;
-}
-
-/*
- * Close the SLOS' vnode.
- */
-static int
-slos_vpclose(void)
-{
-	int error;
-
-	error = vn_close(slos.slos_vp, FREAD, 
-		curthread->td_proc->p_ucred, curthread);
-
-	slos.slos_vp = NULL;
-	
-	return error;
-}
-
 static int
 slos_itreeopen(struct slos *slos)
 {
@@ -239,17 +191,6 @@ slosHandler(struct module *inModule, int inEvent, void *inArg) {
 		    g_vfs_close(slos.slos_cp);
 		    dev_ref(slos.slos_vp->v_rdev);
 		    g_topology_unlock();
-		}
-
-		/* Close the devfs vnode. */
-		if (slos.slos_vp != NULL) {
-		    /* 
-		     * We use vdrop instead of close as we did not increment writecount
-		     * of vnode, we incremented use count on namei operation.
-		     */
-		    vdrop(slos.slos_vp);
-		    if (error != 0)
-			printf("ERROR: slos_vpclose() failed with %d\n", error);
 		}
 
 		lockdestroy(&slos.slos_lock);

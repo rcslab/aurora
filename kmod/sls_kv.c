@@ -58,6 +58,9 @@ slskv_destroy(struct slskv_table *table)
 	struct slskv_pair *kv, *tmpkv;
 	int i;
 
+	if (table == NULL)
+	    return;
+
 	/* Iterate all buckets. */
 	for (i = 0; i <= table->mask; i++) {
 	    LIST_FOREACH_SAFE(kv, &table->buckets[i], next, tmpkv) {

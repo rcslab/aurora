@@ -150,7 +150,8 @@ slsckpt_getpipe(struct proc *p, struct file *fp, struct slsfile *info, struct sb
 }
 
 static int
-slsckpt_getsocket(struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
+slsckpt_getsocket(struct proc *p, struct file *fp, struct slsfile *info, 
+	struct sbuf *sb, struct slsckpt_data *sckpt_data)
 {
 	int error;
 
@@ -161,7 +162,7 @@ slsckpt_getsocket(struct proc *p, struct file *fp, struct slsfile *info, struct 
 	if (error != 0)
 	    return (error);
 
-	error = slsckpt_socket(p, (struct socket *) fp->f_data, sb);
+	error = slsckpt_socket(p, (struct socket *) fp->f_data, sb, sckpt_data);
 	if (error != 0)
 	    return (error);
 
@@ -273,10 +274,11 @@ slsckpt_getposixshm(struct proc *p, struct file *fp,
  * that we can safely store them together.
  */
 static int
-slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slskv_table *objtable)
+slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slsckpt_data *sckpt_data)
 {
 	vm_object_t obj, shadow;
 	struct sbuf *sb, *oldsb;
+	struct sls_record *rec;
 	struct slsfile info;
 	vm_ooffset_t offset;
 	uint64_t sockid;
@@ -289,7 +291,7 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slskv_tabl
 	 * If we have already checkpointed this open file, return success. 
 	 * The caller will add the SLS ID to its file descriptor table.
 	 */
-	if (slskv_find(slsm.slsm_rectable, (uint64_t) fp, (uintptr_t *) &sb) == 0)
+	if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) fp, (uintptr_t *) &sb) == 0)
 	    return (0);
 
 	info.type = fp->f_type;
@@ -331,7 +333,7 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slskv_tabl
 		info.slsid = *slsid;
 
 		/* Check again if we have actually checkpointed this pts before. */
-		if (slskv_find(slsm.slsm_rectable, (uint64_t) *slsid, (uintptr_t *) &oldsb) == 0) {
+		if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) *slsid, (uintptr_t *) &oldsb) == 0) {
 		    sbuf_delete(sb);
 		    return (0);
 		}
@@ -382,7 +384,7 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slskv_tabl
 	     * right now because we don't configure the peer after restoring, but
 	     * it could be used for fixing up its configuration in the future.
 	     */
-	    if (slskv_find(slsm.slsm_rectable, (uint64_t) *slsid, (uintptr_t *) &oldsb) == 0) {
+	    if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) *slsid, (uintptr_t *) &oldsb) == 0) {
 		sbuf_delete(sb);
 		return (0);
 	    }
@@ -402,14 +404,14 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slskv_tabl
 		info.slsid = *slsid;
 
 		/* Recheck - again, same as with pipes. */
-		if (slskv_find(slsm.slsm_rectable, (uint64_t) *slsid, (uintptr_t *) &oldsb) == 0) {
+		if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) *slsid, (uintptr_t *) &oldsb) == 0) {
 		    sbuf_delete(sb);
 		    return (0);
 		}
 	    }
 
 	    /* No peer or peer not checkpointed, go ahead. */
-	    error = slsckpt_getsocket(p, fp, &info, sb);
+	    error = slsckpt_getsocket(p, fp, &info, sb, sckpt_data);
 	    if (error != 0)
 		goto error;
 
@@ -423,7 +425,7 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slskv_tabl
 
 	    /* Lookup whether we have already shadowed the object. */
 	    obj = ((struct shmfd *) fp->f_data)->shm_object;
-	    error = slskv_find(objtable, (uint64_t) obj, (uintptr_t *) &shadow);
+	    error = slskv_find(sckpt_data->sckpt_objtable, (uint64_t) obj, (uintptr_t *) &shadow);
 
 	    /* XXX Refactor into the main shadowing code. */
 	    /* 
@@ -448,7 +450,7 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slskv_tabl
 	    vm_object_shadow(&shadow, &offset, ptoa(obj->size));
 
 	    ((struct shmfd *) fp->f_data)->shm_object = shadow;
-	    error = slskv_add(objtable, (uint64_t) obj, (uintptr_t) shadow);
+	    error = slskv_add(sckpt_data->sckpt_objtable, (uint64_t) obj, (uintptr_t) shadow);
 	    KASSERT((error == 0), ("shadow already exists"));
 
 	    break;
@@ -462,7 +464,7 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slskv_tabl
 	    info.slsid = *slsid;
 
 	    /* Check again if we have actually checkpointed this pts before. */
-	    if (slskv_find(slsm.slsm_rectable, (uint64_t) *slsid, (uintptr_t *) &oldsb) == 0) {
+	    if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) *slsid, (uintptr_t *) &oldsb) == 0) {
 		sbuf_delete(sb);
 		return (0);
 	    }
@@ -480,14 +482,14 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slskv_tabl
 
 	sbuf_finish(sb);
 
+	rec = sls_getrecord(sb, SLOSREC_FILE);
 	/* Add the backing entities to the global tables. */
-	error = slskv_add(slsm.slsm_rectable, *slsid, (uintptr_t) sb);
-	if (error != 0)
-	    return (error);
+	error = slskv_add(sckpt_data->sckpt_rectable, *slsid, (uintptr_t) rec);
+	if (error != 0) {
+	    free(rec, M_SLSMM);
+	    goto error;
+	}
 
-	error = slskv_add(slsm.slsm_typetable, (uint64_t) sb, (uintptr_t) SLOSREC_FILE);
-	if (error != 0)
-	    return (error);
 
 	/* Give the SLS ID we want to use for the file pointer to the caller. */
 	*slsid = info.slsid;
@@ -737,7 +739,7 @@ slsckpt_file_supported(struct file *fp)
 }
 
 int
-slsckpt_filedesc(struct proc *p, struct slskv_table *objtable, struct sbuf *sb)
+slsckpt_filedesc(struct proc *p, struct slsckpt_data *sckpt_data, struct sbuf *sb)
 {
 	struct slsfiledesc slsfiledesc;
 	struct slskv_table *fdtable;
@@ -795,7 +797,7 @@ slsckpt_filedesc(struct proc *p, struct slskv_table *objtable, struct sbuf *sb)
 		continue;
 
 	    /* Checkpoint the file structure itself. */
-	    error = slsckpt_file(p, fp, &slsid, objtable);
+	    error = slsckpt_file(p, fp, &slsid, sckpt_data);
 	    if (error != 0)
 		goto done;
 

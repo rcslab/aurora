@@ -192,11 +192,11 @@ slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset)
 	    else
 		slsproc.pgrpwait = 0;
 
-	    /* If we are the leader, we are already locked. */
+	    /* If we're the leader, we're already locked. */
 	    if (pleader == p)
-		_PRELE(pleader);
-	    else
-		PRELE(p);
+		_PRELE(p);
+	    else 
+		PRELE(pleader);
 	}
 
 
@@ -205,8 +205,6 @@ slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset)
 	/* Get the name of the process. */
 	memcpy(slsproc.name, p->p_comm, MAXCOMLEN + 1);
 
-	printf("Pointers: %p %p\n", p, p->p_pptr);
-	printf("PID %lx PPID %lx\n", slsproc.slsid, slsproc.pptr);
 	sigacts = p->p_sigacts;
 
 	mtx_lock(&sigacts->ps_mtx);
@@ -290,7 +288,6 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 	if (slsproc->pid == slsproc->sid) {
 	    pgrp = malloc(sizeof(*pgrp), M_SESSION, M_WAITOK | M_ZERO);
 	    sess = malloc(sizeof(*sess), M_PGRP, M_WAITOK | M_ZERO);
-
 
 	    /* We are changing the process tree with this. */
 	    PROC_UNLOCK(p);
@@ -436,7 +433,7 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 	     * and the new sessions coincide, and the old session is only referred
 	     * to by us, dropping our reference causes it to be destroyed.
 	     */
-	    sess_hold(pgrp->pg_session);
+	    sess_hold(sess);
 	    sess_release(pgrp->pg_session);
 	    pgrp->pg_session = sess;
 

@@ -5,10 +5,10 @@ SRCS	= slos.c slos_alloc.c slos_bnode.c slos_bootalloc.c \
 
 CFLAGS	+= -DKDTRACE_HOOKS -DKLD_TIED -I../include
 CLEANFILES = .depend*
+WITH_CTF = 1
 
 .ifdef WITH_DFLAGS
 DEBUG_FLAGS += -g3 -O0 -DINVARIANTS -DINVARIANT_SUPPORT -DDEBUG_LOCKS
-WITH_CTF = 1
 .endif
 
 .ifdef WITH_DEBUG

@@ -1,4 +1,3 @@
-
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/sbuf.h>
@@ -18,13 +17,14 @@ static struct option partadd_longopts[] = {
 	{ "memory", no_argument, NULL, 'm' },
 	{ "oid", required_argument, NULL, 'o' },
 	{ "period", required_argument, NULL, 't' },
+	{ "backend", required_argument, NULL, 'b' },
 	{ NULL, no_argument, NULL, 0 },
 };
 
 void
 partadd_usage(void)
 {
-    printf("Usage: slsctl partadd -o <id> [-t ms] [--delta]\n");
+    printf("Usage: slsctl partadd -o <id>  [-b <memory|slos>] [-t ms] [-d]\n");
 }
 
 int
@@ -43,8 +43,7 @@ partadd_main(int argc, char* argv[]) {
 	};
 	oid_set = 0;
 
-	/* XXX Allow -m option back when we are ready for in-memory checkpointing. */
-	while ((opt = getopt_long(argc, argv, "do:p:t:", partadd_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "b:do:p:t:", partadd_longopts, NULL)) != -1) {
 	    switch (opt) {
 	    case 'd':
 		attr.attr_mode = SLS_DELTA;
@@ -61,6 +60,18 @@ partadd_main(int argc, char* argv[]) {
 
 	    case 't':
 		attr.attr_period = strtol(optarg, NULL, 10);
+		break;
+
+	    case 'b':
+
+		/* The input is only valid if we matched a string. */
+		if (strncmp(optarg, "memory", sizeof("memory")) == 0)
+		    attr.attr_target = SLS_MEM;
+		else if (strncmp(optarg, "slos", sizeof("slos")) == 0)
+		    attr.attr_target = SLS_OSD;
+		else
+		    partadd_usage();
+
 		break;
 
 	    default:

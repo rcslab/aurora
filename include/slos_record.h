@@ -13,19 +13,10 @@ struct slos_node;
 #define SLOSREC_MEM	    0x00000003	/* Record holds info related to a vmspace */
 #define SLOSREC_VMOBJ	    0x00000005	/* Record holds info for an object */
 #define SLOSREC_FILE	    0x00000006  /* Record holds info for a file */
-#define SLOSREC_PIPE	    0x00000007	/* Record holds info for a pipe */
-#define SLOSREC_KQUEUE	    0x00000008	/* Record holds info for a kqueue */
-#define SLOSREC_SOCKET	    0x00000009	/* Record holds info for a socket */
-#define SLOSREC_VNODE	    0x0000000a	/* Record holds info for a vnode */
 #define SLOSREC_SYSVSHM	    0x0000000b	/* Record holds info for SYSV shared memory */
-#define SLOSREC_POSIXSHM    0x0000000c	/* Record holds info for POSIX shared memory */
 #define SLOSREC_SOCKBUF	    0x0000000d	/* Record holds info for socket buffers */
-
-/* XXX Factor out */
-#define SLOSREC_FDESC	    0x000000a0	/* Record holds a file descriptor*/
-#define SLOSREC_DATA	    0x000000a1
-#define SLOSREC_FILENAME    0x000000a2
-
+#define SLOSREC_DIR	    0x0000000e	/* Record holds a directory */
+#define SLOSREC_DATA	    0x0000000f	/* Record holds arbitrary data */
 
 #define SLOS_RMAGIC	    0x51058A1CUL
 

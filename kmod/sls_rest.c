@@ -54,6 +54,7 @@
 #include "sls_kv.h"
 #include "sls_load.h"
 #include "sls_mm.h"
+#include "sls_partition.h"
 #include "sls_proc.h"
 #include "sls_sysv.h"
 #include "sls_table.h"
@@ -94,7 +95,6 @@ slsrest_doproc(struct proc *p, uint64_t daemon, char **bufp,
 	/* 
 	 * Save the old process - new process pairs.
 	 */
-	printf("Adding %lx, %p\n", slsproc.slsid, p);
 	error = slskv_add(restdata->proctable, (uint64_t) slsproc.slsid, (uintptr_t) p);
 	if (error != 0)
 	    SLS_DBG("Error: Could not add process %p to table\n", p);
@@ -142,14 +142,9 @@ slsrest_dofile(struct slsrest_data *restdata, char **bufp, size_t *buflenp)
 	    break;
 
 	case DTYPE_PIPE:
-	    free(data, M_SLSMM);
-	    break;
-
 	case DTYPE_SOCKET:
-	    free(data, M_SLSMM);
-	    break;
-
 	case DTYPE_PTS:
+	    free(data, M_SLSMM);
 	    break;
 
 	case DTYPE_SHM:
@@ -269,7 +264,6 @@ slsrest_dosockbuf(char *buf, size_t bufsize, struct slskv_table *table)
 	if (error != 0)
 	    return (error);
 
-	printf("Restored sockbuf %lx\n", sbid);
 
 	error = slskv_add(table, sbid, (uintptr_t) m);
 	if (error != 0) {
@@ -440,7 +434,6 @@ slsrest_metadata(void *args)
 	if (error != 0)
 	    goto error; 
 
-
 	/* 
 	 * We're done restoring. If we were the 
 	 * last restoree, notify the parent. 
@@ -585,7 +578,7 @@ slsrest_shadow(vm_object_t shadow, vm_object_t source, vm_ooffset_t offset)
 }
 
 static int 
-slsrest_vmobjects(struct slskv_table *metatable, struct slskv_table *datatable, 
+slsrest_dovmobjects(struct slskv_table *metatable, struct slskv_table *datatable, 
 	struct slskv_table *objtable)
 {
 	struct slsvmobject slsvmobject, *slsvmobjectp;
@@ -613,9 +606,13 @@ slsrest_vmobjects(struct slskv_table *metatable, struct slskv_table *datatable,
 		return (error);
 
 	    /* Find the data associated with the object. */
-	    error = slskv_find(datatable, (uint64_t) record, (uintptr_t *) &slsdata);
-	    if (error != 0)
-		return (error);
+
+	    slsdata = NULL;
+	    if (datatable != NULL) {
+		error = slskv_find(datatable, (uint64_t) record, (uintptr_t *) &slsdata);
+		if (error != 0)
+		    return (error);
+	    }
 
 	    /* Restore the object. */
 	    error = slsrest_vmobject(&slsvmobject, objtable, slsdata);
@@ -655,9 +652,7 @@ slsrest_vmobjects(struct slskv_table *metatable, struct slskv_table *datatable,
 }
 
 static int
-slsrest_files(struct slskv_table *metatable, 
-		struct slskv_table *datatable, 
-		struct slsrest_data *restdata)
+slsrest_dofiles(struct slskv_table *metatable, struct slsrest_data *restdata)
 {
 	struct slskv_iter iter;
 	struct slos_rstat *st;
@@ -744,8 +739,7 @@ slsrest_init(struct slsrest_data **restdatap)
 	struct slsrest_data *restdata;
 	int error;
 
-	restdata = malloc(sizeof(*restdata), M_SLSMM, M_WAITOK);
-	bzero(restdata, sizeof(*restdata));
+	restdata = malloc(sizeof(*restdata), M_SLSMM, M_WAITOK | M_ZERO);
 
 	/* Initialize the necessary tables. */
 	error = slskv_create(&restdata->objtable, SLSKV_NOREPLACE);
@@ -791,48 +785,107 @@ static int
 sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 {
 	struct slskv_table *metatable = NULL, *datatable = NULL;
-	struct slsrest_data *restdata;
 	struct slspagerun *pagerun, *tmppagerun;
+	struct slsrest_data *restdata;
 	struct slsdata *slsdata;
+	vm_object_t obj, shadow;
+	struct sls_record *rec;
 	struct slskv_iter iter;
-	struct slos_node *vp;
 	struct slos_rstat *st;
+	struct slos_node *vp;
+	struct slspart *slsp;
+	struct sbuf *record;
+	uint64_t slsid;
 	size_t buflen;
-	void *record;
 	char *buf;
 	int error;
+
+	/* Get the record table from the appropriate backend. */
 
 	/* Bring in the checkpoints from the backend. */
 	error = slsrest_init(&restdata);
 	if (error != 0)
-	    return 0;
+	    return (error);
+
+	/* Check if the requested partition exists. */
+	slsp = slsp_find(oid);
+	if (slsp == NULL)
+	    goto out;
 	
-	/* ------------ SLOS-Specific Part ------------ */
-	SLS_DBG("Opening inode\n");
+	switch (slsp->slsp_attr.attr_target) {
+	case SLS_OSD:
 
-	/* XXX Temporary until we change to multiple inodes per checkpoint. */
-	vp = slos_iopen(&slos, oid);
-	if (vp == NULL)
-	    return EIO; 
+	    /* XXX Temporary until we change to multiple inodes per checkpoint. */
+	    SLS_DBG("Opening inode\n");
+	    vp = slos_iopen(&slos, oid);
+	    if (vp == NULL)
+		return (EIO); 
 
-	SLS_DBG("Reading in data\n");
+	    SLS_DBG("Reading in data\n");
 
-	/* Bring in the whole checkpoint in the form of SLOS records. */
-	error = sls_read_slos(vp, &metatable, &datatable);
-	if (error != 0) {
-	    slos_iclose(&slos, vp);
-	    goto out;
+	    /* Bring in the whole checkpoint in the form of SLOS records. */
+	    error = sls_read_slos(vp, &metatable, &datatable);
+	    if (error != 0) {
+		slos_iclose(&slos, vp);
+		goto out;
+	    }
+
+	    SLS_DBG("Closing inode\n");
+	    error = slos_iclose(&slos, vp); 
+	    if (error != 0) {
+		SLS_DBG("Error closing\n");
+		goto out;
+	    }
+	    break;
+
+	case SLS_MEM:
+	    error = slskv_create(&metatable, SLSKV_NOREPLACE);
+	    if (error != 0)
+		goto out;
+
+	    iter = slskv_iterstart(slsp->slsp_sckpt->sckpt_rectable);
+	    while (slskv_itercont(&iter, &slsid, (uintptr_t *) &rec) != SLSKV_ITERDONE) {
+
+		st = malloc(sizeof(*st), M_SLSMM, M_WAITOK);
+		st->type = rec->srec_type;
+		st->len = sbuf_len(rec->srec_sb);
+
+		error = slskv_add(metatable, (uint64_t) sbuf_data(rec->srec_sb), (uintptr_t) st);
+		if (error != 0) {
+		    free(st, M_SLSMM);
+		    goto out;
+		}
+	    }
+
+	    iter = slskv_iterstart(slsp->slsp_sckpt->sckpt_objtable);
+	    while (slskv_itercont(&iter, (uint64_t *) &obj, (uintptr_t *) &shadow) != SLSKV_ITERDONE) {
+		vm_object_reference(obj);
+
+		vm_object_t shadow = obj;
+		vm_ooffset_t offset = 0;
+		vm_object_shadow(&shadow, &offset, ptoa(obj->size));
+
+		error = slskv_add(restdata->objtable, (uint64_t) obj, (uintptr_t) shadow);
+		if (error != 0) {
+		    vm_object_deallocate(shadow);
+		    goto out;
+		}
+	    }
+
+	    break;
+
+	default:
+	    panic("Invalid target %d\n", slsp->slsp_attr.attr_target);
 	}
 
-	SLS_DBG("Closing inode\n");
-	error = slos_iclose(&slos, vp); 
-	if (error != 0) {
-	    SLS_DBG("Error closing\n");
+	/* 
+	 * Recreate the VM object tree. When restoring from the SLOS we recreate everything, while
+	 * when restoring from memory all anonymous objects are already there.
+	 */
+	error = slsrest_dovmobjects(metatable, datatable, restdata->objtable);
+	if (error != 0)
 	    goto out;
-	}
 
-
-	/* ------------ End SLOS-Specific Part ------------ */
 
 	/* 
 	 * Iterate through the metadata; each entry represents either 
@@ -847,9 +900,6 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	 * of the soon-to-be-restored object's record.
 	 */
 
-	error = slsrest_vmobjects(metatable, datatable, restdata->objtable);
-	if (error != 0)
-	    goto out;
 
 
 	/* Recreate all mbufs (to be inserted into socket buffers later). */
@@ -866,7 +916,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 		goto out;
 	}
 
-	error = slsrest_files(metatable, datatable, restdata);
+	error = slsrest_dofiles(metatable, restdata);
 	if (error != 0)
 	    goto out;
 
@@ -918,6 +968,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	 * that for slsrest_ttyfixup().
 	 */
 	slsrest_fini(restdata);
+	restdata = NULL;
 
 	/* Restore all sessions. */
 	cv_broadcast(&slsm.slsm_donecv);
@@ -928,7 +979,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 
 out:
 	/* Cleanup the tables used for bringing the data in memory. */
-	if (metatable != NULL) {
+	if ((metatable != NULL) && (slsp->slsp_attr.attr_target != SLS_MEM)) {
 	    while (slskv_pop(metatable, (uint64_t *) &record, (uintptr_t *) &st) == 0) {
 		free(st, M_SLSMM);
 		free(record, M_SLSMM);
@@ -937,7 +988,7 @@ out:
 	    slskv_destroy(metatable);
 	}
 	
-	if (datatable != NULL) {
+	if ((datatable != NULL) && (slsp->slsp_attr.attr_target != SLS_MEM)) {
 	    while (slskv_pop(datatable, (uint64_t *) &record, (uint64_t *) &slsdata) == 0) {
 		LIST_FOREACH_SAFE(pagerun, slsdata, next, tmppagerun) {
 		    LIST_REMOVE(pagerun, next);
@@ -950,7 +1001,13 @@ out:
 	    slskv_destroy(datatable);
 	}
 
+	/* Leave the reference we got when searching for the partition. */
+	if (slsp != NULL)
+	    slsp_deref(slsp);
 
+	/* Clean up the restore data if coming here from an error. */
+	if (restdata != NULL)
+	   slsrest_fini(restdata);
 
 	return (error);
 }

@@ -165,7 +165,7 @@ add_dir_entry(struct bnode *bnode, char * path, size_t size, int rec_num)
 {
 	int status;
 
-	uint64_t cur_dir_ptr = ALLOC();;
+	uint64_t cur_dir_ptr = ALLOC();
 	add_key_val(broot, rec_num, &DISKPTR_BLOCK(cur_dir_ptr));
 
 	struct dirent * dir = calloc(1, bsize);
@@ -178,7 +178,7 @@ add_dir_entry(struct bnode *bnode, char * path, size_t size, int rec_num)
 
 	//Write the records now
 	struct slos_record * dir_rec = calloc(1, bsize);
-	dir_rec->rec_type = SLOSREC_DATA;
+	dir_rec->rec_type = SLOSREC_DIR;
 	dir_rec->rec_length = sizeof(*dir);
 	dir_rec->rec_size = 1;
 	dir_rec->rec_magic  = SLOS_RMAGIC;

@@ -65,11 +65,12 @@
  */
 
 static int
-slsckpt_sockbuf(struct sockbuf *sockbuf)
+slsckpt_sockbuf(struct sockbuf *sockbuf, struct slsckpt_data *sckpt_data)
 {
 	struct filedescent **fdescent;
 	struct mbuf *packetm, *m;
 	struct slsmbuf slsmbuf;
+	struct sls_record *rec;
 	size_t datalen, clen;
 	struct cmsghdr *cm;
 	struct sbuf *sb;
@@ -156,16 +157,14 @@ slsckpt_sockbuf(struct sockbuf *sockbuf)
 	    return (error);
 	}
 
+	rec = sls_getrecord(sb, SLOSREC_SOCKBUF);
 	/* Add the new buffer to the tables. */
-	error = slskv_add(slsm.slsm_rectable, (uint64_t) sockbuf, (uintptr_t) sb);
+	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) sockbuf, (uintptr_t) rec);
 	if (error != 0) {
+	    free(rec, M_SLSMM);
 	    sbuf_delete(sb);
 	    return (error);
 	}
-
-	error = slskv_add(slsm.slsm_typetable, (uint64_t) sb, (uintptr_t) SLOSREC_SOCKBUF);
-	if (error != 0)
-	    return (error);
 
 	return (0);
 }
@@ -224,7 +223,8 @@ slsckpt_sock_in(struct socket *so, struct slssock *info)
 }
 
 int
-slsckpt_socket(struct proc *p, struct socket *so, struct sbuf *sb)
+slsckpt_socket(struct proc *p, struct socket *so, 
+	struct sbuf *sb, struct slsckpt_data *sckpt_data)
 {
 	struct slssock info;
 	int error;
@@ -283,7 +283,7 @@ slsckpt_socket(struct proc *p, struct socket *so, struct sbuf *sb)
 
 	if (so->so_rcv.sb_mbcnt != 0) {
 	    info.rcvid = (uint64_t) &so->so_rcv;
-	    error = slsckpt_sockbuf(&so->so_rcv);
+	    error = slsckpt_sockbuf(&so->so_rcv, sckpt_data);
 	    if (error != 0)
 		return (error);
 	} else {
@@ -292,7 +292,7 @@ slsckpt_socket(struct proc *p, struct socket *so, struct sbuf *sb)
 
 	if (so->so_snd.sb_mbcnt != 0) {
 	    info.sndid = (uint64_t) &so->so_snd;
-	    error = slsckpt_sockbuf(&so->so_snd);
+	    error = slsckpt_sockbuf(&so->so_snd, sckpt_data);
 	    if (error != 0)
 		return (error);
 	} else {
