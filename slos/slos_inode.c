@@ -393,7 +393,7 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 	ino->ino_ctime_nsec = tv.tv_nsec;
 	ino->ino_mtime = tv.tv_sec;
 	ino->ino_mtime_nsec = tv.tv_nsec;
-	ino->ino_link_num = 0;
+	ino->ino_nlink = 0;
 
 	ino->ino_flags = 0;
 	ino->ino_blk = diskptr.offset;
@@ -401,6 +401,7 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 	ino->ino_mode = mode;
 	ino->ino_asize = 0;
 	ino->ino_size = 0;
+	ino->ino_blocks = 0;
 
 	/* Get a block for the records btree. */
 	recptr = slos_alloc(slos->slos_alloc, 1);
@@ -720,13 +721,11 @@ slos_timechange(struct slos_node *svp)
 int 
 slos_iupdate(struct slos_node *svp)
 {
-    struct slos_inode *ino;
     int error;
 
     mtx_lock(&svp->sn_mtx);
-    ino = svp->sn_ino;
     slos_timechange(svp);
-    error = slos_iwrite(svp->sn_slos, ino);
+    error = slos_iwrite(svp->sn_slos, SLSINO(svp));
     mtx_unlock(&svp->sn_mtx);
 
     return error;

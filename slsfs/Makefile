@@ -1,7 +1,7 @@
 KMOD	= slsfs
 DPSRCS = offset.inc
 SRCS	= slsfs_subr.c slsfs_vnops.c slsfs_vfsops.c slsfs_dir.c \
-	  slsfs_buf.c vnode_if.h 
+	  slsfs_buf.c slsfs_node.c vnode_if.h 
 
 CFLAGS	+= -DKDTRACE_HOOKS -DKLD_TIED -I../include
 

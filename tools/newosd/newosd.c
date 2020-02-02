@@ -140,9 +140,10 @@ create_root_inode(struct bnode *broot)
 	root_inode.ino_ctime_nsec = ts.tv_nsec;
 	root_inode.ino_mtime = ts.tv_sec;
 	root_inode.ino_mtime_nsec = ts.tv_nsec;
-	root_inode.ino_link_num = 2;
-	root_inode.ino_asize = bsize * 2;
-	root_inode.ino_size = bsize * 2;
+	root_inode.ino_nlink = 0;
+	root_inode.ino_asize = 0;
+	root_inode.ino_size = 0;
+	root_inode.ino_blocks = 0;
 
 	printf("Root inode at %lu\n", root_inode.ino_blk);
 	INIT_BNODE(broot, ALLOC());
@@ -155,6 +156,11 @@ create_root_inode(struct bnode *broot)
 	if (status < 0)
 	    exit (-1);
 
+	void * zeroes = calloc(1, bsize);
+
+	status = pwrite(fd, zeroes, bsize, broot->blkno * bsize);
+	if (status < 0) 
+		exit (-1);
 
 	return broot;
 }
@@ -370,9 +376,6 @@ write_sb()
 	/* The root of the inode btree. */
 
 	broot = create_root_inode(broot);
-
-	add_dir_entry(broot, ".", 1, 0);
-	add_dir_entry(broot, "..", 2, 1);
 
 	status = WRITEBNODE(broot);
 	if (status < 0)

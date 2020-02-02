@@ -280,6 +280,24 @@ slsfs_mount(struct mount *mp)
 	vfs_mountedfrom(mp, from);
 	DBUG("Mount done\n");
 
+	struct vnode *vp = NULL;
+	VFS_ROOT(mp, LK_EXCLUSIVE, &vp);
+	if (vp == NULL) {
+		return (EIO);
+	}
+
+	if (SLSINO(SLSVP(vp))->ino_nlink < 2) {
+	    DBUG("Retrieved Root\n");
+	    size_t rno;
+	    error = slos_rcreate(SLSVP(vp), SLOSREC_DATA, &rno);
+	    if (error) {
+		return (error);
+	    }
+	    DBUG("Creating Data record for root inode - %lu\n", rno);
+	    slsfs_init_dir(vp, vp, NULL);
+	}
+	VOP_UNLOCK(vp, 0);
+
 	return (error);
 }
 
@@ -475,6 +493,7 @@ slsfs_vget(struct mount *mp, ino_t ino, int flags, struct vnode **vpp)
 	svnode->sn_slos = slos;
 	vp->v_data = svnode;
 	vp->v_bufobj.bo_ops = &bufops_slsfs;
+	vp->v_bufobj.bo_bsize = IOSIZE(svnode);
 	slsfs_init_vnode(vp, ino);
 
 	error = vfs_hash_insert(vp, ino, 0, td, &none, NULL, NULL);
@@ -511,7 +530,6 @@ slsfs_sync(struct mount *mp, int waitfor)
 
 		bo = &vp->v_bufobj;
 		if (bo->bo_dirty.bv_cnt) {
-			DBUG("Attempting to flush vnode at %p\n", vp);
 			error = slsfs_sync_vp(vp);
 			if (error) {
 				/*

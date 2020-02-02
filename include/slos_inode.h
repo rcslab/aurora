@@ -72,9 +72,10 @@ struct slos_inode {
 	uint64_t		ino_magic;		/* magic for finding errors */
 
 	uint16_t		ino_mode;		/* mode */
-	uint64_t		ino_link_num;
+	uint64_t		ino_nlink;		/* hard links */
 	uint64_t		ino_asize;		/* Actual size of file on disk */
 	uint64_t		ino_size;		/* Size of file */
+	uint64_t		ino_blocks;		/* Number of on IO blocks */
 };
 
 

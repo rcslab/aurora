@@ -9,7 +9,7 @@ struct slos;
 #define MPTOSLOS(mp) ((TOSMP(mp)->sp_slos))
 #define SLSVP(vp) ((struct slos_node *)(vp->v_data))
 #define SLSVPSIZ(vp) (SLSINO(vp)->ino_size)
-#define SLSINO(svp) ((struct slos_inode *)(svp->sn_ino))
+#define SLSINO(svp) ((svp)->sn_ino)
 #define	VPSLOS(vp) (SLSVP(vp)->sn_slos)
 #define SMPSLOS(mp) ((mp)->sdev->slos)
 #define SECTORSIZE(smp) ((smp)->sp_sdev->devblocksize)

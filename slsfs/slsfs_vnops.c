@@ -29,7 +29,6 @@
 static int
 slsfs_inactive(struct vop_inactive_args *args)
 {
-	DBUG("INACTIVE\n");
 	return (0);
 }
 
@@ -45,7 +44,7 @@ slsfs_getattr(struct vop_getattr_args *args)
 	VATTR_NULL(vap);
 	vap->va_type = IFTOVT(inode->ino_mode);
 	vap->va_mode = inode->ino_mode & ~S_IFMT; 
-	vap->va_nlink = inode->ino_link_num;
+	vap->va_nlink = inode->ino_nlink;
 	vap->va_uid = 0;
 	vap->va_gid = 0;
 	vap->va_fsid = VNOVAL;
@@ -95,7 +94,6 @@ static int
 slsfs_mkdir(struct vop_mkdir_args *args)
 {
 	struct vnode *dvp = args->a_dvp;
-	struct slos_node *slsdvp = SLSVP(dvp);
 	struct vnode **vpp = args->a_vpp;
 	struct componentname *name = args->a_cnp;
 	struct vattr *vap = args->a_vap;
@@ -112,7 +110,7 @@ slsfs_mkdir(struct vop_mkdir_args *args)
 	} 
 
 	DBUG("Initing Directory named %s\n", name->cn_nameptr);
-	slsfs_init_dir(slsdvp, SLSVP(vp), name);
+	slsfs_init_dir(dvp, vp, name);
 	*vpp = vp;
 
 	return (0);
@@ -141,74 +139,85 @@ slsfs_open(struct vop_open_args *args)
 static int
 slsfs_readdir(struct vop_readdir_args *args)
 {
+	struct buf *bp;
+	struct dirent dir;
+	size_t blkno;
+	off_t blkoff;
+	size_t diroffset;
+	int error = 0;
+
 	struct vnode *vp = args->a_vp;
 	struct slos_node *slsvp = SLSVP(vp);
 	struct uio *io = args->a_uio;
-	uint64_t rno;
-	uint64_t lastrno;
-	int error;
+	size_t filesize = SLSINO(slsvp)->ino_size;
+	size_t blksize = IOSIZE(slsvp);
 
 	KASSERT(slsvp->sn_slos != NULL, ("Null slos"));
-
-	if (vp->v_type != VDIR)
+	if (vp->v_type != VDIR) {
 		return (ENOTDIR);
-
-	error = slos_lastrno(slsvp, &lastrno);
-	if (error == EIO) {
-		return (error);
-	} else if (error == EINVAL) {
-		panic("Problem directories should always have 2 records\n");
 	}
 
-	if ((io->uio_offset <= lastrno) &&
+	DBUG("READING DIRECTORY\n");
+	if ((io->uio_offset < filesize) &&
 	    (io->uio_resid >= sizeof(struct dirent)))
 	{
-		/* Create the UIO for the disk. */
-		while (io->uio_offset <= lastrno) {
-			if (io->uio_offset == 0) {
-				error = slos_firstrno(slsvp, &rno);
-			} else {
-				/* Make getrecord - subtracting by 1 because next record will just grab that  */
-				rno = io->uio_offset - 1;
-				error = slos_nextrno(slsvp, &rno);
-			}
-
-			if (error) {
-				DBUG("Problem getting record %lu - %d\n", rno, error);
-				return (error);
-			}
-			struct uio auio;
-			struct iovec aiov;
-			struct dirent dir;
-			aiov.iov_base = &dir;
-			aiov.iov_len = sizeof(dir);
-			slos_uioinit(&auio, 0, UIO_READ, &aiov, 1);
-
-			error = slos_rread(slsvp, rno, &auio);
-			if (error) {
-				DBUG("Error %d\n", error);
-				return (error);
-			}
-
-			dir.d_reclen = GENERIC_DIRSIZ(&dir);
-			dirent_terminate(&dir);
-			if (io->uio_resid < GENERIC_DIRSIZ(&dir)) {
-				break;
-			}
-
-			error = uiomove(&dir, dir.d_reclen, io);
-			io->uio_offset = rno + 1;
-			if (error) {
-				return (error);
-			}
+		diroffset = io->uio_offset;
+		blkno = io->uio_offset / blksize;
+		blkoff = io->uio_offset % blksize;
+		error = slsfs_bread(vp, blkno, curthread->td_ucred, &bp);
+		if (error) {
+			brelse(bp);
+			DBUG("Problem reading from blk in readdir\n");
+			return (error);
 		}
+		/* Create the UIO for the disk. */
+		while (diroffset < filesize) {
+			size_t anyleft = ((diroffset % blksize) + sizeof(struct dirent)) > blksize;
+			if (anyleft) {
+				blkoff = 0;
+				blkno++;
+				diroffset = blkno * blksize;
+				brelse(bp);
+				error = slsfs_bread(vp, blkno, curthread->td_ucred, &bp);
+				if (error) {
+					DBUG("Problem reading from blk in readdir in while\n");
+					brelse(bp);
+					return (error);
+				}
+			}
+			if (buf_mapped(bp)) {
+				KASSERT(bp->b_bcount > blkoff, ("Blkoff out of range of buffer\n"));
+				dir = *((struct dirent *)(bp->b_data + blkoff));
+				if (dir.d_reclen == 0) {
+					break;
+				}
+				dir.d_reclen = GENERIC_DIRSIZ(&dir);
+				dirent_terminate(&dir);
+				if (io->uio_resid < GENERIC_DIRSIZ(&dir)) {
+					break;
+				}
+
+				error = uiomove(&dir, dir.d_reclen, io);
+				if (error) {
+					DBUG("Problem moving buffer\n");
+					return (error);
+				}
+			} else {
+				brelse(bp);
+				return (EIO);
+			}
+			diroffset += sizeof(struct dirent);
+			blkoff += sizeof(struct dirent);
+		}
+		brelse(bp);
+		io->uio_offset = diroffset;
 	}
 
 	if (args->a_eofflag != NULL) {
 		*args->a_eofflag = 0;
 	}
 
-	return (0);
+	return (error);
 }
 
 static int
@@ -245,7 +254,7 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 		struct componentname tmp;
 		tmp.cn_nameptr = ".."; 
 		tmp.cn_namelen = 2;
-		error = slsfs_lookup_name(SLSVP(dvp), &tmp, &dir, NULL);
+		error = slsfs_lookup_name(dvp, &tmp, &dir);
 		/* Record was not found */
 		if (error)
 			goto out;
@@ -256,7 +265,7 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 		}
 	} else {
 		DBUG("Looking up file %s\n", cnp->cn_nameptr);
-		error = slsfs_lookup_name(SLSVP(dvp), cnp, &dir, NULL);
+		error = slsfs_lookup_name(dvp, cnp, &dir);
 		if (error == EINVAL) {
 			error = ENOENT;
 			/* 
@@ -269,7 +278,7 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 				cnp->cn_flags |= SAVENAME;
 				error = EJUSTRETURN;
 			}
-		} else {
+		} else if (error == 0) {
 			/* Cases for when name is found, others to be filled in later */
 			if ((nameiop == DELETE) && islastcn) {
 				DBUG("Delete of file %s\n", cnp->cn_nameptr);
@@ -283,7 +292,7 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 				panic("Rename Not implemented\n");
 			} else if ((nameiop == CREATE) && islastcn) {
 				DBUG("Create of file %s\n", cnp->cn_nameptr);
-				error = SLS_VGET(dvp, dir.d_fileno, LK_EXCLUSIVE, &vp);
+				error = SLS_VGET(dvp, -1, LK_EXCLUSIVE, &vp);
 				if (!error) {
 					cnp->cn_flags |= SAVENAME;
 					*vpp = vp;
@@ -318,13 +327,12 @@ slsfs_rmdir(struct vop_rmdir_args *args)
 	struct componentname *cnp = args->a_cnp;
 	int error;
 
-	struct slos_node *sdvp = SLSVP(dvp);
 	struct slos_node *svp = SLSVP(vp);
 	struct slos_inode *ivp = SLSINO(svp);
 
 	/* Check if directory is empty */
 	/* Are we mounted here*/
-	if (ivp->ino_link_num > 2) {
+	if (ivp->ino_nlink > 2) {
 		return (ENOTEMPTY);
 	}
 
@@ -332,7 +340,7 @@ slsfs_rmdir(struct vop_rmdir_args *args)
 		return (EPERM);
 	}
 
-	error = slsfs_remove_node(sdvp, svp, cnp);
+	error = slsfs_remove_node(dvp, vp, cnp);
 	if (error) {
 		return (error);
 	}
@@ -350,7 +358,6 @@ slsfs_create(struct vop_create_args *args)
 {
 	DBUG("Creating file\n");
 	struct vnode *dvp = args->a_dvp;
-	struct slos_node *slsdvp = SLSVP(dvp);
 	struct vnode **vpp = args->a_vpp;
 	struct componentname *name = args->a_cnp;
 	struct vattr *vap = args->a_vap;
@@ -366,7 +373,7 @@ slsfs_create(struct vop_create_args *args)
 		return (error);
 	} 
 
-	error = slsfs_add_dirent(slsdvp, VINUM(vp), name->cn_nameptr, name->cn_namelen, DT_REG);
+	error = slsfs_add_dirent(dvp, VINUM(vp), name->cn_nameptr, name->cn_namelen, DT_REG);
 	if (error == -1) {
 		return (EIO);
 	}
@@ -384,10 +391,7 @@ slsfs_remove(struct vop_remove_args *args)
 	DBUG("Removing file %s\n", cnp->cn_nameptr);
 	int error;
 
-	struct slos_node *sdvp = SLSVP(dvp);
-	struct slos_node *svp = SLSVP(vp);
-
-	error = slsfs_remove_node(sdvp, svp, cnp);
+	error = slsfs_remove_node(dvp, vp, cnp);
 	if (error) {
 		return (error);
 	}

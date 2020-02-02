@@ -63,3 +63,4 @@ cscope.out
 localsocket
 slsfifo
 slssysvshm
+.clangd/

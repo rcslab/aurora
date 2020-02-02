@@ -7,6 +7,7 @@
 #include <slos_bnode.h>
 
 #include "slsfs_buf.h"
+#include "slsfs_node.h"
 #include "../slos/slosmm.h"
 #include "../slos/slos_alloc.h"
 
@@ -23,10 +24,10 @@ int
 slsfs_bcreate(struct vnode *vp, uint64_t lbn, size_t size, struct buf **buf) 
 {
 	struct buf *tempbuf;
-	struct btree *tree;
-	struct slos_record *rec;
 	struct slos_recentry tempsize;
+
 	int error = 0;
+	size_t blksize = IOSIZE(SLSVP(vp));
 
 	/*
 	 * We use the recentry data structure as currently the record btrees 
@@ -35,24 +36,9 @@ slsfs_bcreate(struct vnode *vp, uint64_t lbn, size_t size, struct buf **buf)
 	 */
 	tempsize.len = size;
 	tempsize.offset = lbn;
-
-	struct slos_node *svp = SLSVP(vp);
-	size_t blksize = IOSIZE(svp);
-
-	KASSERT(size == blksize, ("Currently we only accept sizes of blksize"));
-
-	error = slos_firstrec(svp, &rec);
+	error = slsfs_key_insert(SLSVP(vp), lbn, tempsize);
 	if (error) {
-		return (error);
-	} 
-
-	tree = btree_init(svp->sn_slos, rec->rec_data.offset, ALLOCMAIN);
-	DBUG("Writing key/size pair to vnode %lu/%lu\n", lbn, size);
-	error = btree_insert(tree, lbn, &tempsize);
-	btree_destroy(tree);
-
-	if (error) {
-		return (error);
+	    return (error);
 	}
 
 	tempbuf = getblk(vp,  lbn, blksize, 0, 0, 0);
@@ -88,10 +74,10 @@ void
 slsfs_bdirty(struct buf *buf)
 {
 	/*
-	* This B_MANAGED tells the buffer cache to not release our buffer to 
-	* any queue when using bqrelse or brelse.  To be able to invalidate or 
-	* fully release a buffer this flag must be unset
-	*/
+	 * This B_MANAGED tells the buffer cache to not release our buffer to 
+	 * any queue when using bqrelse or brelse.  To be able to invalidate or 
+	 * fully release a buffer this flag must be unset
+	 */
 	buf->b_flags |= B_MANAGED;
 	bdwrite(buf);
 }
@@ -124,8 +110,8 @@ slsfs_lookupbln(struct slos_node *svp, uint64_t lbn,  uint64_t * pbn)
 			DBUG("Error creating record\n");
 			return (error);
 		}
-
 		*pbn = -1;
+
 		return (0);
 	} else if (error) {
 		DBUG("Error seraching for first record\n");

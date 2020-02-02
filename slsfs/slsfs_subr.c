@@ -73,15 +73,16 @@ slsfs_new_node(struct slos *slos, mode_t mode, uint64_t *ppid)
 }
 
 int
-slsfs_remove_node(struct slos_node *dvp, struct slos_node *vp, struct componentname *name)
+slsfs_remove_node(struct vnode *dvp, struct vnode *vp, struct componentname *name)
 {
 	int error;
+	struct slos_node *svp = SLSVP(vp);
 
 	error = slsfs_unlink_dir(dvp, vp, name);
 	if (error) {
 		return error;
 	}
-	error = slos_iremove(vp->sn_slos, SLSINO(vp)->ino_pid);
+	error = slos_iremove(svp->sn_slos, SLSINO(svp)->ino_pid);
 	if (error) {
 		return (error);
 	}
@@ -119,7 +120,6 @@ slsfs_bufsync(struct bufobj *bufobj, int waitfor)
 void
 slsfs_bdflush(struct bufobj *bufobj, struct buf *buf)
 {    
-	DBUG("BUFFLUSH\n");
 	bufbdflush(bufobj, buf);
 }
 
@@ -155,7 +155,6 @@ slsfs_sync_vp(struct vnode *vp)
 void
 slsfs_bufstrategy(struct bufobj *bo, struct buf *bp)
 {
-	DBUG("BUF STRAT\n");
 	if (bp->b_blkno == (daddr_t)(-1)) {
 		vfs_bio_clrbuf(bp); 
 		bufdone(bp);
@@ -164,11 +163,9 @@ slsfs_bufstrategy(struct bufobj *bo, struct buf *bp)
 
 	switch(bp->b_iocmd) {
 	case BIO_READ:
-		DBUG("Read blk\n");
 		slos_readblk(&slos, bp->b_blkno, bp->b_data);
 		break;
 	case BIO_WRITE:
-		DBUG("Write blk\n");
 		slos_writeblk(&slos, bp->b_blkno, bp->b_data);
 		break;
 	default:
@@ -179,5 +176,4 @@ slsfs_bufstrategy(struct bufobj *bo, struct buf *bp)
 	 * to complete its IO 
 	 */
 	bufdone(bp);
-	DBUG("BUF STRAT DONE\n");
 }
