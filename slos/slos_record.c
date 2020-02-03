@@ -359,28 +359,6 @@ error:
 	return error;
 }
 
-static int
-slos_rupdate(struct slos_node *vp, uint64_t rno, struct uio *auio)
-{
-
-    struct slos_record *rec;
-    int error;
-
-    error = slos_getrec(vp, rno, &rec);
-    if (error)
-	goto update_err;
-
-    uiomove(rec->rec_internal_data, auio->uio_resid, auio);
-    error = slos_recdwrite(vp->sn_slos, rec);
-
-update_err:
-    if(rec != NULL) {
-	free(rec, M_SLOS);
-    }
-
-    return (error);
-}
-
 int 
 slos_rwrite(struct slos_node *vp, uint64_t rno, struct uio *auio)
 {

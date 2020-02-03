@@ -186,41 +186,6 @@ out:
 }
 
 /*
- * In certain cases we cannot shadow objects, but instead have to copy
- * them wholesale. This is because we cannot mend all references to the
- * the objects, and the processes in the SLS can therefore access the 
- * parent object while a dump is in progress. In that case, we clone the
- * object and all of its data.
- */
-static int
-slsckpt_objcopy(vm_object_t *dstp, vm_object_t src)
-{
-       vm_page_t srcpage, dstpage;
-       vm_object_t dst;
-       vm_page_t page;
-
-       /* XXX Here we assume there is no parent object, is this accurate? */
-
-       KASSERT((src->backing_object == NULL), ("object has backer"));
-       dst = vm_object_allocate(src->type, src->size);
-       if (dst == NULL)
-           return (ENOMEM);
-
-       /* Loop around all pages of the shared object, copying them over. */
-       srcpage = TAILQ_FIRST(&src->memq);
-       for (int i = 0; i < src->resident_page_count; i++) {
-           dstpage = vm_page_grab(dst, srcpage->pindex, VM_ALLOC_WAITOK);
-           pmap_copy_page(srcpage, dstpage);
-           page = TAILQ_NEXT(srcpage, listq);
-       }
-
-       /* Export the new object to the caller. */
-       *dstp = dst;
-       return (0);
-}
-
-
-/*
  * Below are the two functions used for creating the shadows, slsckpt_shadow()
  * and slsckpt_collapse(). What slsckpt_shadow does it take a reference on the
  * objects that are directly attached to the process' entries, and then create
@@ -417,36 +382,6 @@ slsckpt_shadow(slsset *procset, struct slskv_table *table, int is_fullckpt)
 	}
 
 	return (0);
-}
-
-/*
- * Collapse an object created by SLS into its parent.
- */
-/* XXX Incorporate into sckpt_destroy(). */
-static void
-slsckpt_collapse(struct slskv_table *objtable)
-{
-	struct slskv_iter iter;
-	vm_object_t obj, shadow;
-	
-	/* 
-	 * When collapsing, we do so by removing the 
-	 * reference of the original object we took in 
-	 * slsckpt_shadow. After having done so, the
-	 * object is left with one reference and one
-	 * shadow, so it can be collapsed with it.
-	 */
-	/* 
-	 * XXX This probably does not work right now. Suppose we have an object directly
-	 * shared among processes; the at shadow time we got 2 references, not one.
-	 * We need to be able to reason about how many references we have. Moreover,
-	 * the shadow is still referred to by VM entries of the object. In that case,
-	 * we need to actually fix up the references while collapsing.
-	 */
-	/* XXX Don't forget the SYSV shared memory table! */
-	iter = slskv_iterstart(objtable);
-	while (slskv_itercont(&iter, (uint64_t *) &obj, (uintptr_t *) &shadow) != SLSKV_ITERDONE)
-	    vm_object_deallocate(obj);
 }
 
 /*

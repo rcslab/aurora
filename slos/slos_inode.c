@@ -623,83 +623,6 @@ slos_istat(struct slos *slos, uint64_t ino)
 	return 0;
 }
 
-/* 
- * Iterator for going through all entries of the 
- * inode btree. Each time we iterate, we open 
- * a vnode that we can use to operate on the vnode.
- * The previously iterated vnode is closed.
- */
-struct slos_viter {
-	uint64_t nextpid;
-	struct slos_node *curvp;
-};
-
-static struct slos_viter *
-slos_viter_begin(struct slos *slos)
-{
-	struct slos_viter *viter;
-
-	viter = malloc(sizeof(*viter), M_SLOS, M_WAITOK);
-	viter->nextpid = 0;
-	viter->curvp = NULL;
-
-	return viter;
-}
-
-static struct slos_node *
-slos_viter_iter(struct slos *slos, struct slos_viter *viter)
-{
-	struct slos_node *vp;
-	struct slos_diskptr inoptr;
-	int error;
-
-	if (viter->curvp != NULL) {
-	    /* Close the previously iterated vnode. */
-	    error = slos_iclose(slos, viter->curvp);
-	    if (error != 0) 
-		return NULL;
-
-	    /* Overwrite the pointer to avoid closing twice. */
-	    viter->curvp = NULL;
-	}
-
-	/* Get the next key equal to or larger than the current one. */
-	error = btree_keymax(slos->slos_inodes, &viter->nextpid, &inoptr);
-	if (error != 0)
-	    return NULL;
-
-	/* Open the new vnode. */
-	vp = slos_iopen(slos, viter->nextpid);
-	if (vp == NULL)
-	    return NULL;
-	
-	/* Update the iterator. */  
-	viter->nextpid += 1;
-	viter->curvp = vp;
-
-	return vp;
-}
-
-static int 
-slos_viter_end(struct slos *slos, struct slos_viter *viter)
-{
-	int error;
-	
-	if (viter->curvp != NULL) {
-	    /* Close the previously iterated vnode. */
-	    error = slos_iclose(slos, viter->curvp);
-	    if (error != 0) 
-		return error;
-
-	    /* Overwrite the pointer to avoid closing twice. */
-	    viter->curvp = NULL;
-	}
-
-	free(viter, M_SLOS);
-
-	return 0;
-}
-
 // We assume the svp struct is locked
 void 
 slos_timechange(struct slos_node *svp)
@@ -754,6 +677,83 @@ slos_iupdate(struct slos_node *svp)
 #define TESTLEN	    4
 
 #define PIDNO	    4096
+
+/*
+ * Iterator for going through all entries of the
+ * inode btree. Each time we iterate, we open
+ * a vnode that we can use to operate on the vnode.
+ * The previously iterated vnode is closed.
+ */
+struct slos_viter {
+	uint64_t nextpid;
+	struct slos_node *curvp;
+};
+
+static struct slos_viter *
+slos_viter_begin(struct slos *slos)
+{
+	struct slos_viter *viter;
+
+	viter = malloc(sizeof(*viter), M_SLOS, M_WAITOK);
+	viter->nextpid = 0;
+	viter->curvp = NULL;
+
+	return viter;
+}
+
+static struct slos_node *
+slos_viter_iter(struct slos *slos, struct slos_viter *viter)
+{
+	struct slos_node *vp;
+	struct slos_diskptr inoptr;
+	int error;
+
+	if (viter->curvp != NULL) {
+	    /* Close the previously iterated vnode. */
+	    error = slos_iclose(slos, viter->curvp);
+	    if (error != 0)
+		return NULL;
+
+	    /* Overwrite the pointer to avoid closing twice. */
+	    viter->curvp = NULL;
+	}
+
+	/* Get the next key equal to or larger than the current one. */
+	error = btree_keymax(slos->slos_inodes, &viter->nextpid, &inoptr);
+	if (error != 0)
+	    return NULL;
+
+	/* Open the new vnode. */
+	vp = slos_iopen(slos, viter->nextpid);
+	if (vp == NULL)
+	    return NULL;
+
+	/* Update the iterator. */
+	viter->nextpid += 1;
+	viter->curvp = vp;
+
+	return vp;
+}
+
+static int
+slos_viter_end(struct slos *slos, struct slos_viter *viter)
+{
+	int error;
+
+	if (viter->curvp != NULL) {
+	    /* Close the previously iterated vnode. */
+	    error = slos_iclose(slos, viter->curvp);
+	    if (error != 0)
+		return error;
+
+	    /* Overwrite the pointer to avoid closing twice. */
+	    viter->curvp = NULL;
+	}
+
+	free(viter, M_SLOS);
+
+	return 0;
+}
 
 int
 slos_test_inode(void)

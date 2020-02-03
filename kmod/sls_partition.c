@@ -287,19 +287,6 @@ slsp_del(uint64_t oid)
 }
 
 
-/* Go through the process table of the SLS, listing all processes in it. */
-static void
-slsp_list(void)
-{
-	struct slskv_iter iter;
-	uint64_t pid, oid;
-
-	/* XXX Make it so it actually produces useful, partition-centric info. */
-	iter = slskv_iterstart(slsm.slsm_procs);
-	while (slskv_itercont(&iter, &pid, (uintptr_t *) &oid) != SLSKV_ITERDONE)
-	    printf("PID %ld, OID %ld\n", pid, oid);
-}
-
 /* Empty the SLS of all processes. */
 void
 slsp_delall(void)

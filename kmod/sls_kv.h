@@ -50,9 +50,6 @@ struct slskv_table {
 	size_t		    elems;		/* Number of elements in the table */
 };
 
-/* Hash function from keys to buckets. */
-#define SLSKV_BUCKETNO(table, key) (((u_long) key & table->mask)) 
-
 int slskv_create(struct slskv_table **tablep, enum slskv_policy policy);
 void slskv_destroy(struct slskv_table *table);
 int slskv_find(struct slskv_table *table, uint64_t key, uintptr_t *value);

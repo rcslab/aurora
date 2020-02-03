@@ -72,8 +72,8 @@ __attribute__((constructor)) init()
     }
 }
 
-void 
-__attribute__((deconstructor)) deconstruct()
+void
+__attribute__((destructor)) destruct()
 {
     char buf[BUFSIZE] = { };
     char spid[BUFSIZE] = {};
@@ -106,24 +106,25 @@ create_path(int fd, char * buf)
 }
 
 static int
-link_path(char * path, int fd, int at1, int at2)
+link_path(const char *path, int fd, int at1, int at2)
 {
     char full_path[BUFSIZE] = { };
-    create_path(fd, &full_path);
+    create_path(fd, full_path);
     return linkat(at1, path, at2, full_path, 0);
 }
+
 static int
 unlink_path(int fd)
 {
     char full_path[BUFSIZE] = { };
-    create_path(fd, &full_path);
+    create_path(fd, full_path);
     return unlink(full_path);
 }
 
 enum action { OPEN = 'O', OPENAT = 'A', CLOSE ='C', DUP = 'D', DUP2 = '2' };
 
-int 
-log(enum action a, int fd, int dup) 
+int
+debug_log(enum action a, int fd, int dup)
 {
     char buf[BUFSIZE] = { };
     char character[BUFSIZE] = { };
@@ -187,7 +188,7 @@ open(const char *path, int flags, ...)
 	printf("Problem Creating File\n - %s", path);
 	return EIO;
     }
-    log(OPEN, r, 0);
+    debug_log(OPEN, r, 0);
 
     return r;
 }
@@ -208,7 +209,7 @@ close(int fd)
 	printf("Problem unlink fd %d\n", fd);
 	return EIO;
     }
-    log(CLOSE, fd, 0);
+    debug_log(CLOSE, fd, 0);
 
     return r;
 }
@@ -227,7 +228,7 @@ dup(int oldd)
 	printf("Problem Creating File\n");
 	return EIO;
     }
-    log(DUP, oldd, r);
+    debug_log(DUP, oldd, r);
 
     return r;
 }
@@ -246,7 +247,7 @@ dup2(int oldd, int newd)
 	printf("Problem Creating File\n");
 	return EIO;
     }
-    log(DUP2, oldd, newd);
+    debug_log(DUP2, oldd, newd);
 
     return r;
 }
@@ -271,7 +272,7 @@ openat(int fd, const char *path, int flags, ...)
 	printf("Problem Creating File %s\n", path);
 	return EIO;
     }
-    log(OPENAT, r, fd);
+    debug_log(OPENAT, r, fd);
 
     return r;
 }

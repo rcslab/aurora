@@ -50,26 +50,6 @@ extern struct buf_ops bufops_slsfs;
 static const char *slsfs_opts[] = { "from" };
 
 static int
-slos_itreeopen(struct slos *slos)
-{
-	uint64_t itree;
-
-	itree = slos->slos_sb->sb_inodes.offset;
-	slos->slos_inodes = btree_init(slos, itree, ALLOCMAIN);
-	if (slos->slos_inodes == NULL)
-		return (EIO);
-
-	return (0);
-}
-
-static void
-slos_itreeclose(struct slos *slos)
-{
-	btree_discardelem(slos->slos_inodes);
-	btree_destroy(slos->slos_inodes);
-}
-
-static int
 slsfs_mount_device(struct vnode *devvp, struct mount *mp, struct slsfs_device **slsfsdev)
 {
 	struct slsfs_device * sdev;
@@ -97,61 +77,6 @@ slsfs_mount_device(struct vnode *devvp, struct mount *mp, struct slsfs_device **
 	DBUG("Mounting Device Done\n");
 
 	return (0);
-}
-
-static int
-slsfs_create_slos(struct slsfsmount *smp)
-{
-	int error;
-
-	struct slos * slosfs = &slos;
-	KASSERT(slosfs != NULL, ("slos null"));
-	KASSERT(smp != NULL, ("slsfs mount"));
-	mtx_init(&slosfs->slos_mtx, "slosmtx", NULL, MTX_DEF);
-
-	slosfs->slos_vp = smp->sp_sdev->devvp;
-	slosfs->slos_cp = smp->sp_sdev->gconsumer;
-
-	/* Read in the superblock. */
-	DBUG("SLOS Read in Super\n");
-	error = slos_sbread(slosfs);
-	if (error != 0) {
-		DBUG("ERROR: slos_sbread failed with %d\n", error);
-		return error;
-	}
-
-	/* Set up the bootstrap allocator. */
-	DBUG("SLOS Boot Init\n");
-	error = slos_bootinit(slosfs);
-	if (error != 0) {
-		DBUG("slos_bootinit had error %d\n", error);
-		return error;
-	}
-
-	slosfs->slos_alloc = slos_alloc_init(slosfs);
-	if (slosfs->slos_alloc == NULL) {
-		DBUG("ERROR: slos_alloc_init failed to set up allocator\n");
-		return EINVAL;
-	}
-
-	/* Get the btree of inodes in the SLOS. */
-	error = slos_itreeopen(slosfs);
-	if (error != 0) {
-		DBUG("ERROR: slos_itreeopen failed with %d\n", error);
-		return error;
-	}
-
-	/* Set up the open vnode hashtable. */
-	error = slos_vhtable_init(slosfs);
-	if (error != 0) {
-		DBUG("ERROR: slos_vhtable_init failed with %d\n", error);
-		return error;
-	}
-
-	smp->sp_slos = slosfs;
-	DBUG("SLOS Loaded.\n");
-
-	return error;
 }
 
 /*
@@ -359,43 +284,6 @@ free_mount_info(struct mount *mp)
 
 	free(smp, M_SLSFSMNT);
 	DBUG("Destroyed slsmount info\n");
-}
-
-static int
-slsfs_destroy_slos(struct slos * fs)
-{
-	int error; 
-
-	mtx_lock(&fs->slos_mtx);
-	DBUG("Destroying SLOS\n");
-
-	if (fs->slos_vhtable != NULL) {
-		DBUG("Destroying SLOS vhtable\n");
-		error = slos_vhtable_fini(fs);
-		if (error != 0) {
-			DBUG("ERROR: slos_vhtable_fini failed with %d\n", error);
-			mtx_unlock(&fs->slos_mtx);
-			return error;
-		}
-	}
-
-	if (fs->slos_inodes != NULL)
-		slos_itreeclose(fs);
-
-	DBUG("Destroying SLOS allocator\n");
-	slos_alloc_destroy(fs);
-
-	if (fs->slos_bootalloc != NULL)
-		DBUG("Destroying SLOS bootalloc\n");
-	slos_bootdestroy(fs);
-
-	free(fs->slos_sb, M_SLOS);
-
-	mtx_unlock(&fs->slos_mtx);
-	mtx_destroy(&fs->slos_mtx);
-	DBUG("SLOS Unloaded.\n");
-
-	return (0);
 }
 
 static int

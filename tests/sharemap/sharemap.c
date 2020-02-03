@@ -23,7 +23,7 @@ ping()
 	for (;;) {
 	    sleep(1);
 
-	    while (atomic_cmpset_int((int *) sharemap, 0, 1) == 0)
+	    while (atomic_cmpset_int((u_int *) sharemap, 0, 1) == 0)
 		    ;
 
 	    printf("ping\n");
@@ -40,7 +40,7 @@ pong()
 	for (;;) {
 	    sleep(1);
 
-	    while (atomic_cmpset_int((int *) sharemap, 1, 0) == 0)
+	    while (atomic_cmpset_int((u_int *) sharemap, 1, 0) == 0)
 		    ;
 
 	    printf("pong\n");

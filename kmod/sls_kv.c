@@ -13,6 +13,9 @@
 #include "sls_kv.h"
 #include "sls_mm.h"
 
+/* Hash function from keys to buckets. */
+#define SLSKV_BUCKETNO(table, key) (((u_long) key & table->mask))
+
 uma_zone_t slskv_zone = NULL;
 
 /* 
@@ -212,7 +215,7 @@ slskv_del(struct slskv_table *table, uint64_t key)
  * return it. If the table is empty, return an error.
  */
 int
-slskv_pop(struct slskv_table *table, uint64_t *key, uint64_t *value)
+slskv_pop(struct slskv_table *table, uint64_t *key, uintptr_t *value)
 {
 	struct slskv_pairs *bucket;
 	struct slskv_pair *kv;
