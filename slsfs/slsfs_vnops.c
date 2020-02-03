@@ -19,10 +19,12 @@
 #include <slos_record.h>
 #include <slos_btree.h>
 #include <slos_io.h>
+#include <slos_record.h>
 
 #include "slsfs_dir.h"
 #include "slsfs_subr.h"
 #include "slsfs_buf.h"
+#include "slsfs_node.h"
 
 #define DIR_NUMFILES(vp) (vp->sn_records->size)
 
@@ -620,9 +622,55 @@ slsfs_print(struct vop_print_args *args)
 static int
 slsfs_strategy(struct vop_strategy_args *args)
 {
-	DBUG("SLSFS STRAT\n");
+	int error;
+	struct slos_recentry entry = {};
+
 	struct buf *bp = args->a_bp;
-	bstrategy(bp);
+	struct vnode *vp = args->a_vp;
+
+	error = slsfs_key_get(SLSVP(vp), bp->b_lblkno, &entry);
+	if (error && error != EINVAL) {
+		DBUG("ERROR\n");
+		return (error);
+	};
+
+	/*
+	 * We fill the record btree with null values on their creation (See 
+	 * slsfs_bcreate), so this is to handle the case of a buffer that hasnt 
+	 * been allocated yet.  If its been allocated we actually will perform
+	 * the storage IO. If this is a buffer thats performing the 
+	 * VOP_STRATEGY, and its a write, then this MUST be being called
+	 * from within the sync context which means an allocation has already
+	 * been completed.
+	 *
+	 * XXX: Revisit upon completely new Btrees
+	 */
+	if (REC_ISALLOCED(entry))  {
+		bp->b_blkno = entry.diskptr.offset;
+	} else {
+		KASSERT(bp->b_iocmd == BIO_READ, ("This case should only happen during a read"));
+		bp->b_blkno = (daddr_t) (-1);
+		vfs_bio_clrbuf(bp); 
+		bufdone(bp);
+
+		return (0);
+	}
+
+	switch(bp->b_iocmd) {
+	case BIO_READ:
+		slos_readblk(&slos, bp->b_blkno, bp->b_data);
+		break;
+	case BIO_WRITE:
+		slos_writeblk(&slos, bp->b_blkno, bp->b_data);
+		break;
+	default:
+		panic("This shouldn't happen");
+	}
+	/* 
+	 * Bufdone will finish the IO but also wakeup anyone waiting on this buf
+	 * to complete its IO 
+	 */
+	bufdone(bp);
 	return (0);
 }
 

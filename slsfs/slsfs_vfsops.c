@@ -30,10 +30,10 @@
 #include <slos_inode.h>
 #include <slos_btree.h>
 #include <slos_io.h>
+#include <slosmm.h>
 
 #include "../slos/slos_bootalloc.h"
 #include "../slos/slos_alloc.h"
-#include "../slos/slosmm.h"
 
 #include "slsfs_subr.h"
 #include "slsfs.h"
@@ -527,7 +527,6 @@ slsfs_sync(struct mount *mp, int waitfor)
 		if (vget(vp, LK_EXCLUSIVE | LK_INTERLOCK | LK_NOWAIT, td) != 0) {
 			continue;
 		}
-
 		bo = &vp->v_bufobj;
 		if (bo->bo_dirty.bv_cnt) {
 			error = slsfs_sync_vp(vp);

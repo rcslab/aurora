@@ -1,6 +1,7 @@
 #include <slsfs.h>
 #include <slos_btree.h>
 #include <slos_record.h>
+#include <slosmm.h>
 
 #include <slsfs_node.h>
 
@@ -37,6 +38,7 @@ slsfs_key_insert(struct slos_node *svp, uint64_t key, struct slos_recentry val)
 	tree = btree_init(svp->sn_slos, rec->rec_data.offset, ALLOCMAIN);
 	error = btree_insert(tree, key, &val);
 	btree_destroy(tree);
+	free(rec, M_SLOS);
 
 	return (error);
 }
@@ -50,12 +52,54 @@ slsfs_key_remove(struct slos_node *svp, uint64_t key)
 
 	error = slos_firstrec(svp, &rec);
 	if (error) {
-	    return (error);
+		return (error);
 	}
 
 	tree = btree_init(svp->sn_slos, rec->rec_data.offset, ALLOCMAIN);
 	error = btree_delete(tree, key);
 	btree_destroy(tree);
+	free(rec, M_SLOS);
 
+	return (error);
+}
+
+int
+slsfs_key_replace(struct slos_node *svp, uint64_t key, struct slos_recentry val)
+{
+	struct btree *tree;
+	struct slos_record *rec;
+	struct slos_recentry entry;
+	int error = 0;
+
+	error = slos_firstrec(svp, &rec);
+	if (error) {
+		return (error);
+	}
+
+	tree = btree_init(svp->sn_slos, rec->rec_data.offset, ALLOCMAIN);
+	error = btree_overwrite(tree, key, &val, &entry);
+	btree_destroy(tree);
+	free(rec, M_SLOS);
+
+	return (error);
+}
+
+int
+slsfs_key_get(struct slos_node *svp, uint64_t key, struct slos_recentry *val) 
+{
+	struct btree *tree;
+	struct slos_record *rec;
+	int error = 0;
+
+	error = slos_firstrec(svp, &rec);
+	if (error) {
+		return (error);
+	}
+
+	tree = btree_init(svp->sn_slos, rec->rec_data.offset, ALLOCMAIN);
+	error = btree_search(tree, key, val);
+	btree_destroy(tree);
+	free(rec, M_SLOS);
+	
 	return (error);
 }

@@ -16,20 +16,24 @@
 
 #include <machine/atomic.h>
 
-#include "slos.h"
-#include "slos_io.h"
+#include <slos.h>
+#include <slos_io.h>
+#include <slos_record.h>
+#include <slosmm.h>
+
+#include "../slos/slos_alloc.h"
+
 #include "slsfs.h"
 #include "slsfs_subr.h"
 #include "slsfs_dir.h"
 #include "slsfs_buf.h"
-#include "../slos/slosmm.h"
-#include "../slos/slos_alloc.h"
+#include "slsfs_node.h"
 
 uint64_t pids;
 
 struct buf_ops bufops_slsfs = {
 	.bop_name	=   "slsfs_bufops",
-	.bop_strategy	=   slsfs_bufstrategy, 
+	.bop_strategy	=   bufstrategy, 
 	.bop_write	=   slsfs_bufwrite,
 	.bop_sync	=   slsfs_bufsync,
 	.bop_bdflush	=   slsfs_bdflush,
@@ -127,9 +131,12 @@ int
 slsfs_sync_vp(struct vnode *vp)
 {
 	struct buf *bp, *tbd;
+	struct slos_diskptr ptr;
+	struct slos_recentry entry;
+
 	struct slos *slos = SLSVP(vp)->sn_slos;
 	struct bufobj *bo = &vp->v_bufobj;
-	struct slos_diskptr ptr;
+	size_t blksize = IOSIZE(SLSVP(vp));
 	int error = 0;
 
 	BO_LOCK(bo);
@@ -137,12 +144,18 @@ slsfs_sync_vp(struct vnode *vp)
 		if (BUF_LOCK(bp, LK_EXCLUSIVE | LK_INTERLOCK | LK_SLEEPFAIL, BO_LOCKPTR(bo)) == ENOLCK) {
 			continue;
 		}
+
 		ptr = slos_alloc(slos->slos_alloc, 1);
-		bp->b_blkno = ptr.offset;
+		entry.diskptr = ptr;
+		entry.len = blksize;
+		entry.offset = 0;
+
+		error = slsfs_key_replace(SLSVP(vp), bp->b_lblkno, entry);
 		if (error) {
 			BUF_UNLOCK(bp);
 			continue;
 		}
+		bp->b_blkno = ptr.offset;
 		/* This bwrite will call bstrategy */
 		slsfs_bundirty(bp);
 		BO_LOCK(bo);
@@ -150,30 +163,4 @@ slsfs_sync_vp(struct vnode *vp)
 	BO_UNLOCK(bo);
 
 	return slos_iupdate(SLSVP(vp));
-}
-
-void
-slsfs_bufstrategy(struct bufobj *bo, struct buf *bp)
-{
-	if (bp->b_blkno == (daddr_t)(-1)) {
-		vfs_bio_clrbuf(bp); 
-		bufdone(bp);
-		return;
-	}
-
-	switch(bp->b_iocmd) {
-	case BIO_READ:
-		slos_readblk(&slos, bp->b_blkno, bp->b_data);
-		break;
-	case BIO_WRITE:
-		slos_writeblk(&slos, bp->b_blkno, bp->b_data);
-		break;
-	default:
-		panic("This shouldn't happen");
-	}
-	/* 
-	 * Bufdone will finish the IO but also wakeup anyone waiting on this buf
-	 * to complete its IO 
-	 */
-	bufdone(bp);
 }

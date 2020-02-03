@@ -5,10 +5,10 @@
 #include <slos_io.h>
 #include <slos_btree.h>
 #include <slos_bnode.h>
+#include <slosmm.h>
 
 #include "slsfs_buf.h"
 #include "slsfs_node.h"
-#include "../slos/slosmm.h"
 #include "../slos/slos_alloc.h"
 
 /*
@@ -34,8 +34,11 @@ slsfs_bcreate(struct vnode *vp, uint64_t lbn, size_t size, struct buf **buf)
 	 * store recentrys which are represent their disk location and offset 
 	 * and len in the block. 
 	 */
+	tempsize.diskptr.offset = 0;
+	tempsize.diskptr.size = 0;
 	tempsize.len = size;
 	tempsize.offset = lbn;
+
 	error = slsfs_key_insert(SLSVP(vp), lbn, tempsize);
 	if (error) {
 	    return (error);
@@ -60,9 +63,8 @@ slsfs_bread(struct vnode *vp, uint64_t lbn, struct ucred *cred, struct buf **buf
 	int error;
 
 	size_t blksize = IOSIZE(SLSVP(vp));
-
+	
 	error = bread(vp, lbn, blksize, cred, buf);
-
 	if (error) {
 		return (error);
 	}

@@ -400,6 +400,7 @@ slos_readblk(struct slos *slos, uint64_t blkno, void *buf)
 int
 slos_writeblk(struct slos *slos, uint64_t blkno, void *buf)
 {
+	KASSERT(blkno != 0, ("This is our superblock!"));
 	return slos_opblk(slos, blkno, buf, 1);
 }
 

@@ -9,7 +9,7 @@
 #include <slos_inode.h>
 #include <slos_record.h>
 #include <slos_io.h>
-#include "../slos/slosmm.h"
+#include <slosmm.h>
 
 #include "slsfs_dir.h"
 #include "slsfs_subr.h"
