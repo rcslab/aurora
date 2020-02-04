@@ -216,12 +216,13 @@ slsfs_mount(struct mount *mp)
 	    size_t rno;
 	    error = slos_rcreate(SLSVP(vp), SLOSREC_DATA, &rno);
 	    if (error) {
+		vput(vp);
 		return (error);
 	    }
 	    DBUG("Creating Data record for root inode - %lu\n", rno);
 	    slsfs_init_dir(vp, vp, NULL);
 	}
-	VOP_UNLOCK(vp, 0);
+	vput(vp);
 
 	return (error);
 }
