@@ -68,7 +68,6 @@ error:
 void
 slsckpt_destroy(struct slsckpt_data *sckpt_data)
 {
-	vm_object_t obj, shadow;
 	struct sls_record *rec;
 	uint64_t slsid;
 
@@ -76,18 +75,12 @@ slsckpt_destroy(struct slsckpt_data *sckpt_data)
 	    return;
 
 	if (sckpt_data->sckpt_objtable != NULL) {
-	    while (slskv_pop(sckpt_data->sckpt_objtable, (uint64_t *) &obj, (uintptr_t *) &shadow) == 0)
-		/* Destroy exactly the shadows we have the sole reference for */
-		if (shadow != NULL)
-		    vm_object_deallocate(shadow);
-		else
-		    vm_object_deallocate(obj);
-	    
+	    slsvm_objtable_collapse(sckpt_data->sckpt_objtable);
 	    slskv_destroy(sckpt_data->sckpt_objtable);
 	}
 
 	if (sckpt_data->sckpt_objtable != NULL) {
-	    while (slskv_pop(sckpt_data->sckpt_rectable, &slsid, (uintptr_t *) &rec) == 0) {
+	    KV_FOREACH_POP(sckpt_data->sckpt_rectable, slsid, rec) {
 		sbuf_delete(rec->srec_sb);
 		free(rec, M_SLSMM);
 	    }
@@ -206,8 +199,6 @@ slsp_init(uint64_t oid, struct slspart **slspp)
 static void
 slsp_fini(struct slspart *slsp)
 {
-	vm_object_t obj, shadow;
-
 	/* Remove all processes currently in the partition from the SLS. */
 	slsp_detachall(slsp);
 
@@ -216,11 +207,7 @@ slsp_fini(struct slspart *slsp)
 
 	/* Remove any references to VM objects we may have. */
 	if (slsp->slsp_objects != NULL) {
-
-	    /* Collapse all shadows that we created. */
-	    while (slskv_pop(slsp->slsp_objects, (uint64_t *) &obj, (uintptr_t *) &shadow) == 0)
-		vm_object_deallocate(obj);
-
+	    slsvm_objtable_collapse(slsp->slsp_objects);
 	    slskv_destroy(slsp->slsp_objects);
 	}
 

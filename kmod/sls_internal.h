@@ -108,6 +108,7 @@ struct sls_restored_args {
 
 struct sls_getrecord;
 
+void slsvm_objtable_collapse(struct slskv_table *objtable);
 void sls_checkpointd(struct sls_checkpointd_args *args);
 void sls_restored(struct sls_restored_args *args);
 

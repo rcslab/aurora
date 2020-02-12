@@ -58,6 +58,11 @@
     (atomic_load_int(&slsp->slsp_status) != 0 && \
     SLS_PROCALIVE(proc))
 
+#define OBJT_ISANONYMOUS(obj) \
+	(((obj) != NULL) && \
+	(((obj)->type == OBJT_DEFAULT) || \
+	 ((obj)->type == OBJT_SWAP)))
+
 SDT_PROVIDER_DEFINE(sls);
 
 SDT_PROBE_DEFINE(sls, , , start);
@@ -66,6 +71,8 @@ SDT_PROBE_DEFINE(sls, , , sysv);
 SDT_PROBE_DEFINE(sls, , , proc);
 SDT_PROBE_DEFINE(sls, , , file);
 SDT_PROBE_DEFINE(sls, , , shadow);
+SDT_PROBE_DEFINE(sls, , , pmap_start);
+SDT_PROBE_DEFINE(sls, , , pmap_done);
 SDT_PROBE_DEFINE(sls, , , vm);
 SDT_PROBE_DEFINE(sls, , , cont);
 SDT_PROBE_DEFINE(sls, , , dump);
@@ -183,38 +190,77 @@ out:
 	return error;
 }
 
-
-/*
- * Collapse an object created by SLS into its parent.
- */
+/* Transfer a reference between objects. */
 static void
-slsckpt_collapse(struct slskv_table *objtable)
+slsvm_object_reftransfer(vm_object_t src, vm_object_t dst)
+{
+	vm_object_reference(dst);
+	vm_object_deallocate(src);
+}
+
+/* Create a shadow of the same size as the object, perfectly aligned. */
+static void
+slsvm_object_shadowexact(vm_object_t *objp)
+{
+	vm_ooffset_t offset = 0;
+
+	vm_object_shadow(objp, &offset, ptoa((*objp)->size));
+}
+
+/* 
+ * Shadow an object. Take an extra reference on behalf of Aurora for the
+ * object, and transfer the one already in the object to the shadow. The
+ * transfer follows the following logic: The object has a reference because
+ * some memory location in some remote data structure holds a pointer to it.  
+ * Pass that exact location to the vm_object_shadow() function to replace the
+ * pointer with one to the new object.
+ *
+ * Save the object-shadow pair in the table.
+ */
+static int
+slsvm_object_shadow(struct slskv_table *objtable, vm_object_t *objp)
+{
+	vm_object_t obj;
+	int error;
+
+	obj = *objp;
+	vm_object_reference(obj);
+	slsvm_object_shadowexact(objp);
+
+	error = slskv_add(objtable, (uint64_t) obj, (uintptr_t) *objp);
+	if (error != 0) {
+	    vm_object_deallocate(*objp);
+	    return (error);
+	}
+
+	return (0);
+}
+
+void
+slsvm_objtable_collapse(struct slskv_table *objtable)
 {
 	struct slskv_iter iter;
 	vm_object_t obj, shadow;
 	
-	/* 
-	 * When collapsing, we do so by removing the 
-	 * reference of the original object we took in 
-	 * slsckpt_shadow. After having done so, the
-	 * object is left with one reference and one
-	 * shadow, so it can be collapsed with it.
-	 */
-	/* 
-	 * XXX This probably does not work right now. Suppose we have an object directly
-	 * shared among processes; the at shadow time we got 2 references, not one.
-	 * We need to be able to reason about how many references we have. Moreover,
-	 * the shadow is still referred to by VM entries of the object. In that case,
-	 * we need to actually fix up the references while collapsing.
-	 */
-	/* XXX Don't forget the SYSV shared memory table! */
+	/* Remove the Aurora - created shadow. */
 	KV_FOREACH(objtable, iter, obj, shadow) 
 	    vm_object_deallocate(obj);
+
+	/* XXX Don't forget the SYSV shared memory table! */
+}
+
+/* Destroy all physical process memory mappings for the entry. */
+static void
+slsvm_entry_zap(struct proc *p, struct vm_map_entry *entry)
+{
+	SDT_PROBE0(sls, , , pmap_start);
+	pmap_remove(&p->p_vmspace->vm_pmap, entry->start, entry->end);
+	SDT_PROBE0(sls, , , pmap_done);
 }
 
 /*
- * Below are the two functions used for creating the shadows, slsckpt_shadow()
- * and slsckpt_collapse(). What slsckpt_shadow does it take a reference on the
+ * Below are the two functions used for creating the shadows, slsvm_procset_shadow()
+ * and slsvm_objtable_collapse(). What slsvm_procset_shadow does it take a reference on the
  * objects that are directly attached to the process' entries, and then create
  * a shadow for it. The entry's reference to the original object is transferred
  * to the shadow, while the new object gets another reference to the original.
@@ -239,169 +285,80 @@ slsckpt_collapse(struct slskv_table *objtable)
  * This causes any CoW objects shared among memory maps to split into two. 
  */
 static int 
-slsckpt_shadowone(struct proc *p, struct slskv_table *table, int is_fullckpt)
+slsvm_proc_shadow(struct proc *p, struct slskv_table *table, int is_fullckpt)
 {
 	struct vm_map_entry *entry, *header;
-	struct slskv_table *vmentry_table;
-	vm_object_t obj, shadow, vmshadow;
-	vm_ooffset_t offset;
+	vm_object_t obj, vmshadow;
 	int error;
-
-	error = slskv_create(&vmentry_table, SLSKV_NOREPLACE);
-	if (error != 0)
-	    return (error);
 
 	header = &p->p_vmspace->vm_map.header;
 	for (entry = header->next; entry != header; entry = entry->next) {
 		obj = entry->object.vm_object;
 		/* 
-		 * If the object is not anonymous, it is impossible to
-		 * shadow it in a logical way. If it is null, either the
-		 * entry is a guard entry, or it doesn't have any data yet.
-		 * In any case, we don't need to do anything.
+		 * Non anonymous objects cannot shadowed meaningfully. Guard 
+		 * entries are null.
 		 */
-		if (obj == NULL || ((obj->type != OBJT_DEFAULT) && 
-				    (obj->type != OBJT_SWAP)))
+		if (!OBJT_ISANONYMOUS(obj))
 		    continue;
 
 		/* 
 		 * Check if we have already shadowed the object. If we did, 
-		 * have the process' map point to the shadow instead of the
-		 * old object.
+		 * have the process map point to the shadow.
 		 */
-		if (slskv_find(vmentry_table, (uint64_t) obj, (uintptr_t *) &vmshadow) == 0) {
-		    /* We share the created shadow with this map entry. */
+		if (slskv_find(table, (uint64_t) obj, (uintptr_t *) &vmshadow) == 0) {
 		    entry->object.vm_object = vmshadow;
-
-		    /* 
-		     * Because of the way we shadow (see below), we 
-		     * do not change the offset of the VM entry.
-		     */
-
-		    /* Remove the mappings so that the process rereads them. */
-		    pmap_remove(&p->p_vmspace->vm_pmap, entry->start, entry->end);
-
-		    /* Move the reference to the shadow from the original. */
-		    vm_object_reference(vmshadow);
-		    vm_object_deallocate(obj);
+		    slsvm_object_reftransfer(obj, vmshadow);
+		    slsvm_entry_zap(p, entry);
 		    continue;
 		}
 
-		/* 
-		 * Take a reference on behalf of Aurora. When we shadow, both 
-		 * references will be transferred to the shadows.
-		 */
-		vm_object_reference(obj);
-		vm_object_reference(obj);
-
-		/*
-		 * Normally, we transfer the VM entry's offset to the
-		 * shadow, and have the entry have offset in the new
-		 * object. This poses problems if we assume different
-		 * entries with different offsets in the object, since
-		 * the first entry to be checkpointed would dictate
-		 * object alignment. As a result, we keep the entries'
-		 * offsets untouched, and have the shadow be at offset
-		 * 0 of its backer. Moreover, the shadow fully covers
-		 * the original object, since we can't know which parts
-		 * of it are in use just from one VM entry.
-		 */
-
-		/* The copy for the VM entry. We don't have control over it from here. */
-		offset = 0;
-		vm_object_shadow(&entry->object.vm_object, &offset, ptoa(obj->size));
-
-		/* The copy for the SLS. We use it to manipulate the object tree. */
-		offset = 0;
-		shadow = obj;
-		vm_object_shadow(&shadow, &offset, ptoa(obj->size));
-
-		/* Remove the mappings so that the process rereads them. */
-		/* 
-		 * XXX Can we make it so that we preemptively create this? 
-		 * There are such functions as pmap_copy() and stuff.
-		 */
-		pmap_remove(&p->p_vmspace->vm_pmap, entry->start, entry->end);
-
-		/* 
-		 * If we failed, something went wrong - we checked before
-		 * and the object was not in the table, so why did we fail?
-		 */
-		error = slskv_add(vmentry_table, (uint64_t) obj, (uintptr_t) entry->object.vm_object);
+		/* Shadow the object, retain it in Aurora. */
+		error = slsvm_object_shadow(table, &entry->object.vm_object);
 		if (error != 0)
 		    goto error;
 
-		/* Add them to the table for dumping later. */
-		error = slskv_add(table, (uint64_t) obj, (uintptr_t) shadow);
-		if (error != 0)
-		    goto error;
+		slsvm_entry_zap(p, entry);
 
-		/* 
-		 * If we are doing a full checkpoint, or if this is the first
-		 * of a series of delta checkpoints, we need to checkpoint all
-		 * parent objects apart from the top-level ones. Otherwise we
-		 * are fine with only the top-level objects. The way we can
-		 * see whether we should traverse the whole object hierarchy
-		 * is by checking the table argument; if there are still 
-		 * objects from a previous checkpoint (the latter case) it is
-		 * non-NULL.
-		 */
 		if (!is_fullckpt)
 		    continue;
 
-		obj = obj->backing_object;
-		while (obj != NULL && ((obj->type == OBJT_DEFAULT) || 
-					(obj->type == OBJT_SWAP))) {
-		    /* 
-		     * Take a reference to the object. We do this because
-		     * it's possible to move pages from an object to one of its 
-		     * shadows while we are checkpointing. If we have already
-		     * dumped that shadow's pages, that means that we will miss
-		     * it. By adding an extra reference we disallow this optimization.
-		     */
+		/* If in a full checkpoint, checkpoint down the tree. */
 
+		obj = obj->backing_object;
+		while (OBJT_ISANONYMOUS(obj)) {
 		    vm_object_reference(obj);
 		    /* These objects have no shadows. */
 		    error = slskv_add(table, (uint64_t) obj, (uintptr_t) NULL);
 		    if (error != 0) {
-			/* 
-			 * If we failed, we already have it in the table. Set
-			 * the object to null to break out of the while loop.
-			 */
+			/* Already in the table. */
 			vm_object_deallocate(obj);
-			obj = NULL;
-			continue;
+			break;
 		    }
 
 		    obj = obj->backing_object;
 		}
 	}
 
-	/* We don't need to know the entries' new objects anymore. */
-	slskv_destroy(vmentry_table);
-
 	return (0);
 
 error:
 
 	/* Deallocate only the shadows we have control over. */
-	slsckpt_collapse(table);
-
-	slskv_destroy(vmentry_table);
+	slskv_destroy(table);
 
 	return (error);
 }
 
 /* Collapse the backing objects of all processes under checkpoint. */
 static int 
-slsckpt_shadow(slsset *procset, struct slskv_table *table, int is_fullckpt) 
+slsvm_procset_shadow(slsset *procset, struct slskv_table *table, int is_fullckpt) 
 {
 	struct slskv_iter iter;
 	struct proc *p;
 	int error;
 
 	KVSET_FOREACH(procset, iter, p) {
-	    error = slsckpt_shadowone(p, table, is_fullckpt);
+	    error = slsvm_proc_shadow(p, table, is_fullckpt);
 	    if (error != 0)
 		return (error);
 	}
@@ -469,7 +426,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	}
 
 	/* Shadow the objects to be dumped. */
-	error = slsckpt_shadow(procset, sckpt_data->sckpt_objtable, is_fullckpt);
+	error = slsvm_procset_shadow(procset, sckpt_data->sckpt_objtable, is_fullckpt);
 	if (error != 0) {
 	    SLS_DBG("shadowing failed with %d\n", error);
 	    slsckpt_cont(procset);

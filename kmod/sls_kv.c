@@ -36,7 +36,7 @@ slskv_create(struct slskv_table **tablep, enum slskv_policy policy)
 	    return (ENOMEM);
 	}
 
-	/* Initialize the mutex. */
+	/* Initialize the mutexes. */
 	for (i = 0; i < SLSKV_BUCKETS; i++)
 	    mtx_init(&table->mtx[i], "slskv", NULL, MTX_DEF);
 
