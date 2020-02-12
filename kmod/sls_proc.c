@@ -147,7 +147,7 @@ slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset)
 	 * field to store its slsid. Otherwise we denote that the process
 	 * is an orphan by using its own slsid as that of its parent.
 	 */
-	if (slsset_find(procset, (uint64_t) p->p_pptr) == 0)
+	if (slsset_find_unlocked(procset, (uint64_t) p->p_pptr) == 0)
 	    slsproc.pptr = (uint64_t) p->p_pptr;
 	else
 	    slsproc.pptr = (uint64_t) p;
@@ -156,7 +156,7 @@ slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset)
 	 * Similarly, if the session leader is not in the SLS, the  process
 	 * process is going to be migrated to the restored process' session.
 	 */
-	if (slsset_find(procset, (uint64_t) p->p_session->s_leader) == 0)
+	if (slsset_find_unlocked(procset, (uint64_t) p->p_session->s_leader) == 0)
 	    slsproc.sid = (uint64_t) p->p_session->s_sid;
 	else
 	    slsproc.sid = (uint64_t) 0;
@@ -187,7 +187,7 @@ slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset)
 	    slsproc.pgrpwait = 0;
 	} else {
 	    /* Check if it's in the process set. */
-	    if (slsset_find(procset, (uint64_t) pleader) == 0)
+	    if (slsset_find_unlocked(procset, (uint64_t) pleader) == 0)
 		slsproc.pgrpwait = 1;
 	    else
 		slsproc.pgrpwait = 0;
@@ -486,14 +486,11 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 	 * the correct vector by using the value as an index in a table).
 	 */
 
-
 	sbuf_delete(name);
 	return (0);
 
 error:
 	sbuf_delete(name);
-
-
 	return (error);
 }
 

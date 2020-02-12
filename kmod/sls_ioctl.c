@@ -285,12 +285,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	    error = slskv_create(&slsm.slsm_procs);
 	    if (error != 0)
 		return (error);
-	    error = slskv_create(&slsm.slsm_procs);
-	    if (error != 0)
-		return (error);
-	    slsm.slsm_procs = uma_zalloc(slskv_zone, M_WAITOK);
-	    if (slsm.slsm_procs == NULL)
-		return (ENOMEM);
 
 	    error = slskv_create(&slsm.slsm_parts);
 	    if (error != 0)

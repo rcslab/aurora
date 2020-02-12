@@ -4,6 +4,7 @@
 #include <sys/param.h>
 #include <sys/lock.h>
 #include <sys/queue.h>
+#include <sys/sx.h>
 
 #include <machine/param.h>
 
@@ -31,22 +32,24 @@ LIST_HEAD(slskv_pairs, slskv_pair);	/* A bucket of the hashtable */
 
 /* The main key-value table. */
 struct slskv_table {
+	struct sx	    sx;			/* Shared-exclusive lock for iteration */
 	struct mtx_padalign mtx[SLSKV_BUCKETS];	/* Per-bucket locking */
 	struct slskv_pairs  *buckets;		/* The buckets of key-value pairs */
 	/* Read-only elements of the struct */
 	u_long		    mask;		/* Hashmask used by the builtin hashtable */
 	void		    *data;		/* Private data */
-	/* Could become debug-only if it causes coherence traffic */
-	size_t		    elems;		/* Number of elements in the table */
 };
 
 int slskv_create(struct slskv_table **tablep);
 void slskv_destroy(struct slskv_table *table);
+int slskv_find_unlocked(struct slskv_table *table, uint64_t key, uintptr_t *value);
 int slskv_find(struct slskv_table *table, uint64_t key, uintptr_t *value);
+int slskv_add_unlocked(struct slskv_table *table, uint64_t key, uintptr_t value);
 int slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value);
 int slskv_pop(struct slskv_table *table, uint64_t *key, uintptr_t *value);
 void slskv_del(struct slskv_table *table, uint64_t key);
 int slskv_serial(struct slskv_table *table, struct sbuf *sbp);
+int slskv_serial_unlocked(struct slskv_table *table, struct sbuf *sbp);
 int slskv_deserial(char *buf, size_t len, struct slskv_table **tablep);
 
 /* 
@@ -62,8 +65,11 @@ typedef struct slskv_table slsset;
 #define slsset_destroy(table) (slskv_destroy(table))
 #define slsset_del(table, key) (slskv_del(table, key))
 #define slsset_serial(table, sb) (slskv_serial(table, sb))
+#define slsset_serial_unlocked(table, sb) (slskv_serial_unlocked(table, sb))
 #define slsset_deserial(buf, len, tablep) (slskv_serial(buf, len, tablep))
 
+int slsset_add_unlocked(slsset *table, uint64_t key);
+int slsset_find_unlocked(slsset *table, uint64_t key);
 int slsset_find(slsset *table, uint64_t key);
 int slsset_add(slsset *table, uint64_t key);
 int slsset_pop(slsset *table, uint64_t *key);
@@ -86,15 +92,25 @@ struct slskv_iter {
 
 struct slskv_iter slskv_iterstart(struct slskv_table *table);
 int slskv_itercont(struct slskv_iter *iter, uint64_t *key, uintptr_t *value);
+void slskv_iterabort(struct slskv_iter *iter);
+
+#define KV_FOREACH_POP_UNLOCKED(table, kvkey, kvvalue) \
+	_Static_assert(sizeof(kvkey) == sizeof(uint64_t), "popping into variable of the wrong size"); \
+	_Static_assert(sizeof(kvvalue) == sizeof(uintptr_t), "popping into variable of the wrong size"); \
+	while (slskv_pop_unlocked(table, (uint64_t *) &kvkey, (uintptr_t *) &kvvalue) == 0)
 
 #define KV_FOREACH_POP(table, kvkey, kvvalue) \
 	_Static_assert(sizeof(kvkey) == sizeof(uint64_t), "popping into variable of the wrong size"); \
 	_Static_assert(sizeof(kvvalue) == sizeof(uintptr_t), "popping into variable of the wrong size"); \
 	while (slskv_pop(table, (uint64_t *) &kvkey, (uintptr_t *) &kvvalue) == 0)
 
-#define SET_FOREACH_POP(settable, setvalue) \
+#define KVSET_FOREACH_POP(settable, setvalue) \
 	_Static_assert(sizeof(setvalue) == sizeof(uint64_t), "popping into variable of the wrong size"); \
 	while (slsset_pop(settable, (uint64_t *) &setvalue) == 0)
+
+#define KVSET_FOREACH_POP_UNLOCKED(settable, setvalue) \
+	_Static_assert(sizeof(setvalue) == sizeof(uint64_t), "popping into variable of the wrong size"); \
+	while (slsset_pop_unlocked(settable, (uint64_t *) &setvalue) == 0)
 
 #define KV_FOREACH(table, iter, kvkey, kvvalue) \
 	_Static_assert(sizeof(kvkey) == sizeof(uint64_t), "popping into variable of the wrong size"); \
@@ -103,8 +119,9 @@ int slskv_itercont(struct slskv_iter *iter, uint64_t *key, uintptr_t *value);
 
 #define KVSET_FOREACH(settable, iter, setvalue) \
 	_Static_assert(sizeof(setvalue) == sizeof(uint64_t), "popping into variable of the wrong size"); \
-	iter = slskv_iterstart(settable); \
 	for (iter = slskv_iterstart(settable); slskv_itercont(&iter, (uint64_t *) &setvalue, (uintptr_t *) &setvalue) != SLSKV_ITERDONE;)
+
+#define KV_ABORT(iter) do { (slskv_iterabort(&(iter))); } while (0)
 
 /* Zone for the key value tables. */
 extern uma_zone_t slskv_zone;

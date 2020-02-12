@@ -153,7 +153,7 @@ slsload_kqueue(slsset **kevsetp, char **bufp, size_t *bufsizep)
 error:
 	/* Free each kevent entry separately. */
 	if (kevset != NULL) {
-	    SET_FOREACH_POP(kevset, kevinfo) 
+	    KVSET_FOREACH_POP(kevset, kevinfo) 
 		free(kevinfo, M_SLSMM);
 
 	    slsset_destroy(kevset);

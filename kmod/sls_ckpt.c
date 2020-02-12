@@ -359,8 +359,10 @@ slsvm_procset_shadow(slsset *procset, struct slskv_table *table, int is_fullckpt
 
 	KVSET_FOREACH(procset, iter, p) {
 	    error = slsvm_proc_shadow(p, table, is_fullckpt);
-	    if (error != 0)
+	    if (error != 0) {
+		KV_ABORT(iter);
 		return (error);
+	    }
 	}
 
 	return (0);
@@ -421,6 +423,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	    if(error != 0) {
 		SLS_DBG("Checkpointing failed\n");
 		slsckpt_cont(procset);
+		KV_ABORT(iter);
 		goto error;
 	    }
 	}
@@ -486,7 +489,6 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	    panic("Invalid target %d\n", slsp->slsp_attr.attr_target);
 	}
 	SDT_PROBE0(sls, , , dump);
-
 
 	/* 
 	 *  If this is a delta checkpoint, and it is not the first
@@ -628,7 +630,6 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		if (deadpid != 0) {
 		    slsset_del(args->slsp->slsp_procs, deadpid);
 		    slsset_del(slsm.slsm_procs, deadpid);
-
 		    deadpid = 0;
 		}
 
@@ -646,14 +647,13 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		    continue;
 		}
 
-
 		/* Add it to the set of processes to be checkpointed. */
-		error = slsset_add(procset, (uint64_t) p);
-		if (error != 0)
+		error = slsset_add_unlocked(procset, (uint64_t) p);
+		if (error != 0) {
+		    KV_ABORT(iter);
 		    goto out;
-
+		}
 	    }
-
 	    nanotime(&tstart);
 	    /* 
 	     * If we recursively checkpoint, we don't actually enter the children
@@ -683,7 +683,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		     * new child while we were checking.
 		     */ 
 		    LIST_FOREACH(pchild, &p->p_children, p_sibling) {
-			if (slskv_find(procset, (uint64_t) pchild, (uintptr_t *) &pchild) != 0) {
+			if (slskv_find_unlocked(procset, (uint64_t) pchild, (uintptr_t *) &pchild) != 0) {
 			    /* We found a child that didn't exist before. */
 
 			    /* 
@@ -702,13 +702,17 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 			     * is undefined, we will go through the set again in the
 			     * next iteration of the outer while, so it's safe.
 			     */
-			    error = slsset_add(procset, (uint64_t) pchild);
-			    if (error != 0)
+			    error = slsset_add_unlocked(procset, (uint64_t) pchild);
+			    if (error != 0) {
+				KV_ABORT(iter);
 				goto out;
+			    }
 
 			}
 		    }
 		}
+		
+
 	    } while (new_procs > 0);
 
 	    SDT_PROBE0(sls, , , start);
@@ -720,7 +724,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	    nanotime(&tend);
 
 	    /* Release all checkpointed processes. */
-	    SET_FOREACH_POP(procset, p)
+	    KVSET_FOREACH_POP(procset, p)
 		PRELE(p);
 
 	    /* If the interval is 0, checkpointing is non-periodic. Finish up. */
@@ -762,7 +766,7 @@ out:
 
 	if (procset != NULL) {
 	    /* Release any process references gained. */
-	    SET_FOREACH_POP(procset, p)
+	    KVSET_FOREACH_POP(procset, p)
 		PRELE(p);
 	    slskv_destroy(procset);
 	}

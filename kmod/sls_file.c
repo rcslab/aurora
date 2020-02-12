@@ -814,7 +814,6 @@ slsckpt_filedesc(struct proc *p, struct slsckpt_data *sckpt_data, struct sbuf *s
 	    goto done;
 
 done:
-
 	vdrop(filedesc->fd_cdir);
 	vdrop(filedesc->fd_rdir);
 
@@ -868,22 +867,22 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc info,
 	    /* Get the restored open file from the ID. */
 	    error = slskv_find(filetable, slsid, (uint64_t *) &fp);
 	    if (error != 0)
-		return (error);
+		goto error;
 
 	    /* We restore the file _exactly_ at the same fd.*/
 	    error = fdalloc(curthread, fd, &res);
 	    if (error != 0)
-		goto out;
+		goto error;
 
 	    if (res != fd) {
 		error = EINVAL;
-		goto out;
+		goto error;
 	    }
 
 	    /* Get a reference to the open file for the table and install it. */
 	    if (!fhold(fp)) {
 		error = EBADF;
-		goto out;
+		goto error;
 	    }
 
 	    /* 
@@ -896,9 +895,13 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc info,
 	    _finstall(p->p_fd, fp, fd, O_CLOEXEC, NULL);
 	}
 	
-out:
 	FILEDESC_XUNLOCK(newfdp);
-	slskv_destroy(fdtable);
+
+	return (0);
+
+error:
+
+	FILEDESC_XUNLOCK(newfdp);
 
 	return (error);
 }

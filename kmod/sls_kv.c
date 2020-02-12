@@ -66,9 +66,11 @@ slskv_zone_init(void *mem, int size, int flags __unused)
 
 	/* Initialize the mutexes. */
 	for (i = 0; i < SLSKV_BUCKETS; i++)
-	    mtx_init(&table->mtx[i], "slskv", NULL, MTX_DEF);
+	    mtx_init(&table->mtx[i], "slskvmtx", NULL, MTX_DEF);
 
-	table->elems = 0;
+	/* Shared lock for mutation, exclusive for iteration. */
+	sx_init(&table->sx, "slskvsx");
+
 	table->data = NULL;
 
 	return (0);
@@ -88,6 +90,8 @@ slskv_zone_fini(void *mem, int size)
 	/* Destroy the lock. */
 	for (i = 0; i < SLSKV_BUCKETS; i++)
 	    mtx_destroy(&table->mtx[i]);
+
+	sx_destroy(&table->sx);
 }
 
 int
@@ -140,7 +144,7 @@ slskv_destroy(struct slskv_table *table)
 
 /* Find a value corresponding to a 64bit key. */
 int
-slskv_find(struct slskv_table *table, uint64_t key, uintptr_t *value)
+slskv_find_unlocked(struct slskv_table *table, uint64_t key, uintptr_t *value)
 {
 	struct slskv_pair *kv;
 
@@ -160,9 +164,20 @@ slskv_find(struct slskv_table *table, uint64_t key, uintptr_t *value)
 	return (EINVAL);
 }
 
-/* Add a new value to the hashtable. Duplicates are not allowed. */
 int
-slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value)
+slskv_find(struct slskv_table *table, uint64_t key, uintptr_t *value)
+{
+	int error;
+
+	sx_slock(&table->sx);
+	error = slskv_find_unlocked(table, key, value);
+	sx_sunlock(&table->sx);
+
+	return (error);
+}
+
+int
+slskv_add_unlocked(struct slskv_table *table, uint64_t key, uintptr_t value)
 {
 	struct slskv_pairs *bucket;
 	struct slskv_pair *newkv, *kv;
@@ -188,9 +203,22 @@ slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value)
 
 	/* We didn't find the key, so we are free to insert. */
 	LIST_INSERT_HEAD(bucket, newkv, next);
-	table->elems += 1;
 	mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+
 	return (0);
+}
+
+/* Add a new value to the hashtable. Duplicates are not allowed. */
+int
+slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value)
+{
+	int error;
+
+	sx_slock(&table->sx);
+	error = slskv_add_unlocked(table, key, value);
+	sx_sunlock(&table->sx);
+
+	return (error);
 }
 
 /* 
@@ -202,6 +230,7 @@ slskv_del(struct slskv_table *table, uint64_t key)
 	struct slskv_pairs *bucket;
 	struct slskv_pair *kv, *tmpkv;
 
+	sx_slock(&table->sx);
 	mtx_lock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 	/* Get the bucket for the key and traverse it. */
 	bucket = &table->buckets[SLSKV_BUCKETNO(table, key)];
@@ -214,7 +243,6 @@ slskv_del(struct slskv_table *table, uint64_t key)
 	    if (kv->key == key) {
 		LIST_REMOVE(kv, next);
 		uma_zfree(slskvpair_zone, kv);
-		table->elems -= 1;
 
 		/* We remove at most one pair. */
 		break;
@@ -222,14 +250,11 @@ slskv_del(struct slskv_table *table, uint64_t key)
 	}
 
 	mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+	sx_sunlock(&table->sx);
 }
 
-/*
- * Randomly grab an element from the table, remove it and
- * return it. If the table is empty, return an error.
- */
-int
-slskv_pop(struct slskv_table *table, uint64_t *key, uintptr_t *value)
+static int
+slskv_pop_unlocked(struct slskv_table *table, uint64_t *key, uintptr_t *value)
 {
 	struct slskv_pairs *bucket;
 	struct slskv_pair *kv;
@@ -253,6 +278,22 @@ slskv_pop(struct slskv_table *table, uint64_t *key, uintptr_t *value)
 	}
 
 	mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+
+	return (error);
+}
+
+/*
+ * Randomly grab an element from the table, remove it and
+ * return it. If the table is empty, return an error.
+ */
+int
+slskv_pop(struct slskv_table *table, uint64_t *key, uintptr_t *value)
+{
+	int error;
+
+	sx_xlock(&table->sx);
+	error = slskv_pop_unlocked(table, key, value);
+	sx_xunlock(&table->sx);
 
 	return (error);
 }
@@ -290,16 +331,10 @@ slskv_iternextbucket(struct slskv_iter *iter)
 }
 
 /*
- * Return an iterator for the given key-value table.
- * NOTE: The iteration operation DOES NOT TAKE ANY LOCKS.
- * That means that iteration should never happen concurrently
- * with operations that modify the table. The alternative would
- * be having a variable that normal operations check before beginning
- * execution; if it is set, they wait until it is free. This is essentiallly
- * a lock that is taken by the iterator, and checked, but _never_ taken, by the
- * rest of the operations. If the lock was taken by the operations, then we could
- * end up exclusively using the global lock for prolonged periods of time, even if
- * no iteration is taking place.
+ * Return an iterator for the given key-value table. Note that we cannot 
+ * iterate recursively or serialize, and any operations on the table
+ * should be done unlocked (finds always make sense, additions sometimes,
+ * deletions are dangerous and are not available).
  */
 struct slskv_iter 
 slskv_iterstart(struct slskv_table *table)
@@ -311,6 +346,7 @@ slskv_iterstart(struct slskv_table *table)
 	iter.table = table;
 
 	/* Find the next valid element, if it exists. */
+	sx_xlock(&iter.table->sx);
 	slskv_iternextbucket(&iter);
 
 	return iter;
@@ -330,8 +366,10 @@ slskv_itercont(struct slskv_iter *iter, uint64_t *key, uintptr_t *value)
 	    slskv_iternextbucket(iter);
 
 	    /* If we have no more buckets to look at, iteration is done. */
-	    if (iter->bucket > iter->table->mask)
+	    if (iter->bucket > iter->table->mask) {
+		sx_xunlock(&iter->table->sx);
 		return SLSKV_ITERDONE;
+	    }
 	} 
 
 	/* Export the found pair to the caller. */
@@ -344,6 +382,39 @@ slskv_itercont(struct slskv_iter *iter, uint64_t *key, uintptr_t *value)
 	return (0);
 }
 
+/* Abort the iteration. Needed to release the lock. */
+void
+slskv_iterabort(struct slskv_iter *iter)
+{
+	sx_xunlock(&iter->table->sx);
+	bzero(iter, sizeof(*iter));
+}
+
+int
+slskv_serial_unlocked(struct slskv_table *table, struct sbuf *sb)
+{
+	uintptr_t value;
+	uint64_t key;
+	int error;
+
+	/* Iterate the hashtable, saving the key-value pairs. */
+	KV_FOREACH_POP_UNLOCKED(table, key, value) {
+	    error = sbuf_bcat(sb, (void *) &key, sizeof(key));
+	    if (error != 0) {
+		sx_xunlock(&table->sx);
+		return (error);
+	    }
+		    
+	    sbuf_bcat(sb, (void *) &value, sizeof(value));
+	    if (error != 0) {
+		sx_xunlock(&table->sx);
+		return (error);
+	    }
+	}
+
+	return (0);
+}
+
 /* 
  * Serialize a table into a linear buffer. 
  * Used for exporting the table to disk.
@@ -351,25 +422,12 @@ slskv_itercont(struct slskv_iter *iter, uint64_t *key, uintptr_t *value)
 int
 slskv_serial(struct slskv_table *table, struct sbuf *sb)
 {
-	struct slskv_iter iter;
-	uintptr_t value;
-	uint64_t key;
 	int error;
 
-	/* Iterate the hashtable, saving the key-value pairs. */
-	iter = slskv_iterstart(table);
-	KV_FOREACH_POP(table, key, value) {
-	    error = sbuf_bcat(sb, (void *) &key, sizeof(key));
-	    if (error != 0)
-		return (error);
-		    
-	    sbuf_bcat(sb, (void *) &value, sizeof(value));
-	    if (error != 0)
-		return (error);
-		    
-	}
-
-	return (0);
+	sx_xlock(&table->sx);
+	error = slskv_serial_unlocked(table, sb);
+	sx_xunlock(&table->sx);
+	return (error);
 }
 
 /*
@@ -420,10 +478,24 @@ slsset_find(slsset *table, uint64_t key)
 	return (slskv_find(table, key, &nothing));
 }
 
+int 
+slsset_find_unlocked(slsset *table, uint64_t key)
+{
+	uintptr_t nothing;
+
+	return (slskv_find_unlocked(table, key, &nothing));
+}
+
 int
 slsset_add(slsset *table, uint64_t key)
 {
 	return (slskv_add(table, key, (uintptr_t) key));
+}
+
+int
+slsset_add_unlocked(slsset *table, uint64_t key)
+{
+	return (slskv_add_unlocked(table, key, (uintptr_t) key));
 }
 
 int

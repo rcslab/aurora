@@ -998,28 +998,35 @@ slstable_test(void)
 	    case SLOSREC_TESTMETA:
 		/* Test only the metadata, since there is no data. */
 		error = slstable_testmeta(origtable, record, st->type);
-		if (error != 0)
+		if (error != 0) {
+		    KV_ABORT(iter);
 		    goto out;
+		}
 
 		break;
 
 	    case SLOSREC_TESTDATA:
 		/* A data record also has metadata; test it separately. */
 		error = slstable_testmeta(origtable, record, st->type);
-		if (error != 0)
+		if (error != 0) {
+		    KV_ABORT(iter);
 		    goto out;
+		}
 
 		/* Go check the data itself. */
 		error = slstable_testdata(datatable, 
 			(vm_object_t) record->slsid, record);
-		if (error != 0)
+		if (error != 0) {
+		    KV_ABORT(iter);
 		    goto out;
+		}
 
 		break;
 
 	    default:
 		printf("ERROR: Invalid type found: %ld.\n", st->type);
 		printf("Valid types: %x, %x\n", SLOSREC_TESTMETA, SLOSREC_TESTDATA);
+		KV_ABORT(iter);
 		goto out;
 
 	    }

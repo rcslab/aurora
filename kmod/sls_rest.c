@@ -177,6 +177,7 @@ slsrest_dofiledesc(struct proc *p, char **bufp, size_t *buflenp,
 	    return (error);
 
 	error = slsrest_filedesc(p, slsfiledesc, fdtable, filetable);
+	slskv_destroy(fdtable);
 	sbuf_delete(slsfiledesc.cdir);
 	sbuf_delete(slsfiledesc.rdir);
 	if (error != 0) {
@@ -601,22 +602,28 @@ slsrest_dovmobjects(struct slskv_table *metatable, struct slskv_table *datatable
 
 	    /* Get the data associated with the object in the table. */
 	    error =  slsload_vmobject(&slsvmobject, &buf, &buflen);
-	    if (error != 0)
+	    if (error != 0) {
+		KV_ABORT(iter);
 		return (error);
+	    }
 
 	    /* Find the data associated with the object. */
 
 	    slsdata = NULL;
 	    if (datatable != NULL) {
 		error = slskv_find(datatable, (uint64_t) record, (uintptr_t *) &slsdata);
-		if (error != 0)
+		if (error != 0) {
+		    KV_ABORT(iter);
 		    return (error);
+		}
 	    }
 
 	    /* Restore the object. */
 	    error = slsrest_vmobject(&slsvmobject, objtable, slsdata);
-	    if (error != 0)
+	    if (error != 0) {
+		KV_ABORT(iter);
 		return (error);
+	    }
 
 	}
 
@@ -634,6 +641,7 @@ slsrest_dovmobjects(struct slskv_table *metatable, struct slskv_table *datatable
 	    slsvmobjectp = (struct slsvmobject *) record; 
 	    error = slskv_find(objtable, slsvmobjectp->slsid, (uintptr_t *) &object);
 	    if (error != 0) {
+		KV_ABORT(iter);
 		return (error);
 	    }
 
@@ -662,8 +670,10 @@ slsrest_dofiles(struct slskv_table *metatable, struct slsrest_data *restdata)
 		continue;
 
 	    error = slsrest_dofile(restdata, (char **) &record, &st->len);
-	    if (error != 0)
+	    if (error != 0) {
+		KV_ABORT(iter);
 		return (error);
+	    }
 	}
 
 	return (0);
@@ -716,7 +726,7 @@ slsrest_fini(struct slsrest_data *restdata)
 	/* Each value in the table is a set of kevents. */
 	if (restdata->kevtable != NULL) {
 	    KV_FOREACH_POP(restdata->kevtable, kq, kevset) {
-		SET_FOREACH_POP(kevset, slskev)
+		KVSET_FOREACH_POP(kevset, slskev)
 		    free(slskev, M_SLSMM);
 
 		slsset_destroy(kevset);
@@ -847,6 +857,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 		error = slskv_add(metatable, (uint64_t) sbuf_data(rec->srec_sb), (uintptr_t) st);
 		if (error != 0) {
 		    free(st, M_SLSMM);
+		    KV_ABORT(iter);
 		    goto out;
 		}
 	    }
@@ -861,6 +872,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 		error = slskv_add(restdata->objtable, (uint64_t) obj, (uintptr_t) shadow);
 		if (error != 0) {
 		    vm_object_deallocate(shadow);
+		    KV_ABORT(iter);
 		    goto out;
 		}
 	    }
@@ -904,8 +916,10 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	    buflen = st->len;
 
 	    error = slsrest_dosockbuf(buf, buflen, restdata->mbuftable);
-	    if (error != 0)
+	    if (error != 0) {
+		KV_ABORT(iter);
 		goto out;
+	    }
 	}
 
 	error = slsrest_dofiles(metatable, restdata);
@@ -921,8 +935,10 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	    buflen = st->len;
 
 	    error = slsrest_dosysvshm(buf, buflen, restdata->objtable);
-	    if (error != 0)
+	    if (error != 0) {
+		KV_ABORT(iter);
 		goto out;
+	    }
 	}
 
 
@@ -938,8 +954,10 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	    buflen = st->len;
 
 	    error = slsrest_fork(daemon, buf, buflen, restdata);
-	    if (error != 0)
+	    if (error != 0) {
+		KV_ABORT(iter);
 		goto out;
+	    }
 	}
 
 	/* Wait until all processes are done restoring. */
