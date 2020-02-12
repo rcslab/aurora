@@ -16,18 +16,46 @@
 /* Hash function from keys to buckets. */
 #define SLSKV_BUCKETNO(table, key) (((u_long) key & table->mask))
 
+static uma_zone_t slskvpair_zone = NULL;
 uma_zone_t slskv_zone = NULL;
 
-/* 
- * Create a table with values of the specified size.
- */
-int 
-slskv_create(struct slskv_table **tablep, enum slskv_policy policy)
+static int
+slskv_zone_ctor(void *mem, int size, void *args __unused, int flags __unused)
+{
+	/* XXX Put in KASSERTs */
+	return (0);
+}
+
+static void
+slskv_zone_dtor(void *mem, int size, void *args __unused)
+{
+	struct slskv_table *table;
+	struct slskv_pair *kv, *tmpkv;
+	int i;
+
+	table = (struct slskv_table *) mem;
+
+	/* XXX Put in KASSERTs */
+	/* Iterate all buckets. */
+	for (i = 0; i <= table->mask; i++) {
+	    LIST_FOREACH_SAFE(kv, &table->buckets[i], next, tmpkv) {
+		/*
+		 * Remove all elements from each bucket and free them.
+		 * We are also responsible for freeing the values themselves.
+		 */
+		LIST_REMOVE(kv, next);
+		uma_zfree(slskvpair_zone, kv);
+	    }
+	}
+}
+
+static int
+slskv_zone_init(void *mem, int size, int flags __unused)
 {
 	struct slskv_table *table;
 	int i;
 
-	table = malloc(sizeof(*table), M_SLSMM, M_WAITOK | M_ZERO);
+	table = (struct slskv_table *) mem;
 
 	/* Create the buckets using the existing kernel functions. */
 	table->buckets = hashinit(SLSKV_BUCKETS, M_SLSMM, &table->mask);
@@ -40,41 +68,19 @@ slskv_create(struct slskv_table **tablep, enum slskv_policy policy)
 	for (i = 0; i < SLSKV_BUCKETS; i++)
 	    mtx_init(&table->mtx[i], "slskv", NULL, MTX_DEF);
 
-	table->repl_policy = policy;
 	table->elems = 0;
 	table->data = NULL;
-
-	/* Export the table. */
-	*tablep = table;
 
 	return (0);
 }
 
-/*
- * Destroy a hashtable, freeing all key-value pairs in the process.
- * This function is not protected by the table lock, since that 
- * will be destroyed by the end. We use SLOS-wide functions for that. 
- */
-void
-slskv_destroy(struct slskv_table *table)
+static void
+slskv_zone_fini(void *mem, int size)
 {
-	struct slskv_pair *kv, *tmpkv;
+	struct slskv_table *table;
 	int i;
 
-	if (table == NULL)
-	    return;
-
-	/* Iterate all buckets. */
-	for (i = 0; i <= table->mask; i++) {
-	    LIST_FOREACH_SAFE(kv, &table->buckets[i], next, tmpkv) {
-		/* 
-		 * Remove all elements from each bucket and free them. 
-		 * We are also responsible for freeing the values themselves. 
-		 */
-		LIST_REMOVE(kv, next);
-		uma_zfree(slskv_zone, kv);
-	    }
-	}
+	table = (struct slskv_table *) mem;
 
 	/* Destroy the hashtable itself. */
 	hashdestroy(table->buckets, M_SLSMM, table->mask);
@@ -82,9 +88,54 @@ slskv_destroy(struct slskv_table *table)
 	/* Destroy the lock. */
 	for (i = 0; i < SLSKV_BUCKETS; i++)
 	    mtx_destroy(&table->mtx[i]);
+}
 
-	/* Free the table itself. */
-	free(table, M_SLSMM);
+int
+slskv_init(void)
+{
+	slskv_zone = uma_zcreate("SLS tables",
+		sizeof(struct slskv_table), slskv_zone_ctor, slskv_zone_dtor,
+		slskv_zone_init, slskv_zone_fini,
+		UMA_ALIGNOF(struct slskv_table), 0);
+	if (slskv_zone == NULL)
+	    return (ENOMEM);
+
+	slskvpair_zone = uma_zcreate("SLS table pairs",
+		sizeof(struct slskv_pair), NULL, NULL, NULL,
+		NULL, UMA_ALIGNOF(struct slskv_pair), 0);
+	if (slskvpair_zone == NULL) {
+	    uma_zdestroy(slskv_zone);
+	    slskv_zone = NULL;
+	    return (ENOMEM);
+	}
+
+	return (0);
+}
+
+void
+slskv_fini(void)
+{
+	if (slskv_zone != NULL)
+	    uma_zdestroy(slskv_zone);
+
+	if (slskvpair_zone != NULL)
+	    uma_zdestroy(slskvpair_zone);
+}
+
+int
+slskv_create(struct slskv_table **tablep)
+{
+	*tablep = uma_zalloc(slskv_zone, M_WAITOK);
+	if (*tablep == NULL)
+	    return (ENOMEM);
+
+	return (0);
+}
+
+void
+slskv_destroy(struct slskv_table *table)
+{
+	uma_zfree(slskv_zone, table);
 }
 
 /* Find a value corresponding to a 64bit key. */
@@ -109,17 +160,14 @@ slskv_find(struct slskv_table *table, uint64_t key, uintptr_t *value)
 	return (EINVAL);
 }
 
-/* 
- * Add a new value to the hashtable. Inserting the new value may fail
- * depending on whether the key already exists and the replace policy.
- */
+/* Add a new value to the hashtable. Duplicates are not allowed. */
 int
 slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value)
 {
 	struct slskv_pairs *bucket;
-	struct slskv_pair *newkv, *kv, *tmpkv;
+	struct slskv_pair *newkv, *kv;
 
-	newkv = uma_zalloc(slskv_zone, M_WAITOK);
+	newkv = uma_zalloc(slskvpair_zone, M_WAITOK);
 	newkv->key = key;
 	newkv->value = value;
 
@@ -128,55 +176,21 @@ slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value)
 
 	mtx_lock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 
-	switch (table->repl_policy) {
-	/* We don't care about multiples, so we blindly insert the new value. */
-	case SLSKV_MULTIPLES:
-	    LIST_INSERT_HEAD(bucket, newkv, next);
-	    table->elems += 1;
-	    mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
-	    return (0);
-
-	
-	case SLSKV_NOREPLACE:
-	    /* Try to find existing instances of the key. */
-	    LIST_FOREACH(kv, bucket, next) {
-		/* We found the key, so we cannot insert. */
-		if (kv->key == key) {
-		    uma_zfree(slskv_zone, newkv);
-		    mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
-		    return (EINVAL);
-		}
+	/* Try to find existing instances of the key. */
+	LIST_FOREACH(kv, bucket, next) {
+	    /* We found the key, so we cannot insert. */
+	    if (kv->key == key) {
+		uma_zfree(slskvpair_zone, newkv);
+		mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+		return (EINVAL);
 	    }
-
-	    /* We didn't find the key, so we are free to insert. */
-	    LIST_INSERT_HEAD(bucket, newkv, next);
-	    table->elems += 1;
-	    mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
-	    return (0);
-
-	case SLSKV_REPLACE:
-	    /* Try to find existing instances of the key. */
-	    LIST_FOREACH_SAFE(kv, bucket, next, tmpkv) {
-		/* 
-		 * We found an old instance of the key.
-		 * Update the key-value pair in place.
-		 */
-		if (kv->key == key) {
-		    kv->value = value;
-		    mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
-
-		    uma_zfree(slskv_zone, newkv);
-		    return (0);
-		}
-	    }
-
-	    /* There were no old instances, add the key. */
-	    LIST_INSERT_HEAD(bucket, newkv, next);
-	    table->elems += 1;
-
-	    mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
-	    return (0);
 	}
+
+	/* We didn't find the key, so we are free to insert. */
+	LIST_INSERT_HEAD(bucket, newkv, next);
+	table->elems += 1;
+	mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+	return (0);
 }
 
 /* 
@@ -199,7 +213,7 @@ slskv_del(struct slskv_table *table, uint64_t key)
 	     */
 	    if (kv->key == key) {
 		LIST_REMOVE(kv, next);
-		uma_zfree(slskv_zone, kv);
+		uma_zfree(slskvpair_zone, kv);
 		table->elems -= 1;
 
 		/* We remove at most one pair. */
@@ -231,7 +245,7 @@ slskv_pop(struct slskv_table *table, uint64_t *key, uintptr_t *value)
 		*value = kv->value;
 
 		LIST_REMOVE(kv, next);
-		uma_zfree(slskv_zone, kv);
+		uma_zfree(slskvpair_zone, kv);
 		error = 0;
 
 		break;
@@ -355,17 +369,6 @@ slskv_serial(struct slskv_table *table, struct sbuf *sb)
 		    
 	}
 
-	/* 
-	 * Add the policy to the end. By adding it to the end, instead
-	 * of the start, we can easily concatenate serializations of 
-	 * hashtables, effectively joining them (whether the result 
-	 * deserializes to a valid hashtable depends on the replacement
-	 * policy, though).
-	 */
-	error = sbuf_bcat(sb, (void *) &table->repl_policy, sizeof(table->repl_policy));
-	if (error != 0)
-	    return (error);
-
 	return (0);
 }
 
@@ -376,7 +379,6 @@ slskv_serial(struct slskv_table *table, struct sbuf *sb)
 int
 slskv_deserial(char *buf, size_t len, struct slskv_table **tablep)
 {
-	enum slskv_policy repl_policy;
 	struct slskv_table *table;
 	uintptr_t value;
 	char *pairaddr;
@@ -384,17 +386,14 @@ slskv_deserial(char *buf, size_t len, struct slskv_table **tablep)
 	int i, error;
 	size_t pairs;
 
-	/* Get the replacement policy of the table first. */
-	memcpy(&repl_policy, &buf[len - sizeof(repl_policy)], sizeof(repl_policy));
-
 	KASSERT(buf != NULL, ("buffer is not finalized"));
 
-	error = slskv_create(&table, repl_policy);
+	error = slskv_create(&table);
 	if (error != 0)
 	    return (error);
 
 	/* Find out how many pairs there are. */
-	pairs = (len - sizeof(repl_policy)) / (sizeof(uint64_t) + sizeof(uintptr_t));
+	pairs = len / (sizeof(uint64_t) + sizeof(uintptr_t));
 	for (i = 0; i < pairs; i++) {
 	    pairaddr = &buf[i * (sizeof(uint64_t) + sizeof(uintptr_t))];
 	    memcpy(&key, (void *) pairaddr, sizeof(key));

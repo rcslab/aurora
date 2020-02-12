@@ -41,11 +41,11 @@ slsckpt_create(struct slsckpt_data **sckpt_datap)
 
 	sckpt_data = malloc(sizeof(*sckpt_data), M_SLSMM, M_WAITOK | M_ZERO);
 
-	error = slskv_create(&sckpt_data->sckpt_rectable, SLSKV_NOREPLACE);
+	error = slskv_create(&sckpt_data->sckpt_rectable);
 	if (error != 0)
 	    goto error;
 
-	error = slskv_create(&sckpt_data->sckpt_objtable, SLSKV_NOREPLACE);
+	error = slskv_create(&sckpt_data->sckpt_objtable);
 	if (error != 0)
 	    goto error;
 

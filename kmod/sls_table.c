@@ -277,11 +277,11 @@ sls_read_slos(struct slos_node *vp, struct slskv_table **metatablep,
 
 
 	/* Create the tables that hold the data and metadata of the checkpoint. */
-	error = slskv_create(&metatable, SLSKV_NOREPLACE);
+	error = slskv_create(&metatable);
 	if (error != 0)
 	    return error;
 
-	error = slskv_create(&datatable, SLSKV_NOREPLACE);
+	error = slskv_create(&datatable);
 	if (error != 0) {
 	    slskv_destroy(metatable);
 	    return error;
@@ -934,7 +934,7 @@ slstable_test(void)
 	 * The table with the original info structs, plays the role
 	 * of the actual table that is passed from the upper layers.
 	 */
-	error = slskv_create(&origtable, SLSKV_NOREPLACE);
+	error = slskv_create(&origtable);
 	if (error != 0)
 	    goto out;
 
@@ -945,7 +945,7 @@ slstable_test(void)
 	 * create here a _second_ table, which will be passed to - and
 	 * destroyed by - slstable_write.
 	 */
-	error = slskv_create(&backuptable, SLSKV_NOREPLACE);
+	error = slskv_create(&backuptable);
 	if (error != 0)
 	    goto out;
 

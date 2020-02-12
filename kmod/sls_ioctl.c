@@ -270,13 +270,9 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	    cv_init(&slsm.slsm_proccv, "SLS process restore lock");
 	    cv_init(&slsm.slsm_donecv, "SLS general restore lock");
 
-	    slskv_zone = uma_zcreate("SLS table pairs", 
-		    sizeof(struct slskv_pair), NULL, NULL, NULL, 
-		    NULL, UMA_ALIGNOF(struct slskv_pair), 0);
-	    if (slskv_zone == NULL) {
-		error = ENOMEM;
-		break;
-	    }
+	    error = slskv_init();
+	    if (error)
+		return (error);
 
 	    slspagerun_zone = uma_zcreate("SLS pageruns", 
 		    sizeof(struct slspagerun), NULL, NULL, NULL, 
@@ -286,11 +282,17 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		break;
 	    }
 
-	    error = slskv_create(&slsm.slsm_procs, SLSKV_NOREPLACE);
+	    error = slskv_create(&slsm.slsm_procs);
 	    if (error != 0)
 		return (error);
+	    error = slskv_create(&slsm.slsm_procs);
+	    if (error != 0)
+		return (error);
+	    slsm.slsm_procs = uma_zalloc(slskv_zone, M_WAITOK);
+	    if (slsm.slsm_procs == NULL)
+		return (ENOMEM);
 
-	    error = slskv_create(&slsm.slsm_parts, SLSKV_NOREPLACE);
+	    error = slskv_create(&slsm.slsm_parts);
 	    if (error != 0)
 		return (error);
 
@@ -325,11 +327,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	    if (slsm.slsm_parts != NULL)
 		slskv_destroy(slsm.slsm_parts);
 
-	    if (slspagerun_zone != NULL)
-		uma_zdestroy(slspagerun_zone);
-
-	    if (slskv_zone!= NULL)
-		uma_zdestroy(slskv_zone);
+	    slskv_fini();
 
 	    cv_destroy(&slsm.slsm_donecv);
 	    cv_destroy(&slsm.slsm_proccv);

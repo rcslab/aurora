@@ -753,7 +753,7 @@ slsckpt_filedesc(struct proc *p, struct slsckpt_data *sckpt_data, struct sbuf *s
 	 * The table of file descriptors to be created. We use this instead
 	 * of an array for the file descriptor table.
 	 */
-	error = slskv_create(&fdtable, SLSKV_NOREPLACE);
+	error = slskv_create(&fdtable);
 	if (error != 0)
 	    return (error);
 

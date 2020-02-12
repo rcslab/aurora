@@ -602,10 +602,9 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	}
 
 	/* The set of processes we are going to checkpoint. */
-	error = slsset_create(&procset);
+	error = slskv_create(&procset);
 	if (error != 0)
 	    goto out;
-
 
 	for (;;) {
 	    /* 
@@ -765,7 +764,7 @@ out:
 	    /* Release any process references gained. */
 	    SET_FOREACH_POP(procset, p)
 		PRELE(p);
-	    slsset_destroy(procset);
+	    slskv_destroy(procset);
 	}
 
 	/* Free the arguments passed to the kthread. */

@@ -29,28 +29,18 @@ struct slskv_pair {
 
 LIST_HEAD(slskv_pairs, slskv_pair);	/* A bucket of the hashtable */
 
-/* 
- * Replace policy for conflicting keys. When we try to add a new key only
- * to find that it already exists in the structure, we can either keep the
- * old value, replace it with the new value, or allow multiple values 
- * for the same key. For the latter case, deleting a key only deletes one 
- * instance of it, and searching similarly returns an arbitrary instance.
- */
-enum slskv_policy { SLSKV_REPLACE, SLSKV_NOREPLACE, SLSKV_MULTIPLES };
-
 /* The main key-value table. */
 struct slskv_table {
 	struct mtx_padalign mtx[SLSKV_BUCKETS];	/* Per-bucket locking */
 	struct slskv_pairs  *buckets;		/* The buckets of key-value pairs */
 	/* Read-only elements of the struct */
 	u_long		    mask;		/* Hashmask used by the builtin hashtable */
-	enum slskv_policy   repl_policy;	/* Replace policy for adds */
 	void		    *data;		/* Private data */
 	/* Could become debug-only if it causes coherence traffic */
 	size_t		    elems;		/* Number of elements in the table */
 };
 
-int slskv_create(struct slskv_table **tablep, enum slskv_policy policy);
+int slskv_create(struct slskv_table **tablep);
 void slskv_destroy(struct slskv_table *table);
 int slskv_find(struct slskv_table *table, uint64_t key, uintptr_t *value);
 int slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value);
@@ -68,7 +58,7 @@ int slskv_deserial(char *buf, size_t len, struct slskv_table **tablep);
 
 typedef struct slskv_table slsset;
 
-#define slsset_create(tablep) (slskv_create(tablep, SLSKV_NOREPLACE))
+#define slsset_create(tablep) (slskv_create(tablep))
 #define slsset_destroy(table) (slskv_destroy(table))
 #define slsset_del(table, key) (slskv_del(table, key))
 #define slsset_serial(table, sb) (slskv_serial(table, sb))
@@ -79,6 +69,10 @@ int slsset_add(slsset *table, uint64_t key);
 int slsset_pop(slsset *table, uint64_t *key);
 
 #define SLSKV_ITERDONE 1
+
+/* Initialization/finalization routines for the subsystem. */
+int slskv_init(void);
+void slskv_fini(void);
 
 /* 
  * Iterator used for dumping the contents of a key-value table. 
@@ -112,7 +106,7 @@ int slskv_itercont(struct slskv_iter *iter, uint64_t *key, uintptr_t *value);
 	iter = slskv_iterstart(settable); \
 	for (iter = slskv_iterstart(settable); slskv_itercont(&iter, (uint64_t *) &setvalue, (uintptr_t *) &setvalue) != SLSKV_ITERDONE;)
 
-/* Zone for the wrapper struct around KV pairs, used to enter them into a table. */
+/* Zone for the key value tables. */
 extern uma_zone_t slskv_zone;
 
 

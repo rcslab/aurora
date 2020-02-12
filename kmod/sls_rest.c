@@ -737,31 +737,31 @@ slsrest_init(struct slsrest_data **restdatap)
 	restdata = malloc(sizeof(*restdata), M_SLSMM, M_WAITOK | M_ZERO);
 
 	/* Initialize the necessary tables. */
-	error = slskv_create(&restdata->objtable, SLSKV_NOREPLACE);
+	error = slskv_create(&restdata->objtable);
 	if (error != 0)
 	    goto error;
 
-	error = slskv_create(&restdata->proctable, SLSKV_NOREPLACE);
+	error = slskv_create(&restdata->proctable);
 	if (error != 0)
 	    goto error;
 
-	error = slskv_create(&restdata->filetable, SLSKV_NOREPLACE);
+	error = slskv_create(&restdata->filetable);
 	if (error != 0)
 	    goto error;
 
-	error = slskv_create(&restdata->kevtable, SLSKV_NOREPLACE);
+	error = slskv_create(&restdata->kevtable);
 	if (error != 0)
 	    goto error;
 
-	error = slskv_create(&restdata->pgidtable, SLSKV_NOREPLACE);
+	error = slskv_create(&restdata->pgidtable);
 	if (error != 0)
 	    goto error;
 	
-	error = slskv_create(&restdata->sesstable, SLSKV_NOREPLACE);
+	error = slskv_create(&restdata->sesstable);
 	if (error != 0)
 	    goto error;
 
-	error = slskv_create(&restdata->mbuftable, SLSKV_NOREPLACE);
+	error = slskv_create(&restdata->mbuftable);
 	if (error != 0)
 	    goto error;
 	
@@ -834,7 +834,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	    break;
 
 	case SLS_MEM:
-	    error = slskv_create(&metatable, SLSKV_NOREPLACE);
+	    error = slskv_create(&metatable);
 	    if (error != 0)
 		goto out;
 
