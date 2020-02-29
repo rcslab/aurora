@@ -9,6 +9,7 @@
 #include <sys/vnode.h>
 
 #include "slos.h"
+#include "btree.h"
 
 struct btree;
 
@@ -34,6 +35,7 @@ struct slos_node {
 	uint64_t		sn_refcnt;		/* reference count */
 	LIST_ENTRY(slos_node)	sn_entries;		/* link for in-memory vnodes */
 	struct btree		*sn_records;		/* records btree */
+	struct fbtree		sn_tree;		/* Data btree */
 	struct mtx		sn_mtx;			/* vnode mutex */
 	struct slos_inode	*sn_ino;		/* On disk representation of the slos */
 	struct slos		*sn_slos;		/* Slos the node belong to */
@@ -67,6 +69,7 @@ struct slos_inode {
 
 	uint64_t		ino_blk;		/* on-disk position */
 	struct slos_diskptr	ino_records;		/* btree of records */
+	struct slos_diskptr	ino_btree;		/* btree for data */
 
 	uint64_t		ino_flags;		/* inode flags */
 	uint64_t		ino_magic;		/* magic for finding errors */
@@ -77,7 +80,6 @@ struct slos_inode {
 	uint64_t		ino_size;		/* Size of file */
 	uint64_t		ino_blocks;		/* Number of on IO blocks */
 };
-
 
 LIST_HEAD(slos_vnlist, slos_node);
 

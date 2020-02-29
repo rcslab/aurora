@@ -31,6 +31,7 @@
 #include <slos_btree.h>
 #include <slos_io.h>
 #include <slosmm.h>
+#include <btree.h>
 
 #include "../slos/slos_bootalloc.h"
 #include "../slos/slos_alloc.h"
@@ -38,6 +39,8 @@
 #include "slsfs_subr.h"
 #include "slsfs.h"
 #include "slsfs_dir.h"
+#include "slsfs_buf.h"
+
 
 static MALLOC_DEFINE(M_SLSFSMNT, "slsfs_mount", "SLS mount structures");
 
@@ -203,8 +206,30 @@ slsfs_mount(struct mount *mp)
 		return (error);
 	}
 	vfs_mountedfrom(mp, from);
-	DBUG("Mount done\n");
 
+	// This is all quite hacky just to get it working though
+	error = getnewvnode("SLSFS Fake VNode", mp, &sls_vnodeops, &slos.slsfs_dev);
+	if (error) {
+	    DBUG("Problem getting fake vnode for device\n");
+	    return (error);
+	}	
+	slos.slsfs_dev->v_bufobj.bo_ops = &bufops_slsfs;
+	slos.slsfs_dev->v_bufobj.bo_bsize = slos.slos_sb->sb_bsize;
+
+	// We for it to be a VCHR device to not have BMAP operations occur 
+	// within bdwrites. 
+	slos.slsfs_dev->v_type = VCHR;
+
+	// We are going to hitch the pointer to the slos cause thats all the 
+	// fake device needs
+	slos.slsfs_dev->v_data = &slos;
+
+	lockmgr(&slos.slsfs_dev->v_lock, LK_EXCLUSIVE, NULL);
+	error = insmntque(slos.slsfs_dev, mp);
+
+	// Unlock it so there is no recursive lock when root requires to use it
+	// to retrieve its btree.
+	VOP_UNLOCK(slos.slsfs_dev, 0);
 	struct vnode *vp = NULL;
 	VFS_ROOT(mp, LK_EXCLUSIVE, &vp);
 	if (vp == NULL) {
@@ -212,17 +237,13 @@ slsfs_mount(struct mount *mp)
 	}
 
 	if (SLSINO(SLSVP(vp))->ino_nlink < 2) {
-	    DBUG("Retrieved Root\n");
-	    size_t rno;
-	    error = slos_rcreate(SLSVP(vp), SLOSREC_DATA, &rno);
-	    if (error) {
-		vput(vp);
-		return (error);
-	    }
-	    DBUG("Creating Data record for root inode - %lu\n", rno);
-	    slsfs_init_dir(vp, vp, NULL);
+		slsfs_init_dir(vp, vp, NULL);
 	}
 	vput(vp);
+
+	// Lock before we reduce count
+	VOP_LOCK(slos.slsfs_dev, LK_EXCLUSIVE);
+	vput(slos.slsfs_dev);
 
 	return (error);
 }
@@ -397,6 +418,22 @@ slsfs_vget(struct mount *mp, ino_t ino, int flags, struct vnode **vpp)
 }
 
 static int
+sync_dev(struct vnode *vp)
+{
+	DBUG("Syncing device vnode\n");
+	struct buf *bp, *tbd;
+	struct bufobj *bo = &vp->v_bufobj;
+	TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
+		if (BUF_LOCK(bp, LK_EXCLUSIVE | LK_SLEEPFAIL, NULL)) {
+			continue;
+		}
+		slsfs_bundirty(bp);
+	}
+
+	return (0);
+}
+
+static int
 slsfs_sync(struct mount *mp, int waitfor)
 {
 	struct vnode *vp, *mvp;
@@ -417,7 +454,12 @@ slsfs_sync(struct mount *mp, int waitfor)
 			continue;
 		}
 		bo = &vp->v_bufobj;
-		if (bo->bo_dirty.bv_cnt) {
+		// We cant let the slsfs_dev sync normally as its a fake inode
+		// and doesnt have all the interconects a regular one does. We 
+		// may one to flush it out and just make it easier for the 
+		// abstraction, meaning make a fake inode and fake slos_node 
+		// for it as well.
+		if (bo->bo_dirty.bv_cnt && vp != slos.slsfs_dev) {
 			error = slsfs_sync_vp(vp);
 			if (error) {
 				/*
@@ -431,9 +473,30 @@ slsfs_sync(struct mount *mp, int waitfor)
 			}
 		} 
 		vput(vp);
-
 	}
-	DBUG("SYNCING DONE\n");
+
+	// Just a hack for now to get this thing working
+	MNT_VNODE_FOREACH_ACTIVE(vp, mp, mvp) {
+		if(VOP_ISLOCKED(vp)) {
+			VI_UNLOCK(vp);
+			continue;
+		}
+
+		if (vget(vp, LK_EXCLUSIVE | LK_INTERLOCK | LK_NOWAIT, td) != 0) {
+			continue;
+		}
+		bo = &vp->v_bufobj;
+		// We cant let the slsfs_dev sync normally as its a fake inode
+		// and doesnt have all the interconects a regular one does. We 
+		// may one to flush it out and just make it easier for the 
+		// abstraction, meaning make a fake inode and fake slos_node 
+		// for it as well.
+		if (bo->bo_dirty.bv_cnt && vp == slos.slsfs_dev) {
+			sync_dev(slos.slsfs_dev);
+		}
+		vput(vp);
+	}
+
 	return (0);
 }
 

@@ -8,6 +8,9 @@
 #include <sys/lock.h>
 #include <sys/lockmgr.h>
 #include <sys/mutex.h>
+#include <vm/uma.h>
+
+typedef uint64_t bnode_ptr;
 
 #ifdef WITH_DEBUG
 #define DBUG(fmt, ...) do {			    \
@@ -17,6 +20,11 @@
 #else
 #define DBUG(fmt, ...) ((void)(0));
 #endif // WITH_DEBUG
+
+typedef uint64_t vnode_off_key_t[2];
+
+extern uma_zone_t fnodes_zone;
+
 
 /*
  * SLOS Pointer
@@ -44,8 +52,8 @@ struct slos_diskptr {
 #define SLOS_MAJOR_VERSION	1
 #define SLOS_MINOR_VERSION	4
 
-#define SLOS_LOCK(slos) (lockmgr(&slos->slos_lock, LK_EXCLUSIVE, &slos->slos_mtx))
-#define SLOS_UNLOCK(slos) (lockmgr(&slos->slos_lock, LK_RELEASE, &slos->slos_mtx))
+#define SLOS_LOCK(slos) (lockmgr(&((slos)->slos_lock), LK_EXCLUSIVE, NULL))
+#define SLOS_UNLOCK(slos) (lockmgr(&((slos)->slos_lock), LK_RELEASE, NULL))
 
 /*
  * Object store flags
@@ -57,12 +65,12 @@ struct slos {
 	SLIST_ENTRY(slos)	next_slos;
 
 	struct vnode		*slos_vp;	/* The vnode for the disk device */
+	struct vnode		*slsfs_dev;
 	struct slos_sb		*slos_sb;	/* The superblock of the filesystem */
 	struct slos_bootalloc	*slos_bootalloc;/* The bootstrap alloc for the device */
 	struct slos_blkalloc	*slos_alloc;    /* The allocator for the device */
 	struct g_consumer	*slos_cp;	/* The geom consumer used to talk to disk */
 	struct g_provider	*slos_pp;	/* The geom producer */ 
-	struct mtx		slos_mtx;	/* Mutex for SLOS-wide operations */
 	struct btree		*slos_inodes;	/* An index of all inodes */
 	struct slos_vhtable	*slos_vhtable;	/* Table of opened vnodes */
 	struct lock		slos_lock;	/* Sleepable lock */
@@ -100,9 +108,12 @@ struct slos_sb {
 	uint64_t		sb_numblks;	/* number of blocks */
 	uint8_t			sb_clean;	/* osd clean */
 	uint64_t		sb_mtime;	/* last mounted */
+	bnode_ptr		sb_bmap_ptr;	/* The disk location of the root of the bmap vnode */
 };
 
 extern struct slos slos;
+
+
 
 #endif /* _SLOS_H_ */
 

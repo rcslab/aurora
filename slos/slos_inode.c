@@ -12,6 +12,21 @@
 #include "slos_bnode.h"
 #include "slos_io.h"
 #include "slosmm.h"
+#include "slsfs.h"
+
+static int
+compare_vnode_t(const void *k1, const void *k2)
+{
+	const size_t * key1 = (const size_t *)k1;
+	const size_t * key2 = (const size_t *)k2;
+
+	if (*key1 > *key2) {
+		return 1;
+	} else if (*key1 < *key2) {
+		return -1;
+	} 
+	return 0;
+}
 
 /* 
  * Initialize the hashtable that holds all open vnodes. There is no need
@@ -205,9 +220,17 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 	vp->sn_status = SLOS_VALIVE;
 	/* The refcount will be incremented by the caller. */
 	vp->sn_refcnt = 0;
+
+	fbtree_init(slos->slsfs_dev, ino->ino_btree.offset, sizeof(size_t), 
+		sizeof(struct slos_diskptr), &compare_vnode_t, &vp->sn_tree);
+
+	//fbtree_test(&vp->sn_tree);
+	//panic("Test baby");
+
 	/* Add to the open vnode hashtable. */
 	slos_vhtable_add(slos, vp);
 	/* Initialize the mutex used by record operations. */
+
 	mtx_init(&vp->sn_mtx, "slosvno", NULL, MTX_DEF);
 
 	return vp;
@@ -346,7 +369,7 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 	struct slos_inode *ino = NULL;
 	struct bnode *bnode = NULL;
 	struct slos_diskptr diskptr = DISKPTR_NULL;
-	struct slos_diskptr recptr = DISKPTR_NULL;
+	struct slos_diskptr btreeptr = DISKPTR_NULL;
 	uint64_t prevroot;
 	struct timespec tv;
 	int error;
@@ -354,7 +377,7 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 	vfs_timestamp(&tv);
 
 	/* Initialize inode block */
-	mtx_lock(&slos->slos_mtx);
+	SLOS_LOCK(slos);
 
 	/* 
 	 * Search the inodes btree for an existing 
@@ -381,12 +404,22 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 	    goto error;
 	}
 
+
+	btreeptr = slos_alloc(slos->slos_alloc, 1);
+	if (btreeptr.offset == 0) {
+	    error = ENOSPC;
+	    goto error;
+	}
+
 	/* 
 	 * Create and initialize the inode. The 
 	 * GID, UID, and name fields have
 	 * to be set by the caller.
 	 */
-	ino = malloc(slos->slos_sb->sb_bsize, M_SLOS, M_WAITOK);
+	ino = malloc(slos->slos_sb->sb_bsize, M_SLOS, M_WAITOK | M_ZERO);
+
+	slos_writeblk(slos, btreeptr.offset, ino);
+
 	ino->ino_pid = pid;
 
 	ino->ino_ctime = tv.tv_sec;
@@ -402,26 +435,8 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 	ino->ino_asize = 0;
 	ino->ino_size = 0;
 	ino->ino_blocks = 0;
+	ino->ino_btree = btreeptr;
 
-	/* Get a block for the records btree. */
-	recptr = slos_alloc(slos->slos_alloc, 1);
-	if (recptr.offset == 0) {
-	    error = ENOSPC;
-	    goto error;
-	}
-
-	/* Actually write the bnode to disk. */
-	bnode = bnode_alloc(slos, recptr.offset, 
-		sizeof(struct slos_diskptr), BNODE_EXTERNAL);
-	error = bnode_write(slos, bnode);
-	if (error != 0)
-	    goto error;
-	
-	/* Have the inode point to the btree root. */
-	ino->ino_records.offset = recptr.offset;
-	ino->ino_records.size = 1;
-
-	/* Write the inode to disk. */
 	error = slos_iwrite(slos, ino);
 	if (error != 0)
 	    goto error;
@@ -452,19 +467,19 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 	free(bnode, M_SLOS);
 	free(ino, M_SLOS);
 
-	mtx_unlock(&slos->slos_mtx);
+	SLOS_UNLOCK(slos);
 
 	return 0;
 
 error:
 	btree_keepelem(slos->slos_inodes);
 	slos_free(slos->slos_alloc, diskptr);
-	slos_free(slos->slos_alloc, recptr);
+	slos_free(slos->slos_alloc, btreeptr);
 
 	free(bnode, M_SLOS);
 	free(ino, M_SLOS);
 
-	mtx_unlock(&slos->slos_mtx);
+	SLOS_UNLOCK(slos);
 	
 	return error;
 }
@@ -476,7 +491,7 @@ slos_iremove(struct slos *slos, uint64_t pid)
 	struct slos_diskptr inoptr; 
 	int error;
 
-	mtx_lock(&slos->slos_mtx);
+	SLOS_LOCK(slos);
 
 	/* 
 	 * If there are no open versions of the
@@ -489,7 +504,7 @@ slos_iremove(struct slos *slos, uint64_t pid)
 	    /* Get the on-disk position of the inode. */
 	    error = btree_search(slos->slos_inodes, pid, &inoptr);
 	    if (error != 0) {
-		mtx_unlock(&slos->slos_mtx);
+		SLOS_UNLOCK(slos);
 		return error;
 	    }
 
@@ -499,11 +514,11 @@ slos_iremove(struct slos *slos, uint64_t pid)
 	     */
 	    vp = slos_vpimport(slos, inoptr.offset);
 	    if (vp == NULL) {
-		mtx_unlock(&slos->slos_mtx);
+		SLOS_UNLOCK(slos);
 		return EIO;
 	    }
 	    /* Free both in-memory and on-disk resources. */
-	    mtx_unlock(&slos->slos_mtx);
+	    SLOS_UNLOCK(slos);
 	    slos_ifree(slos, vp);
 
 	    return (0);
@@ -517,7 +532,7 @@ slos_iremove(struct slos *slos, uint64_t pid)
 
 	}
 
-	mtx_unlock(&slos->slos_mtx);
+	SLOS_UNLOCK(slos);
 
 	return (0);
 }

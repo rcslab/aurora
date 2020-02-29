@@ -30,6 +30,7 @@ MALLOC_DEFINE(M_SLOS, "slos", "SLOS");
 
 /* We have only one SLOS currently, make it global. */
 struct slos slos;
+uma_zone_t fnodes_zone;
 
 /*
  * Returns the vnode associated with the filename in the sbuf.
@@ -79,10 +80,12 @@ slosHandler(struct module *inModule, int inEvent, void *inArg) {
 
 	switch (inEvent) {
 	    case MOD_LOAD:
+		fnodes_zone = uma_zcreate("File Btree Nodes",
+		    sizeof(struct fnode), NULL, NULL, NULL, NULL, 0, 0);
+
 		bzero(&slos, sizeof(slos));
 
 		/* Set up the global SLOS mutex. */
-		mtx_init(&slos.slos_mtx, "slosmtx", NULL, MTX_DEF);
 		lockinit(&slos.slos_lock, PVFS, "sloslock", VLKTIMEOUT, LK_NOSHARE);
 
 		/* Open the device for writing. */
@@ -150,7 +153,7 @@ slosHandler(struct module *inModule, int inEvent, void *inArg) {
 		 * Maybe geom takes care of that? 
 		 */
 
-		mtx_lock(&slos.slos_mtx);
+		SLOS_LOCK(&slos);
 
 		/* Remove the vnodes table. */
 		if (slos.slos_vhtable != NULL) {
@@ -158,7 +161,7 @@ slosHandler(struct module *inModule, int inEvent, void *inArg) {
 		    /* If we have open vnodes, we can't unmount yet. */
 		    if (error != 0) {
 			printf("ERROR: slos_vhtable_fini failed with %d\n", error);
-			mtx_unlock(&slos.slos_mtx);
+			SLOS_UNLOCK(&slos);
 			return error;
 		    }
 		}
@@ -192,13 +195,9 @@ slosHandler(struct module *inModule, int inEvent, void *inArg) {
 		    dev_ref(slos.slos_vp->v_rdev);
 		    g_topology_unlock();
 		}
-
+		SLOS_UNLOCK(&slos);
 		lockdestroy(&slos.slos_lock);
-
-		mtx_unlock(&slos.slos_mtx);
-
-		/* Destroy the mutex. */
-		mtx_destroy(&slos.slos_mtx);
+		slos.slsfs_dev = NULL;
 
 		printf("SLOS Unloaded.\n");
 		break;

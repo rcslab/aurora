@@ -1,10 +1,13 @@
+#ifndef _SLSFS_H_
+#define _SLSFS_H_
 #include <sys/mount.h>
 #include <sys/queue.h>
+#include <sys/vnode.h>
 
 struct slos;
 
-
 #define SLOS_ROOT_INODE (100000)
+#define SLOS_BMAP_INODE (100001)
 #define TOSMP(mp) ((struct slsfsmount *)(mp->mnt_data))
 #define MPTOSLOS(mp) ((TOSMP(mp)->sp_slos))
 #define SLSVP(vp) ((struct slos_node *)(vp->v_data))
@@ -46,3 +49,4 @@ struct slsfs_device {
 
 
 extern struct vop_vector sls_vnodeops;
+#endif // _SLSFS_H_

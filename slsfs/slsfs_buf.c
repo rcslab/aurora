@@ -24,7 +24,7 @@ int
 slsfs_bcreate(struct vnode *vp, uint64_t lbn, size_t size, struct buf **buf) 
 {
 	struct buf *tempbuf;
-	struct slos_recentry tempsize;
+	struct slos_node *svp = SLSVP(vp);
 
 	int error = 0;
 	size_t blksize = IOSIZE(SLSVP(vp));
@@ -34,12 +34,10 @@ slsfs_bcreate(struct vnode *vp, uint64_t lbn, size_t size, struct buf **buf)
 	 * store recentrys which are represent their disk location and offset 
 	 * and len in the block. 
 	 */
-	tempsize.diskptr.offset = 0;
-	tempsize.diskptr.size = 0;
-	tempsize.len = size;
-	tempsize.offset = lbn;
-
-	error = slsfs_key_insert(SLSVP(vp), lbn, tempsize);
+	struct slos_diskptr ptr;
+	ptr.offset = 0;
+	ptr.size = 0;
+	error = fbtree_insert(&svp->sn_tree, &lbn, &ptr);
 	if (error) {
 	    return (error);
 	}
@@ -63,7 +61,7 @@ slsfs_bread(struct vnode *vp, uint64_t lbn, struct ucred *cred, struct buf **buf
 	int error;
 
 	size_t blksize = IOSIZE(SLSVP(vp));
-	
+
 	error = bread(vp, lbn, blksize, cred, buf);
 	if (error) {
 		return (error);
@@ -98,40 +96,18 @@ slsfs_bundirty(struct buf *buf)
 int 
 slsfs_lookupbln(struct slos_node *svp, uint64_t lbn,  uint64_t * pbn)
 {
-	struct slos_record *rec;
-	struct slos_recentry size;
-	uint64_t rno;
 	int error; 
+	*pbn = (-1);
 
-	uint64_t key = lbn;
-
-	error = slos_firstrec(svp, &rec);
+	struct slos_diskptr ptr;
+	error = fbtree_get(&svp->sn_tree, &lbn, &ptr);
 	if (error == EINVAL) {
-		error = slos_rcreate(svp, SLOSREC_DATA, &rno);
-		if (error) {
-			DBUG("Error creating record\n");
-			return (error);
-		}
-		*pbn = -1;
-
 		return (0);
 	} else if (error) {
-		DBUG("Error seraching for first record\n");
-		return (error);
+	    return (error);
 	}
 
-	struct btree * tree = btree_init(svp->sn_slos, rec->rec_data.offset, ALLOCMAIN);
-	error = btree_keymin(tree, &key, &size);
-	btree_destroy(tree);
-	if (error == EINVAL) {
-		*pbn = -1;
-		return (0);
-	} 
-	if (error && error != EINVAL) {
-		return (error);
-	}
-	DBUG("Found Offset/Size pair - %lu/%lu\n", key, size.len);
-	*pbn = key;
+	*pbn = ptr.offset;
 
 	return (0); 
 }

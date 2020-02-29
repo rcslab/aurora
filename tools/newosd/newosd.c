@@ -144,6 +144,7 @@ create_root_inode(struct bnode *broot)
 	root_inode.ino_asize = 0;
 	root_inode.ino_size = 0;
 	root_inode.ino_blocks = 0;
+	root_inode.ino_btree = DISKPTR_BLOCK(ALLOC());
 
 	printf("Root inode at %lu\n", root_inode.ino_blk);
 	INIT_BNODE(broot, ALLOC());
@@ -159,6 +160,10 @@ create_root_inode(struct bnode *broot)
 	void * zeroes = calloc(1, bsize);
 
 	status = pwrite(fd, zeroes, bsize, broot->blkno * bsize);
+	if (status < 0) 
+		exit (-1);
+
+	status = pwrite(fd, zeroes, bsize, root_inode.ino_btree.offset * bsize);
 	if (status < 0) 
 		exit (-1);
 

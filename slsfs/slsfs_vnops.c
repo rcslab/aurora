@@ -37,6 +37,7 @@ slsfs_inactive(struct vop_inactive_args *args)
 static int
 slsfs_getattr(struct vop_getattr_args *args)
 {
+	DBUG("Get attr\n");
 	struct vnode *vp = args->a_vp;
 	struct vattr *vap = args->a_vap;
 	struct slos_node *slsvp = SLSVP(vp);
@@ -79,14 +80,20 @@ static int
 slsfs_reclaim(struct vop_reclaim_args *args)
 {
 	struct vnode *vp = args->a_vp;
-	DBUG("Reclaiming vnode %p\n", vp);
 	struct slos_node *svp = SLSVP(vp);
-	slos_vpfree(svp->sn_slos, svp);
+
+	DBUG("Reclaiming vnode %p\n", vp);
+
+	if (vp != slos.slsfs_dev) { 
+	    slos_vpfree(svp->sn_slos, svp);
+	}
 
 	vp->v_data = NULL;
 	cache_purge(vp);
 	vnode_destroy_vobject(vp);
-	vfs_hash_remove(vp);
+	if (vp !=  slos.slsfs_dev) {
+		vfs_hash_remove(vp);
+	}
 	DBUG("Done reclaiming vnode %p\n", vp);
 
 	return (0);
@@ -112,7 +119,12 @@ slsfs_mkdir(struct vop_mkdir_args *args)
 	} 
 
 	DBUG("Initing Directory named %s\n", name->cn_nameptr);
-	slsfs_init_dir(dvp, vp, name);
+	error = slsfs_init_dir(dvp, vp, name);
+	if (error) {
+	    DBUG("Issue init directory\n");
+	    *vpp = NULL;
+	    return (error);
+	}
 	*vpp = vp;
 
 	return (0);
@@ -198,7 +210,7 @@ slsfs_readdir(struct vop_readdir_args *args)
 				if (io->uio_resid < GENERIC_DIRSIZ(&dir)) {
 					break;
 				}
-
+				DBUG("%s\n", dir.d_name);
 				error = uiomove(&dir, dir.d_reclen, io);
 				if (error) {
 					DBUG("Problem moving buffer\n");
@@ -279,7 +291,11 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 				DBUG("Regular name lookup - not found, but creating\n");
 				cnp->cn_flags |= SAVENAME;
 				error = EJUSTRETURN;
+			} else {
+			    DBUG("File not found\n");
 			}
+		// XXX Instead of saving the name save the offset into the 
+		// directory so we can just grab it.
 		} else if (error == 0) {
 			/* Cases for when name is found, others to be filled in later */
 			if ((nameiop == DELETE) && islastcn) {
@@ -292,28 +308,21 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 			} else if ((nameiop == RENAME) && islastcn) {
 				DBUG("Rename of file %s\n", cnp->cn_nameptr);
 				panic("Rename Not implemented\n");
-			} else if ((nameiop == CREATE) && islastcn) {
-				DBUG("Create of file %s\n", cnp->cn_nameptr);
-				error = SLS_VGET(dvp, -1, LK_EXCLUSIVE, &vp);
-				if (!error) {
-					cnp->cn_flags |= SAVENAME;
-					*vpp = vp;
-				}
-			} else if ((nameiop == LOOKUP) && islastcn) {
+			} else {
 				DBUG("Lookup of file %s\n", cnp->cn_nameptr);
 				error = SLS_VGET(dvp, dir.d_fileno, LK_EXCLUSIVE, &vp);
 				if (!error) {
-					cnp->cn_flags |= SAVENAME;
 					*vpp = vp;
 				}
-			} else {
-				panic("nameiop corrupted value");
 			}
+		} else {
+		    DBUG("ERROR IN LOOKUP %d\n", error);
+		    return (error);
 		}
 	}
 
 out:
-	/* Cache the entry in the name cache for the future */
+	// Cache the entry in the name cache for the future 
 	if((cnp->cn_flags & MAKEENTRY) != 0) {
 		cache_enter(dvp, *vpp, cnp);
 	}
@@ -381,6 +390,10 @@ slsfs_create(struct vop_create_args *args)
 	}
 
 	*vpp = vp;
+	if ((name->cn_flags & MAKEENTRY) != 0) {
+	    cache_enter(dvp, *vpp, name);
+	}
+
 	return (0);
 }
 
@@ -390,8 +403,9 @@ slsfs_remove(struct vop_remove_args *args)
 	struct vnode *vp = args->a_vp;
 	struct vnode *dvp = args->a_dvp;
 	struct componentname *cnp = args->a_cnp;
-	DBUG("Removing file %s\n", cnp->cn_nameptr);
 	int error;
+
+	DBUG("Removing file %s\n", cnp->cn_nameptr);
 
 	error = slsfs_remove_node(dvp, vp, cnp);
 	if (error) {
@@ -455,7 +469,6 @@ slsfs_write(struct vop_write_args *args)
 	}
 
 	int modified = 0;
-	DBUG("Writing  - %lu at offset %lu\n", uio->uio_resid, uio->uio_offset);
 	while(uio->uio_resid) {
 		// Grab the key thats closest to offset, but not over it
 		// Mask out the lower order bits so we just have the block;
@@ -470,10 +483,8 @@ slsfs_write(struct vop_write_args *args)
 		xfersize = omin(uio->uio_resid, (blksize - off));
 
 		if (pbn == -1) {
-			DBUG("Creating buf at block %lu\n", bno);
 			error = slsfs_bcreate(vp, bno, blksize, &bp);
 		} else {
-			DBUG("Reading Buf\n");
 			error = slsfs_bread(vp, bno, args->a_cred, &bp);
 		}
 
@@ -481,13 +492,11 @@ slsfs_write(struct vop_write_args *args)
 			DBUG("Problem getting buffer for write\n");
 			return (error);
 		}
-		DBUG("Write to buf object\n");
 		uiomove((char *)bp->b_data + off, xfersize, uio);
 		/* One thing thats weird right now is our inodes and meta data is currently not
 		 * in the buf cache, so we don't really have to worry about dirtying those buffers,
 		 * but later we will have to dirty them.
 		 */
-		DBUG("Dirtying buf object\n");
 		slsfs_bdirty(bp);
 		modified++;
 	}
@@ -533,9 +542,7 @@ slsfs_read(struct vop_read_args *args)
 		panic("bad file type");
 	}
 
-	DBUG("Reading File - %lu/%lu\n", uio->uio_resid, uio->uio_offset);
 	resid = omin(uio->uio_resid, (filesize - uio->uio_offset));
-	DBUG("Read - RESID %lu\n", resid);
 	while(resid) {
 		// Grab the key thats closest to offset, but not over it
 		// Mask out the lower order bits so we just have the block;
@@ -549,17 +556,14 @@ slsfs_read(struct vop_read_args *args)
 		toread = omin(resid, (blksize - off));
 
 		if (pbn == -1) {
-			DBUG("Creating buf at block %lu\n", bno);
 			error = slsfs_bcreate(vp, bno, blksize, &bp);
 		} else {
-			DBUG("Reading Buf\n");
 			error = slsfs_bread(vp, bno, args->a_cred, &bp);
 		}
 
 		if (error) {
 			return (error);
 		}
-		DBUG("Reading from buf object - %lu left at local blk off %lu\n", resid, off);
 		error = uiomove((char *)bp->b_data + off, toread, uio);
 		if (error) {
 			brelse(bp);
@@ -609,6 +613,7 @@ slsfs_bmap(struct vop_bmap_args *args)
 static int
 slsfs_fsync(struct vop_fsync_args *args)
 {
+	DBUG("null fsync\n");
 	return (0);
 }
 
@@ -623,37 +628,42 @@ static int
 slsfs_strategy(struct vop_strategy_args *args)
 {
 	int error;
-	struct slos_recentry entry = {};
+	struct slos_diskptr ptr;
 
 	struct buf *bp = args->a_bp;
 	struct vnode *vp = args->a_vp;
 
-	error = slsfs_key_get(SLSVP(vp), bp->b_lblkno, &entry);
-	if (error && error != EINVAL) {
-		DBUG("ERROR\n");
-		return (error);
-	};
+	if (vp != slos.slsfs_dev) {
+	    error = fbtree_get(&SLSVP(vp)->sn_tree, &bp->b_lblkno, &ptr);
+	    if (error && error != EINVAL) {
+		    DBUG("ERROR\n");
+		    return (error);
+	    };
 
-	/*
-	 * We fill the record btree with null values on their creation (See 
-	 * slsfs_bcreate), so this is to handle the case of a buffer that hasnt 
-	 * been allocated yet.  If its been allocated we actually will perform
-	 * the storage IO. If this is a buffer thats performing the 
-	 * VOP_STRATEGY, and its a write, then this MUST be being called
-	 * from within the sync context which means an allocation has already
-	 * been completed.
-	 *
-	 * XXX: Revisit upon completely new Btrees
-	 */
-	if (REC_ISALLOCED(entry))  {
-		bp->b_blkno = entry.diskptr.offset;
+
+	    /*
+	    * We fill the record btree with null values on their creation (See 
+	    * slsfs_bcreate), so this is to handle the case of a buffer that hasnt 
+	    * been allocated yet.  If its been allocated we actually will perform
+	    * the storage IO. If this is a buffer thats performing the 
+	    * VOP_STRATEGY, and its a write, then this MUST be being called
+	    * from within the sync context which means an allocation has already
+	    * been completed.
+	    *
+	    * XXX: Revisit upon completely new Btrees
+	    */
+	    if (ptr.size != 0)  {
+		    bp->b_blkno = ptr.offset;
+	    } else {
+		    KASSERT(bp->b_iocmd == BIO_READ, ("This case should only happen during a read"));
+		    bp->b_blkno = (daddr_t) (-1);
+		    vfs_bio_clrbuf(bp); 
+		    bufdone(bp);
+
+		    return (0);
+	    }
 	} else {
-		KASSERT(bp->b_iocmd == BIO_READ, ("This case should only happen during a read"));
-		bp->b_blkno = (daddr_t) (-1);
-		vfs_bio_clrbuf(bp); 
-		bufdone(bp);
-
-		return (0);
+	    bp->b_blkno = bp->b_lblkno;
 	}
 
 	switch(bp->b_iocmd) {
@@ -677,6 +687,7 @@ slsfs_strategy(struct vop_strategy_args *args)
 static int
 slsfs_setattr(struct vop_setattr_args *args)
 {
+	DBUG("Set attr\n");
 	return (0);
 }
 
@@ -685,9 +696,6 @@ slsfs_rename(struct vop_rename_args *args)
 {
 	return (0);
 }
-
-
-
 
 struct vop_vector sls_vnodeops = {
 	.vop_default =		&default_vnodeops,

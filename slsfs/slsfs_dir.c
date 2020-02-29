@@ -78,6 +78,11 @@ slsfs_add_dirent(struct vnode *vp, uint64_t ino, char *nameptr, long namelen, ui
 		SLSINO(svp)->ino_nlink++;
 	}
 	SLSINO(svp)->ino_size = dir->d_off + sizeof(struct dirent);
+	// XXX This is actually incorrect -- we are flushing an update to disk 
+	// when we havnt actually made the change to directory on disk, this 
+	// probably cleans itself up when we make the changes to inodes though 
+	// on disk. (Root Inode, its buffers will the inode itself so we will 
+	// dirty those buffers)
 	error = slos_iupdate(svp);
 	if (error) {
 		DBUG("Problem syncing inode update");
@@ -171,7 +176,7 @@ slsfs_unlink_dir(struct vnode *dvp, struct vnode *vp, struct componentname *name
 	KASSERT(last != NULL, ("No way this should happen"));
 	// This means that the last entry IS the one being deleted
 	if (last->d_namlen == name->cn_namelen && 
-	    !strcmp(last->d_name, name->cn_nameptr)) {
+	    !strncmp(last->d_name, name->cn_nameptr, name->cn_namelen)) {
 		KASSERT(del_bp == last_bp, ("If they are the same they should have been in the same block"));
 		KASSERT(strcmp(dir.d_name, last->d_name) == 0, ("Should be the same Directory"));
 		bzero(last, sizeof(struct dirent));
@@ -192,7 +197,6 @@ slsfs_unlink_dir(struct vnode *dvp, struct vnode *vp, struct componentname *name
 		SLSINO(sdvp)->ino_blocks--;
 		DBUG("Last of the block, removing block from tree - %lu blocks left\n", SLSINO(sdvp)->ino_blocks);
 		slsfs_key_remove(sdvp, SLSINO(sdvp)->ino_blocks);
-		last_bp->b_flags &= ~(B_ASYNC | B_INVAL | B_MANAGED);
 		bundirty(last_bp);
 		brelse(last_bp);
 
@@ -246,7 +250,8 @@ slsfs_lookup_name(struct vnode *vp, struct componentname *name, struct dirent *d
 				dir = NULL;
 				break;
 			}
-			if (strcmp(name->cn_nameptr, dir->d_name) == 0) {
+			if ((name->cn_namelen == dir->d_namlen) &&
+				strncmp(name->cn_nameptr, dir->d_name, name->cn_namelen) == 0) {
 				*dir_p = *dir;
 				brelse(bp);
 				return (0);

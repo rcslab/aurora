@@ -1,7 +1,7 @@
 KMOD	= slos
 DPSRCS = offset.inc
 SRCS	= slos.c slos_alloc.c slos_bnode.c slos_bootalloc.c \
-	    slos_btree.c slos_inode.c slos_io.c slos_record.c 
+	    slos_btree.c slos_inode.c slos_io.c slos_record.c newbtree.c
 
 CFLAGS	+= -DKDTRACE_HOOKS -DKLD_TIED -I../include
 CLEANFILES = .depend*

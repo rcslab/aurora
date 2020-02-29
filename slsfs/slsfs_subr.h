@@ -15,3 +15,4 @@ int slsfs_bufwrite(struct buf *buf);
 int slsfs_bufsync(struct bufobj *bufobj, int waitfor);
 void slsfs_bdflush(struct bufobj *bufobj, struct buf *buf);
 int slsfs_sync_vp(struct vnode *vp);
+void slsfs_bufstrategy(struct bufobj *bo, struct buf *bp);
