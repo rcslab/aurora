@@ -28,6 +28,11 @@
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
+#include <slos.h>
+#include <slos_inode.h>
+#include <slos_record.h>
+#include <sls_data.h>
+
 #include "sls_data.h"
 #include "sls_internal.h"
 #include "sls_mm.h"
@@ -129,6 +134,8 @@ slsp_attach(uint64_t oid, pid_t pid)
 
 	error = slsset_add(slsp->slsp_procs, pid);
 	KASSERT(error == 0, ("PID already in the partition"));
+
+	slsp->slsp_procnum += 1;
 	
 	return (0);
 }
@@ -146,6 +153,8 @@ slsp_detach(uint64_t oid, pid_t pid)
 	/* Remove the process from both the partition and the SLS. */
 	slskv_del(slsm.slsm_procs, pid);
 	slsset_del(slsp->slsp_procs, pid);
+
+	slsp->slsp_procnum -= 1;
 	
 	return (0);
 }
@@ -167,29 +176,41 @@ slsp_detachall(struct slspart *slsp)
  * Create a new struct slspart to be entered into the SLS.
  */
 static int 
-slsp_init(uint64_t oid, struct slspart **slspp)
+slsp_init(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
 {
-	struct slspart *slsp;
+	struct slspart *slsp = NULL;
 	int error;
 
 	/* Create the new partition. */
 	slsp = malloc(sizeof(*slsp), M_SLSMM, M_WAITOK | M_ZERO);
 	slsp->slsp_oid = oid;
+	slsp->slsp_attr = attr;
 	/* The SLS module itself holds one reference to the partition. */
 	slsp->slsp_refcount = 1;
-	/* This pointer is set during checkpointing. */
-	/* XXX slsp->slsp_attr? We should define the backend at creation time. */
+	slsp->slsp_status = SPROC_AVAILABLE;
 
 	/* Create the set of held processes. */
 	error = slsset_create(&slsp->slsp_procs);
-	if (error != 0) {
-	    free(slsp, M_SLSMM);
-	    return (error);
-	}
+	if (error != 0)
+	    goto error;
+
+	/* XXX Temporary until we change to multiple inodes per checkpoint.  */
+	/* Create the SLOS node for the partition. */
+	error = slos_icreate(&slos, oid, 0);
+	if (error != 0)
+	    goto error;
 	
 	*slspp = slsp;
 
 	return (0);
+
+error:
+	if (slsp != NULL && slsp->slsp_procs != NULL)
+	    slsset_destroy(slsp->slsp_procs);
+
+	free(slsp, M_SLSMM);
+
+	return (error);
 }
 
 /* 
@@ -201,6 +222,9 @@ slsp_fini(struct slspart *slsp)
 {
 	/* Remove all processes currently in the partition from the SLS. */
 	slsp_detachall(slsp);
+
+	/* XXX TEMP Remove the partition from the SLOS. */
+	slos_iremove(&slos, slsp->slsp_oid);
 
 	/* Destroy the proc bookkeeping structure. */
 	slsset_destroy(slsp->slsp_procs);
@@ -214,16 +238,12 @@ slsp_fini(struct slspart *slsp)
 	if (slsp->slsp_sckpt != NULL)
 	    slsckpt_destroy(slsp->slsp_sckpt);
 
-
 	free(slsp, M_SLSMM);
 }
 
-/*
- * Add the running process with PID pid to the SLS. If a process 
- * of that PID is already in the SLS, the operation fails.
- */
+/* Add a partition with unique ID oid to the SLS. */
 int
-slsp_add(uint64_t oid, struct slspart **slspp)
+slsp_add(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
 {
 	struct slspart *slsp;
 	int error;
@@ -241,7 +261,7 @@ slsp_add(uint64_t oid, struct slspart **slspp)
 	}
 
 	/* If we didn't find it, create one. */
-	error = slsp_init(oid, &slsp);
+	error = slsp_init(oid, attr, &slsp);
 	if (error != 0)
 	    return (error);
 
@@ -313,4 +333,10 @@ slsp_deref(struct slspart *slsp)
 	if (slsp->slsp_refcount == 0)
 	    slsp_del(slsp->slsp_oid);
 
+}
+
+int
+slsp_isempty(struct slspart *slsp)
+{
+	return (slsp->slsp_procnum == 0);
 }

@@ -267,15 +267,8 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	    * even be faster. However, right now it's not very useful,
 	    * since the SLOS isn't there yet in terms of speed.
 	    */
-	    /* XXX TEMP so that we can checkpoint multiple times. */
-	    slos_iremove(&slos, slsp->slsp_oid);
 
 	    /* The dump itself. */
-	    /* XXX Temporary until we change to multiple inodes per checkpoint. */
-	    error = slos_icreate(&slos, slsp->slsp_oid, 0);
-	    if (error != 0)
-		goto error;
-
 	    vp = slos_iopen(&slos, slsp->slsp_oid);
 	    if (vp == NULL)
 		goto error;
@@ -393,85 +386,147 @@ error:
 	return (error);
 }
 
+static int
+slsckpt_gather_processes(struct slspart *slsp, slsset *procset)
+{
+	struct slskv_iter iter;
+	uint64_t deadpid = 0;
+	struct proc *p;
+	uint64_t pid;
+	int error;
+
+	KVSET_FOREACH(slsp->slsp_procs, iter, pid) {
+	    /* Remove the PID of the unavailable process from the set. */
+	    if (deadpid != 0) {
+		slsp_detach(slsp->slsp_oid, deadpid);
+		deadpid = 0;
+	    }
+
+	    /* Does the process still exist? */
+	    error = pget(pid, PGET_WANTREAD, &p);
+	    if (error != 0) {
+		deadpid = pid;
+		continue;
+	    }
+
+	    /* Is the process exiting? */
+	    if (!SLS_RUNNABLE(p, slsp)) {
+		PRELE(p);
+		deadpid = pid;
+		continue;
+	    }
+
+	    /* Add it to the set of processes to be checkpointed. */
+	    error = slsset_add_unlocked(procset, (uint64_t) p);
+	    if (error != 0) {
+		KV_ABORT(iter);
+		return (error);
+	    }
+	}
+
+	/* Cleanup any leftover dead PIDs. */
+	if (deadpid != 0)
+	    slsp_detach(slsp->slsp_oid, deadpid);
+
+	return (0);
+}
+
+/* Gather the children of the processes currently in the working set. */
+static int
+slsckpt_gather_children_once(slsset *procset, int *new_procs)
+{
+	struct proc *p, *pchild;
+	struct slskv_iter iter;
+	int error;
+
+	/* Stop all processes in the set. */
+	slsckpt_stop(procset);
+
+	/* Assume there are no new children. */
+	new_procs = 0;
+
+	KVSET_FOREACH(procset, iter, p) {
+	    /* Check for new children. */
+	    LIST_FOREACH(pchild, &p->p_children, p_sibling) {
+		if (slsset_find_unlocked(procset, (uint64_t) pchild) != 0) {
+		    /* We found a child that didn't exist before. */
+		    if (!SLS_PROCALIVE(pchild))
+			continue;
+
+		    new_procs += 1;
+
+		    PHOLD(pchild);
+		    error = slsset_add_unlocked(procset, (uint64_t) pchild);
+		    if (error != 0) {
+			KV_ABORT(iter);
+			return (error);
+		    }
+
+		}
+	    }
+	}
+
+	return (0);
+}
+
+/* Gather all descendants of the processes in the working set. */
+static int
+slsckpt_gather_children(slsset *procset)
+{
+	int new_procs;
+	int error;
+
+	do {
+	    error = slsckpt_gather_children_once(procset, &new_procs);
+	    if (error != 0)
+		return (error);
+	} while (new_procs > 0);
+
+	return (0);
+}
+
 /*
  * System process that continuously checkpoints a partition.
  */
 void
 sls_checkpointd(struct sls_checkpointd_args *args)
 {
+	struct slspart *slsp = args->slsp;
 	struct timespec tstart, tend;
 	long msec_elapsed, msec_left;
-	uint64_t pid, deadpid = 0;
-	struct slskv_iter iter;
 	slsset *procset = NULL;
-	struct proc *p, *pchild;
-	int new_procs;
+	struct proc *p;
 	int error;
 
 	SLS_DBG("Process active\n");
-	/* 
-	 * Check if the partition is available for checkpointing. 
-	 * If not, silently exit - the parition is already being
-	 * checkpointed due to a previous call. 
-	 */
-	if (atomic_cmpset_int(&args->slsp->slsp_status, SPROC_AVAILABLE, 
+	/* Check if the partition is available for checkpointing. */
+
+	if (atomic_cmpset_int(&slsp->slsp_status, SPROC_AVAILABLE,
 		    SPROC_CHECKPOINTING) == 0) {
-	    SLS_DBG("Partition %ld in state %d\n", args->slsp->slsp_oid, args->slsp->slsp_status);
+	    SLS_DBG("Partition %ld in state %d\n", slsp->slsp_oid, slsp->slsp_status);
 	    goto out;
 	}
 
 	/* The set of processes we are going to checkpoint. */
-	error = slskv_create(&procset);
+	error = slsset_create(&procset);
 	if (error != 0)
 	    goto out;
 
 	for (;;) {
-	    /* 
-	     * If the partition has changed state, we have to stop
-	     * checkpointing because it got detached from the SLS.
-	     */
-	    if (args->slsp->slsp_status != SPROC_CHECKPOINTING)
+	    /* Check if the partition got detached from the SLS. */
+	    if (slsp->slsp_status != SPROC_CHECKPOINTING)
 		break;
 
-	    /* 
-	     * If deadpid is valid (!= 0), we need to remove it from the process set,
-	     * because the process it corresponds to is unavailable. We need to delay
-	     * the freeing until after we iterate through the slsset entry, due to
-	     * the latter's implementation.
-	     */
-	    deadpid = 0;
+	    /* Gather all processes still running. */
+	    error = slsckpt_gather_processes(slsp, procset);
+	    if (error != 0)
+		break;
 
-	    KVSET_FOREACH(args->slsp->slsp_procs, iter, pid) {
-
-		/* Remove the PID of the unavailable process from the set. */
-		if (deadpid != 0) {
-		    slsset_del(args->slsp->slsp_procs, deadpid);
-		    slsset_del(slsm.slsm_procs, deadpid);
-		    deadpid = 0;
-		}
-
-		/* 
-		 * Check if the process we are trying to checkpoint is trying
-		 * to exit, if so not only drop the reference the daemon has, 
-		 * but also that of the SLS itself.
-		 */
-		error = pget(pid, PGET_WANTREAD, &p);
-		if (error != 0 || !SLS_RUNNABLE(p, args->slsp)) {
-		    SLS_DBG("Getting a process %ld failed\n", pid);
-		    /* Drop the reference taken by pget. */
-		    PRELE(p);
-		    deadpid = pid;
-		    continue;
-		}
-
-		/* Add it to the set of processes to be checkpointed. */
-		error = slsset_add_unlocked(procset, (uint64_t) p);
-		if (error != 0) {
-		    KV_ABORT(iter);
-		    goto out;
-		}
-	    }
 	    nanotime(&tstart);
+
+	    if (slsp_isempty(slsp))
+		break;
+
 	    /* 
 	     * If we recursively checkpoint, we don't actually enter the children
 	     * into the SLS permanently, but only checkpoint them in this iteration.
@@ -481,63 +536,19 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	     * if we actually care about them we can add them to the SLS.
 	     */
 
-	    do { 
-		/* If we're not recursively checkpointing, abort the search. */
-		if (args->recurse == 0)
+	    /* If we're not recursively checkpointing, abort the search. */
+	    if (args->recurse != 0) {
+		error = slsckpt_gather_children(procset);
+		if (error != 0)
 		    break;
-
-		/* Assume there are no new children. */
-		new_procs = 0;
-
-		/* 
-		 * Stop all processes in the set. This causes them
-		 * to get detached from their terminals.
-		 */
-		slsckpt_stop(procset);
-		KVSET_FOREACH(procset, iter, p) {
-		    /* 
-		     * Check every process if it had a 
-		     * new child while we were checking.
-		     */ 
-		    LIST_FOREACH(pchild, &p->p_children, p_sibling) {
-			if (slskv_find_unlocked(procset, (uint64_t) pchild, (uintptr_t *) &pchild) != 0) {
-			    /* We found a child that didn't exist before. */
-
-			    /* 
-			     * Check if the child is still alive.
-			     * If it's exiting ignore its subtree.
-			     */
-			    if (!SLS_PROCALIVE(pchild))
-				continue;
-
-			    new_procs += 1;
-
-			    PHOLD(pchild);
-			    /* 
-			     * Here we're adding to the set while we're iterating it.
-			     * While whether we will iterate through the new element
-			     * is undefined, we will go through the set again in the
-			     * next iteration of the outer while, so it's safe.
-			     */
-			    error = slsset_add_unlocked(procset, (uint64_t) pchild);
-			    if (error != 0) {
-				KV_ABORT(iter);
-				goto out;
-			    }
-
-			}
-		    }
-		}
-		
-
-	    } while (new_procs > 0);
+	    }
 
 	    SDT_PROBE0(sls, , , start);
 	    slsckpt_stop(procset);
 	    SDT_PROBE0(sls, , , stopped);
 
 	    /* Checkpoint the process once. */
-	    sls_checkpoint(procset, args->slsp);
+	    sls_checkpoint(procset, slsp);
 	    nanotime(&tend);
 
 	    /* Release all checkpointed processes. */
@@ -545,12 +556,12 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		PRELE(p);
 
 	    /* If the interval is 0, checkpointing is non-periodic. Finish up. */
-	    if (args->slsp->slsp_attr.attr_period == 0)
+	    if (slsp->slsp_attr.attr_period == 0)
 		break;
 
 	    /* Else compute how long we need to wait until we need to checkpoint again. */
 	    msec_elapsed = (tonano(tend) - tonano(tstart)) / (1000 * 1000);
-	    msec_left = args->slsp->slsp_attr.attr_period - msec_elapsed;
+	    msec_left = slsp->slsp_attr.attr_period - msec_elapsed;
 	    if (msec_left > 0)
 		pause_sbt("slscpt", SBT_1MS * msec_left, 0, C_HARDCLOCK | C_CATCH);
 
@@ -562,24 +573,14 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	 * If we exited normally, and the process is still in the SLOS,
 	 * mark the process as available for checkpointing.
 	 */
-	atomic_cmpset_int(&args->slsp->slsp_status, SPROC_CHECKPOINTING, 
-		    SPROC_AVAILABLE); 
+	atomic_cmpset_int(&slsp->slsp_status, SPROC_CHECKPOINTING, SPROC_AVAILABLE);
 
 	SLS_DBG("Stopped checkpointing\n");
 
 out:
 
-	/* Cleanup any dead PIDs still around. */
-	if (deadpid != 0) {
-	    slsset_del(args->slsp->slsp_procs, deadpid);
-	    slsset_del(slsm.slsm_procs, deadpid);
-	    deadpid = 0;
-	}
-
-	printf("Checkpointing for partition %ld done.\n", args->slsp->slsp_oid);
-
 	/* Drop the reference we got for the SLS process. */
-	slsp_deref(args->slsp);
+	slsp_deref(slsp);
 
 	if (procset != NULL) {
 	    /* Release any process references gained. */

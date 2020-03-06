@@ -152,7 +152,7 @@ sls_partadd(struct sls_partadd_args *args)
 	    return (EINVAL);
 
 	/* Copy the SLS attributes to be given to the new process. */
-	error = slsp_add(args->oid, &slsp);
+	error = slsp_add(args->oid, args->attr, &slsp);
 	if (error != 0)
 	    return (error);
 

@@ -29,9 +29,10 @@ struct slspart {
     slsset		    *slsp_procs;    /* The processes that belong to this partition */
     int			    slsp_status;    /* Status of checkpoint */
     struct sls_attr	    slsp_attr;	    /* Parameters for checkpointing the process */
-    int			    slsp_refcount;  /* Reference count for the process. */
+    int			    slsp_refcount;  /* Reference count for the partition. */
     struct slskv_table	    *slsp_objects;  /* VM Objects created for the SLS */
     struct slsckpt_data	    *slsp_sckpt;    /* In-memory checkpoint */
+    uint64_t		    slsp_procnum;   /* Number of processes in the partition */
     /* XXX slsp_mtx member */
 
     LIST_ENTRY(slspart)	    slsp_parts;	    /* List of active SLS partitions */
@@ -44,7 +45,7 @@ struct slspart *slsp_find(uint64_t oid);
 int slsp_attach(uint64_t oid, pid_t pid);
 int slsp_detach(uint64_t oid, pid_t pid);
 
-int slsp_add(uint64_t oid, struct slspart **slspp);
+int slsp_add(uint64_t oid, struct sls_attr attr, struct slspart **slspp);
 void slsp_del(uint64_t oid);
 
 void slsp_delall(void);
@@ -52,5 +53,6 @@ void slsp_delall(void);
 void slsp_ref(struct slspart *slsp);
 void slsp_deref(struct slspart *slsp);
 
+int slsp_isempty(struct slspart *slsp);
 
 #endif /* _SLSPART_H_ */
