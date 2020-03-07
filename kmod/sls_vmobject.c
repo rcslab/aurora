@@ -38,12 +38,13 @@ int
 slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_data, int target)
 {
 	struct slsvmobject cur_obj;
-	struct sbuf *sb;
 	struct sls_record *rec;
+	vm_object_t curobj, backer;
+	struct sbuf *sb;
 	int error;
 
 	/* Find if we have already checkpointed the object. */
-	if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) obj, (uintptr_t *) &sb) == 0)
+	if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) obj->objid, (uintptr_t *) &sb) == 0)
 	    return (0);
 
 	/* We don't need the anonymous objects for in-memory checkpointing. */
@@ -59,11 +60,28 @@ slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_dat
 	cur_obj.size = obj->size;
 	cur_obj.type = obj->type;
 	cur_obj.id = obj;
-	cur_obj.backer = obj->backing_object;
-	cur_obj.backer_off = obj->backing_object_offset;
+
+	/* 
+	 * If the backer has the same ID as we do, we're an Aurora shadow. Find 
+	 * the first non-Aurora ancestor.
+	 */
+	curobj = obj;
+	backer = obj->backing_object;
+	while ((backer != NULL) && (backer->objid == curobj->objid)) {
+	    curobj = backer;
+	    backer = backer->backing_object;
+	}
+
+	if (backer != NULL) {
+		cur_obj.backer = backer->objid;
+		cur_obj.backer_off = obj->backing_object_offset;
+	} else {
+		cur_obj.backer = 0UL;
+		cur_obj.backer_off = 0;
+	}
 	cur_obj.path = NULL;
 	cur_obj.magic = SLSVMOBJECT_ID;
-	cur_obj.slsid = (uint64_t) obj;
+	cur_obj.slsid = obj->objid;
 
 	error = sbuf_bcat(sb, (void *) &cur_obj, sizeof(cur_obj));
 	if (error != 0)
@@ -90,7 +108,7 @@ slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_dat
 
 	rec = sls_getrecord(sb, cur_obj.slsid, SLOSREC_VMOBJ);
 
-	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) obj, (uintptr_t) rec);
+	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) cur_obj.slsid, (uintptr_t) rec);
 	if (error != 0) {
 	    free(rec, M_SLSMM);
 	    goto error;
@@ -99,8 +117,7 @@ slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_dat
 	return (0);
 
 error:
-
-	slskv_del(sckpt_data->sckpt_rectable, (uint64_t) obj);
+	slskv_del(sckpt_data->sckpt_rectable, (uint64_t) cur_obj.slsid);
 	sbuf_delete(sb);
 
 	return (error);

@@ -38,6 +38,7 @@ slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 
 	    /* Dump the metadata to the records table. */
 	    slssysvshm.magic = SLSSYSVSHM_ID;
+	    /* XXX Use the encoding for the rest of the object? */
 	    slssysvshm.slsid = (uint64_t) shmsegs[i].object;
 	    slssysvshm.key = shmsegs[i].u.shm_perm.key;
 	    slssysvshm.shm_segsz = shmsegs[i].u.shm_segsz;

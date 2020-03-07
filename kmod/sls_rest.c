@@ -557,13 +557,6 @@ slsrest_shadow(vm_object_t shadow, vm_object_t source, vm_ooffset_t offset)
 	shadow->backing_object = source;
 	shadow->backing_object_offset = offset;
 
-	/* 
-	* If this is the first shadow, then we transfer the reference
-	* from the caller to the shadow, as done in vm_object_shadow.
-	* Otherwise we add a reference to the shadow.
-	*/
-	if (source->shadow_count != 0)
-	    source->ref_count += 1;
 
 	VM_OBJECT_WLOCK(source);
 	shadow->domain = source->domain;
@@ -650,6 +643,8 @@ slsrest_dovmobjects(struct slskv_table *metatable, struct slskv_table *datatable
 	    if (error != 0) {
 		continue;
 	    }
+
+	    SLS_DBG("Shadowing (%p, %p)\n", parent, object);
 	    slsrest_shadow(object, parent, slsvmobjectp->backer_off);
 	}
 	SLS_DBG("Restoration of VM Objects\n");

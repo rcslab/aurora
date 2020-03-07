@@ -40,6 +40,7 @@ slsvm_object_shadow(struct slskv_table *objtable, vm_object_t *objp)
 	obj = *objp;
 	vm_object_reference(obj);
 	slsvm_object_shadowexact(objp);
+	obj->flags |= OBJ_AURORA;
 
 	error = slskv_add(objtable, (uint64_t) obj, (uintptr_t) *objp);
 	if (error != 0) {
@@ -67,6 +68,7 @@ slsvm_objtable_collapse(struct slskv_table *objtable)
  * Destroy all physical process memory mappings for the entry. Only makes
  * sense for writable entries, read-only entries are retained.
  */
+/* XXX Change to something less destructive, this is a major perf problem. */
 void
 slsvm_entry_zap(struct proc *p, struct vm_map_entry *entry)
 {
@@ -138,14 +140,18 @@ slsvm_proc_shadow(struct proc *p, struct slskv_table *table, int is_fullckpt)
 
 		slsvm_entry_zap(p, entry);
 
-		if (!is_fullckpt)
+		/* 
+		 * Only go ahead if it's a full checkpoint or we have not 
+		 * checkpointed this object before. 
+		 */
+		if ((!is_fullckpt) && (obj->flags & OBJ_AURORA))
 		    continue;
 
-		/* If in a full checkpoint, checkpoint down the tree. */
-
+		/* Checkpoint down the tree. */
 		obj = obj->backing_object;
 		while (OBJT_ISANONYMOUS(obj)) {
 		    vm_object_reference(obj);
+		    obj->flags |= OBJ_AURORA;
 		    /* These objects have no shadows. */
 		    error = slskv_add(table, (uint64_t) obj, (uintptr_t) NULL);
 		    if (error != 0) {
@@ -199,6 +205,11 @@ void
 slsvm_object_shadowexact(vm_object_t *objp)
 {
 	vm_ooffset_t offset = 0;
+	vm_object_t obj;
 
+	obj = *objp;
 	vm_object_shadow(objp, &offset, ptoa((*objp)->size));
+
+	/* Inherit the unique object ID from the parent. */
+	(*objp)->objid = obj->objid;
 }

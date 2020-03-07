@@ -298,6 +298,9 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slsckpt_da
 	info.flag = fp->f_flag;
 	info.offset = fp->f_offset;
 
+	/* 
+	 * XXX Change SLS ID to the encoding used for the rest of the objects.  
+	 */
 	info.magic = SLSFILE_ID;
 	info.slsid = *slsid;
 

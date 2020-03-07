@@ -51,12 +51,14 @@ slsckpt_vmentry(struct vm_map_entry *entry, struct sbuf *sb)
 	cur_entry.protection = entry->protection;
 	cur_entry.max_protection = entry->max_protection;
 	cur_entry.inheritance = entry->inheritance;
-	cur_entry.obj = entry->object.vm_object;
 	cur_entry.slsid = (uint64_t) entry;
-	if (cur_entry.obj != NULL)
-	    cur_entry.type = cur_entry.obj->type;
-	else
+	if (entry->object.vm_object != NULL) {
+	    cur_entry.obj = OBJID_START | (OBJID_MASK & ((uint64_t) entry->object.vm_object->objid));
+	    cur_entry.type = entry->object.vm_object->type; 
+	} else {
+	    cur_entry.obj = 0;
 	    cur_entry.type = OBJT_DEAD;
+	}
 
 	error = sbuf_bcat(sb, (void *) &cur_entry, sizeof(cur_entry));
 	if (error != 0)
@@ -195,7 +197,6 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 	    }
 	}
 
-
 	/* XXX restore cred if needed */
 	entry->cred = NULL;
 
@@ -287,7 +288,7 @@ slsrest_vmentry(struct vm_map *map, struct slsvmentry *entry, struct slskv_table
 	int fd;
 
 	/* If it's a guard page use the code for anonymous/empty/physical entries. */
-	if (entry->obj == NULL) 
+	if (entry->obj == 0) 
 	    return slsrest_vmentry_anon(map, entry, objtable);
 
 

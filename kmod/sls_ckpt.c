@@ -78,14 +78,6 @@ static int sls_checkpoint(slsset *procset, struct slspart *slsp);
 static int slsckpt_metadata(struct proc *p, struct slspart *slsp, 
 	slsset *procset, struct slsckpt_data *sckpt_data);
 
-static inline uint64_t
-tonano(struct timespec tp)
-{
-    const long billion = 1000UL * 1000 * 1000;
-
-    return billion * tp.tv_sec + tp.tv_nsec;
-}
-
 /*
  * Stop the processes, and wait until they are truly not running. 
  */
@@ -549,7 +541,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		break;
 
 	    /* Else compute how long we need to wait until we need to checkpoint again. */
-	    msec_elapsed = (tonano(tend) - tonano(tstart)) / (1000 * 1000);
+	    msec_elapsed = (TONANO(tend) - TONANO(tstart)) / (1000 * 1000);
 	    msec_left = slsp->slsp_attr.attr_period - msec_elapsed;
 	    if (msec_left > 0)
 		pause_sbt("slscpt", SBT_1MS * msec_left, 0, C_HARDCLOCK | C_CATCH);

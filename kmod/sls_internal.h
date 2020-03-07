@@ -107,6 +107,9 @@ struct sls_restored_args {
 	int target;
 };
 
+#define TONANO(tv) ((1000UL * 1000 * 1000 * (tv).tv_sec) + (tv).tv_nsec)
+#define TOMICRO(tv) ((1000UL * 1000 * (tv).tv_sec) + (tv).tv_usec)
+
 struct sls_getrecord;
 
 void slsvm_objtable_collapse(struct slskv_table *objtable);

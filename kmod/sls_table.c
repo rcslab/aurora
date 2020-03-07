@@ -176,6 +176,9 @@ sls_readdata_slos(struct slos_node *vp, uint64_t rno,
 	uint64_t len;
 	int error;
 
+	/* XXX We are using just one record for the data until we have CoW. */
+	rno = 0;
+
 	error = slos_rstat(vp, rno, &stat);
 	if (error != 0)
 	    return (error);
@@ -339,8 +342,12 @@ sls_read_slos_record(uint64_t oid, uint64_t rno, struct slskv_table *metatable,
 	    return (EIO);
 
 	ret = slos_rstat(vp, rno, &stat);
-	if (ret != 0)
-	    goto out;
+	if (ret != 0) {
+	    /* XXX Until CoW. */
+	    ret = slos_rstat(vp, 0, &stat);
+	    if (ret != 0)
+		goto out;
+	}
 
 	/* 
 	 * If the record can hold data, "typecast" it to look like it only has 
@@ -533,7 +540,6 @@ sls_objdata(struct slos_node *vp, uint64_t rno, vm_object_t obj)
 		break;
 	}
 
-
 	if (error != 0)
 	    return error;
 
@@ -577,8 +583,11 @@ sls_writemeta_slos(struct sls_record *rec, uint64_t rno)
 	}
 
 	error = slos_rcreate(vp, type, &rno, SLOSRNO_FIXED);
-	if (error != 0)
-	    goto error;
+	if (error != 0) {
+	    /* XXX Until CoW. */
+	    if (rno != 0)
+		goto error;
+	}
 
 	/* Create the UIO for the disk. */
 	aiov.iov_base = record;
@@ -625,7 +634,10 @@ sls_writedata_slos(struct sls_record *rec, uint64_t rno, struct slskv_table *obj
 	struct slsvmobject *info;
 	vm_object_t obj, newobj;
 	struct slos_node *vp;
-	int error, ret;
+	int error, ret = 0;
+
+	/* XXX Until we have CoW. */
+	rno = 0;
 
 	/* The record number returned is the unique record ID. */
 	error = sls_writemeta_slos(rec, rno);
@@ -648,7 +660,7 @@ sls_writedata_slos(struct sls_record *rec, uint64_t rno, struct slskv_table *obj
 	 * are identical at checkpoint time, so we use it to
 	 * retrieve the object and grab its data.
 	 */
-	obj = (vm_object_t) info->slsid;
+	obj = (vm_object_t) info->id;
 	if ((obj->type != OBJT_DEFAULT && (obj->type != OBJT_SWAP)))
 	    goto out;
 
@@ -709,15 +721,13 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 	uint64_t rno;
 	uint64_t slsid;
 	uint64_t timestamp;
+	struct timeval tv;
 	int error;
 
 	sb_manifest = sbuf_new_auto();
-	/* 
-	 * XXX Have the record number be a us-granularity timestamp. It 2^64 
-	 * microseconds is ~585K years, which I think is enough for this 
-	 * system.
-	 */
-	timestamp = 5;
+	/* Use the current time as the record number. */
+	microtime(&tv);
+	timestamp = TOMICRO(tv);
 	rno = timestamp;
 
 	KV_FOREACH_POP(sckpt_data->sckpt_rectable, slsid, rec) {
@@ -727,7 +737,7 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 	     */
 	    if (sls_isdata(rec->srec_type))
 		error = sls_writedata_slos(rec, rno, sckpt_data->sckpt_objtable);
-	    else 
+	    else
 		error = sls_writemeta_slos(rec, rno);
 	    if (error != 0) {
 		sbuf_delete(sb_manifest);

@@ -82,13 +82,14 @@ struct slssession {
 #define SLSVMOBJECT_ID 0x7abc7303
 struct slsvmobject {
 	uint64_t magic;
+	uint64_t obj;		/* The object pointer itself */
 	uint64_t slsid;
 	vm_pindex_t size;
 	enum obj_type type;
 	struct sbuf *path; 
 	vm_object_t id;
 	/* Used for objects that are shadows of others */
-	vm_object_t backer;
+	uint64_t backer;
 	vm_ooffset_t backer_off;
 
 	/* XXX Bookkeeping for swapped out pages? */
@@ -106,7 +107,7 @@ struct slsvmentry {
 	vm_eflags_t eflags;
 	vm_prot_t protection;
 	vm_prot_t max_protection;
-	vm_object_t obj;
+	uint64_t obj;
 	vm_inherit_t inheritance;
 	enum obj_type type;
 };
