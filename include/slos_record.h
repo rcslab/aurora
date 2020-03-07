@@ -11,14 +11,18 @@ struct slos_node;
 #define SLOSREC_PROC	    0x00000001	/* Record holds process-local info */
 #define SLOSREC_SESS	    0x00000002	/* Record holds process-local info */
 #define SLOSREC_MEM	    0x00000003	/* Record holds info related to a vmspace */
-#define SLOSREC_VMOBJ	    0x00000005	/* Record holds info for an object */
-#define SLOSREC_FILE	    0x00000006  /* Record holds info for a file */
-#define SLOSREC_SYSVSHM	    0x0000000b	/* Record holds info for SYSV shared memory */
-#define SLOSREC_SOCKBUF	    0x0000000d	/* Record holds info for socket buffers */
-#define SLOSREC_DIR	    0x0000000e	/* Record holds a directory */
-#define SLOSREC_DATA	    0x0000000f	/* Record holds arbitrary data */
+#define SLOSREC_VMOBJ	    0x00000004	/* Record holds info for an object */
+#define SLOSREC_FILE	    0x00000005  /* Record holds info for a file */
+#define SLOSREC_SYSVSHM	    0x00000006	/* Record holds info for SYSV shared memory */
+#define SLOSREC_SOCKBUF	    0x00000007	/* Record holds info for socket buffers */
+#define SLOSREC_DIR	    0x00000008	/* Record holds a directory */
+#define SLOSREC_DATA	    0x00000009	/* Record holds arbitrary data */
+#define SLOSREC_MANIFEST    0x0000000a	/* Record holds the manifest of a checkpoint */
 
 #define SLOS_RMAGIC	    0x51058A1CUL
+
+/* Record number allocation policies for slos_rcreate(). */
+enum slosrec_policy { SLOSRNO_ANY, SLOSRNO_FIXED };
 
 /*
  * SLSOSD Record
@@ -48,7 +52,8 @@ struct slos_recentry {
 	uint64_t len;			/* The length of actual data in bytes. */
 };
 
-int slos_rcreate(struct slos_node *vp, uint64_t rtype, uint64_t *rnop);
+int slos_rcreate(struct slos_node *vp, uint64_t rtype, 
+	uint64_t *rnop, enum slosrec_policy policy);
 
 /* XXX Implement */
 uint64_t slos_rclone(struct slos_node *vp, uint64_t rno);
@@ -85,6 +90,7 @@ struct slos_rstat {
 int slos_rstat(struct slos_node *vp, uint64_t rno, struct slos_rstat *stat);
 
 /* Records btree iterators */
+int slos_findrno(struct slos_node *vp, uint64_t rno, int *is_present);
 int slos_firstrno(struct slos_node *vp, uint64_t *rnop);
 int slos_lastrno(struct slos_node *vp, uint64_t *rnop);
 int slos_prevrno(struct slos_node *vp, uint64_t *rnop);

@@ -21,7 +21,7 @@ slsfs_key_insert(struct slos_node *svp, uint64_t key, struct slos_recentry val)
 	error = slos_firstrec(svp, &rec);
 	if (error && error == EINVAL) {
 		size_t rno;
-		error = slos_rcreate(svp, SLOSREC_DATA, &rno);
+		error = slos_rcreate(svp, SLOSREC_DATA, &rno, SLOSRNO_ANY);
 		if (error) {
 			return (error);
 		}

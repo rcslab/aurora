@@ -476,7 +476,7 @@ sls_writemeta_slos(struct slos_node *vp, struct sbuf *sb, uint64_t type, uint64_
 
 	len = sbuf_len(sb);
 
-	error = slos_rcreate(vp, type, &rno);
+	error = slos_rcreate(vp, type, &rno, SLOSRNO_ANY);
 	if (error != 0)
 	    return error;
 

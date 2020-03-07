@@ -104,7 +104,7 @@ slsfs_lookupbln(struct slos_node *svp, uint64_t lbn,  uint64_t * pbn)
 	if (error == EINVAL) {
 		return (0);
 	} else if (error) {
-	    return (error);
+		return (error);
 	}
 
 	*pbn = ptr.offset;
