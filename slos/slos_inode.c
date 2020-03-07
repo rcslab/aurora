@@ -544,7 +544,7 @@ slos_iremove(struct slos *slos, uint64_t pid)
 struct slos_node *
 slos_iopen(struct slos *slos, uint64_t pid)
 {
-	DBUG("Opening Inode %lu\n", pid);
+	DBUG("Opening Inode %lx\n", pid);
 	struct slos_node *vp = NULL;
 	struct slos_diskptr inoptr;
 	int error;

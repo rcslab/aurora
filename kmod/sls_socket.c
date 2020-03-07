@@ -157,7 +157,7 @@ slsckpt_sockbuf(struct sockbuf *sockbuf, struct slsckpt_data *sckpt_data)
 	    return (error);
 	}
 
-	rec = sls_getrecord(sb, SLOSREC_SOCKBUF);
+	rec = sls_getrecord(sb, (uint64_t) slsmbuf.slsid, SLOSREC_SOCKBUF);
 	/* Add the new buffer to the tables. */
 	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) sockbuf, (uintptr_t) rec);
 	if (error != 0) {

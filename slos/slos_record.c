@@ -111,7 +111,7 @@ slos_rcreate(struct slos_node *vp, uint64_t rtype,
 	    return (error);
 	}
 
-	DBUG("Record found %lu\n", rno);
+	DBUG("Record found %lx\n", rno);
 
 	/* Get space on disk for the record itself. */
 	recordptr = slos_alloc(slos->slos_alloc, 1);

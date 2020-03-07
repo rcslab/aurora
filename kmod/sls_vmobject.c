@@ -88,7 +88,7 @@ slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_dat
 	if (error != 0)
 	    goto error;
 
-	rec = sls_getrecord(sb, SLOSREC_VMOBJ);
+	rec = sls_getrecord(sb, cur_obj.slsid, SLOSREC_VMOBJ);
 
 	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) obj, (uintptr_t) rec);
 	if (error != 0) {

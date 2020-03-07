@@ -797,7 +797,6 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	struct sls_record *rec;
 	struct slskv_iter iter;
 	struct slos_rstat *st;
-	struct slos_node *vp;
 	struct slspart *slsp;
 	struct sbuf *record;
 	uint64_t slsid;
@@ -822,25 +821,14 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 
 	    /* XXX Temporary until we change to multiple inodes per checkpoint. */
 	    SLS_DBG("Opening inode\n");
-	    vp = slos_iopen(&slos, oid);
-	    if (vp == NULL)
-		return (EIO); 
 
 	    SLS_DBG("Reading in data\n");
 
 	    /* Bring in the whole checkpoint in the form of SLOS records. */
-	    error = sls_read_slos(vp, &metatable, &datatable);
-	    if (error != 0) {
-		slos_iclose(&slos, vp);
+	    error = sls_read_slos(oid, &metatable, &datatable);
+	    if (error != 0)
 		goto out;
-	    }
 
-	    SLS_DBG("Closing inode\n");
-	    error = slos_iclose(&slos, vp); 
-	    if (error != 0) {
-		SLS_DBG("Error closing\n");
-		goto out;
-	    }
 	    break;
 
 	case SLS_MEM:
@@ -904,8 +892,6 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	 * but for now we have pointers between entities point to the slsid
 	 * of the soon-to-be-restored object's record.
 	 */
-
-
 
 	/* Recreate all mbufs (to be inserted into socket buffers later). */
 	KV_FOREACH(metatable, iter, record, st) {

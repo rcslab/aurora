@@ -482,7 +482,7 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slsckpt_da
 
 	sbuf_finish(sb);
 
-	rec = sls_getrecord(sb, SLOSREC_FILE);
+	rec = sls_getrecord(sb, *slsid, SLOSREC_FILE);
 	/* Add the backing entities to the global tables. */
 	error = slskv_add(sckpt_data->sckpt_rectable, *slsid, (uintptr_t) rec);
 	if (error != 0) {

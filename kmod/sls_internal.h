@@ -46,8 +46,9 @@ struct slsckpt_data {
 
 /* An in-memory version of an Aurora record. */
 struct sls_record {
-	struct sbuf *srec_sb;   /* The data of the record itself. */
-	uint64_t    srec_type;	/* The record type. */
+	struct sbuf *srec_sb;   /* The data of the record itself */
+	uint64_t    srec_id;	/* The unique ID of the record */
+	uint64_t    srec_type;	/* The record type */
 };
 
 /* The data needed to restore an SLS partition. */
@@ -65,7 +66,7 @@ struct slsrest_data {
 
 extern struct sls_metadata slsm;
 
-struct sls_record *sls_getrecord(struct sbuf *sb, uint64_t type);
+struct sls_record *sls_getrecord(struct sbuf *sb, uint64_t slsid, uint64_t type);
 #define FDTOFP(p, fd) (p->p_fd->fd_files->fdt_ofiles[fd].fde_file)
 
 inline int

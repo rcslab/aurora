@@ -168,7 +168,7 @@ slsckpt_metadata(struct proc *p, struct slspart *slsp, slsset *procset, struct s
 	if (error != 0)
 	    goto out;
 
-	rec = sls_getrecord(sb, SLOSREC_PROC);
+	rec = sls_getrecord(sb, (uint64_t) p, SLOSREC_PROC);
 	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) p, (uintptr_t) rec);
 	if (error != 0) {
 	    free(rec, M_SLSMM);
@@ -195,7 +195,6 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 {
 	struct slsckpt_data *sckpt_data, *sckpt_old = NULL;
 	struct slskv_iter iter;
-	struct slos_node *vp;
 	int is_fullckpt;
 	struct proc *p;
 	int error = 0;
@@ -267,21 +266,11 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	    * even be faster. However, right now it's not very useful,
 	    * since the SLOS isn't there yet in terms of speed.
 	    */
-
-	    /* The dump itself. */
-	    vp = slos_iopen(&slos, slsp->slsp_oid);
-	    if (vp == NULL)
-		goto error;
-
-	    error = sls_write_slos(vp, sckpt_data);
+	    error = sls_write_slos(slsp->slsp_oid, sckpt_data);
 	    if (error != 0) {
 		SLS_DBG("sls_write_slos return %d\n", error);
 		goto error;
 	    }
-
-	    error = slos_iclose(&slos, vp);
-	    if (error != 0)
-		goto error;
 
 	    break;
 

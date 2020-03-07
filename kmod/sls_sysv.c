@@ -77,7 +77,7 @@ slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 	if (error != 0)
 	    goto error;
 
-	rec = sls_getrecord(sb, SLOSREC_SYSVSHM);
+	rec = sls_getrecord(sb, (uint64_t) shmsegs, SLOSREC_SYSVSHM);
 	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) shmsegs, (uintptr_t) rec);
 	if (error != 0) {
 	    free(rec, M_SLSMM);
