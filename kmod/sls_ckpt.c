@@ -182,10 +182,10 @@ out:
  * it properly, as well as shadowing any VM objects directly accessible
  * by the partition's processes.
  */
-static int 
+static int __attribute__ ((noinline))
 sls_checkpoint(slsset *procset, struct slspart *slsp)
 {
-	struct slsckpt_data *sckpt_data, *sckpt_old = NULL;
+	struct slsckpt_data *sckpt_data, *sckpt_old;
 	struct slskv_iter iter;
 	int is_fullckpt;
 	struct proc *p;
@@ -213,8 +213,6 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	 * doing deltas, with this being the first iteration.
 	 */
 	is_fullckpt = (slsp->slsp_sckpt == NULL) ? 1 : 0;
-	if (!is_fullckpt)
-	    sckpt_old = slsp->slsp_sckpt;
 
 	/* Shadow SYSV shared memory. */
 	error = slsckpt_sysvshm(sckpt_data, sckpt_data->sckpt_objtable);
@@ -249,6 +247,19 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	slsckpt_cont(procset);
 	SDT_PROBE0(sls, , ,cont);
 
+	vm_map_t vm_map = &p->p_vmspace->vm_map;
+	
+	for (vm_map_entry_t entry = vm_map->header.next; entry != &vm_map->header; 
+		entry = entry->next) {
+	    if (entry->object.vm_object == NULL || 
+		(entry->protection & VM_PROT_WRITE) == 0 ||
+		entry->object.vm_object->type != OBJT_DEFAULT ||
+		entry->object.vm_object->backing_object == NULL)
+		continue;
+
+	    slsvm_object_copy(p, entry, entry->object.vm_object);
+	}
+
 	switch (slsp->slsp_attr.attr_target) {
 	case SLS_OSD:
 	    /* 
@@ -274,6 +285,8 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	    /* Associate the checkpoint with the partition. */
 	    slsp->slsp_sckpt = sckpt_data;
 	    sckpt_data = NULL;
+
+
 	    break;
 
 	default:
@@ -336,13 +349,15 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	case SLS_DELTA:
 	case SLS_DEEP:
 	    /* Destroy the old shadows, now only the new ones remain. */
+	    sckpt_old = slsp->slsp_sckpt;
 	    if (sckpt_old != NULL)
 		slsckpt_destroy(sckpt_old);
 	    slsp->slsp_sckpt = sckpt_data;
 	    break;
 
 	case SLS_SHALLOW:
-	    /* Destory the new shadow, provided we already have an old one. */
+	    /* Destroy the new shadow, provided we already have an old one. */
+	    sckpt_old = slsp->slsp_sckpt;
 	    if (sckpt_old != NULL)
 		slsckpt_destroy(sckpt_data);
 	    else 
@@ -484,6 +499,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 
 	if (atomic_cmpset_int(&slsp->slsp_status, SPROC_AVAILABLE,
 		    SPROC_CHECKPOINTING) == 0) {
+	    printf("Overlapping checkpoints\n");
 	    SLS_DBG("Partition %ld in state %d\n", slsp->slsp_oid, slsp->slsp_status);
 	    goto out;
 	}

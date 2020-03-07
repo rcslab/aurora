@@ -15,7 +15,7 @@
 #include <vm/uma.h>
 
 /* The number of buckets created. */
-#define SLSKV_BUCKETS (1024)
+#define SLSKV_BUCKETS (4)
 
 /* 
  * Generic hashtable data structure. Built on top

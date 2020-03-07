@@ -7,19 +7,24 @@
 #include <sys/param.h>
 #include <sys/pcpu.h>
 #include <sys/proc.h>
+#include <sys/rwlock.h>
 
+#include <vm/vm.h>
 #include <vm/vm.h>
 #include <vm/pmap.h>
 #include <vm/vm_extern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
+#include <vm/vm_param.h>
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
 #include "sls_internal.h"
 #include "sls_kv.h"
 #include "sls_vm.h"
+
+SDT_PROBE_DEFINE(sls, , , procset_loop);
 
 /* 
  * Shadow an object. Take an extra reference on behalf of Aurora for the
@@ -58,8 +63,12 @@ slsvm_objtable_collapse(struct slskv_table *objtable)
 	vm_object_t obj, shadow;
 	
 	/* Remove the Aurora - created shadow. */
-	KV_FOREACH(objtable, iter, obj, shadow) 
+	KV_FOREACH(objtable, iter, obj, shadow) {
+	    KASSERT((obj->ref_count == 2), ("someone has a reference to object %p", obj));
 	    vm_object_deallocate(obj);
+	    KASSERT((shadow->backing_object != obj), 
+		    ("object %p was not merged with its shadow %p", obj, shadow));
+	}
 
 	/* XXX Don't forget the SYSV shared memory table! */
 }
@@ -68,15 +77,57 @@ slsvm_objtable_collapse(struct slskv_table *objtable)
  * Destroy all physical process memory mappings for the entry. Only makes
  * sense for writable entries, read-only entries are retained.
  */
-/* XXX Change to something less destructive, this is a major perf problem. */
-void
-slsvm_entry_zap(struct proc *p, struct vm_map_entry *entry)
+static void __attribute__ ((noinline))
+slsvm_entry_zap(struct proc *p, struct vm_map_entry *entry, vm_object_t obj)
 {
-	/* We could do it for currently read only if we did it lazily */
-	if ((entry->max_protection & VM_PROT_WRITE) == 0)
-	    return;
+	if (((entry->eflags & MAP_ENTRY_NEEDS_COPY) == 0) &&
+		((entry->protection & VM_PROT_WRITE) != 0)) {
+	    pmap_protect_pglist(&p->p_vmspace->vm_pmap, 
+		    0, entry->start - entry->offset, 
+		    &obj->memq, entry->protection & ~VM_PROT_WRITE, AURORA_PMAP_TEST_FULL);
+	}
+}
 
-	pmap_remove(&p->p_vmspace->vm_pmap, entry->start, entry->end);
+void 
+slsvm_object_copy(struct proc *p, struct vm_map_entry *entry, vm_object_t obj)
+{
+	vm_page_t cur, copy, original, tmp; 
+	vm_offset_t vaddr;
+	
+	SLS_DBG("(%p) Object copy start\n", obj);
+
+	KASSERT(obj->type != OBJT_DEAD, ("object %p is dead", obj));
+	KASSERT(obj->backing_object != NULL, ("object %p is unbacked", obj));
+	KASSERT(obj->backing_object->type != OBJT_DEAD, ("object %p is dead", obj->backing_object));
+
+	/* Lock the object before locking its backer, else we can deadlock. */
+	VM_OBJECT_WLOCK(obj);
+	VM_OBJECT_WLOCK(obj->backing_object);
+
+	KASSERT(obj->type != OBJT_DEAD, ("object %p is dead", obj));
+	KASSERT(obj->backing_object != NULL, ("object %p is unbacked", obj));
+	KASSERT(obj->backing_object->type != OBJT_DEAD, ("object %p is dead", obj->backing_object));
+
+	TAILQ_FOREACH_SAFE(cur, &obj->backing_object->memq, listq, tmp)  {
+	    /* Check if already copied. */
+	    original = vm_page_lookup(obj, cur->pindex);
+	    if (original != NULL)
+		continue;
+
+	    /* Otherwise create a blank copy, and fix up the page tables. */
+	    copy = vm_page_grab(obj, cur->pindex, VM_ALLOC_NORMAL | VM_ALLOC_NOBUSY);
+	    /* Copy the data into the page and mark it as valid. */
+	    pmap_copy_page(cur, copy);
+	    copy->valid = VM_PAGE_BITS_ALL;
+
+	    vaddr = entry->start - entry->offset + IDX_TO_OFF(cur->pindex);
+	    pmap_enter(&p->p_vmspace->vm_pmap, vaddr, copy, entry->protection,
+		    VM_PROT_WRITE | VM_PROT_COPY, 0);
+	}
+	VM_OBJECT_WUNLOCK(obj->backing_object);
+	VM_OBJECT_WUNLOCK(obj);
+
+	SLS_DBG("(%p) Object copy end\n", obj);
 }
 
 /*
@@ -127,18 +178,19 @@ slsvm_proc_shadow(struct proc *p, struct slskv_table *table, int is_fullckpt)
 		 * have the process map point to the shadow.
 		 */
 		if (slskv_find(table, (uint64_t) obj, (uintptr_t *) &vmshadow) == 0) {
+		    slsvm_entry_zap(p, entry, obj);
 		    entry->object.vm_object = vmshadow;
 		    slsvm_object_reftransfer(obj, vmshadow);
-		    slsvm_entry_zap(p, entry);
+		    SLS_DBG("(TRANSFER) Object %p has %d references\n", obj, obj->ref_count);
 		    continue;
 		}
 
 		/* Shadow the object, retain it in Aurora. */
+		slsvm_entry_zap(p, entry, obj);
 		error = slsvm_object_shadow(table, &entry->object.vm_object);
 		if (error != 0)
 		    goto error;
 
-		slsvm_entry_zap(p, entry);
 
 		/* 
 		 * Only go ahead if it's a full checkpoint or we have not 
@@ -183,6 +235,7 @@ slsvm_procset_shadow(slsset *procset, struct slskv_table *table, int is_fullckpt
 	int error;
 
 	KVSET_FOREACH(procset, iter, p) {
+	    SDT_PROBE0(sls, , , procset_loop);
 	    error = slsvm_proc_shadow(p, table, is_fullckpt);
 	    if (error != 0) {
 		KV_ABORT(iter);
@@ -208,8 +261,12 @@ slsvm_object_shadowexact(vm_object_t *objp)
 	vm_object_t obj;
 
 	obj = *objp;
+	SLS_DBG("(PRE) Object %p has %d references\n", obj, obj->ref_count);
 	vm_object_shadow(objp, &offset, ptoa((*objp)->size));
 
+	KASSERT((obj != *objp), ("object %p wasn't shadowed", obj));
+	SLS_DBG("(POST) Object %p has %d references\n", obj, obj->ref_count);
+	SLS_DBG("(SHADOW) Object %p has shadow %p\n", obj, *objp);
 	/* Inherit the unique object ID from the parent. */
 	(*objp)->objid = obj->objid;
 }

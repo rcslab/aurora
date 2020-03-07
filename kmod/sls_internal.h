@@ -118,5 +118,8 @@ void sls_restored(struct sls_restored_args *args);
 
 int slsckpt_create(struct slsckpt_data **sckpt_datap);
 void slsckpt_destroy(struct slsckpt_data *sckpt_data);
+
+SDT_PROVIDER_DECLARE(sls);
+
 #endif /* _SLS_H_ */
 
