@@ -63,3 +63,4 @@ localsocket
 slsfifo
 slssysvshm
 .clangd
+.ccls-cache

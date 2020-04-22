@@ -7,18 +7,19 @@ BEGIN
     cmds = 0;
 }
 
-fbt::btree_add:entry,
-fbt::btree_delete:entry,
-fbt::btree_candidate:entry,
-fbt::btree_search:entry,
-fbt::bnode_write:entry,
-fbt::bnode_child:entry,
-fbt::bnode_read:entry,
-fbt::btree_keymin:entry,
-fbt::btree_keymax:entry,
-fbt::bnode_search:entry,
-fbt::bnode_free:entry,
-fbt::slos_readblk:entry
+fbt::fbtree_insert:entry,
+fbt::fbtree_remove:entry,
+fbt::fbtree_get:entry,
+fbt::fbtree_replace:entry,
+fbt::slsfs_read:entry,
+fbt::slsfs_write:entry,
+fbt::fnode_init:entry,
+fbt::fnode_keymin:entry,
+fbt::slsfs_retrieve_buf:entry,
+fbt::slsfs_bcreate:entry,
+fbt::slsfs_bread:entry,
+fbt::slsfs_bdirty:entry,
+fbt::slsfs_lookupbln:entry
 {
     current[probefunc] = timestamp;
     this->traceme = 1;
@@ -30,18 +31,19 @@ io:::start
     @disk[args[1]->device_name, args[1]->unit_number, args[0]->bio_cmd] = count();
 }
 
-fbt::btree_add:return,
-fbt::btree_delete:return,
-fbt::btree_candidate:return,
-fbt::btree_search:return,
-fbt::bnode_write:return,
-fbt::bnode_read:return,
-fbt::bnode_child:return,
-fbt::btree_keymin:return,
-fbt::btree_keymax:return,
-fbt::bnode_search:return,
-fbt::bnode_free:return,
-fbt::slos_readblk:return
+fbt::fbtree_insert:return,
+fbt::fbtree_remove:return,
+fbt::fbtree_get:return,
+fbt::fbtree_replace:return,
+fbt::slsfs_read:return,
+fbt::slsfs_write:return,
+fbt::fnode_init:return,
+fbt::fnode_keymin:return,
+fbt::slsfs_retrieve_buf:return,
+fbt::slsfs_bcreate:return,
+fbt::slsfs_bread:return,
+fbt::slsfs_bdirty:return,
+fbt::slsfs_lookupbln:return
 {
     @ts[probefunc] = avg(timestamp - current[probefunc]);
     @counts[probefunc] = count();

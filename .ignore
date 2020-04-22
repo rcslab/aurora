@@ -1,3 +1,6 @@
 cscope.out
 *.o
 tags
+.ccls-cache
+.clangd
+.git

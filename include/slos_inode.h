@@ -13,42 +13,13 @@
 
 struct btree;
 
-#define SLOS_VALIVE	0
-#define SLOS_VDEAD	1
+#define SLOS_VALIVE	(0x1)
+#define SLOS_VDEAD	(0x10)
+#define SLOS_RENAME	(0x100)
 
 #define SVPBLK(svp) (svp->sn_slos->slos_sb->sb_bsize);
 #define INUM(node) (node->sn_ino->ino_pid);
 #define RECORDDATASIZ(vp) ((vp->sn_slos->slos_sb->sb_bsize) - (sizeof(struct slos_record)))
-
-struct slos_node {
-	int64_t			sn_pid;			/* process id */
-	int64_t			sn_uid;			/* user id */
-	int64_t			sn_gid;			/* group id */
-	u_char			sn_procname[64];	/* process name */
-
-	uint64_t		sn_ctime;		/* creation time */
-	uint64_t		sn_mtime;		/* last modification time */
-
-	uint64_t		sn_blk;			/* on-disk position */
-
-	uint64_t		sn_status;		/* status of vnode */
-	uint64_t		sn_refcnt;		/* reference count */
-	LIST_ENTRY(slos_node)	sn_entries;		/* link for in-memory vnodes */
-	struct btree		*sn_records;		/* records btree */
-	struct fbtree		sn_tree;		/* Data btree */
-	struct mtx		sn_mtx;			/* vnode mutex */
-	struct slos_inode	*sn_ino;		/* On disk representation of the slos */
-	struct slos		*sn_slos;		/* Slos the node belong to */
-};
-
-/* Inode flags */
-#define SLOSINO_DIRTY	0x00000001
-
-/* Magic for each inode. */
-#define SLOS_IMAGIC	0x51051A1CUL
-
-/* Maximum length of the inode name. */
-#define SLOS_NAMELEN	64
 
 /*
  * SLSOSD Inode
@@ -81,6 +52,37 @@ struct slos_inode {
 	uint64_t		ino_blocks;		/* Number of on IO blocks */
 };
 
+
+struct slos_node {
+	int64_t			sn_pid;			/* process id */
+	int64_t			sn_uid;			/* user id */
+	int64_t			sn_gid;			/* group id */
+	u_char			sn_procname[64];	/* process name */
+
+	uint64_t		sn_ctime;		/* creation time */
+	uint64_t		sn_mtime;		/* last modification time */
+
+	uint64_t		sn_blk;			/* on-disk position */
+
+	uint64_t		sn_status;		/* status of vnode */
+	uint64_t		sn_refcnt;		/* reference count */
+	LIST_ENTRY(slos_node)	sn_entries;		/* link for in-memory vnodes */
+	struct btree		*sn_records;		/* records btree */
+	struct fbtree		sn_tree;		/* Data btree */
+	struct mtx		sn_mtx;			/* vnode mutex */
+	struct slos_inode	sn_ino;			/* On disk representation of the slos */
+	struct slos		*sn_slos;		/* Slos the node belong to */
+};
+
+/* Inode flags */
+#define SLOSINO_DIRTY	0x00000001
+
+/* Magic for each inode. */
+#define SLOS_IMAGIC	0x51051A1CUL
+
+/* Maximum length of the inode name. */
+#define SLOS_NAMELEN	64
+
 LIST_HEAD(slos_vnlist, slos_node);
 
 /* Number of buckets in the hashtable. */
@@ -103,7 +105,8 @@ struct slos_vhtable {
 int slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode);
 int slos_iremove(struct slos *slos, uint64_t pid);
 
-int slos_iupdate(struct slos_node *svp);
+int slos_updatetime(struct slos_node *svp);
+int slos_updateroot(struct slos_node *svp);
 void slos_timechange(struct slos_node *svp);
 
 struct slos_node *slos_iopen(struct slos *slos, uint64_t pid);
@@ -116,4 +119,5 @@ int slos_vpexport(struct slos *slos, struct slos_node *vp);
 void slos_vpfree(struct slos *slos, struct slos_node *vp);
 int slos_test_inode(void);
 
+int slos_newnode(struct slos *slos, uint64_t pid, struct slos_node **vp);
 #endif /* _SLOS_INODE_H_ */

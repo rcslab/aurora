@@ -7,14 +7,12 @@
 
 #include <slsfs.h>
 #include <slos_inode.h>
-#include <slos_record.h>
 #include <slos_io.h>
 #include <slosmm.h>
 
 #include "slsfs_dir.h"
 #include "slsfs_subr.h"
 #include "slsfs_buf.h"
-#include "slsfs_node.h"
 
 int
 slsfs_add_dirent(struct vnode *vp, uint64_t ino, char *nameptr, long namelen, uint8_t type)
@@ -27,10 +25,11 @@ slsfs_add_dirent(struct vnode *vp, uint64_t ino, char *nameptr, long namelen, ui
 
 	struct slos_node *svp = SLSVP(vp);
 	size_t blksize = IOSIZE(svp);
-	size_t blks = SLSINO(svp)->ino_blocks;
+	size_t blks = SLSINO(svp).ino_blocks;
+	DBUG("DIR BLOCKS %lu \n", blks);
 
 	if (blks) {
-		error = slsfs_bread(vp, blks - 1, curthread->td_ucred, &bp);
+		error = slsfs_bread(vp, blks - 1, blksize, curthread->td_ucred, &bp);
 		if (error) {
 			return (error);
 		}
@@ -57,10 +56,10 @@ slsfs_add_dirent(struct vnode *vp, uint64_t ino, char *nameptr, long namelen, ui
 			return (error);
 		}
 		blks += 1;
-		SLSINO(svp)->ino_blocks = blks;
+		SLSINO(svp).ino_blocks = blks;
 		// We are pre adding the dirent we will be adding to this directory
 		// Actual size is the full block allocated to it;
-		SLSINO(svp)->ino_asize = SLSINO(svp)->ino_blocks * blksize;
+		SLSINO(svp).ino_asize = SLSINO(svp).ino_blocks * blksize;
 		off = 0;
 	}
 
@@ -75,15 +74,15 @@ slsfs_add_dirent(struct vnode *vp, uint64_t ino, char *nameptr, long namelen, ui
 
 	slsfs_bdirty(bp);
 	if (type == DT_DIR) {
-		SLSINO(svp)->ino_nlink++;
+		SLSINO(svp).ino_nlink++;
 	}
-	SLSINO(svp)->ino_size = dir->d_off + sizeof(struct dirent);
+	SLSINO(svp).ino_size = dir->d_off + sizeof(struct dirent);
 	// XXX This is actually incorrect -- we are flushing an update to disk 
 	// when we havnt actually made the change to directory on disk, this 
 	// probably cleans itself up when we make the changes to inodes though 
 	// on disk. (Root Inode, its buffers will the inode itself so we will 
 	// dirty those buffers)
-	error = slos_iupdate(svp);
+	error = slos_updatetime(svp);
 	if (error) {
 		DBUG("Problem syncing inode update");
 	}
@@ -147,10 +146,10 @@ slsfs_unlink_dir(struct vnode *dvp, struct vnode *vp, struct componentname *name
 
 	del_bno = dir.d_off / blksize;
 	del_off = dir.d_off % blksize;
-	last_bno = SLSINO(sdvp)->ino_blocks - 1; 
+	last_bno = SLSINO(sdvp).ino_blocks - 1; 
 	last_off = (size % blksize);
 
-	error = slsfs_bread(dvp, last_bno, curthread->td_ucred, &last_bp);
+	error = slsfs_bread(dvp, last_bno, blksize, curthread->td_ucred, &last_bp);
 	if (error) {
 		brelse(last_bp);
 		return (error); 
@@ -164,7 +163,7 @@ slsfs_unlink_dir(struct vnode *dvp, struct vnode *vp, struct componentname *name
 	if (last_bno == del_bno) {
 		del_bp = last_bp;
 	} else {
-		error = slsfs_bread(dvp, del_bno, curthread->td_ucred, &del_bp);
+		error = slsfs_bread(dvp, del_bno, blksize, curthread->td_ucred, &del_bp);
 		if (error) {
 			brelse(del_bp);
 			brelse(last_bp);
@@ -194,16 +193,15 @@ slsfs_unlink_dir(struct vnode *dvp, struct vnode *vp, struct componentname *name
 	// Last element in the block so have to move back
 	if (last_off == 0) {
 		// Remove the offset in the file
-		SLSINO(sdvp)->ino_blocks--;
-		DBUG("Last of the block, removing block from tree - %lu blocks left\n", SLSINO(sdvp)->ino_blocks);
-		slsfs_key_remove(sdvp, SLSINO(sdvp)->ino_blocks);
+		SLSINO(sdvp).ino_blocks--;
+		DBUG("Last of the block, removing block from tree - %lu blocks left\n", SLSINO(sdvp).ino_blocks);
 		bundirty(last_bp);
 		brelse(last_bp);
 
-		KASSERT(SLSINO(sdvp)->ino_blocks != 0, ("Should never occur"));
-		SLSINO(sdvp)->ino_size = ((SLSINO(sdvp)->ino_blocks) * blksize) - (blksize % sizeof(struct dirent));
+		KASSERT(SLSINO(sdvp).ino_blocks != 0, ("Should never occur"));
+		SLSINO(sdvp).ino_size = ((SLSINO(sdvp).ino_blocks) * blksize) - (blksize % sizeof(struct dirent));
 	} else {
-		SLSINO(sdvp)->ino_size -= sizeof(struct dirent);
+		SLSINO(sdvp).ino_size -= sizeof(struct dirent);
 		slsfs_bdirty(last_bp);
 	}
 
@@ -213,11 +211,12 @@ slsfs_unlink_dir(struct vnode *dvp, struct vnode *vp, struct componentname *name
 
 	// Update the links and size;
 	if (vp->v_type == VDIR) {
-		SLSINO(sdvp)->ino_nlink--;
+		SLSINO(sdvp).ino_nlink--;
 	}
 
 	// Update inode size to disk
-	error  = slos_iupdate(sdvp);
+	slos_updatetime(sdvp);
+	error  = slos_updateroot(sdvp);
 	if (error) {
 		return (error);
 	}
@@ -235,11 +234,11 @@ slsfs_lookup_name(struct vnode *vp, struct componentname *name, struct dirent *d
 
 	struct slos_node *svp = SLSVP(vp);
 	size_t blksize = IOSIZE(svp);
-	size_t blks = SLSINO(svp)->ino_blocks;
+	size_t blks = SLSINO(svp).ino_blocks;
 
 	KASSERT(name->cn_nameptr != NULL, ("We require the name right now to lookup dirs"));
 	for (int i = 0; i < blks; i++){
-		error = slsfs_bread(vp, i, curthread->td_ucred, &bp);
+		error = slsfs_bread(vp, i, BLKSIZE(svp->sn_slos), curthread->td_ucred, &bp);
 		if (error) {
 			return (error);
 		}
@@ -250,8 +249,10 @@ slsfs_lookup_name(struct vnode *vp, struct componentname *name, struct dirent *d
 				dir = NULL;
 				break;
 			}
+			DBUG("Directory lookup %s\n", dir->d_name);
 			if ((name->cn_namelen == dir->d_namlen) &&
 				strncmp(name->cn_nameptr, dir->d_name, name->cn_namelen) == 0) {
+				DBUG("Directory found\n");
 				*dir_p = *dir;
 				brelse(bp);
 				return (0);
@@ -263,4 +264,9 @@ slsfs_lookup_name(struct vnode *vp, struct componentname *name, struct dirent *d
 	} 
 
 	return (EINVAL);
+}
+
+int slsfs_update_dirent(struct vnode *tdvp, struct vnode *fvp, struct vnode *tvp)
+{
+	return (0);
 }

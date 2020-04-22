@@ -16,7 +16,7 @@ int slsfs_bcreate(struct vnode *node, uint64_t lbn, size_t xfersize, struct buf 
  * Given some vnode will read in the buffer associated with the logical block 
  * number (lbn), and attach it to the pointer at buf.
  */
-int slsfs_bread(struct vnode *node, uint64_t lbn, struct ucred *cred, struct buf **buf);
+int slsfs_bread(struct vnode *node, uint64_t lbn, size_t size, struct ucred *cred, struct buf **buf);
 
 void slsfs_bdirty(struct buf *buf);
 int slsfs_bundirty(struct buf *buf);
@@ -30,4 +30,4 @@ int slsfs_bundirty(struct buf *buf);
  *
  * On failure will return a physical block number of -1
  */
-int slsfs_lookupbln(struct slos_node *node, uint64_t lbn, uint64_t *pbn);
+int slsfs_lookupbln(struct slos_node *svp, uint64_t lbn,  struct fnode_iter *iter);

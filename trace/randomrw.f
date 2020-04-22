@@ -1,5 +1,5 @@
-set $dir=/testmnt/
-set $filesize=100m
+set $dir=/testmnt
+set $filesize=2g
 set $iosize=64k
 set $nthreads=1
 set $workingset=0
@@ -19,6 +19,6 @@ define process name=rand-rw,instances=1
   }
 }
 
-run 10
+run 5
 
 echo "Random RW Version 3.0 personality successfully loaded"

@@ -1,10 +1,14 @@
 #ifndef _FB_BTREE_H_
 #define _FB_BTREE_H_
-
+#include <sys/param.h>
+#include <sys/lock.h>
+#include <sys/rwlock.h>
 #include <sys/vnode.h>
 #include <sys/mutex.h>
+#include <sys/queue.h>
 #include <slos.h>
 #include <slsfs.h>
+
 
 typedef int (*compare_t)(const void *, const void *);
 
@@ -12,6 +16,8 @@ typedef uint32_t fb_keysize;
 typedef uint32_t fb_valsize;
 
 #define BT_INTERNAL 0x1
+#define ROOTCHANGE (256)
+#define INTERNALSPLIT (257)
 
 extern uma_zone_t fnodes_zone;
 
@@ -35,27 +41,30 @@ extern uma_zone_t fnodes_zone;
 #define NODE_OFFSET(node) (MAX_NUM_INTERNAL(node) * (node)->fn_tree->bt_keysize)
 #define NODE_SIZE(node)	((node)->fn_dnode->dn_numkeys)
 #define NODE_MAX(node) (NODE_FLAGS((node)) & BT_INTERNAL ? (node)->fn_max_int : (node)->fn_max_ext)
+#define NODE_RELEASE(node) (brelse((node)->fn_buf))
 
 #define NODE_COMPARE(node, key1, key2) ((node)->fn_tree->comp(key1, key2))
 
-#define ITER_VAL(iter) (fnode_getval(&iter.it_node, iter.it_index))
-#define ITER_KEY(iter) (fnode_getkey(&iter.it_node, iter.it_index))
+#define ITER_VAL(iter) (fnode_getval(&(iter).it_node, (iter).it_index))
+#define ITER_KEY(iter) (fnode_getkey(&(iter).it_node, (iter).it_index))
+
+#define ITER_VAL_T(iter, TYPE) (*(TYPE *)ITER_VAL(iter))
+#define ITER_KEY_T(iter, TYPE) (*(TYPE *)ITER_KEY(iter))
+
+#define ITER_RELEASE(iter) (bqrelse((iter).it_node.fn_buf))
+#define ITER_NEXT(iter) (fnode_iter_next(&(iter)))
+#define ITER_ISNULL(iter) (iter.it_index == -1)
+
+#define BTREE_LOCK(tree, flags) (lockmgr(&(tree)->bt_lock, flags, 0))
+#define BTREE_UNLOCK(tree, flags) (lockmgr(&(tree)->bt_lock, LK_RELEASE | flags, 0))
+
+#define FBT_TRACKBUF (0x1)
 
 struct alloc_d {
 	bnode_ptr	    a_root_ptr;
 	size_t	    a_numEntries;
 	bnode_ptr 	    data[];
 };
-
-
-/* Simple block Allocator */
-struct fileblk_alloc {
-	struct vnode    *a_vnode;
-	struct buf	    *a_buf;
-	bnode_ptr	    a_ptr;
-	struct alloc_d  *a_data;
-};
-
 
 /* 
  * File Backed Btree
@@ -66,21 +75,33 @@ struct fileblk_alloc {
  * Allocation state is held in the first block of the file, this is just a 
  * simple ordered free list.
  */
+
+struct buflist {
+    struct buf *l_buf;
+    LIST_ENTRY(buflist) l_entry;
+};
+
 struct fbtree {
 	struct vnode	*bt_backend;	/* The vnode representing our backend */
 	fb_keysize	bt_keysize;	/* Size of keys */
 	fb_valsize	bt_valsize;	/* Size of values */
 	bnode_ptr	bt_root;
-	struct rwlock	bt_lock;
+	uint64_t	bt_flags;
+	struct lock	bt_lock;
 	size_t		bt_inserts;
 	size_t		bt_splits;
 	size_t		bt_removes;
 	size_t		bt_replaces;
 	size_t		bt_gets;
 	size_t		bt_root_replaces;
+	char		bt_name[255];
+
+	LIST_HEAD(dirtybuf, buflist) bt_dirtybuf;
+	size_t		bt_dirtybuf_cnt;
 
 	compare_t	comp;
 };
+
 
 /*
  * On Disk Btree Node
@@ -99,7 +120,7 @@ struct dnode {
 struct fnode {
 	struct fbtree	*fn_tree;	/* Associated tree */
 	struct dnode	*fn_dnode;	/* On disk data */
-	struct buf	*fn_buf;	/* Buf of associated dnode */
+	struct buf	*fn_buf;
 	bnode_ptr	fn_location;
 	size_t		fn_max_int;
 	size_t		fn_max_ext;
@@ -112,36 +133,44 @@ struct fnode {
  */
 struct fnode_iter {
 	struct fnode	it_node;
-	uint32_t		it_index; 
+	uint32_t	it_index; 
 };
 
 int fnode_iter_next(struct fnode_iter *it);
 int fnode_iter_prev(struct fnode_iter *it);
 int fnode_iter_get(struct fnode_iter *it, void *val);
+void *fnode_getkey(struct fnode *node, int i);
+void *fnode_getval(struct fnode *node, int i);
 
+
+
+int fiter_remove(struct fnode_iter *it);
 
 /* Helpers for the btree algorithm */
 int fnode_keymin(struct fnode *node, void *key, void *value);
-int fnode_keymin_iter(struct fnode *node, void *key, struct fnode_iter *iter);
 int fnode_init(struct fbtree *tree, bnode_ptr ptr, struct fnode *node);
 
 /* File Backed Btree operations */
 int fbtree_init(struct vnode *backend, bnode_ptr ptr, fb_keysize keysize, 
-    fb_valsize valsize, compare_t comp, struct fbtree *tree);
+    fb_valsize valsize, compare_t comp, char *, uint64_t fbflags, struct fbtree *tree);
 void fbtree_destroy(struct fbtree *tree);
+size_t fbtree_size(struct fbtree *tree);
 
 
 /* Read operations */
 int fbtree_keymin(struct fbtree *tree, const void *key, void *value);
-int fbtree_keymax(struct fbtree *tree, const void *key, void *value);
+//int fbtree_keymax(struct fbtree *tree, void *key, void *value);
+int fbtree_keymax_iter(struct fbtree *tree, void *key, struct fnode_iter *iter);
+int fbtree_keymin_iter(struct fbtree *tree, void *key, struct fnode_iter *iter);
 int fbtree_iterat(struct fbtree *tree, const void *key, struct fnode_iter *iter);
 int fbtree_get(struct fbtree *tree, const void *key, void *value);
 
 /* Write operations */
 int fbtree_insert(struct fbtree *tree, void *key, void *value);
-int fbtree_delete(struct fbtree, void *key, void *value);
+int fbtree_remove(struct fbtree *tree, void *key, void *value);
 int fbtree_replace(struct fbtree *tree, void *key, void *value);
 
 int fbtree_test(struct fbtree *tree);
+void fnode_print(struct fnode *node);
 
 #endif /* _FB_BTREE_H_ */

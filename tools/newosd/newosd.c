@@ -33,8 +33,6 @@ struct bnode *broot;
 #define SZROOTBLK   2
 #define BKTBLK	    3
 
-#define SLOS_ROOT_INODE (100000)
-
 /* Used in init_bnode below. */
 #define max(a, b) (((a) > (b)) ? (a) : (b))
 
@@ -105,6 +103,48 @@ add_key_val(struct bnode *bnode, uint64_t key, void * val) {
     init_bkey(bnode, bnode->size, key);
     init_bval(bnode, bnode->size, val);
     bnode->size++;
+}
+
+static int
+create_inode(uint64_t pid)
+{
+	struct slos_inode root_inode;
+	struct timespec ts;
+	int status;
+	uint64_t inode_blk = ALLOC();
+
+	status = clock_gettime(CLOCK_REALTIME, &ts);
+	if (status < 0) 
+	    exit (-1);
+
+	bzero(&root_inode, sizeof(struct slos_inode));
+	root_inode.ino_pid = 0;
+	root_inode.ino_blk = inode_blk;
+	root_inode.ino_flags |= 0;
+	root_inode.ino_magic = SLOS_IMAGIC;
+	root_inode.ino_mode = S_IFDIR | S_IRWXU;
+	root_inode.ino_ctime = ts.tv_sec;
+	root_inode.ino_ctime_nsec = ts.tv_nsec;
+	root_inode.ino_mtime = ts.tv_sec;
+	root_inode.ino_mtime_nsec = ts.tv_nsec;
+	root_inode.ino_nlink = 0;
+	root_inode.ino_asize = 0;
+	root_inode.ino_size = 0;
+	root_inode.ino_blocks = 0;
+	root_inode.ino_btree = DISKPTR_BLOCK(ALLOC());
+
+	printf("Root NEW inode at %lu\n", root_inode.ino_blk);
+	status = pwrite(fd, &root_inode, bsize, root_inode.ino_blk * bsize);
+	if (status < 0)
+	    exit (-1);
+
+	void * zeroes = malloc(bsize);
+	bzero(zeroes, bsize);
+	status = pwrite(fd, zeroes, bsize, root_inode.ino_btree.offset * bsize);
+	if (status < 0) 
+		exit (-1);
+
+	return root_inode.ino_blk;
 }
 
 static struct bnode * 
@@ -381,6 +421,12 @@ write_sb()
 	/* The root of the inode btree. */
 
 	broot = create_root_inode(broot);
+	sb->sb_root = DISKPTR_BLOCK(create_inode(0));
+
+	void * buf = malloc(bsize);
+	bzero(buf, bsize);
+	sb->sb_allocsize = DISKPTR_BLOCK(create_inode(1));
+	sb->sb_allocoffset = DISKPTR_BLOCK(create_inode(2));
 
 	status = WRITEBNODE(broot);
 	if (status < 0)
@@ -476,6 +522,7 @@ main(int argc, const char *argv[])
 	if (write_sb() < 0)
 		exit(1);
 
+	printf("BLOCKS USED : %lu\n", alloc_offset);
 	return 0;
 }
 

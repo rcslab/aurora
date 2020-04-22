@@ -9,8 +9,9 @@
 #include <sys/lockmgr.h>
 #include <sys/mutex.h>
 #include <vm/uma.h>
+#include <sys/proc.h>
+#include <sys/condvar.h>
 
-typedef uint64_t bnode_ptr;
 
 #ifdef WITH_DEBUG
 #define DBUG(fmt, ...) do {			    \
@@ -21,19 +22,25 @@ typedef uint64_t bnode_ptr;
 #define DBUG(fmt, ...) ((void)(0));
 #endif // WITH_DEBUG
 
+#define ALLOCATEBLK(slos, bytes, ptr) ((slos)->slsfs_blkalloc(slos, bytes, ptr))
+
+typedef uint64_t bnode_ptr;
 typedef uint64_t vnode_off_key_t[2];
+typedef struct slos_diskptr diskptr_t;
 
 extern uma_zone_t fnodes_zone;
 
+struct slsfs_blkalloc {
+	struct slos_node *a_offset;
+	struct slos_node *a_size;
+};
 
 /*
  * SLOS Pointer
  */
 struct slos_diskptr {
-	/*uint64_t  _reserved;*/
 	uint64_t    offset;	/* The block offset of the first block of the region. */
 	uint64_t    size;	/* The size of the region in blocks. */
-	/*uint8_t   hash[16];*/
 };
 
 /* Block size for file-backed SLOSes. */
@@ -66,14 +73,32 @@ struct slos {
 
 	struct vnode		*slos_vp;	/* The vnode for the disk device */
 	struct vnode		*slsfs_dev;
+	struct vnode		*slsfs_inodes;
+
+	uint64_t		slsfs_dirtybufcnt;
+
+	int			slsfs_sync_exit;
+	int			slsfs_syncing;
+	int			slsfs_checkpointtime;
+	struct thread		*slsfs_syncertd;
+	struct cv		slsfs_sync_cv;
+	struct mtx		slsfs_sync_lk;
+	struct mount		*slsfs_mount;
+
 	struct slos_sb		*slos_sb;	/* The superblock of the filesystem */
 	struct slos_bootalloc	*slos_bootalloc;/* The bootstrap alloc for the device */
 	struct slos_blkalloc	*slos_alloc;    /* The allocator for the device */
+	struct slsfs_blkalloc	slsfs_alloc;
+
 	struct g_consumer	*slos_cp;	/* The geom consumer used to talk to disk */
 	struct g_provider	*slos_pp;	/* The geom producer */ 
+
 	struct btree		*slos_inodes;	/* An index of all inodes */
 	struct slos_vhtable	*slos_vhtable;	/* Table of opened vnodes */
+
 	struct lock		slos_lock;	/* Sleepable lock */
+
+	int (*slsfs_blkalloc)(struct slos*, size_t, diskptr_t *);
 };
 
 /* Get the intra-block position of an offset for the given SLOS. */
@@ -90,6 +115,7 @@ struct slos_sb {
 	uint16_t		sb_majver;	/* major version */
 	uint16_t		sb_minver;	/* minor version */
 	uint32_t		sb_flags;	/* feature flags */
+
 	struct slos_diskptr	sb_broot;	/* root of the allocator offset btree */
 	struct slos_diskptr	sb_szroot;	/* root of the allocator size btree */
 	struct slos_diskptr	sb_inodes;	/* pointer to the inode btree */
@@ -108,7 +134,10 @@ struct slos_sb {
 	uint64_t		sb_numblks;	/* number of blocks */
 	uint8_t			sb_clean;	/* osd clean */
 	uint64_t		sb_mtime;	/* last mounted */
-	bnode_ptr		sb_bmap_ptr;	/* The disk location of the root of the bmap vnode */
+	diskptr_t		sb_root;
+	diskptr_t		sb_allocoffset;
+	diskptr_t		sb_allocsize;
+
 };
 
 extern struct slos slos;

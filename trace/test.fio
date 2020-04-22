@@ -13,8 +13,8 @@
 [randread]
 directory=/testmnt
 bs=64k
-rw=randread
+rw=randwrite
 time_based=2
 runtime=5
-size=5m
+size=100m
 rate_process=poisson

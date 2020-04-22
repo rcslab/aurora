@@ -554,7 +554,6 @@ static int
 sls_writemeta_slos(struct sls_record *rec, uint64_t rno)
 {
 	struct sbuf *sb = rec->srec_sb;
-	uint64_t type = rec->srec_type;
 	struct slos_node *vp = NULL;
 	int error, close_error;
 	struct iovec aiov;
@@ -582,12 +581,15 @@ sls_writemeta_slos(struct sls_record *rec, uint64_t rno)
 	    goto error;
 	}
 
+#if 0
+	uint64_t type = rec->srec_type;
 	error = slos_rcreate(vp, type, &rno, SLOSRNO_FIXED);
 	if (error != 0) {
 	    /* XXX Until CoW. */
 	    if (rno != 0)
 		goto error;
 	}
+#endif
 
 	/* Create the UIO for the disk. */
 	aiov.iov_base = record;
@@ -735,6 +737,7 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 	     * VM object records are special, since we need to dump 
 	     * actual memory along with the metadata.
 	     */
+            printf("Writing record number %lx\n", rno);
 	    if (sls_isdata(rec->srec_type))
 		error = sls_writedata_slos(rec, rno, sckpt_data->sckpt_objtable);
 	    else

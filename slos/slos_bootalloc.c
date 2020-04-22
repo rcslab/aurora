@@ -211,6 +211,7 @@ slos_bootpopulate(struct slos *slos, struct slos_bootalloc *alloc)
 		M_SLOS, M_WAITOK | M_ZERO);
 
 	/* Populate the bytemap with the offsets btree. */
+	DBUG("slos broot offset %lu\n", slos->slos_sb->sb_broot.offset);
 	error = slos_bytemap(slos, slos->slos_sb->sb_broot.offset, bytemap, 0);
 	if (error != 0) {
 	    DBUG("First bytemap error.\n");

@@ -269,6 +269,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	    * even be faster. However, right now it's not very useful,
 	    * since the SLOS isn't there yet in terms of speed.
 	    */
+            printf("Writing OID %lx\n", slsp->slsp_oid);
 	    error = sls_write_slos(slsp->slsp_oid, sckpt_data);
 	    if (error != 0) {
 		SLS_DBG("sls_write_slos return %d\n", error);

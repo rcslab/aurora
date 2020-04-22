@@ -33,7 +33,6 @@
 
 #include <slsfs.h>
 
-#include "slos_bootalloc.h"
 #include "slos_io.h"
 #include "slosmm.h"
 
@@ -119,10 +118,13 @@ slos_uiozero(struct uio *auio, size_t xfersize)
 
 /*
  * Routines for filesystems actually backed by disks. The functions work
- * with the buffer cache and the device itself.
+ * with the device itself.
  */
 
-/* Read from the specified extent. */
+/* 
+ * Read from the specified extent. Here we read directly from the file/disk
+ * backing the SLOS, bypassing the buffer cache for the vnodes in the FS.
+ */
 static int
 slos_read_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
 {
@@ -166,7 +168,7 @@ slos_read_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
 		if (bytesinextent < xfersize)
 			xfersize = bytesinextent;
 
-		/* Get the blocks from the buffer cache. */
+		/* Send the block IO directly to the backer of the SLOS. */
 		error = bread(slos->slos_vp, bno, slos->slos_sb->sb_bsize, 
 		    curthread->td_proc->p_ucred, &bp);
 		if (error != 0) {
@@ -209,7 +211,10 @@ slos_read_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
 	return error;
 }
 
-/* Write to an extent beginning from offset off for len bytes. */
+/* 
+ * Write to the specified extent. Here we read directly from the file/disk
+ * backing the SLOS, bypassing the buffer cache for the vnodes in the FS.
+ */
 static int
 slos_write_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
 {
@@ -223,40 +228,40 @@ slos_write_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio
 
 	struct vnode *vp = slos->slos_vp;
 
-	/* 
-	 * There is a distinction between logical 
-	 * blocks and physical sectors. Most disks
-	 * expose 512 byte sectors even if they actually
-	 * use 4k for compatibility reasons, and so the
-	 * block numbers given to the buffer cache correspond
-	 * to 512 byte increments.
+	/*
+	 There is a distinction between logical 
+	 blocks and physical sectors. Most disks
+	 expose 512 byte sectors even if they actually
+	 use 4k for compatibility reasons, and so the
+	 block numbers given to the buffer cache correspond
+	 to 512 byte increments.
 	 */
 	sectorsperblock = slos->slos_sb->sb_bsize / slos->slos_sb->sb_ssize;
 
 	for (error = 0; uio->uio_resid > 0;) {
+		 /* XXX If the IO is not aligned, read the buffer from the 
+		  * disk.  It's OK right now, since we never partially 
+		  * overwrite pages, but still.
+		  */
 
-		/* 
-		 * XXX If the IO is not aligned, read the buffer from the disk. 
-		 * It's OK right now, since we never partially overwrite pages, but still.
-		 */
-
-		/* Check if the offset is still in the extent. */
+		// Check if the offset is still in the extent.
 		bytesinextent = (diskptr->size * slos->slos_sb->sb_bsize) - uio->uio_offset;
 		if (bytesinextent <= 0)
 			break;
 
-		/* Get the block number and the offset in the block. */
+		// Get the block number and the offset in the block. 
 		bno = (blkno(slos, uio->uio_offset) + diskptr->offset) * sectorsperblock;
 		boff = blkoff(slos, uio->uio_offset);
 
-		/* Get the size to be transferred from the buffer. */
+		// Get the size to be transferred from the buffer.
 		xfersize = slos->slos_sb->sb_bsize - boff;
 
-		/* Check if we need to read the full block. */
+		// Check if we need to read the full block.
 		if (uio->uio_resid < xfersize)
 			xfersize = uio->uio_resid;
 
-		/* Check if there are enough bytes in the extent to read the block */
+		// Check if there are enough bytes in the extent to read the 
+		// block
 		if (bytesinextent < xfersize)
 			xfersize = bytesinextent;
 
@@ -264,7 +269,7 @@ slos_write_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio
 		if (bp == NULL)
 			break;
 
-		/* Copy over the data we need to the block buffer. */
+		// Copy over the data we need to the block buffer.
 		if (buf_mapped(bp)) {
 			error = vn_io_fault_uiomove((char *) bp->b_data + (boff & PAGE_MASK), (int) xfersize, uio);
 		} else {
@@ -285,6 +290,9 @@ slos_write_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio
 	return error;
 }
 
+/* 
+ * Read from the disk/file backing the SLOS. This bypasses the buffer cache.
+ */
 int
 slos_read(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
 {
@@ -294,33 +302,35 @@ slos_read(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
 	int error;  
 	struct vnode *vp = slos->slos_vp;
 
-	if (!vn_isdisk(vp, &error)) {
-
-		newuio = cloneuio(uio);
-
-		/* Get the offset in the file which we're backing the FS with.  */
-		file_offset = diskptr->offset * slos->slos_sb->sb_bsize;
-		newuio->uio_offset = file_offset + uio->uio_offset;
-
-		/* Truncate the size of the operation to fit into the extent. */
-		extent_size = diskptr->size * slos->slos_sb->sb_bsize;
-		newuio->uio_resid = min(uio->uio_resid, extent_size - uio->uio_offset);
-
-		/* Issue the read itself. */
-		error = VOP_READ(vp, newuio, 0, curthread->td_ucred);
-		/* Increment the size of the original UIO. */
-		uio->uio_resid = newuio->uio_resid;
-		uio->uio_offset = newuio->uio_offset - file_offset;
-
-		free(newuio, M_IOV);
-
-		return error;
-	} else {
-
+        /* If the backend is a real disk, handle it here. */
+        if (vn_isdisk(vp, &error))
 		return slos_read_disk(slos, diskptr, uio);
-	}
+
+        /* Otherwise use the VFS to do the operation. */
+        newuio = cloneuio(uio);
+
+        /* Get the offset in the file which we're backing the FS with.  */
+        file_offset = diskptr->offset * slos->slos_sb->sb_bsize;
+        newuio->uio_offset = file_offset + uio->uio_offset;
+
+        /* Truncate the size of the operation to fit into the extent. */
+        extent_size = diskptr->size * slos->slos_sb->sb_bsize;
+        newuio->uio_resid = min(uio->uio_resid, extent_size - uio->uio_offset);
+
+        /* Issue the read itself. */
+        error = VOP_READ(vp, newuio, 0, curthread->td_ucred);
+        /* Increment the size of the original UIO. */
+        uio->uio_resid = newuio->uio_resid;
+        uio->uio_offset = newuio->uio_offset - file_offset;
+
+        free(newuio, M_IOV);
+
+        return (error);
 }
 
+/* 
+ * Write to the disk/file backing the SLOS. 
+ */
 int
 slos_write(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
 {
@@ -330,31 +340,33 @@ slos_write(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
 	int error;
 	struct vnode *vp = slos->slos_vp;
 
-	if (!vn_isdisk(vp, &error)) {
-		newuio = cloneuio(uio);
 
-		/* Get the offset in the file which we're backing the FS with.  */
-		file_offset = diskptr->offset * slos->slos_sb->sb_bsize;
-		newuio->uio_offset = file_offset + uio->uio_offset;
+        /* If the backend is a real disk, handle it here. */
+        if (vn_isdisk(vp, &error))
+	        return slos_write_disk(slos, diskptr, uio);
 
-		/* Truncate the size of the operation to fit into the extent. */
-		extent_size = diskptr->size * slos->slos_sb->sb_bsize;
-		newuio->uio_resid = min(uio->uio_resid, extent_size - uio->uio_offset);
 
-		/* Issue the write itself. */
-		error = VOP_WRITE(vp, newuio, 0, curthread->td_ucred);
+        /* Otherwise use the VFS to do the operation. */
+        newuio = cloneuio(uio);
 
-		/* Increment the size of the original UIO. */
-		uio->uio_resid = newuio->uio_resid;
-		uio->uio_offset = newuio->uio_offset - file_offset;
+        /* Get the offset in the file which we're backing the FS with.  */
+        file_offset = diskptr->offset * slos->slos_sb->sb_bsize;
+        newuio->uio_offset = file_offset + uio->uio_offset;
 
-		free(newuio, M_IOV);
+        /* Truncate the size of the operation to fit into the extent. */
+        extent_size = diskptr->size * slos->slos_sb->sb_bsize;
+        newuio->uio_resid = min(uio->uio_resid, extent_size - uio->uio_offset);
 
-		return error;
-	} else {
+        /* Issue the write itself. */
+        error = VOP_WRITE(vp, newuio, 0, curthread->td_ucred);
 
-		return slos_write_disk(slos, diskptr, uio);
-	}
+        /* Increment the size of the original UIO. */
+        uio->uio_resid = newuio->uio_resid;
+        uio->uio_offset = newuio->uio_offset - file_offset;
+
+        free(newuio, M_IOV);
+
+        return (error);
 }
 
 
@@ -372,7 +384,7 @@ slos_opblk(struct slos *slos, uint64_t blkno, void *buf, int write)
 
 	sbptr = (struct slos_diskptr) {
 		.offset = blkno,
-		    .size = 1,
+		.size = 1,
 	};
 
 	aiov.iov_base = buf;
@@ -389,14 +401,14 @@ slos_opblk(struct slos *slos, uint64_t blkno, void *buf, int write)
 	return error;
 }
 
-/* Read a block from disk into a contiguous buffer. */
+/* Read a block from disk into a contiguous buffer, bypassing the buffer cache. */
 int
 slos_readblk(struct slos *slos, uint64_t blkno, void *buf)
 {
 	return slos_opblk(slos, blkno, buf, 0);
 }
 
-/* Write a block from disk into a contiguous buffer. */
+/* Write a block from disk into a contiguous buffer, bypassing the buffercache. */
 int
 slos_writeblk(struct slos *slos, uint64_t blkno, void *buf)
 {
@@ -404,7 +416,10 @@ slos_writeblk(struct slos *slos, uint64_t blkno, void *buf)
 	return slos_opblk(slos, blkno, buf, 1);
 }
 
-/* Read the superblock of the SLOS into the in-memory struct. */
+/* 
+ * Read the superblock of the SLOS into the in-memory struct.  
+ * Device lock is held previous to call
+ * */
 int
 slos_sbread(struct slos * slos)
 {
@@ -435,20 +450,12 @@ slos_sbread(struct slos * slos)
 		return error;
 	}
 
-	/* Lock needed to call vn_stat. */
-	error = vn_lock(slos->slos_vp, LK_EXCLUSIVE);
-	if (error != 0) {
-		printf("ERROR: Locking vnode failed with %d\n", error);
-		return error;
-	}
-
 	/* 
 	 * Our read and write routines depend on our superblock
 	 * for information like the block size, so we can't use them.
 	 * We instead do a stat call on the vnode to get it directly.
 	 */
 	error = vn_stat(slos->slos_vp, &st, NULL, NULL, curthread);
-	VOP_UNLOCK(slos->slos_vp, 0);
 	if (error != 0) {
 		return error;
 	}
@@ -458,8 +465,8 @@ slos_sbread(struct slos * slos)
 	/* 
 	 * Since our read routines use the superblock's data to find
 	 * the block size, we can't use them. We do a bread instead.
-	 */
-	/* Get the blocks from the buffer cache. */
+	 * Get the blocks from the buffer cache. 
+	 * */
 	error = bread(slos->slos_vp, 0, st.st_blksize, curthread->td_proc->p_ucred, &bp);
 	if (error != 0) {
 		free(sb, M_SLOS);

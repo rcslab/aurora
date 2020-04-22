@@ -5,20 +5,23 @@
 #include <sys/vnode.h>
 
 struct slos;
+extern uint64_t slsids;
 
-#define SLOS_ROOT_INODE (100000)
-#define SLOS_BMAP_INODE (100001)
+#define SLOS_INODES_ROOT (10000)
+#define SLOS_ROOT_INODE (10001)
+#define SLOS_BMAP_INODE (10002)
 #define TOSMP(mp) ((struct slsfsmount *)(mp->mnt_data))
 #define MPTOSLOS(mp) ((TOSMP(mp)->sp_slos))
 #define SLSVP(vp) ((struct slos_node *)(vp->v_data))
-#define SLSVPSIZ(vp) (SLSINO(vp)->ino_size)
+#define SLSVPSIZ(vp) (SLSINO(vp).ino_size)
 #define SLSINO(svp) ((svp)->sn_ino)
 #define	VPSLOS(vp) (SLSVP(vp)->sn_slos)
 #define SMPSLOS(mp) ((mp)->sdev->slos)
 #define SECTORSIZE(smp) ((smp)->sp_sdev->devblocksize)
-#define IOSIZE(svp) ((svp)->sn_slos->slos_sb->sb_bsize)
+#define IOSIZE(svp) (BLKSIZE((svp)->sn_slos))
+#define BLKSIZE(slos) ((slos)->slos_sb->sb_bsize)
 
-#define SVINUM(sp) (SLSINO(sp)->ino_pid)
+#define SVINUM(sp) (SLSINO(sp).ino_pid)
 #define VINUM(vp) (SVINUM(SLSVP(vp)))
 
 #define SLS_VALLOC(aa, bb, cc, dd) ((TOSMP(aa->v_mount))->sls_valloc(aa, bb, cc, dd))

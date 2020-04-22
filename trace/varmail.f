@@ -24,10 +24,10 @@
 #
 
 set $dir=/testmnt
-set $nfiles=100
+set $nfiles=10
 set $meandirwidth=10
 set $filesize=cvar(type=cvar-gamma,parameters=mean:16384;gamma:1.5)
-set $nthreads=8
+set $nthreads=1
 set $iosize=1m
 set $meanappendsize=4k
 
@@ -53,5 +53,5 @@ define process name=filereader,instances=1
   }
 }
 
-run 10
+run 5
 echo  "Varmail Version 3.0 personality successfully loaded"

@@ -12,4 +12,6 @@ int slsfs_lookup_name(struct vnode *vp,
 	struct componentname *name, struct dirent *dir_p);
 int slsfs_unlink_dir(struct vnode *dvp, struct vnode *vp, 
 	struct componentname *name);
+int slsfs_update_dirent(struct vnode *tdvp, 
+    struct vnode *fvp, struct vnode *tvp);
 
