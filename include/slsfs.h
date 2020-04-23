@@ -1,11 +1,11 @@
 #ifndef _SLSFS_H_
 #define _SLSFS_H_
-#include <sys/mount.h>
 #include <sys/queue.h>
+
+#include <sys/mount.h>
 #include <sys/vnode.h>
 
 struct slos;
-extern uint64_t slsids;
 
 #define SLOS_INODES_ROOT (10000)
 #define SLOS_ROOT_INODE (10001)

@@ -43,15 +43,29 @@ struct buf_ops bufops_slsfs = {
 int
 slsfs_new_node(struct slos *slos, mode_t mode, uint64_t *slsidp)
 {
-	uint64_t slsid;
+	int slsid;
+        int slsid_requested;
 	int error;
 
-        /*  XXX Use one of the existing unr counters in the kernel? */
-        /* Get an inode number if one is not specified. */
-	slsid = (*slsidp == 0) ? atomic_fetchadd_64(&slsids, 1) : *slsidp;
+        /*
+         * Get an inode number if one is not specified.
+         *
+         * The unique identifier generator is 31-bit. This unfortunately
+         * means we have to truncate the SLS IDs passed by the SLS. Since the
+         * probability of a collision is small enough, this isn't a big limitation.
+         *
+         */
+        slsid_requested = OIDTOSLSID(*slsidp);
+        if (slsid_requested == 0)
+                slsid = alloc_unr(slsid_unr);
+        else
+                slsid = alloc_unr_specific(slsid_unr, slsid_requested);
+
+        if (slsid < 0)
+                return (EINVAL);
 
         /* Create the inode. */
-	error = slos_icreate(slos, slsid, mode);
+	error = slos_icreate(slos, (uint64_t) slsid, mode);
 	if (error != 0) {
 		*slsidp = 0;
 		return (error);
@@ -101,7 +115,7 @@ slsfs_get_node(struct slos *slos, uint64_t slsid, struct slos_node **spp)
 {
 	struct slos_node *sp;
 
-	sp = slos_iopen(slos, slsid);
+	sp = slos_iopen(slos, OIDTOSLSID(slsid));
 	if (sp != NULL) {
 		*spp = sp;
 		return (0);

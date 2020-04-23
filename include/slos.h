@@ -101,6 +101,12 @@ struct slos {
 	int (*slsfs_blkalloc)(struct slos*, size_t, diskptr_t *);
 };
 
+/* Identifier allocator */
+extern struct unrhdr *slsid_unr;
+
+/* Turns an SLS ID to an identifier suitable for the SLOS. */
+#define OIDTOSLSID(OID) ((int) (OID & INT_MAX))
+
 /* Get the intra-block position of an offset for the given SLOS. */
 #define blkoff(slos, off)   (off % slos->slos_sb->sb_bsize)
 

@@ -20,6 +20,7 @@
 #include <sys/kthread.h>
 #include <sys/stat.h>
 #include <sys/proc.h>
+#include <sys/systm.h>
 
 #include <geom/geom.h>
 #include <geom/geom_vfs.h>
@@ -55,7 +56,7 @@ extern struct buf_ops bufops_slsfs;
 
 static const char *slsfs_opts[] = { "from" };
 extern struct slos slos;
-uint64_t slsids;
+struct unrhdr *slsid_unr;
 
 /*
  * Register the Aurora filesystem type with the kernel.
@@ -63,11 +64,11 @@ uint64_t slsids;
 static int
 slsfs_init(struct vfsconf *vfsp)
 {
-        /*
-         * XXX Change this, bring together the SLS ID
-         * and file ID schemes into a coherent whole.
-         */
-	slsids = SLOS_BMAP_INODE + 1;
+        /* Get a new unique identifier generator. */
+        slsid_unr = new_unrhdr(0, INT_MAX, NULL);
+
+        /* The constructor never fails. */
+        KASSERT(slsid_unr != NULL, ("slsid unr creation failed"));;
 	return (0);
 }
 
@@ -77,6 +78,10 @@ slsfs_init(struct vfsconf *vfsp)
 static int
 slsfs_uninit(struct vfsconf *vfsp)
 {
+        /* Destroy the identifier generator. */
+        delete_unrhdr(slsid_unr);
+        slsid_unr = NULL;
+
 	return (0);
 }
 
