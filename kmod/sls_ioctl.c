@@ -135,13 +135,13 @@ sls_partadd(struct sls_partadd_args *args)
 {
 	struct slspart *slsp = NULL;
 	int error;
-	
+
 	/* We are only using the SLOS for now. Later we will be able to use the network. */
 	if ((args->attr.attr_target != SLS_OSD) &&
 	    (args->attr.attr_target != SLS_MEM))
 	    return (EINVAL);
 
-	/* 
+	/*
 	 * Check that the attributes to be passed
 	 * to the SLS process are valid.
 	 */
@@ -149,6 +149,10 @@ sls_partadd(struct sls_partadd_args *args)
 	    return (EINVAL);
 
 	if (args->attr.attr_target >= SLS_TARGETS)
+	    return (EINVAL);
+
+	/* Check if the OID is in range. */
+	if (args->oid < SLS_OIDMIN || args->oid > SLS_OIDMAX)
 	    return (EINVAL);
 
 	/* Copy the SLS attributes to be given to the new process. */

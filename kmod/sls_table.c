@@ -32,9 +32,9 @@
 #include <vm/uma.h>
 
 #include <slos.h>
-#include <slos_record.h>
+#include <slsfs.h>
 #include <sls_data.h>
-#include <slos_inode.h>
+#include <slos_record.h>
 
 #include "sls_internal.h"
 #include "sls_kv.h"
@@ -94,6 +94,7 @@ static int
 sls_readrecord_slos(struct slos_node *vp, uint64_t rno, struct slos_rstat *st,
 	void **recordp)
 {
+#if 0
 	struct iovec aiov;
 	struct uio auio;
 	void *record;
@@ -122,6 +123,8 @@ sls_readrecord_slos(struct slos_node *vp, uint64_t rno, struct slos_rstat *st,
 	*recordp = record;
 
 	return (0);
+#endif
+	return (ENOSYS);
 }
 
 /*
@@ -131,6 +134,7 @@ static int
 sls_readmeta_slos(struct slos_node *vp, uint64_t rno,
 	struct slskv_table *table, void **recordp)
 {
+#if 0
 	struct slos_rstat *st;
 	void *record;
 	int error;
@@ -155,6 +159,8 @@ sls_readmeta_slos(struct slos_node *vp, uint64_t rno,
 	*recordp = record;
 
 	return 0;
+#endif
+	return (ENOSYS);
 }
 
 /* 
@@ -166,6 +172,7 @@ sls_readdata_slos(struct slos_node *vp, uint64_t rno,
 	struct slskv_table *metatable, struct slskv_table *datatable)
 	
 {
+#if 0
 	struct slspagerun *pagerun;
 	struct slos_rstat stat;
 	struct slsdata *data;
@@ -258,6 +265,8 @@ sls_readdata_slos(struct slos_node *vp, uint64_t rno,
 	}
 
 	return 0;
+#endif
+	return (ENOSYS);
 }
 
 static void
@@ -294,6 +303,7 @@ sls_free_datatable(struct slskv_table *datatable)
 static int
 sls_read_slos_manifest(uint64_t oid, uint64_t *rnop, uint64_t **ids, size_t *idlen)
 {
+#if 0
 	struct slos_rstat stat;
 	struct slos_node *vp;
 	int error, ret;
@@ -326,12 +336,15 @@ out:
 	}
 
 	return (ret);
+#endif
+	return (ENOSYS);
 }
 
 static int
 sls_read_slos_record(uint64_t oid, uint64_t rno, struct slskv_table *metatable,
 	struct slskv_table *datatable)
 {
+#if 0
 	struct slos_rstat stat;
 	struct slos_node *vp;
 	int error, ret;
@@ -369,6 +382,8 @@ out:
 	    SLS_DBG("error %d, could not close slos node\n", error);
 
 	return (0);
+#endif
+	return (ENOSYS);
 }
 
 /* Reads in a record from the SLOS and saves it in the record table. */
@@ -376,9 +391,9 @@ int
 sls_read_slos(uint64_t oid, struct slskv_table **metatablep,
 	struct slskv_table **datatablep)
 {
+#if 0
 	struct slskv_table *metatable, *datatable;
 	uint64_t *ids = NULL;
-	uint64_t rno;
 	size_t idlen;
 	int error, i;
 
@@ -397,7 +412,7 @@ sls_read_slos(uint64_t oid, struct slskv_table **metatablep,
 	 * Read the manifsest, get the record number and 
 	 * vnode numbers for the checkpoint. 
 	 */
-	error = sls_read_slos_manifest(oid, &rno, &ids, &idlen);
+	error = sls_read_slos_manifest(oid, &ids, &idlen);
 	if (error != 0)
 	    goto error;
 
@@ -421,6 +436,8 @@ error:
 	sls_free_metatable(datatable);
 
 	return error;
+#endif
+	return (ENOSYS);
 }
 
 /* 
@@ -473,12 +490,12 @@ sls_contig_pages(vm_object_t obj, vm_page_t *page)
 	return contig_len;
 }
 
-/* 
- * Get the pages of an object in the form of a 
+/*
+ * Get the pages of an object in the form of a
  * linked list of contiguous memory areas.
  */
 static int
-sls_objdata(struct slos_node *vp, uint64_t rno, vm_object_t obj)
+sls_objdata(struct vnode *vp, vm_object_t obj)
 {
 	vm_page_t startpage, page;
 	size_t contig_len;
@@ -489,9 +506,9 @@ sls_objdata(struct slos_node *vp, uint64_t rno, vm_object_t obj)
 	int x = 0;
 
 	/* Traverse the object's resident pages. */
-	page = TAILQ_FIRST(&obj->memq); 
+	page = TAILQ_FIRST(&obj->memq);
 	while (page != NULL) {
-	    /* 
+	    /*
 	     * Split the memory into contiguous chunks.
 	     * By doing so, we can efficiently dump the
 	     * data to the backend. The alternative
@@ -505,8 +522,8 @@ sls_objdata(struct slos_node *vp, uint64_t rno, vm_object_t obj)
 	    x += contig_len >> PAGE_SHIFT;
 
 	    /* Map the process' data into the kernel. */
-	    data = pmap_map(NULL, startpage->phys_addr, 
-		    startpage->phys_addr + contig_len, 
+	    data = pmap_map(NULL, startpage->phys_addr,
+		    startpage->phys_addr + contig_len,
 		    VM_PROT_READ | VM_PROT_WRITE);
 	    if (data == 0)
 		return ENOMEM;
@@ -517,18 +534,18 @@ sls_objdata(struct slos_node *vp, uint64_t rno, vm_object_t obj)
 	    aiov.iov_base = (void *) data;
 	    aiov.iov_len = contig_len;
 
-	    /* 
+	    /*
 	     * The offset of the write adjusted because the first
 	     * page-sized chunk holds the metadata of the VM object.
 	     */
-	    slos_uioinit(&auio, PAGE_SIZE + IDX_TO_OFF(startpage->pindex), 
+	    slos_uioinit(&auio, PAGE_SIZE + IDX_TO_OFF(startpage->pindex),
 		    UIO_WRITE, &aiov, 1);
 
 	    /* The write itself. */
 	    while (auio.uio_resid > 0) {
-		error = slos_rwrite(vp, rno, &auio);
+		error = VOP_WRITE(vp, &auio, 0, NULL);
 		if (error != 0)
-		    return error;
+			return (error);
 	    }
 
 	    /* ------------ End SLOS-Specific Part ------------ */
@@ -540,26 +557,33 @@ sls_objdata(struct slos_node *vp, uint64_t rno, vm_object_t obj)
 		break;
 	}
 
+	VOP_FSYNC(vp, MNT_WAIT, curthread);
 	if (error != 0)
 	    return error;
 
 	return 0;
 }
 
-/* 
- * Creates a record in the SLOS with the metadata held in the sbuf. 
+/*
+ * Creates a record in the SLOS with the metadata held in the sbuf.
  * The record is contiguous, and only has data in the beginning.
  */
 static int
-sls_writemeta_slos(struct sls_record *rec, uint64_t rno)
+sls_writemeta_slos(struct sls_record *rec, struct vnode **vpp, bool overwrite)
 {
 	struct sbuf *sb = rec->srec_sb;
-	struct slos_node *vp = NULL;
+	struct thread *td = curthread;
+	int mode = FREAD | FWRITE;
 	int error, close_error;
+	struct vnode *vp;
+	uint64_t slsid;
 	struct iovec aiov;
 	struct uio auio;
 	void *record;
 	size_t len;
+
+	if (vpp != NULL)
+		*vpp = NULL;
 
 	record = sbuf_data(sb);
 	if (record == NULL)
@@ -567,29 +591,35 @@ sls_writemeta_slos(struct sls_record *rec, uint64_t rno)
 
 	len = sbuf_len(sb);
 
-	/* 
-	 * Try to create the node. We don't have an 
-	 * "open, create if not there" call. 
+	/* Try to create the node, if not already there, and wrap it in a vnode. */
+	slsid = rec->srec_id;
+	error = slsfs_new_node(&slos, MAKEIMODE(VREG, S_IRWXU), &slsid);
+	if (error != 0)
+		return (EINVAL);
+
+	error = VFS_VGET(slos.slsfs_mount, slsid, LK_EXCLUSIVE, &vp);
+	if (error != 0)
+		return (error);
+
+
+	/*
+	 * If the node is just for metadata, delete the previous contents.
+	 * This is because some records include null-terminated arrays.
 	 */
-	error = slos_icreate(&slos, rec->srec_id, 0);
-	if ((error != 0) && (error != EINVAL))
-	    return (error);
-
-	vp = slos_iopen(&slos, rec->srec_id);
-	if (vp == NULL) {
-	    error = EIO;
-	    goto error;
+	if (overwrite) {
+		/* XXX Truncate */
+		/*
+		error = slsfs_truncate(vp, 0);
+		if (error != 0)
+			goto error;
+		*/
 	}
 
-#if 0
-	uint64_t type = rec->srec_type;
-	error = slos_rcreate(vp, type, &rno, SLOSRNO_FIXED);
-	if (error != 0) {
-	    /* XXX Until CoW. */
-	    if (rno != 0)
+	/* Open the record for writing. */
+	error = VOP_OPEN(vp, mode, NULL, td, NULL);
+	if (error != 0)
 		goto error;
-	}
-#endif
+
 
 	/* Create the UIO for the disk. */
 	aiov.iov_base = record;
@@ -598,66 +628,77 @@ sls_writemeta_slos(struct sls_record *rec, uint64_t rno)
 
 	/* Keep reading until we get all the info. */
 	while (auio.uio_resid > 0) {
-	    error = slos_rwrite(vp, rno, &auio);
+	    error = VOP_WRITE(vp, &auio, 0, NULL);
 	    if (error != 0)
 		goto error;
 	}
 
-	error = slos_iclose(&slos, vp);
+	/* Pass the open vnode to the caller if needed. */
+	if (vpp != NULL) {
+		*vpp = vp;
+		return (0);
+	}
+
+	/* Else we're done with the vnode. */
+	error = VOP_CLOSE(vp, mode, NULL, td);
 	if (error != 0)
 	    return (error);
+
+	VOP_FSYNC(vp, MNT_WAIT, curthread);
+	VOP_UNLOCK(vp, 0);
 
 	return (0);
 
 error:
 	if (vp != NULL) {
-	    close_error = slos_iclose(&slos, vp);
-	    if (close_error != 0) {
-		SLS_DBG("error %d, could not close slos node\n", close_error);
-		return (error);
-	    }
+	    close_error = VOP_CLOSE(vp, mode, NULL, td);
+	    if (close_error != 0)
+		SLS_DBG("error %d, could not close SLSFS vnode\n", close_error);
 	}
+
+	if (vpp != NULL)
+		*vpp = NULL;
 
 	return (error);
 }
 
 /*
  * Creates a record in the SLOS with metadata and data.
- * The metadata is typically held in the beginning of the 
- * record, with the data spanning the rest of the record's 
- * address space. The data is stored in a sparse manner, 
- * their position in the record encoding their position 
+ * The metadata is typically held in the beginning of the
+ * record, with the data spanning the rest of the record's
+ * address space. The data is stored in a sparse manner,
+ * their position in the record encoding their position
  * in the VM object.
  */
 static int
-sls_writedata_slos(struct sls_record *rec, uint64_t rno, struct slskv_table *objtable)
+sls_writedata_slos(struct sls_record *rec, struct slskv_table *objtable)
 {
 	struct sbuf *sb = rec->srec_sb;
+	struct thread *td = curthread;
+	int mode = FREAD | FWRITE;
 	struct slsvmobject *info;
 	vm_object_t obj, newobj;
-	struct slos_node *vp;
+	struct vnode *vp;
 	int error, ret = 0;
 
-	/* XXX Until we have CoW. */
-	rno = 0;
 
 	/* The record number returned is the unique record ID. */
-	error = sls_writemeta_slos(rec, rno);
+	error = sls_writemeta_slos(rec, &vp, false);
 	if (error != 0)
 	    return (error);
 
 	/* The node will exist, since we called sls_writemeta_slos().*/
-	vp = slos_iopen(&slos, rec->srec_id);
-	if (vp == NULL)
-	    return (EIO);
+	error = VOP_OPEN(vp, mode, NULL, td, NULL);
+	if (error != 0)
+		return (error);
 
-	/* 
+	/*
 	 * We know that the sbuf holds a slsvmobject struct,
 	 * that's why we are in this function in the first place.
 	 */
 	info = (struct slsvmobject *) sbuf_data(sb);
 
-	/* 
+	/*
 	 * The ID of the info struct and the in-memory pointer
 	 * are identical at checkpoint time, so we use it to
 	 * retrieve the object and grab its data.
@@ -672,22 +713,24 @@ sls_writedata_slos(struct sls_record *rec, uint64_t rno, struct slskv_table *obj
 	    goto out;
 
 	/* Checkpoint the object. */
-	ret = sls_objdata(vp, rno, obj);
+	ret = sls_objdata(vp, obj);
 	if (ret != 0)
 	    goto out;
 
 out:
-	error = slos_iclose(&slos, vp);
+	error = VOP_CLOSE(vp, mode, NULL, td);
 	if (error != 0) {
 	    SLS_DBG("error %d could not close slos node\n", error);
 	    return (ret);
 	}
 
+	VOP_UNLOCK(vp, 0);
+
 	return (ret);
 }
 
 static int
-sls_write_slos_manifest(uint64_t oid, struct sbuf *sb, uint64_t rno)
+sls_write_slos_manifest(uint64_t oid, struct sbuf *sb)
 {
 	struct sls_record rec;
 	int error;
@@ -703,7 +746,7 @@ sls_write_slos_manifest(uint64_t oid, struct sbuf *sb, uint64_t rno)
 	    .srec_sb = sb,
 	};
 
-	error = sls_writemeta_slos(&rec, rno);
+	error = sls_writemeta_slos(&rec, NULL, true);
 	if (error != 0)
 	    return (error);
 
@@ -720,7 +763,6 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 {
 	struct sbuf *sb_manifest;
 	struct sls_record *rec;
-	uint64_t rno;
 	uint64_t slsid;
 	uint64_t timestamp;
 	struct timeval tv;
@@ -730,19 +772,18 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 	/* Use the current time as the record number. */
 	microtime(&tv);
 	timestamp = TOMICRO(tv);
-	rno = timestamp;
 
 	KV_FOREACH_POP(sckpt_data->sckpt_rectable, slsid, rec) {
-	    /* 
-	     * VM object records are special, since we need to dump 
+	    /*
+	     * VM object records are special, since we need to dump
 	     * actual memory along with the metadata.
 	     */
-            printf("Writing record number %lx\n", rno);
 	    if (sls_isdata(rec->srec_type))
-		error = sls_writedata_slos(rec, rno, sckpt_data->sckpt_objtable);
+		error = sls_writedata_slos(rec, sckpt_data->sckpt_objtable);
 	    else
-		error = sls_writemeta_slos(rec, rno);
+		error = sls_writemeta_slos(rec, NULL, true);
 	    if (error != 0) {
+		    panic ("1 ERROR %d\n", error);
 		sbuf_delete(sb_manifest);
 		return (error);
 	    }
@@ -757,10 +798,14 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 	    /* XXX Free as we go. */
 	}
 
-	error = sls_write_slos_manifest(oid, sb_manifest, rno);
-	sbuf_delete(sb_manifest);
+	error = sls_write_slos_manifest(oid, sb_manifest);
 	if (error != 0)
 	    return (error);
+
+
+	VFS_SYNC(slos.slsfs_mount, MNT_WAIT);
+
+	sbuf_delete(sb_manifest);
 
 	return (0);
 }

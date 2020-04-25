@@ -64,7 +64,7 @@ slsvm_objtable_collapse(struct slskv_table *objtable)
 	
 	/* Remove the Aurora - created shadow. */
 	KV_FOREACH(objtable, iter, obj, shadow) {
-	    KASSERT((obj->ref_count == 2), ("someone has a reference to object %p", obj));
+	    KASSERT((obj->ref_count <= 2), ("object %p has %d references", obj, obj->ref_count));
 	    vm_object_deallocate(obj);
 	    KASSERT((shadow->backing_object != obj), 
 		    ("object %p was not merged with its shadow %p", obj, shadow));

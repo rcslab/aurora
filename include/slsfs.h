@@ -40,6 +40,7 @@ struct slsfsmount {
 
 struct slsfs_device {
     struct vnode		*devvp;
+    void 			*vdata;
     struct mtx			g_mtx; 
     struct g_provider		*gprovider;
     struct g_consumer		*gconsumer;
@@ -50,6 +51,8 @@ struct slsfs_device {
 };
 
 
+/* Needed by the SLS to create nodes with specific IDs. */
+int slsfs_new_node(struct slos *slos, mode_t mode, uint64_t *oidp);
 
 extern struct vop_vector sls_vnodeops;
 #endif // _SLSFS_H_

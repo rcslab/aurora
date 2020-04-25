@@ -94,7 +94,6 @@ struct slos {
 	struct g_provider	*slos_pp;	/* The geom producer */ 
 
 	struct btree		*slos_inodes;	/* An index of all inodes */
-	struct slos_vhtable	*slos_vhtable;	/* Table of opened vnodes */
 
 	struct lock		slos_lock;	/* Sleepable lock */
 

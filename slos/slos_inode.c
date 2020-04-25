@@ -31,109 +31,6 @@ compare_vnode_t(const void *k1, const void *k2)
 	return 0;
 }
 
-/* 
- * Initialize the hashtable that holds all open vnodes. There is no need
- * for locking, since the SLOS does not export any methods to its users.
- */
-int
-slos_vhtable_init(struct slos *slos)
-{
-	slos->slos_vhtable = malloc(sizeof(*slos->slos_vhtable), M_SLOS, M_WAITOK);
-
-	slos->slos_vhtable->vh_table = (struct slos_vnlist *)
-	    hashinit(VHTABLE_MAX, M_SLOS, &slos->slos_vhtable->vh_hashmask);
-	if (slos->slos_vhtable->vh_table == NULL) {
-		free(slos->slos_vhtable, M_SLOS);
-		return ENOMEM;
-	}
-
-	return 0;
-}
-
-/*
- * Destroy the open vnodes hashtable. This function takes in the SLOS locked,
- * and leaves it so. This operation fails if there are open vnodes.
- */
-int
-slos_vhtable_fini(struct slos *slos)
-{
-	struct slos_vnlist *bucket;
-	int i;
-
-	/* 
-	 * Any vnodes that exist in the hashtable
-	 * are still open by a user. If we exited,
-	 * we would at least cause a crash, and in
-	 * the worst case we could have use-after-free.
-	 *
-	 * The solution is to wait for the opened 
-	 * files to be closed.
-	 */    
-	for (i = 0; i <= slos->slos_vhtable->vh_hashmask; i++) {
-		bucket = &slos->slos_vhtable->vh_table[i];
-		if (!LIST_EMPTY(bucket))
-			return EBUSY;
-	}
-
-	/* If all went well, destroy the vnode table. */
-	hashdestroy(slos->slos_vhtable->vh_table, M_SLOS, 
-	    slos->slos_vhtable->vh_hashmask);
-	free(slos->slos_vhtable, M_SLOS);
-	slos->slos_vhtable = NULL;
-
-	return 0;
-}
-
-/* 
- * Find a vnode corresponding to the given PID. This function takes
- * in the SLOS locked, and leaves it so.
- */
-struct slos_node *
-slos_vhtable_find(struct slos *slos, uint64_t pid)
-{
-	struct slos_vnlist *bucket;
-	struct slos_node *vp;
-
-	bucket = &slos->slos_vhtable->vh_table[pid & slos->slos_vhtable->vh_hashmask];
-	LIST_FOREACH(vp, bucket, sn_entries) {
-		if (vp->sn_pid == pid)
-			return vp;
-	}
-
-	return NULL;
-}
-
-/* 
- * Add a vnode to the hashtbale. This function takes
- * in the SLOS locked, and leaves it so.
- */
-void
-slos_vhtable_add(struct slos *slos, struct slos_node *vp)
-{
-	struct slos_vnlist *bucket;
-
-	bucket = 
-	    &slos->slos_vhtable->vh_table[vp->sn_pid & slos->slos_vhtable->vh_hashmask];
-	LIST_INSERT_HEAD(bucket, vp, sn_entries);
-}
-
-/* 
- * Remove a vnode from the hashtable. This function takes
- * in the SLOS locked, and leaves it so.
- */
-void
-slos_vhtable_remove(struct slos *slos, struct slos_node *vp)
-{
-	/* 
-	 * All vnodes are in the hashtable, so
-	 * we don't need to search for it.
-	 *
-	 * What would be nice is a static assertion
-	 * that the vnode is indeed in the hashtable.
-	 */
-	LIST_REMOVE(vp, sn_entries);
-}
-
 /*
  * Import an inode from the OSD.
  */
@@ -186,7 +83,6 @@ slos_readino(struct slos *slos, uint64_t pid, struct slos_inode *ino)
 	int error;
 	VOP_LOCK(slos->slsfs_inodes, LK_SHARED);
 
-        /* XXX TEMP, but masking away the upper bits does the job. Define that better and we're set.*/
 	error = slsfs_bread(slos->slsfs_inodes, pid, BLKSIZE(slos), NULL, &buf);
 	if (error) {
 		return (error);
@@ -253,10 +149,7 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 		return NULL;
 	}
 	vp = malloc(sizeof(struct slos_node), M_SLOS, M_WAITOK | M_ZERO);
-	/* 
-	 * Move each field separately, 
-	 * translating between the two. 
-	 */
+	/* Move each field separately, translating between the two. */
 	vp->sn_ino = *ino;
 	vp->sn_pid = ino->ino_pid;
 	vp->sn_uid = ino->ino_uid;
@@ -273,7 +166,7 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 	/* The refcount will be incremented by the caller. */
 	vp->sn_refcnt = 0;
 
-	fbtree_init(slos->slsfs_dev, ino->ino_btree.offset, sizeof(uint64_t), 
+	fbtree_init(slos->slsfs_dev, ino->ino_btree.offset, sizeof(uint64_t),
 	    sizeof(diskptr_t), &compare_vnode_t, "VNode Tree", 0, &vp->sn_tree);
 
 	mtx_init(&vp->sn_mtx, "slosvno", NULL, MTX_DEF);
@@ -294,7 +187,7 @@ slos_vpexport(struct slos *slos, struct slos_node *vp)
 	if (error != 0)
 		return error;
 
-	/* Update the inode's mutable elements. */ 
+	/* Update the inode's mutable elements. */
 	ino->ino_ctime = vp->sn_ctime;
 	ino->ino_mtime = vp->sn_mtime;
 
@@ -330,6 +223,7 @@ slos_vpfree(struct slos *slos, struct slos_node *vp)
 static void
 slos_ifree(struct slos *slos, struct slos_node *vp)
 {
+#if 0
 	uint64_t prevroot;
 	int error;
 
@@ -399,6 +293,8 @@ error:
 	 * don't need the in-memory vnode. Free it. 
 	 */
 	slos_vpfree(slos, vp);
+#endif
+	/* XXX Implement */
 }
 
 /* Create an inode for the process with the given PID. */
@@ -432,7 +328,7 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
                 DBUG("Failed to create inode %lx\n", pid);
 		return EINVAL;
 	}
-	
+
 	struct uio io;
 	struct iovec iov;
 	iov.iov_base = &ino;
@@ -477,6 +373,7 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 int
 slos_iremove(struct slos *slos, uint64_t pid)
 {
+#if 0
 	struct slos_node *vp;
 	struct slos_diskptr inoptr; 
 	int error;
@@ -523,8 +420,10 @@ slos_iremove(struct slos *slos, uint64_t pid)
 	}
 
 	SLOS_UNLOCK(slos);
+#endif
 
-	return (0);
+	/* Not yet implemented. */
+	return (ENOSYS);
 }
 
 /*
@@ -594,19 +493,6 @@ slos_iclose(struct slos *slos, struct slos_node *vp)
 			slos_vpfree(slos, vp);
 		}
 	} 
-
-	return 0;
-}
-
-/*
- * Return a structure that holds 
- * statistics about the inode.
- */
-/* XXX Fix prototype */
-struct slos_node *
-slos_istat(struct slos *slos, uint64_t ino)
-{
-	/* XXX Implement */
 
 	return 0;
 }

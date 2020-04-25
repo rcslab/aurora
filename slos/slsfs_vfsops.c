@@ -79,6 +79,8 @@ static int
 slsfs_uninit(struct vfsconf *vfsp)
 {
         /* Destroy the identifier generator. */
+	clean_unrhdr(slsid_unr);
+	clear_unrhdr(slsid_unr);
         delete_unrhdr(slsid_unr);
         slsid_unr = NULL;
 
@@ -187,9 +189,17 @@ static int
 slsfs_mount_device(struct vnode *devvp, struct mount *mp, struct slsfs_device **slsfsdev)
 {
 	struct slsfs_device *sdev;
+	void *vdata;
         int error;
 
 	DBUG("Mounting Device\n");
+
+	/*
+	 * Get a pointer to the device vnode's current private data.
+	 * We need to restore it when destroying the SLOS. The field
+	 * is overwritten by slsfs_create_slos.
+	 */
+	vdata = devvp->v_data;
 
         /* Create the in-memory SLOS. */
 	error = slsfs_create_slos(mp, devvp);
@@ -209,6 +219,7 @@ slsfs_mount_device(struct vnode *devvp, struct mount *mp, struct slsfs_device **
 	sdev->gconsumer = slos.slos_cp;
 	sdev->devsize = slos.slos_pp->mediasize;
 	sdev->devblocksize = slos.slos_pp->sectorsize;
+	sdev->vdata = vdata;
 	mtx_init(&sdev->g_mtx, "slsfsmtx", NULL, MTX_DEF);
 
 	DBUG("Mounting Device Done\n");
@@ -605,6 +616,10 @@ slsfs_unmount_device(struct slsfs_device *sdev)
 
         /* Destroy the device. */
 	mtx_destroy(&sdev->g_mtx);
+
+	/* Restore the node's private data. */
+	sdev->devvp->v_data = sdev->vdata;
+
 	free(sdev, M_SLSFSMNT);
 
 	DBUG("Device Unmounted\n");

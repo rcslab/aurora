@@ -85,23 +85,6 @@ struct slos_node {
 
 LIST_HEAD(slos_vnlist, slos_node);
 
-/* Number of buckets in the hashtable. */
-#define VHTABLE_MAX (1024)
-
-int slos_vhtable_init(struct slos *slos);
-int slos_vhtable_fini(struct slos *slos); 
-
-struct slos_node *slos_vhtable_find(struct slos *slos, uint64_t pid);
-
-void slos_vhtable_add(struct slos *slos, struct slos_node *vp);
-void slos_vhtable_remove(struct slos *slos, struct slos_node *vp);
-
-/* A hashtable of resident vnodes. */
-struct slos_vhtable {
-	struct slos_vnlist	*vh_table;	/* The hashtable of open vnodes. */
-	u_long			vh_hashmask;	/* The hashmask for the table. */
-};
-
 int slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode);
 int slos_iremove(struct slos *slos, uint64_t pid);
 

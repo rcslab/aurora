@@ -248,8 +248,8 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	SDT_PROBE0(sls, , ,cont);
 
 	vm_map_t vm_map = &p->p_vmspace->vm_map;
-	
-	for (vm_map_entry_t entry = vm_map->header.next; entry != &vm_map->header; 
+
+	for (vm_map_entry_t entry = vm_map->header.next; entry != &vm_map->header;
 		entry = entry->next) {
 	    if (entry->object.vm_object == NULL || 
 		(entry->protection & VM_PROT_WRITE) == 0 ||
@@ -269,7 +269,6 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	    * even be faster. However, right now it's not very useful,
 	    * since the SLOS isn't there yet in terms of speed.
 	    */
-            printf("Writing OID %lx\n", slsp->slsp_oid);
 	    error = sls_write_slos(slsp->slsp_oid, sckpt_data);
 	    if (error != 0) {
 		SLS_DBG("sls_write_slos return %d\n", error);

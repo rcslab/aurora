@@ -194,12 +194,6 @@ slsp_init(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
 	if (error != 0)
 	    goto error;
 
-	/* XXX Temporary until we change to multiple inodes per checkpoint.  */
-	/* Create the SLOS node for the partition. */
-	error = slos_icreate(&slos, oid, 0);
-	if (error != 0)
-	    goto error;
-	
 	*slspp = slsp;
 
 	return (0);

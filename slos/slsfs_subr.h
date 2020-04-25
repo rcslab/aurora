@@ -7,7 +7,6 @@
 #include <slos_inode.h>
 
 int slsfs_get_node(struct slos *, uint64_t ino, struct slos_node **spp);
-int slsfs_new_node(struct slos *, mode_t mode, uint64_t *pid);
 int slsfs_remove_node(struct vnode *dvp, struct vnode *vp, struct componentname *name);
 int slsfs_destroy_node(struct slos_node *vp);
 

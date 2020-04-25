@@ -16,6 +16,8 @@
 #include <vm/vm.h>
 #include <vm/vm_object.h>
 
+#include <slsfs.h>
+
 #include "sls_kv.h"
 #include "sls_mm.h"
 #include "sls_partition.h"
@@ -118,6 +120,11 @@ void sls_restored(struct sls_restored_args *args);
 
 int slsckpt_create(struct slsckpt_data **sckpt_datap);
 void slsckpt_destroy(struct slsckpt_data *sckpt_data);
+
+/* The range in which OIDs can fall. */
+#define SLS_OIDRANGE	(64 * 1024)
+#define SLS_OIDMIN 	(1)
+#define SLS_OIDMAX  	((SLS_OIDMIN) + (SLS_OIDRANGE))
 
 SDT_PROVIDER_DECLARE(sls);
 
