@@ -1,10 +1,12 @@
 #!/bin/sh
 
-./tools/newosd/newosd /dev/vtbd1
+gstripe create -s 16384 -v st0 /dev/nvd0 /dev/nvd1 /dev/nvd2 /dev/nvd3
+DISK="/dev/stripe/st0"
+./tools/newosd/newosd "$DISK"
 
 kldload slos/slos.ko
 
-mount -rw -t slsfs /dev/vtbd1 /testmnt
+mount -rw -t slsfs "$DISK" /testmnt
 
 #fio trace/test.fio
 

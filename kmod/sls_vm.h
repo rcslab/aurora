@@ -31,5 +31,6 @@ int slsvm_procset_shadow(slsset *procset, struct slskv_table *table, int is_full
 void slsvm_object_reftransfer(vm_object_t src, vm_object_t dst);
 void slsvm_object_shadowexact(vm_object_t *objp);
 void slsvm_object_copy(struct proc *p, struct vm_map_entry *entry, vm_object_t obj);
+void slsvm_print_chain(vm_object_t shadow);
 
 #endif /* _SLSVM_H_ */

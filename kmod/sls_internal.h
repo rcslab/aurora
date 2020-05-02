@@ -10,6 +10,7 @@
 #include <sys/sdt.h>
 #include <sys/stat.h>
 #include <sys/syscallsubr.h>
+#include <sys/sysctl.h>
 #include <sys/vnode.h>
 
 #include <vm/uma.h>
@@ -112,8 +113,6 @@ struct sls_restored_args {
 #define TONANO(tv) ((1000UL * 1000 * 1000 * (tv).tv_sec) + (tv).tv_nsec)
 #define TOMICRO(tv) ((1000UL * 1000 * (tv).tv_sec) + (tv).tv_usec)
 
-struct sls_getrecord;
-
 void slsvm_objtable_collapse(struct slskv_table *objtable);
 void sls_checkpointd(struct sls_checkpointd_args *args);
 void sls_restored(struct sls_restored_args *args);
@@ -126,6 +125,20 @@ void slsckpt_destroy(struct slsckpt_data *sckpt_data);
 #define SLS_OIDMIN 	(1)
 #define SLS_OIDMAX  	((SLS_OIDMIN) + (SLS_OIDRANGE))
 
+extern struct sysctl_ctx_list aurora_ctx;
+
+/* Statistics and configuration variables accessible through sysctl. */
+extern uint64_t sls_bytes_sent;
+extern unsigned int sls_use_nulldev;
+extern uint64_t sls_iochain_size;
+extern struct file *sls_blackholefp;
+extern int sls_sync;
+extern int sls_drop_io;
+extern uint64_t sls_pages_grabbed;
+extern uint64_t sls_io_initiated;
+
+extern uint64_t ckpt_attempted;
+extern uint64_t ckpt_done;
 SDT_PROVIDER_DECLARE(sls);
 
 #endif /* _SLS_H_ */

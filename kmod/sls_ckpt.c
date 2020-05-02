@@ -71,12 +71,18 @@ SDT_PROBE_DEFINE(sls, , , shadow);
 SDT_PROBE_DEFINE(sls, , , vm);
 SDT_PROBE_DEFINE(sls, , , cont);
 SDT_PROBE_DEFINE(sls, , , dump);
-SDT_PROBE_DEFINE(sls, , , done);
+SDT_PROBE_DEFINE(sls, , , dedup);
+SDT_PROBE_DEFINE(sls, , , sync);
+
+int sls_sync = 1;
+uint64_t ckpt_attempted;
+uint64_t ckpt_done;
 
 static void slsckpt_stop(slsset *procset);
 static int sls_checkpoint(slsset *procset, struct slspart *slsp);
 static int slsckpt_metadata(struct proc *p, struct slspart *slsp, 
 	slsset *procset, struct slsckpt_data *sckpt_data);
+
 
 /*
  * Stop the processes, and wait until they are truly not running. 
@@ -86,17 +92,17 @@ slsckpt_stop(slsset *procset)
 {
 	struct slskv_iter iter;
 	struct proc *p;
-	
+
 	KVSET_FOREACH(procset, iter, p) {
-	    /* Force all threads to the kernel-user boundary. */ 
+	    /* Force all threads to the kernel-user boundary. */
 	    PROC_LOCK(p);
 	    thread_single(p, SINGLE_BOUNDARY);
 	    PROC_UNLOCK(p);
 	}
 }
 
-/* 
- * Let all processes continue executing.  
+/*
+ * Let all processes continue executing.
  */
 static void
 slsckpt_cont(slsset *procset)
@@ -247,22 +253,9 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	slsckpt_cont(procset);
 	SDT_PROBE0(sls, , ,cont);
 
-	vm_map_t vm_map = &p->p_vmspace->vm_map;
-
-	for (vm_map_entry_t entry = vm_map->header.next; entry != &vm_map->header;
-		entry = entry->next) {
-	    if (entry->object.vm_object == NULL || 
-		(entry->protection & VM_PROT_WRITE) == 0 ||
-		entry->object.vm_object->type != OBJT_DEFAULT ||
-		entry->object.vm_object->backing_object == NULL)
-		continue;
-
-	    slsvm_object_copy(p, entry, entry->object.vm_object);
-	}
-
 	switch (slsp->slsp_attr.attr_target) {
 	case SLS_OSD:
-	    /* 
+	    /*
 	    * The cleanest way for this to go away is by splitting
 	    * different SLS records to different on-disk inodes. This
 	    * is definitely possible, and depending on the SLOS it can
@@ -277,22 +270,23 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 
 	    break;
 
-	    /*
-	     * XXX Sync all the data to the SLOS, when we have a way to do so.
-	     */
-
 	case SLS_MEM:
 	    /* Associate the checkpoint with the partition. */
 	    slsp->slsp_sckpt = sckpt_data;
 	    sckpt_data = NULL;
-
-
 	    break;
 
 	default:
 	    panic("Invalid target %d\n", slsp->slsp_attr.attr_target);
 	}
+
 	SDT_PROBE0(sls, , , dump);
+
+
+	if (sls_sync)
+	    VFS_SYNC(slos.slsfs_mount, MNT_WAIT);
+
+	SDT_PROBE0(sls, , , sync);
 
 	/* 
 	 *  If this is a delta checkpoint, and it is not the first
@@ -368,9 +362,11 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	    panic("invalid mode %d\n", slsp->slsp_attr.attr_mode);
 	}
 
+	SDT_PROBE0(sls, , , dedup);
+
+
 	slsp->slsp_epoch += 1;
 	SLS_DBG("Checkpointed partition once\n");
-	SDT_PROBE0(sls, , , done);
 
 	return (0);
 
@@ -494,11 +490,14 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	struct proc *p;
 	int error;
 
+	(void) fhold(sls_blackholefp);
+
 	SLS_DBG("Process active\n");
 	/* Check if the partition is available for checkpointing. */
 
 	if (atomic_cmpset_int(&slsp->slsp_status, SPROC_AVAILABLE,
 		    SPROC_CHECKPOINTING) == 0) {
+	    ckpt_attempted += 1;
 	    printf("Overlapping checkpoints\n");
 	    SLS_DBG("Partition %ld in state %d\n", slsp->slsp_oid, slsp->slsp_status);
 	    goto out;
@@ -506,10 +505,13 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 
 	/* The set of processes we are going to checkpoint. */
 	error = slsset_create(&procset);
-	if (error != 0)
+	if (error != 0) {
+	    ckpt_attempted += 1;
 	    goto out;
+	}
 
 	for (;;) {
+	    ckpt_attempted += 1;
 	    /* Check if the partition got detached from the SLS. */
 	    if (slsp->slsp_status != SPROC_CHECKPOINTING)
 		break;
@@ -545,6 +547,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	    SDT_PROBE0(sls, , , stopped);
 
 	    /* Checkpoint the process once. */
+	    ckpt_done += 1;
 	    sls_checkpoint(procset, slsp);
 	    nanotime(&tend);
 
@@ -565,8 +568,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	    SLS_DBG("Woke up\n");
 	}
 
-	/* 
-	 * 
+	/*
 	 * If we exited normally, and the process is still in the SLOS,
 	 * mark the process as available for checkpointing.
 	 */
@@ -575,6 +577,8 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	SLS_DBG("Stopped checkpointing\n");
 
 out:
+
+	fdrop(sls_blackholefp, curthread);
 
 	/* Drop the reference we got for the SLS process. */
 	slsp_deref(slsp);

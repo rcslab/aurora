@@ -20,6 +20,8 @@
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
+#include <machine/pmap.h>
+
 #include "sls_internal.h"
 #include "sls_kv.h"
 #include "sls_vm.h"
@@ -47,6 +49,12 @@ slsvm_object_shadow(struct slskv_table *objtable, vm_object_t *objp)
 	slsvm_object_shadowexact(objp);
 	obj->flags |= OBJ_AURORA;
 
+	/*
+	 * Shadow objects aren't actually in Aurora! They are directly used
+	 * by processes, so we cannot modify them or dump them.
+	 */
+	KASSERT(((*objp)->flags & OBJ_AURORA) == 0, ("shadow is in Aurora"));
+	//printf("Shadow pair (%p, %p)\n", obj, *objp);
 	error = slskv_add(objtable, (uint64_t) obj, (uintptr_t) *objp);
 	if (error != 0) {
 	    vm_object_deallocate(*objp);
@@ -64,10 +72,7 @@ slsvm_objtable_collapse(struct slskv_table *objtable)
 	
 	/* Remove the Aurora - created shadow. */
 	KV_FOREACH(objtable, iter, obj, shadow) {
-	    KASSERT((obj->ref_count <= 2), ("object %p has %d references", obj, obj->ref_count));
 	    vm_object_deallocate(obj);
-	    KASSERT((shadow->backing_object != obj), 
-		    ("object %p was not merged with its shadow %p", obj, shadow));
 	}
 
 	/* XXX Don't forget the SYSV shared memory table! */
@@ -77,23 +82,48 @@ slsvm_objtable_collapse(struct slskv_table *objtable)
  * Destroy all physical process memory mappings for the entry. Only makes
  * sense for writable entries, read-only entries are retained.
  */
-static void __attribute__ ((noinline))
+static void
 slsvm_entry_zap(struct proc *p, struct vm_map_entry *entry, vm_object_t obj)
 {
 	if (((entry->eflags & MAP_ENTRY_NEEDS_COPY) == 0) &&
 		((entry->protection & VM_PROT_WRITE) != 0)) {
 	    pmap_protect_pglist(&p->p_vmspace->vm_pmap, 
-		    0, entry->start - entry->offset, 
-		    &obj->memq, entry->protection & ~VM_PROT_WRITE, AURORA_PMAP_TEST_FULL);
+		entry->start, entry->end, entry->start - entry->offset,
+		&obj->memq, entry->protection & ~VM_PROT_WRITE, AURORA_PMAP_TEST_FULL);
 	}
 }
 
-void 
+static void __attribute__ ((noinline))
+slsvm_object_zap(vm_object_t obj)
+{
+	vm_page_t m;
+
+	/*
+	 * XXX Optimize for when the entries aren't writable? We want to protect, not remove.
+	 * We might need to check all entries in which the objects reside. For that we need
+	 * to do extra bookkeeping in the object.
+	 */
+	TAILQ_FOREACH(m, &obj->memq, listq)
+		pmap_remove_all(m);
+}
+
+static void
+slsvm_entry_protect(struct proc *p, struct vm_map_entry *entry)
+{
+	if (((entry->eflags & MAP_ENTRY_NEEDS_COPY) == 0) &&
+		((entry->protection & VM_PROT_WRITE) != 0)) {
+	    pmap_protect(&p->p_vmspace->vm_pmap,
+		    entry->start, entry->end,
+		    entry->protection & ~VM_PROT_WRITE);
+	}
+}
+
+void
 slsvm_object_copy(struct proc *p, struct vm_map_entry *entry, vm_object_t obj)
 {
-	vm_page_t cur, copy, original, tmp; 
+	vm_page_t cur, copy, original, tmp;
 	vm_offset_t vaddr;
-	
+
 	SLS_DBG("(%p) Object copy start\n", obj);
 
 	KASSERT(obj->type != OBJT_DEAD, ("object %p is dead", obj));
@@ -166,26 +196,35 @@ slsvm_proc_shadow(struct proc *p, struct slskv_table *table, int is_fullckpt)
 	header = &p->p_vmspace->vm_map.header;
 	for (entry = header->next; entry != header; entry = entry->next) {
 		obj = entry->object.vm_object;
-		/* 
-		 * Non anonymous objects cannot shadowed meaningfully. Guard 
-		 * entries are null.
+		/*
+		 * Non anonymous objects cannot shadowed meaningfully.
+		 * Guard entries are null.
 		 */
 		if (!OBJT_ISANONYMOUS(obj))
 		    continue;
 
-		/* 
-		 * Check if we have already shadowed the object. If we did, 
+		/*
+		 * Check if we have already shadowed the object. If we did,
 		 * have the process map point to the shadow.
 		 */
 		if (slskv_find(table, (uint64_t) obj, (uintptr_t *) &vmshadow) == 0) {
+		    /* If the object is not shadowed, we don't need to do anything else */
+		    if (vmshadow == NULL)
+			    continue;
+		    /* The object is already zapped */
 		    slsvm_entry_zap(p, entry, obj);
 		    entry->object.vm_object = vmshadow;
+		    VM_OBJECT_WLOCK(vmshadow);
+		    vm_object_clear_flag(vmshadow, OBJ_ONEMAPPING);
 		    slsvm_object_reftransfer(obj, vmshadow);
+		    VM_OBJECT_WUNLOCK(vmshadow);
 		    SLS_DBG("(TRANSFER) Object %p has %d references\n", obj, obj->ref_count);
+		    SLS_DBG("(TRANSFER) Shadow %p has %d references\n", vmshadow, vmshadow->ref_count);
 		    continue;
 		}
 
 		/* Shadow the object, retain it in Aurora. */
+		//slsvm_object_zap(obj);
 		slsvm_entry_zap(p, entry, obj);
 		error = slsvm_object_shadow(table, &entry->object.vm_object);
 		if (error != 0)
@@ -249,7 +288,8 @@ slsvm_procset_shadow(slsset *procset, struct slskv_table *table, int is_fullckpt
 void
 slsvm_object_reftransfer(vm_object_t src, vm_object_t dst)
 {
-	vm_object_reference(dst);
+	VM_OBJECT_ASSERT_WLOCKED(dst);
+	vm_object_reference_locked(dst);
 	vm_object_deallocate(src);
 }
 
@@ -269,4 +309,14 @@ slsvm_object_shadowexact(vm_object_t *objp)
 	SLS_DBG("(SHADOW) Object %p has shadow %p\n", obj, *objp);
 	/* Inherit the unique object ID from the parent. */
 	(*objp)->objid = obj->objid;
+}
+
+void
+slsvm_print_chain(vm_object_t shadow)
+{
+	vm_object_t obj;
+
+	for (obj = shadow; (obj != NULL); (obj = obj->backing_object))
+		printf("(%p, %lx) <-- ", obj, obj->objid);
+	printf("\n");
 }

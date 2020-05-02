@@ -141,7 +141,7 @@ slsfs_create_slos(struct mount *mp, struct vnode *devvp)
 	g_topology_lock();
 	error = g_vfs_open(devvp, &slos.slos_cp, "slsfs", 1);
 	if (error) {
-		DBUG("Error in opening GEOM vfs\n");
+		printf("Error in opening GEOM vfs\n");
 		return error;
 	}
 	slos.slos_pp = g_dev_getprovider(devvp->v_rdev);
@@ -151,7 +151,7 @@ slsfs_create_slos(struct mount *mp, struct vnode *devvp)
 	DBUG("SLOS Read in Super\n");
 	error = slos_sbread(&slos);
 	if (error != 0) {
-		DBUG("ERROR: slos_sbread failed with %d\n", error);
+		printf("ERROR: slos_sbread failed with %d\n", error);
 		return error;
 	}
 
@@ -160,7 +160,7 @@ slsfs_create_slos(struct mount *mp, struct vnode *devvp)
         /* Get a vnode for the device. XXX Is this for direct IOs? */
 	error = getnewvnode("SLSFS Fake VNode", mp, &sls_vnodeops, &slos.slsfs_dev);
 	if (error) {
-		DBUG("Problem getting fake vnode for device\n");
+		printf("Problem getting fake vnode for device\n");
 		return (error);
         }
 
@@ -203,8 +203,10 @@ slsfs_mount_device(struct vnode *devvp, struct mount *mp, struct slsfs_device **
 
         /* Create the in-memory SLOS. */
 	error = slsfs_create_slos(mp, devvp);
-        if (error != 0)
-                panic("failed to create the SLOS");
+        if (error != 0) {
+		printf("error %d by slsfs_create_slos", error);
+		return (error);
+	}
 
 
         /*

@@ -457,6 +457,7 @@ slos_sbread(struct slos * slos)
 	 */
 	error = vn_stat(slos->slos_vp, &st, NULL, NULL, curthread);
 	if (error != 0) {
+		printf("vn_stat failed with %d\n", error);
 		return error;
 	}
 
@@ -470,6 +471,7 @@ slos_sbread(struct slos * slos)
 	error = bread(slos->slos_vp, 0, st.st_blksize, curthread->td_proc->p_ucred, &bp);
 	if (error != 0) {
 		free(sb, M_SLOS);
+		printf("bread failed with %d\n", error);
 		return error;
 	}
 

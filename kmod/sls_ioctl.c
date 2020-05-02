@@ -23,6 +23,7 @@
 #include <sys/shm.h>
 #include <sys/signalvar.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 #include <sys/systm.h>
 #include <sys/syscallsubr.h>
 #include <sys/time.h>
@@ -51,10 +52,11 @@
 MALLOC_DEFINE(M_SLSMM, "slsmm", "SLSMM");
 
 struct sls_metadata slsm;
+struct sysctl_ctx_list aurora_ctx;
 
-/* 
+/*
  * Start checkpointing a partition. If a checkpointing period
- * has been set, then the partition gets periodically 
+ * has been set, then the partition gets periodically
  * checkpointed, otherwise it's a one-off.
  */
 static int
@@ -198,6 +200,71 @@ sls_partdel(struct sls_partdel_args *args)
 }
 
 static int
+sls_sysctl_init(void)
+{
+	struct sysctl_oid *root;
+
+	sysctl_ctx_init(&aurora_ctx);
+
+	root = SYSCTL_ADD_ROOT_NODE(&aurora_ctx, OID_AUTO, "aurora", CTLFLAG_RW, 0,
+			"Aurora statistics and configuration variables");
+
+	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "bytes_sent",
+			CTLFLAG_RD, &sls_bytes_sent,
+			0, "Bytes sent to the disk");
+	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "pages_grabbed",
+			CTLFLAG_RD, &sls_pages_grabbed,
+			0, "Pages grabbed by the SLS");
+	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "io_initiated",
+			CTLFLAG_RD, &sls_io_initiated,
+			0, "IOs to disk initiated");
+	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "contig_limit",
+			CTLFLAG_RW, &sls_contig_limit,
+			0, "Limit of contiguous IOs");
+	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "use_nulldev",
+			CTLFLAG_RW, &sls_use_nulldev,
+			0, "Route IOs to the null device");
+	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "drop_io",
+			CTLFLAG_RW, &sls_drop_io,
+			0, "Drop all IOs immediately");
+	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "iochain_size",
+			CTLFLAG_RW, &sls_iochain_size,
+			0, "Maximum IO chain size");
+	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "sync",
+			CTLFLAG_RW, &sls_sync,
+			0, "Sync to the device after finishing dumping");
+	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "ckpt_attempted",
+			CTLFLAG_RW, &ckpt_attempted,
+			0, "Checkpoints attempted");
+	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "ckpt_done",
+			CTLFLAG_RW, &ckpt_done,
+			0, "Checkpoints successfully done");
+
+	return (0);
+}
+
+static int
+sls_setup_blackholefp(void)
+{
+	int sls_blackholefd;
+	int error;
+
+	error = kern_openat(curthread, AT_FDCWD, "/dev/null", UIO_SYSSPACE, O_RDWR, 0);
+	if (error != 0)
+		return (error);
+
+	sls_blackholefd = curthread->td_retval[0];
+	sls_blackholefp = FDTOFP(curthread->td_proc, sls_blackholefd);
+	(void) fhold(sls_blackholefp);
+
+	error = kern_close(curthread, sls_blackholefd);
+	if (error != 0)
+		SLS_DBG("Could not close sls_blackholefd, error %d\n", error);
+
+	return (error);
+}
+
+static int
 sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	int flag __unused, struct thread *td)
 {
@@ -270,6 +337,11 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	case MOD_LOAD:
 	    bzero(&slsm, sizeof(slsm));
 
+
+	    error = sls_setup_blackholefp();
+	    if (error != 0)
+		    return (error);
+
 	    mtx_init(&slsm.slsm_mtx, "SLS main mutex", NULL, MTX_DEF);
 	    cv_init(&slsm.slsm_proccv, "SLS process restore lock");
 	    cv_init(&slsm.slsm_donecv, "SLS general restore lock");
@@ -278,8 +350,8 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	    if (error)
 		return (error);
 
-	    slspagerun_zone = uma_zcreate("SLS pageruns", 
-		    sizeof(struct slspagerun), NULL, NULL, NULL, 
+	    slspagerun_zone = uma_zcreate("SLS pageruns",
+		    sizeof(struct slspagerun), NULL, NULL, NULL,
 		    NULL, UMA_ALIGNOF(struct slspagerun), 0);
 	    if (slspagerun_zone == NULL) {
 		error = ENOMEM;
@@ -294,10 +366,13 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	    if (error != 0)
 		return (error);
 
-	    slsm.slsm_cdev = 
-		make_dev(&slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "sls");
+	    /* Initialize Aurora-related sysctls. */
+	    sls_sysctl_init();
 
-#ifdef SLS_TEST 
+	    slsm.slsm_cdev = make_dev(&slsmm_cdevsw, 0,
+			    UID_ROOT, GID_WHEEL, 0666, "sls");
+
+#ifdef SLS_TEST
 	    printf("Testing slstable component...\n");
 	    error = slstable_test();
 	    if (error != 0)
@@ -307,18 +382,17 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	    printf("SLS Loaded.\n");
 	    break;
 
-	/*
-	 * XXX Don't export OSD right now, we
-	 * don't care since we're going to create
-	 * proper mount/unmount code anyway and
-	 * pull it out of here.
-	 */
 	case MOD_UNLOAD:
 
 	    slsm.slsm_exiting = 1;
 
 	    if (slsm.slsm_cdev != NULL)
 		destroy_dev(slsm.slsm_cdev);
+
+	    if (sysctl_ctx_free(&aurora_ctx)) {
+		    printf("Failed\n");
+
+	    }
 
 	    slsp_delall();
 
@@ -330,6 +404,9 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	    cv_destroy(&slsm.slsm_donecv);
 	    cv_destroy(&slsm.slsm_proccv);
 	    mtx_destroy(&slsm.slsm_mtx);
+
+	    if (sls_blackholefp != NULL)
+	    	fdrop(sls_blackholefp, curthread);
 
 	    printf("SLS Unloaded.\n");
 	    break;

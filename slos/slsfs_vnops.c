@@ -14,6 +14,7 @@
 #include <vm/vm_extern.h>
 #include <vm/vnode_pager.h>
 
+#include "../kmod/sls_internal.h"
 #include <slsfs.h>
 #include <slos.h>
 #include <slos_inode.h>
@@ -25,6 +26,10 @@
 #include "slsfs_dir.h"
 #include "slsfs_subr.h"
 #include "slsfs_buf.h"
+
+SDT_PROVIDER_DEFINE(slos);
+SDT_PROBE_DEFINE3(slos, , , slsfs_deviceblk, "uint64_t", "uint64_t", "int");
+SDT_PROBE_DEFINE3(slos, , , slsfs_vnodeblk, "uint64_t", "uint64_t", "int");
 
 static int
 slsfs_inactive(struct vop_inactive_args *args)
@@ -734,11 +739,16 @@ slsfs_strategy(struct vop_strategy_args *args)
 			bp->b_blkno = (daddr_t) (-1);
 			vfs_bio_clrbuf(bp); 
 			bufdone(bp);
+			return (0);
 		}
 
 		BTREE_UNLOCK(&SLSVP(vp)->sn_tree, 0);
+		int change =  bp->b_bufobj->bo_bsize / slos.slos_vp->v_bufobj.bo_bsize;
+		SDT_PROBE3(slos, , , slsfs_vnodeblk, bp->b_blkno, bp->b_bufobj->bo_bsize, change);
 	} else {
 		bp->b_blkno = bp->b_lblkno;
+		int change =  bp->b_bufobj->bo_bsize / slos.slos_vp->v_bufobj.bo_bsize;
+		SDT_PROBE3(slos, , , slsfs_deviceblk, bp->b_blkno, bp->b_bufobj->bo_bsize, change);
 	}
 
 	int change =  bp->b_bufobj->bo_bsize / slos.slos_vp->v_bufobj.bo_bsize;

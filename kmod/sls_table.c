@@ -46,9 +46,15 @@
 #endif /* SLS_TEST */
 
 
-/* XXX Turn into a sysctl */
 /* The maximum size of a single data transfer */
-size_t sls_contig_limit = (16 * 1024 * 1024);
+uint64_t sls_contig_limit = (16 * 1024 * 1024); 
+unsigned int sls_use_nulldev = 0;
+int sls_drop_io = 0;
+uint64_t sls_iochain_size = 1;
+struct file *sls_blackholefp;
+size_t sls_bytes_sent;
+uint64_t sls_pages_grabbed;
+uint64_t sls_io_initiated;
 
 uma_zone_t slspagerun_zone = NULL;
 
@@ -62,6 +68,73 @@ static uint64_t sls_datastructs[] =  {
     SLOSREC_TESTDATA, 
 #endif
 };
+
+static int
+sls_doio_null(struct uio *auio)
+{
+	size_t sent;
+	int error;
+
+	sent = auio->uio_resid;
+	while (auio->uio_resid > 0) {
+		error = dofilewrite(curthread, -1, sls_blackholefp, auio, 0, 0);
+		if (error != 0)
+			return (error);
+	}
+	sls_bytes_sent += sent;
+
+	return (0);
+
+}
+
+static int
+sls_doio(struct vnode *vp, struct uio *auio)
+{
+	int error = 0;
+	size_t sent;
+
+	/* If we don't want to do anything just return. */
+	if (sls_drop_io) {
+		auio->uio_resid = 0;
+		return (0);
+	}
+
+	/* Route the IO to the null device if that's what we want. */
+	if (sls_use_nulldev) {
+		error = sls_doio_null(auio);
+		if (error != 0)
+			goto out;
+		sls_io_initiated += 1;
+		return (0);
+	}
+
+#if 0
+#define AMPLSIZE 5
+	struct iovec aiov[AMPLSIZE];
+	for (int i = 0; i < AMPLSIZE; i++)
+		aiov[i] = *(auio->uio_iov);
+
+	auio->uio_resid += (AMPLSIZE - 1) * auio->uio_resid;
+	auio->uio_iovcnt += (AMPLSIZE - 1);
+	auio->uio_iov = aiov;
+#endif
+
+	sent = auio->uio_resid;
+	/* Do the IO itself. */
+	while (auio->uio_resid > 0) {
+		error = VOP_WRITE(vp, auio, 0, NULL);
+		if (error != 0)
+			goto out;
+	}
+	sls_bytes_sent += sent;
+out:
+
+	sls_io_initiated += 1;
+	if (error != 0)
+		printf("ERROR %d\n", error);
+
+	return (error);
+}
 
 /* Creates an in-memory Aurora record. */
 struct sls_record *
@@ -461,13 +534,14 @@ sls_contig_pages(vm_object_t obj, vm_page_t *page)
 	prev = *page;
 	cur = TAILQ_NEXT(prev, listq);
 	contig_len = pagesizes[prev->psind];
+	sls_pages_grabbed += (pagesizes[prev->psind] / PAGE_SIZE);
 
 	TAILQ_FOREACH_FROM(cur, &obj->memq, listq) {
 	    /* Pages need to be physically and logically contiguous. */
 	    if (prev->phys_addr + pagesizes[prev->psind] != cur->phys_addr ||
 		prev->pindex + OFF_TO_IDX(pagesizes[prev->psind]) != cur->pindex)
 		break;
-	
+
 	    /* 
 	     * XXX Not sure we need this. Even if the run is gigantic, we do
 	     * no copies, and the IO layer surely has a way of coping with 
@@ -482,6 +556,7 @@ sls_contig_pages(vm_object_t obj, vm_page_t *page)
 	     */
 	    contig_len += pagesizes[cur->psind];
 	    prev = cur;
+	    sls_pages_grabbed += (pagesizes[cur->psind] / PAGE_SIZE);
 	}
 
 	/* Pass the new index into the page list to the caller. */
@@ -493,8 +568,10 @@ sls_contig_pages(vm_object_t obj, vm_page_t *page)
 /*
  * Get the pages of an object in the form of a
  * linked list of contiguous memory areas.
+ *
+ * This function is not inlined in order to be able to use DTrace on it.
  */
-static int
+static int __attribute__ ((noinline))
 sls_objdata(struct vnode *vp, vm_object_t obj)
 {
 	vm_page_t startpage, page;
@@ -516,7 +593,7 @@ sls_objdata(struct vnode *vp, vm_object_t obj)
 	     * at a time, which would fragment the IOs
 	     * and kill performance. The list of resident
 	     * pages is being iterated in the call below.
-	     kk*/
+	     */
 	    startpage = page;
 	    contig_len = sls_contig_pages(obj, &page);
 	    x += contig_len >> PAGE_SHIFT;
@@ -543,7 +620,7 @@ sls_objdata(struct vnode *vp, vm_object_t obj)
 
 	    /* The write itself. */
 	    while (auio.uio_resid > 0) {
-		error = VOP_WRITE(vp, &auio, 0, NULL);
+		error = sls_doio(vp, &auio);
 		if (error != 0)
 			return (error);
 	    }
@@ -556,10 +633,7 @@ sls_objdata(struct vnode *vp, vm_object_t obj)
 	    if (page == NULL || startpage->pindex >= page->pindex)
 		break;
 	}
-
-	VOP_FSYNC(vp, MNT_WAIT, curthread);
-	if (error != 0)
-	    return error;
+	//printf("(%p, %d, %d)\n", obj, obj->resident_page_count, x);
 
 	return 0;
 }
@@ -628,7 +702,7 @@ sls_writemeta_slos(struct sls_record *rec, struct vnode **vpp, bool overwrite)
 
 	/* Keep reading until we get all the info. */
 	while (auio.uio_resid > 0) {
-	    error = VOP_WRITE(vp, &auio, 0, NULL);
+	    error = sls_doio(vp, &auio);
 	    if (error != 0)
 		goto error;
 	}
@@ -644,7 +718,6 @@ sls_writemeta_slos(struct sls_record *rec, struct vnode **vpp, bool overwrite)
 	if (error != 0)
 	    return (error);
 
-	VOP_FSYNC(vp, MNT_WAIT, curthread);
 	VOP_UNLOCK(vp, 0);
 
 	return (0);
@@ -764,14 +837,10 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 	struct sbuf *sb_manifest;
 	struct sls_record *rec;
 	uint64_t slsid;
-	uint64_t timestamp;
-	struct timeval tv;
 	int error;
 
 	sb_manifest = sbuf_new_auto();
 	/* Use the current time as the record number. */
-	microtime(&tv);
-	timestamp = TOMICRO(tv);
 
 	KV_FOREACH_POP(sckpt_data->sckpt_rectable, slsid, rec) {
 	    /*
@@ -783,7 +852,7 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 	    else
 		error = sls_writemeta_slos(rec, NULL, true);
 	    if (error != 0) {
-		    panic ("1 ERROR %d\n", error);
+		    SLS_DBG("Writing the record failed with %d", error);
 		sbuf_delete(sb_manifest);
 		return (error);
 	    }
@@ -802,8 +871,6 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 	if (error != 0)
 	    return (error);
 
-
-	VFS_SYNC(slos.slsfs_mount, MNT_WAIT);
 
 	sbuf_delete(sb_manifest);
 

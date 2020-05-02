@@ -79,6 +79,7 @@ slsckpt_sockbuf(struct sockbuf *sockbuf, struct slsckpt_data *sckpt_data)
 
 	sb = sbuf_new_auto();
 
+	SOCKBUF_LOCK(sockbuf);
 	/* 
 	 * Iterate through all packets. We don't worry about
 	 * denoting where each record ends, we can find out
@@ -151,6 +152,7 @@ slsckpt_sockbuf(struct sockbuf *sockbuf, struct slsckpt_data *sckpt_data)
 	    }
 	}
 
+	SOCKBUF_UNLOCK(sockbuf);
 	error = sbuf_finish(sb);
 	if (error != 0) {
 	    sbuf_delete(sb);
