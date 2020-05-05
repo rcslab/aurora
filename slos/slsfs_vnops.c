@@ -450,7 +450,7 @@ slsfs_retrieve_buf(struct vnode *vp, struct uio *uio, struct buf **bp)
 		DBUG("%d\n", error);
 		return (error);
 	}
-
+	
 	blks = (uio->uio_resid / blksize);
 
 	if (ITER_ISNULL(biter)) {
@@ -458,8 +458,7 @@ slsfs_retrieve_buf(struct vnode *vp, struct uio *uio, struct buf **bp)
 			blks += 1;
 		}
 		size = omin(MAXBCACHEBUF, blks * blksize);
-		ITER_RELEASE(biter);
-		error = slsfs_bcreate(vp, bno, size, bp);
+		error = slsfs_bcreate(vp, bno, size, &biter, bp);
 	} else {
 		uint64_t iter_key = ITER_KEY_T(biter, uint64_t);
 		if (iter_key != bno) {
@@ -467,12 +466,10 @@ slsfs_retrieve_buf(struct vnode *vp, struct uio *uio, struct buf **bp)
 			nextkey = ITER_KEY_T(biter, uint64_t);
 			blks = nextkey - bno;
 			size = omin(MAXBCACHEBUF, blks * blksize);
-			ITER_RELEASE(biter);
-			error = slsfs_bcreate(vp, bno, size, bp);
+			error = slsfs_bcreate(vp, bno, size, &biter, bp);
 		} else {
 			ptr = ITER_VAL_T(biter, diskptr_t);
 			KASSERT(ptr.size >= blksize, ("This should not occur"));
-			ITER_RELEASE(biter);
 			error = slsfs_bread(vp, bno, ptr.size, NULL, bp);
 		}
 	}
@@ -539,6 +536,7 @@ slsfs_write(struct vop_write_args *args)
 	if (ioflag & IO_SYNC) {
 		DBUG("sync\n");
 	}
+
 	while(uio->uio_resid) {
 		// Grab the key thats closest to offset, but not over it
 		// Mask out the lower order bits so we just have the block;
@@ -702,20 +700,18 @@ slsfs_strategy(struct vop_strategy_args *args)
 		KASSERT(bp->b_lblkno != (-1), 
 			("No logical block number should be -1 - vnode effect %lu", 
 			 SLSVP(vp)->sn_pid));
-		BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_EXCLUSIVE);
+		BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_SHARED);
 		error = fbtree_keymin_iter(&SLSVP(vp)->sn_tree, &bp->b_lblkno, &iter);
-                if (error != 0) {
-		    BTREE_UNLOCK(&SLSVP(vp)->sn_tree, LK_EXCLUSIVE);
-                    return (error);
-                }
-
+		if (error != 0) {
+		    return (error);
+		}
 		if (ITER_KEY_T(iter, uint64_t) != bp->b_lblkno) {
 			panic("whats %lu, %p", bp->b_lblkno, &iter.it_node);
 		}
-		ptr = ITER_VAL_T(iter, diskptr_t);
-		ITER_RELEASE(iter);
 
-		if (ptr.size != 0)  {
+		ptr = ITER_VAL_T(iter, diskptr_t);
+
+		if (ptr.offset != (0))  {
 			bp->b_blkno = ptr.offset;
 		} else if (bp->b_iocmd == BIO_WRITE) {
 			error = ALLOCATEBLK(SLSVP(vp)->sn_slos, bp->b_bcount, &ptr);
@@ -728,29 +724,25 @@ slsfs_strategy(struct vop_strategy_args *args)
 			}
 
 			KASSERT(ptr.size <= MAXBCACHEBUF, ("Should not be very largebuffers yet"));
-                        printf("Doing the replacement\n");
-			error = fbtree_replace(&SLSVP(vp)->sn_tree, &bp->b_lblkno, &ptr);
-			if (error) {
-				panic("Problem replacing value -%d", error);
-			}
-                        printf("Did the replacement\n");
+			memcpy(ITER_VAL(iter), &ptr, SLSVP(vp)->sn_tree.bt_valsize);
+			fnode_write(iter.it_node);
+			KASSERT(ptr.offset != 0, ("Should not give allocation of 0"));
 			bp->b_blkno = ptr.offset;
 		} else {
 			bp->b_blkno = (daddr_t) (-1);
 			vfs_bio_clrbuf(bp); 
 			bufdone(bp);
+			BTREE_UNLOCK(&SLSVP(vp)->sn_tree, 0);
 			return (0);
 		}
-
 		BTREE_UNLOCK(&SLSVP(vp)->sn_tree, 0);
-		int change =  bp->b_bufobj->bo_bsize / slos.slos_vp->v_bufobj.bo_bsize;
-		SDT_PROBE3(slos, , , slsfs_vnodeblk, bp->b_blkno, bp->b_bufobj->bo_bsize, change);
 	} else {
 		bp->b_blkno = bp->b_lblkno;
 		int change =  bp->b_bufobj->bo_bsize / slos.slos_vp->v_bufobj.bo_bsize;
 		SDT_PROBE3(slos, , , slsfs_deviceblk, bp->b_blkno, bp->b_bufobj->bo_bsize, change);
 	}
 
+	KASSERT(bp->b_blkno != 0, ("Fucking die"));
 	int change =  bp->b_bufobj->bo_bsize / slos.slos_vp->v_bufobj.bo_bsize;
 	bp->b_blkno = bp->b_blkno * change;
 	bp->b_iooffset = dbtob(bp->b_blkno);

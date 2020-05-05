@@ -142,7 +142,6 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 	int error;
 
 	/* Read the inode from disk. */
-	DBUG("BLKNO %lu\n", inoblk);
 	error = slos_iread(slos, inoblk, &ino);
 	if (error != 0) {
 		DBUG("ERROR READING");
@@ -360,7 +359,7 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 		return (error);
 	}
 	vfs_bio_clrbuf(bp);
-	slsfs_bdirty(bp);
+	bqrelse(bp);
 	VOP_UNLOCK(root_vp, 0);
 
 	// We will use this private pointer as a way to change this ino with 

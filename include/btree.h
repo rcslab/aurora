@@ -21,8 +21,6 @@ typedef uint32_t fb_valsize;
 
 extern uma_zone_t fnodes_zone;
 
-#define FALLOC() (uma_zalloc(fnodes_zone, M_WAITOK | M_ZERO))
-#define FFREE(node) (uma_zfree(fnodes_zone, node));
 #define NODE_FLAGS(node) ((node)->fn_dnode->dn_flags)
 #define NODE_DATA_SIZE(vp) ((4096) - sizeof(struct dnode) + 1)
 #define NODE_KS(node) ((node)->fn_tree->bt_keysize)
@@ -45,13 +43,14 @@ extern uma_zone_t fnodes_zone;
 
 #define NODE_COMPARE(node, key1, key2) ((node)->fn_tree->comp(key1, key2))
 
-#define ITER_VAL(iter) (fnode_getval(&(iter).it_node, (iter).it_index))
-#define ITER_KEY(iter) (fnode_getkey(&(iter).it_node, (iter).it_index))
+#define ITER_VAL(iter) (fnode_getval((iter).it_node, (iter).it_index))
+#define ITER_KEY(iter) (fnode_getkey((iter).it_node, (iter).it_index))
 
 #define ITER_VAL_T(iter, TYPE) (*(TYPE *)ITER_VAL(iter))
 #define ITER_KEY_T(iter, TYPE) (*(TYPE *)ITER_KEY(iter))
 
-#define ITER_RELEASE(iter) (bqrelse((iter).it_node.fn_buf))
+//#define ITER_RELEASE(iter) (bqrelse((iter).it_node->fn_buf))
+#define ITER_RELEASE(iter) 
 #define ITER_NEXT(iter) (fnode_iter_next(&(iter)))
 #define ITER_ISNULL(iter) (iter.it_index == -1)
 
@@ -94,7 +93,10 @@ struct fbtree {
 	size_t		bt_replaces;
 	size_t		bt_gets;
 	size_t		bt_root_replaces;
+	struct fnode	*bt_rootnode;
 	char		bt_name[255];
+	void		*bt_hash;
+	u_long		bt_hashmask;
 
 	LIST_HEAD(dirtybuf, buflist) bt_dirtybuf;
 	size_t		bt_dirtybuf_cnt;
@@ -121,18 +123,22 @@ struct fnode {
 	struct fbtree	*fn_tree;	/* Associated tree */
 	struct dnode	*fn_dnode;	/* On disk data */
 	struct buf	*fn_buf;
+	struct fnode	*fn_right;
+	struct fnode	*fn_parent;
 	bnode_ptr	fn_location;
+	uint8_t		fn_inited;
 	size_t		fn_max_int;
 	size_t		fn_max_ext;
 	void		*fn_values;	/* Pointer to values list */
 	void		*fn_keys;	/* Pointer to keys list */
+	void		*fn_pointers[300];
 };
 
 /*
  * Iterator
  */
 struct fnode_iter {
-	struct fnode	it_node;
+	struct fnode	*it_node;
 	uint32_t	it_index; 
 };
 
@@ -148,7 +154,12 @@ int fiter_remove(struct fnode_iter *it);
 
 /* Helpers for the btree algorithm */
 int fnode_keymin(struct fnode *node, void *key, void *value);
-int fnode_init(struct fbtree *tree, bnode_ptr ptr, struct fnode *node);
+int fnode_insert(struct fnode *node, void *key, void *value);
+int fnode_init(struct fbtree *tree, bnode_ptr ptr, struct fnode **node);
+int fnode_right(struct fnode *node, struct fnode **right);
+int fnode_fetch(struct fnode *node, int index, struct fnode **next);
+int fnode_parent(struct fnode *node, struct fnode **parent);
+void fnode_write(struct fnode *node);
 
 /* File Backed Btree operations */
 int fbtree_init(struct vnode *backend, bnode_ptr ptr, fb_keysize keysize, 

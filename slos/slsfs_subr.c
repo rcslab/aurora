@@ -203,7 +203,6 @@ slsfs_sync_vp(struct vnode *vp)
          */
         /* Synchronously write all the buffers out. */
 	BO_LOCK(bo);
-	DBUG("Syncing dirty buffers\n");
 	TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
 		if (BUF_LOCK(bp, LK_EXCLUSIVE | LK_INTERLOCK | LK_SLEEPFAIL, BO_LOCKPTR(bo)) == ENOLCK) {
 			continue;
@@ -239,12 +238,10 @@ slsfs_sync_dev(struct slos *slos)
 	struct buf *bp, *tbd;
 	struct bufobj *bo = &slos->slsfs_dev->v_bufobj;
 
-	DBUG("Syncing device vnode\n");
 	TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
 		if (BUF_LOCK(bp, LK_EXCLUSIVE | LK_SLEEPFAIL, NULL)) {
 			continue;
 		}
-		DBUG("%p\n", bp);
 		slsfs_bundirty(bp);
 	}
 

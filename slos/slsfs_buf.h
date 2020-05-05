@@ -10,7 +10,7 @@
  * block number (lbn), of size xfersize and allocate it and attach it to the 
  * given pointer at buf.
  */
-int slsfs_bcreate(struct vnode *node, uint64_t lbn, size_t xfersize, struct buf **buf);
+int slsfs_bcreate(struct vnode *node, uint64_t lbn, size_t xfersize, struct fnode_iter *iter, struct buf **buf);
 
 /*
  * Given some vnode will read in the buffer associated with the logical block 

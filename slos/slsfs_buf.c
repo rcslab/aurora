@@ -22,7 +22,7 @@
  * simplicity right now)
  */
 int
-slsfs_bcreate(struct vnode *vp, uint64_t lbn, size_t size, struct buf **bp)
+slsfs_bcreate(struct vnode *vp, uint64_t lbn, size_t size, struct fnode_iter *iter, struct buf **bp)
 {
 	struct buf *tempbuf = NULL;
 	diskptr_t ptr;
@@ -42,17 +42,20 @@ slsfs_bcreate(struct vnode *vp, uint64_t lbn, size_t size, struct buf **bp)
 	 */
 	ptr.offset = 0;
 	ptr.size = size;
-	BTREE_LOCK(&svp->sn_tree, LK_EXCLUSIVE);
-	error = fbtree_insert(&svp->sn_tree, &lbn, &ptr);
+	if (iter == NULL) {
+		BTREE_LOCK(&svp->sn_tree, LK_EXCLUSIVE);
+		error = fbtree_insert(&svp->sn_tree, &lbn, &ptr);
+		BTREE_UNLOCK(&svp->sn_tree, 0);
+	} else {
+		error = fnode_insert(iter->it_node, &lbn, &ptr);
+	}
+
 	if (error == ROOTCHANGE) {
 		svp->sn_ino.ino_btree = (diskptr_t){ svp->sn_tree.bt_root, IOSIZE(svp) };
 	} else if (error) {
 		DBUG("Problem with fbtree insert\n");
-
-		BTREE_UNLOCK(&svp->sn_tree, 0);
 		return (error);
 	}
-	BTREE_UNLOCK(&svp->sn_tree, 0);
 
 	DBUG("Getting block\n");
         /* Actually allocate the block in the buffer cache. */
@@ -104,7 +107,7 @@ slsfs_bdirty(struct buf *buf)
         /* Be aggressive and start the IO immediately. */
 	bawrite(buf);
 
-	atomic_add_64(&slos.slsfs_dirtybufcnt, 1);
+	return;
 }
 
 /*
@@ -118,10 +121,6 @@ slsfs_bundirty(struct buf *buf)
 	buf->b_flags &= ~(B_INVAL | B_CACHE | B_MANAGED);
 	buf->b_flags |= B_REMFREE;
 
-	if (atomic_load_64(&slos.slsfs_dirtybufcnt)) {
-		atomic_subtract_64(&slos.slsfs_dirtybufcnt, 1);
-	}
-
 	return bwrite(buf);
 }
 
@@ -134,7 +133,7 @@ slsfs_lookupbln(struct slos_node *svp, uint64_t lbn,  struct fnode_iter *iter)
 {
 	int error;
 	uint64_t key = lbn;
-	BTREE_LOCK(&svp->sn_tree, LK_EXCLUSIVE);
+	BTREE_LOCK(&svp->sn_tree, LK_SHARED);
 	error = fbtree_keymin_iter(&svp->sn_tree, &key, iter);
 	BTREE_UNLOCK(&svp->sn_tree, 0);
 

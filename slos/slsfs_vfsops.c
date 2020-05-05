@@ -66,6 +66,7 @@ slsfs_init(struct vfsconf *vfsp)
 {
         /* Get a new unique identifier generator. */
         slsid_unr = new_unrhdr(0, INT_MAX, NULL);
+	fnode_zone = uma_zcreate("Btree Fnode slabs", sizeof(struct fnode), NULL, NULL, NULL, NULL, UMA_ALIGN_PTR, 0);
 
         /* The constructor never fails. */
         KASSERT(slsid_unr != NULL, ("slsid unr creation failed"));;
@@ -83,6 +84,7 @@ slsfs_uninit(struct vfsconf *vfsp)
 	clear_unrhdr(slsid_unr);
         delete_unrhdr(slsid_unr);
         slsid_unr = NULL;
+	uma_zdestroy(fnode_zone);
 
 	return (0);
 }
@@ -108,9 +110,8 @@ slsfs_inodes_init(struct mount *mp, struct slos *slos)
 	DBUG("Initing the root inode\n");
 	error = slos_icreate(slos, SLOS_ROOT_INODE, MAKEIMODE(VDIR, S_IRWXU));
 	if (error == EINVAL) {
-                /* XXX Shouldn't this also return error? */
 		DBUG("Already exists\n");
-	} else if(error) {
+	} else if (error) {
 		return (error);
 	}
 
@@ -125,17 +126,8 @@ slsfs_create_slos(struct mount *mp, struct vnode *devvp)
 {
 	int error;
 
-	lockinit(&slos.slos_lock, PVFS, "sloslock", VLKTIMEOUT, LK_NOSHARE);
-	cv_init(&slos.slsfs_sync_cv, "SLSFS Syncer CV");
-	mtx_init(&slos.slsfs_sync_lk, "syncer lock",  NULL, MTX_DEF);
 
 	slos.slos_vp = devvp;
-	slos.slsfs_dirtybufcnt = 0;
-	slos.slsfs_syncing = 0;
-	slos.slsfs_checkpointtime = 1;
-	slos.slsfs_mount = mp;
-
-	devvp->v_data = &slos;
 
         /* Hook up the SLOS into the GEOM provider for the backing device. */
 	g_topology_lock();
@@ -151,10 +143,25 @@ slsfs_create_slos(struct mount *mp, struct vnode *devvp)
 	DBUG("SLOS Read in Super\n");
 	error = slos_sbread(&slos);
 	if (error != 0) {
-		printf("ERROR: slos_sbread failed with %d\n", error);
+		DBUG("ERROR: slos_sbread failed with %d\n", error);
+		printf("Problem with slos\n");
+		if (slos.slos_cp != NULL) {
+			g_topology_lock();
+			g_vfs_close(slos.slos_cp);
+			dev_ref(slos.slos_vp->v_rdev);
+			g_topology_unlock();
+		}
 		return error;
 	}
 
+	lockinit(&slos.slos_lock, PVFS, "sloslock", VLKTIMEOUT, LK_NOSHARE);
+	cv_init(&slos.slsfs_sync_cv, "SLSFS Syncer CV");
+	mtx_init(&slos.slsfs_sync_lk, "syncer lock",  NULL, MTX_DEF);
+	slos.slsfs_dirtybufcnt = 0;
+	slos.slsfs_syncing = 0;
+	slos.slsfs_checkpointtime = 1;
+	slos.slsfs_mount = mp;
+	devvp->v_data = &slos;
 
 	// This is all quite hacky just to get it working though
         /* Get a vnode for the device. XXX Is this for direct IOs? */
@@ -192,8 +199,6 @@ slsfs_mount_device(struct vnode *devvp, struct mount *mp, struct slsfs_device **
 	void *vdata;
         int error;
 
-	DBUG("Mounting Device\n");
-
 	/*
 	 * Get a pointer to the device vnode's current private data.
 	 * We need to restore it when destroying the SLOS. The field
@@ -204,7 +209,7 @@ slsfs_mount_device(struct vnode *devvp, struct mount *mp, struct slsfs_device **
         /* Create the in-memory SLOS. */
 	error = slsfs_create_slos(mp, devvp);
         if (error != 0) {
-		printf("error %d by slsfs_create_slos", error);
+		printf("Error creating SLOS - %d\n", error);
 		return (error);
 	}
 
@@ -325,6 +330,9 @@ error:
 		free(slsfsdev, M_SLSFSMNT);
 	}
 
+	printf("Error mounting");
+	vput(devvp);
+
 	return (error);
 }
 
@@ -340,8 +348,7 @@ slsfs_checkpoint(struct mount *mp)
 	int error;
 
 	td = curthread;
-	DBUG("Syncing regular inodes\n");
-        /* Go throught the list of vnodes attached to the filesystem. */
+	/* Go throught the list of vnodes attached to the filesystem. */
 	MNT_VNODE_FOREACH_ACTIVE(vp, mp, mvp) {
                 /* XXX Is this right? Why are we unlocking the vnode's VI lock? We never locked it.  */
 		if(VOP_ISLOCKED(vp)) {
@@ -362,8 +369,8 @@ slsfs_checkpoint(struct mount *mp)
 		// for it as well.
                 /* Only sync the vnode if it has been dirtied. */
 		if (bo->bo_dirty.bv_cnt) {
-			DBUG("Syncing %p\n", vp);
-                        /* XXX Why return on an error? We should keep going with the rest. */
+			/* XXX Why return on an error? We should keep going 
+			 * with the rest. */
 			error = slsfs_sync_vp(vp);
 			if (error) {
 				vput(vp);
@@ -380,7 +387,6 @@ slsfs_checkpoint(struct mount *mp)
 		vput(vp);
 	}
 
-	DBUG("Syncing inodes\n");
 	// Just a hack for now to get this thing working XXX Why is it a hack?
         /* Sync the inode root itself. */
 	VOP_LOCK(slos.slsfs_inodes, LK_EXCLUSIVE);
@@ -399,8 +405,6 @@ slsfs_checkpoint(struct mount *mp)
 		return;
 	}
 	VOP_UNLOCK(slos.slsfs_dev, 0);
-
-	DBUG("Syncing completely done\n");
 }
 
 /*
@@ -462,18 +466,41 @@ slsfs_init_fs(struct mount *mp)
 		return (EIO);
 	}
 
-	if (SLSINO(SLSVP(vp)).ino_nlink < 2) {
-		slsfs_init_dir(vp, vp, NULL);
-	}
-
-	vput(vp);
-
-        /* Set up the syncer. */
+	/* Set up the syncer. */
+	slos.slsfs_mount = mp;
 	error = kthread_add((void(*)(void *))slsfs_syncer, &slos, NULL,
 		&slos.slsfs_syncertd, 0, 0, "slsfs syncer");
 	if (error) {
 		panic("Syncer could not start");
 	}
+
+	/*
+	 * I have no idea when this bug occured but right now ls -la doesnt 
+	 * show up the first directory that gets created.  Even though with 
+	 * debugging on I can see it within the buffer and it shows correctly 
+	 * there.
+	 *
+	 * This is a hack as if i create and remove a directory it works 
+	 * perfectly fine.
+	 *
+	 * XXX: Fix this bug
+	 *
+	 */
+	if (SLSINO(SLSVP(vp)).ino_nlink < 2) {
+		struct componentname name;
+		struct vattr attr = {};
+		char * buf = "hackme";
+		name.cn_nameptr = buf;
+		name.cn_namelen = 5;
+		slsfs_init_dir(vp, vp, NULL);
+		struct vnode *svp;
+		VOP_MKDIR(vp, &svp, &name, &attr);
+		VOP_RMDIR(vp, svp, &name);
+		VOP_CLOSE(svp, 0, NULL, NULL);
+		VOP_UNLOCK(svp, 0);
+	}
+
+	vput(vp);
 
 	return (0);
 }
@@ -528,6 +555,7 @@ slsfs_mount(struct mount *mp)
 	vfs_getnewfsid(mp);
 
         /* Actually mount the vnode as a filesyste and initialize its state. */
+	printf("Mounting fs\n");
 	error = slsfs_mountfs(devvp, mp);
 	if (error) {
 		return (error);

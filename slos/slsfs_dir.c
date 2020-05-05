@@ -26,7 +26,6 @@ slsfs_add_dirent(struct vnode *vp, uint64_t ino, char *nameptr, long namelen, ui
 	struct slos_node *svp = SLSVP(vp);
 	size_t blksize = IOSIZE(svp);
 	size_t blks = SLSINO(svp).ino_blocks;
-	DBUG("DIR BLOCKS %lu \n", blks);
 
 	if (blks) {
 		error = slsfs_bread(vp, blks - 1, blksize, curthread->td_ucred, &bp);
@@ -50,7 +49,7 @@ slsfs_add_dirent(struct vnode *vp, uint64_t ino, char *nameptr, long namelen, ui
 	} 
 
 	if (!bp) {
-		error = slsfs_bcreate(vp, blks, blksize, &bp);
+		error = slsfs_bcreate(vp, blks, blksize, NULL, &bp);
 		if (error) {
 			DBUG("Problem creating buffer at %lu\n", blks);
 			return (error);

@@ -19,26 +19,31 @@
 # CDDL HEADER END
 #
 #
-# Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
+# Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# ident	"%Z%%M%	%I%	%E% SMI"
+
+# Single threaded asynchronous ($sync) sequential writes (1MB I/Os) to
+# a 1GB file.
+# Stops after 1 series of 1024 ($count) writes has been done.
+
 set $dir=/testmnt
-set $filesize=2g
-set $iosize=64k
+set $cached=false
+set $count=2048
+set $iosize=1m
 set $nthreads=1
-set $workingset=0
-set $directio=0
+set $sync=false
 
-define file name=largefile1,path=$dir,size=$filesize,reuse
+define file name=bigfile,path=$dir,size=0,prealloc,cached=$cached
 
-define process name=rand-write,instances=1
+define process name=filewriter,instances=1
 {
-  thread name=rand-thread,memsize=5m,instances=$nthreads
+  thread name=filewriterthread,memsize=10m,instances=$nthreads
   {
-    flowop write name=rand-write1,filename=largefile1,iosize=$iosize,random,workingset=$workingset,directio=$directio
+    flowop appendfile name=write-file,dsync=$sync,filename=bigfile,iosize=$iosize,iters=$count
+    flowop finishoncount name=finish,value=1
   }
 }
 
-run 5
-
-echo "Random Write Version 3.0 personality successfully loaded"
+echo  "FileMicro-SeqWrite Version 2.2 personality successfully loaded"

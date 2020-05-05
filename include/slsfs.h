@@ -1,9 +1,11 @@
 #ifndef _SLSFS_H_
 #define _SLSFS_H_
+#include <sys/param.h>
 #include <sys/queue.h>
 
 #include <sys/mount.h>
 #include <sys/vnode.h>
+#include <vm/uma.h>
 
 struct slos;
 
@@ -27,6 +29,8 @@ struct slos;
 #define SLS_VALLOC(aa, bb, cc, dd) ((TOSMP(aa->v_mount))->sls_valloc(aa, bb, cc, dd))
 #define SLS_VNODE(mp, vp) getnewvnode("slsfs", mp, &sls_vnodeops, &vp)
 #define SLS_VGET(aa, bb, cc, dd) (aa->v_mount->mnt_op->vfs_vget(aa->v_mount, bb, cc, dd))
+
+extern uma_zone_t fnode_zone;
 
 struct slsfsmount {
     STAILQ_ENTRY(slsfsmount)	sp_next_mount;
