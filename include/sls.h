@@ -4,6 +4,8 @@
 #include <sys/param.h>
 #include <sys/mount.h>
 
+#include <stdbool.h>
+
 #include "sls_ioctl.h"
 
 /* Low-level APIs */
