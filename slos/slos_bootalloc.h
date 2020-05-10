@@ -3,7 +3,7 @@
 
 #include <sys/param.h>
 
-struct slos;
+extern struct slos;
 
 /*
  * Dead simple stack allocator that exclusively

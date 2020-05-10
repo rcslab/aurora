@@ -55,7 +55,6 @@ static vfs_sync_t	slsfs_sync;
 extern struct buf_ops bufops_slsfs;
 
 static const char *slsfs_opts[] = { "from" };
-extern struct slos slos;
 struct unrhdr *slsid_unr;
 
 /*
@@ -175,6 +174,7 @@ slsfs_create_slos(struct mount *mp, struct vnode *devvp)
 	DBUG("Blocksize %lu\n", slos.slos_sb->sb_bsize);
 	slos.slsfs_dev->v_bufobj.bo_ops = &bufops_slsfs;
 	slos.slsfs_dev->v_bufobj.bo_bsize = slos.slos_sb->sb_bsize;
+	DBUG("OldType %x\n", slos.slsfs_dev->v_type);
 	slos.slsfs_dev->v_type = VCHR;
 	slos.slsfs_dev->v_data = &slos;
 	slos.slsfs_dev->v_vflag |= VV_SYSTEM;
@@ -300,6 +300,7 @@ slsfs_mountfs(struct vnode *devvp, struct mount *mp)
 	smp->sls_valloc = &slsfs_valloc;
 	smp->sp_slos = &slos;
 
+	CTR1(KTR_SPARE5, "slsfs_mountfs(%p)", devvp);
         /* Create the in-memory data for the backing device. */
 	error = slsfs_mount_device(devvp, mp, &slsfsdev);
 	if (error) {
@@ -497,7 +498,7 @@ slsfs_init_fs(struct mount *mp)
 		VOP_MKDIR(vp, &svp, &name, &attr);
 		VOP_RMDIR(vp, svp, &name);
 		VOP_CLOSE(svp, 0, NULL, NULL);
-		VOP_UNLOCK(svp, 0);
+		vput(svp);
 	}
 
 	vput(vp);
@@ -858,6 +859,8 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 			return (error);
 		}
 	}
+
+	DBUG("vget(%p) ino = %ld\n", vp, ino);
 
 	*vpp = vp;
 	return (0);

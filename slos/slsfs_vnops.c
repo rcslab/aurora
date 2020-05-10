@@ -1,5 +1,6 @@
 #include <sys/types.h>
 #include <sys/param.h>
+#include <sys/ktr.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
 #include <sys/mount.h>
@@ -30,6 +31,8 @@
 SDT_PROVIDER_DEFINE(slos);
 SDT_PROBE_DEFINE3(slos, , , slsfs_deviceblk, "uint64_t", "uint64_t", "int");
 SDT_PROBE_DEFINE3(slos, , , slsfs_vnodeblk, "uint64_t", "uint64_t", "int");
+
+extern struct slos slos;
 
 static int
 slsfs_inactive(struct vop_inactive_args *args)
@@ -682,7 +685,23 @@ slsfs_fsync(struct vop_fsync_args *args)
 static int
 slsfs_print(struct vop_print_args *args)
 {
-	DBUG("PRINT\n");
+	struct vnode *vp = args->a_vp;
+	struct slos_node *slsvp = SLSVP(vp);
+
+	if (slsvp == NULL) {
+		printf("\t(null)\n");
+	} else if ((void *)slsvp == (void *)&slos) {
+		printf("\tslos\n");
+	} else {
+		printf("\tslos inode\n");
+		printf("\tsn_pid = %ld\n", slsvp->sn_pid);
+		printf("\tsn_uid = %ld\n", slsvp->sn_uid);
+		printf("\tsn_gid = %ld\n", slsvp->sn_gid);
+		printf("\tsn_blk = %ld\n", slsvp->sn_blk);
+		printf("\tsn_status = %lx\n", slsvp->sn_status);
+		printf("\tsn_refcnt = %ld\n", slsvp->sn_refcnt);
+	}
+
 	return (0);
 }
 
@@ -696,6 +715,7 @@ slsfs_strategy(struct vop_strategy_args *args)
 	struct vnode *vp = args->a_vp;
 	struct fnode_iter iter;
 
+        CTR2(KTR_SPARE5, "slsfs_strategy vp=%p blkno=%x\n", vp, bp->b_lblkno);
 	if (vp != slos.slsfs_dev) {
 		KASSERT(bp->b_lblkno != (-1), 
 			("No logical block number should be -1 - vnode effect %lu", 
