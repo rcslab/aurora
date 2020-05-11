@@ -24,26 +24,33 @@
 #
 # ident	"%Z%%M%	%I%	%E% SMI"
 
-# Single threaded asynchronous ($sync) sequential writes (1MB I/Os) to
-# a 1GB file.
-# Stops after 1 series of 1024 ($count) writes has been done.
-
 set $dir=/testmnt
-set $cached=false
-set $count=2048
-set $iosize=1m
+set $nfiles=1000
+set $dirwidth=20
+set $filesize=16k
 set $nthreads=1
-set $sync=false
+set $meaniosize=16k
+set $readiosize=1m
 
-define file name=bigfile,path=$dir,size=0,prealloc,cached=$cached
+set mode quit firstdone
 
-define process name=filewriter,instances=1
+define fileset name=postset,path=$dir,size=$filesize,entries=$nfiles,dirwidth=$dirwidth,prealloc,paralloc
+define fileset name=postsetdel,path=$dir,size=$filesize,entries=$nfiles,dirwidth=$dirwidth,prealloc,paralloc
+
+define process name=filereader,instances=1
 {
-  thread name=filewriterthread,memsize=10m,instances=$nthreads
+  thread name=filereaderthread,memsize=10m,instances=$nthreads
   {
-    flowop appendfile name=write-file,dsync=$sync,filename=bigfile,iosize=$iosize,iters=$count
-    flowop finishoncount name=finish,value=1
+    flowop openfile name=openfile1,filesetname=postset,fd=1
+    flowop appendfilerand name=appendfilerand1,iosize=$meaniosize,fd=1
+    flowop closefile name=closefile1,fd=1
+    flowop openfile name=openfile2,filesetname=postset,fd=1
+    flowop readwholefile name=readfile1,fd=1,iosize=$readiosize
+    flowop closefile name=closefile2,fd=1
+    flowop deletefile name=deletefile1,filesetname=postsetdel
   }
 }
 
-echo  "FileMicro-SeqWrite Version 2.2 personality successfully loaded"
+run 30
+
+echo  "Mongo-like Version 2.3 personality successfully loaded"

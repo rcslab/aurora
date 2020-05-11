@@ -21,7 +21,7 @@ mount -rw -t slsfs $DRIVE /testmnt
 
 #echo "hello" > /testmnt/hello
 #kldload kmod/sls.ko
-#filebench -f trace/varmail.f &2> /dev/null
+filebench -f benchmarks/scripts/mongo.f
 ##sleep 10
 #filebench -f trace/randomrw.f &2> /dev/null
 

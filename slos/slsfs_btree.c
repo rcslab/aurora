@@ -118,7 +118,7 @@ void
 fnode_print(struct fnode *node)
 {
 	int i;
-	printf("%s - NODE: %lu\n", node->fn_tree->bt_name, node->fn_location);
+	printf("%s - NODE: %lu, rightnode: %lu\n", node->fn_tree->bt_name, node->fn_location, node->fn_dnode->dn_rightnode);
 	if (NODE_FLAGS(node) & BT_INTERNAL) {
 		bnode_ptr *p = fnode_getval(node, 0);
 		printf("| C %lu |", *p);
@@ -134,7 +134,13 @@ fnode_print(struct fnode *node)
 			printf("| %lu -> %lu, %lu |,", *t, v->offset, v->size);
 		}
 	}
+	if (!node->fn_right) {
+		fnode_right(node, &node->fn_right);
+	}
 	printf("\n");
+	if (node->fn_right != NULL) {
+		fnode_print(node->fn_right);
+	}
 }
 
 /*
@@ -176,6 +182,11 @@ fnode_fetch(struct fnode *node, int index, struct fnode **next)
 	bnode_ptr ptr;
 	if (node->fn_pointers[index] == NULL) {
 		ptr = *(bnode_ptr *)fnode_getval(node, index);
+		if (ptr == 0) {
+			printf("%d index\n", index);
+			fnode_print(node);
+			panic("Should not be zero");
+		}
 		fnode_init(node->fn_tree, ptr, (struct fnode **)&node->fn_pointers[index]);
 	} 
 
@@ -200,8 +211,8 @@ fnode_follow(struct fnode *root, const void *key, struct fnode **node)
 	while (NODE_FLAGS(cur) & BT_INTERNAL) {
 		// Linear search for now
 		start = 0;
-		end = NODE_SIZE(cur);
-		if (end) {
+		end = NODE_SIZE(cur) - 1;
+		if (NODE_SIZE(cur)) {
 			index = -1;
 			while (start <= end) {
 				mid = (start + end) / 2;
@@ -216,12 +227,15 @@ fnode_follow(struct fnode *root, const void *key, struct fnode **node)
 			}
 
 			if (index == (-1)) {
-				index = NODE_SIZE(cur);
+				index = NODE_SIZE(cur) - 1;
 			}
 		} else {
 			index = 0;
 		}
 
+		if (NODE_COMPARE(cur, fnode_getkey(cur, index), key) < 0) {
+			index++;
+		}
 		/* Create an in-memory copy of the next bnode in the path. */
 		fnode_fetch(cur, index, &next);
 		if (error != 0) {
@@ -625,6 +639,9 @@ fnode_insert_at(struct fnode *node, void *key, void *value, int i)
 {
 	char *src;
 
+	if (i >= node->fn_max_int) {
+		fnode_print(node);
+	}
 	KASSERT(i < node->fn_max_int, ("Insert is out of bounds at %d", i));
 
 	/* The keys scoot over to make room for the new one. */
@@ -854,8 +871,8 @@ fnode_internal_insert(struct fnode *node, void *key, bnode_ptr *val)
 
 	/* Find the proper position in the bnode to insert. */
 	start = 0;
-	end = NODE_SIZE(node);
-	if (end) {
+	end = NODE_SIZE(node) - 1;
+	if (NODE_SIZE(node)) {
 		index = -1;
 		while (start <= end) {
 			mid = (start + end) / 2;
@@ -902,8 +919,8 @@ fnode_external_insert(struct fnode *node, void *key, void *value)
 	int start, end, index, compare, mid;
 
 	start = 0;
-	end = NODE_SIZE(node);
-	if (end) {
+	end = NODE_SIZE(node) - 1;
+	if (NODE_SIZE(node)) {
 		index = -1;
 		while (start <= end) {
 			mid = (start + end) / 2;
@@ -1101,7 +1118,6 @@ fbtree_remove(struct fbtree *tree, void *key, void *value)
 	/* Find the only possible location of the key. */
 	error = fnode_follow(tree->bt_rootnode, key, &node);
 	if (error) {
-		DBUG("Problem following node\n");
 		return (error);
 	}
 

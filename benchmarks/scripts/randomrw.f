@@ -1,9 +1,10 @@
 set $dir=/testmnt
-set $filesize=1g
+set $filesize=2g
 set $iosize=64k
 set $nthreads=1
 set $workingset=0
 set $directio=0
+set $runtime=30
 
 define file name=largefile1,path=$dir,size=$filesize,prealloc,reuse,paralloc
 define file name=largefile2,path=$dir,size=$filesize,prealloc,reuse,paralloc
@@ -20,19 +21,15 @@ define process name=rand-rw,instances=1
   {
     flowop write name=rw2,filename=largefile2,iosize=$iosize,random,workingset=$workingset,directio=$directio
   }
-
   thread name=thwr3,memsize=5m,instances=$nthreads
   {
     flowop write name=rw3,filename=largefile3,iosize=$iosize,random,workingset=$workingset,directio=$directio
   }
-
   thread name=thwr4,memsize=5m,instances=$nthreads
   {
     flowop write name=rw4,filename=largefile4,iosize=$iosize,random,workingset=$workingset,directio=$directio
   }
-
 }
 
-run 10
-
+run $runtime
 echo "Random RW Version 3.0 personality successfully loaded"

@@ -44,33 +44,33 @@ int
 slsfs_new_node(struct slos *slos, mode_t mode, uint64_t *slsidp)
 {
 	int slsid;
-        int slsid_requested;
+	int slsid_requested;
 	int error;
 
-        /*
-         * Get an inode number if one is not specified.
-         *
-         * The unique identifier generator is 31-bit. This unfortunately
-         * means we have to truncate the SLS IDs passed by the SLS. Since the
-         * probability of a collision is small enough, this isn't a big limitation.
-         *
-         */
-        slsid_requested = OIDTOSLSID(*slsidp);
-        if (slsid_requested == 0) {
+	/*
+	 * Get an inode number if one is not specified.
+	 *
+	 * The unique identifier generator is 31-bit. This unfortunately
+	 * means we have to truncate the SLS IDs passed by the SLS. Since the
+	 * probability of a collision is small enough, this isn't a big limitation.
+	 *
+	 */
+	slsid_requested = OIDTOSLSID(*slsidp);
+	if (slsid_requested == 0) {
 		/* If any ID will do, we need to get one. */
-                slsid = alloc_unr(slsid_unr);
+		slsid = alloc_unr(slsid_unr);
 		if (slsid < 0)
 			return (EINVAL);
-         } else {
+	} else {
 		/* If we're going for a specific inode, it's fine if it's already there. */
-                slsid = alloc_unr_specific(slsid_unr, slsid_requested);
+		slsid = alloc_unr_specific(slsid_unr, slsid_requested);
 		if (slsid < 0) {
 			*slsidp = slsid_requested;
 			return (0);
 		}
-	 }
+	}
 
-        /* Create the inode. */
+	/* Create the inode. */
 	error = slos_icreate(slos, (uint64_t) slsid, mode);
 	if (error != 0) {
 		*slsidp = 0;
@@ -91,13 +91,13 @@ slsfs_remove_node(struct vnode *dvp, struct vnode *vp, struct componentname *nam
 	int error;
 	struct slos_node *svp = SLSVP(vp);
 
-        /* If the vnode is reachable from the root mount, unlink it. */
+	/* If the vnode is reachable from the root mount, unlink it. */
 	error = slsfs_unlink_dir(dvp, vp, name);
 	if (error != 0) {
 		return error;
 	}
 
-        /* Mark the node as dead. It will be cleaned up automatically. */
+	/* Mark the node as dead. It will be cleaned up automatically. */
 	svp->sn_status = SLOS_VDEAD;
 
 	return (0);
@@ -109,7 +109,7 @@ slsfs_remove_node(struct vnode *dvp, struct vnode *vp, struct componentname *nam
 int
 slsfs_destroy_node(struct slos_node *vp)
 {
-        KASSERT(vp->sn_status == SLOS_VDEAD, ("destroying still active node"));
+	KASSERT(vp->sn_status == SLOS_VDEAD, ("destroying still active node"));
 	return (0);
 }
 
@@ -146,7 +146,7 @@ restart:
 	BO_LOCK(bo);
 
 restart_locked:
-        /* Remove any clean buffers from the vnode's lists. */
+	/* Remove any clean buffers from the vnode's lists. */
 	TAILQ_FOREACH_SAFE(bp, &bo->bo_clean.bv_hd, b_bobufs, nbp) {
 		if (BUF_LOCK(bp, LK_EXCLUSIVE | LK_NOWAIT, NULL))
 			goto restart_locked;
@@ -160,7 +160,7 @@ restart_locked:
 		BO_LOCK(bo);
 	}
 
-        /* Flush any dirty buffers held by the vnode. */
+	/* Flush any dirty buffers held by the vnode. */
 	TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, nbp) {
 		if (BUF_LOCK(bp,
 		    LK_EXCLUSIVE | LK_SLEEPFAIL | LK_INTERLOCK,
@@ -178,10 +178,10 @@ restart_locked:
 		BO_LOCK(bo);
 	}
 
-        /*
-         * XXX Where does the actual truncation take place? For example, the
-         * size argument of this function never gets used.
-         */
+	/*
+	 * XXX Where does the actual truncation take place? For example, the
+	 * size argument of this function never gets used.
+	 */
 
 	BO_UNLOCK(bo);
 
@@ -195,13 +195,13 @@ slsfs_sync_vp(struct vnode *vp)
 	struct slos *slos = SLSVP(vp)->sn_slos;
 	struct bufobj *bo = &vp->v_bufobj;
 	struct buf *bp, *tbd;
-        int error;
+	int error;
 
-        /*
-         * XXX Do we assume we have the vnode lock? If so
-         * we should add a KASSERT.
-         */
-        /* Synchronously write all the buffers out. */
+	/*
+	 * XXX Do we assume we have the vnode lock? If so
+	 * we should add a KASSERT.
+	 */
+	/* Synchronously write all the buffers out. */
 	BO_LOCK(bo);
 	TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
 		if (BUF_LOCK(bp, LK_EXCLUSIVE | LK_INTERLOCK | LK_SLEEPFAIL, BO_LOCKPTR(bo)) == ENOLCK) {
@@ -212,19 +212,19 @@ slsfs_sync_vp(struct vnode *vp)
 	}
 	BO_UNLOCK(bo);
 
-        /*
-         * Trying to update the time on the vnode holding the inodes
-         * dirties it which means we have to sync it to disk again,
-         * which means we need to update the time again. Avoid this
-         * infinite loop by breaking out.
-         */
+	/*
+	 * Trying to update the time on the vnode holding the inodes
+	 * dirties it which means we have to sync it to disk again,
+	 * which means we need to update the time again. Avoid this
+	 * infinite loop by breaking out.
+	 */
 	if (vp == slos->slsfs_inodes)
 		return (0);
 
-        /* Update the last modified timestamps for the vnode. */
-        error = slos_updatetime(SLSVP(vp));
-        if (error != 0)
-            return (error);
+	/* Update the last modified timestamps for the vnode. */
+	error = slos_updatetime(SLSVP(vp));
+	if (error != 0)
+		return (error);
 
 	return (0);
 }
@@ -259,11 +259,11 @@ slsfs_bufwrite(struct buf *buf)
 int
 slsfs_bufsync(struct bufobj *bufobj, int waitfor)
 {
-        /* Add a check of whether it's dirty. */
-        /*
-         * XXX Do we assume we have the vnode lock? If so
-         * we should add a KASSERT.
-         */
+	/* Add a check of whether it's dirty. */
+	/*
+	 * XXX Do we assume we have the vnode lock? If so
+	 * we should add a KASSERT.
+	 */
 	return (slsfs_sync_vp(bo2vnode(bufobj)));
 }
 
@@ -280,13 +280,13 @@ slsfs_bufbdflush(struct bufobj *bufobj, struct buf *buf)
 void
 slsfs_bufstrategy(struct bufobj *bo, struct buf *bp)
 {
-        struct vnode *vp;
-        int error;
+	struct vnode *vp;
+	int error;
 
-        vp = bp->b_vp;
-        // The device is a VCHR but we still want to use vop strategy on it
-        // This is to allow us to bypass using BMAP operations on the vnode
-        KASSERT(vp->v_type != VCHR || vp == slos.slsfs_dev, ("Wrong vnode in buf strategy"));
-        error  = VOP_STRATEGY(vp, bp);
-        KASSERT(error == 0, ("VOP_STRATEGY failed"));
+	vp = bp->b_vp;
+	// The device is a VCHR but we still want to use vop strategy on it
+	// This is to allow us to bypass using BMAP operations on the vnode
+	KASSERT(vp->v_type != VCHR || vp == slos.slsfs_dev, ("Wrong vnode in buf strategy"));
+	error  = VOP_STRATEGY(vp, bp);
+	KASSERT(error == 0, ("VOP_STRATEGY failed"));
 }

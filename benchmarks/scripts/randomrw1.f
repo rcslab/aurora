@@ -4,6 +4,7 @@ set $iosize=64k
 set $nthreads=1
 set $workingset=0
 set $directio=0
+set $runtime=30
 
 define file name=largefile1,path=$dir,size=$filesize,prealloc,reuse,paralloc
 
@@ -15,6 +16,6 @@ define process name=rand-rw1,instances=1
   }
 }
 
-run 5
+run $runtime
 
 echo "Random RW Version 3.0 personality successfully loaded"

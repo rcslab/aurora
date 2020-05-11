@@ -1,10 +1,11 @@
 #!/bin/sh
-touch /testmnt/dd1
-touch /testmnt/dd2
-touch /testmnt/dd3
-touch /testmnt/dd4
+DEV=/testffs
+touch $DEV/dd1
+touch $DEV/dd2
+touch $DEV/dd3
+touch $DEV/dd4
 
-dd if=/dev/zero of=/testmnt/dd1 &
-dd if=/dev/zero of=/testmnt/dd2 &
-dd if=/dev/zero of=/testmnt/dd3 &
-dd if=/dev/zero of=/testmnt/dd4 &
+dd if=/dev/zero of=$DEV/dd1 &
+dd if=/dev/zero of=$DEV/dd2 &
+dd if=/dev/zero of=$DEV/dd3 &
+dd if=/dev/zero of=$DEV/dd4 &

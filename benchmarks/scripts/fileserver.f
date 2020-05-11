@@ -23,14 +23,13 @@
 # Use is subject to license terms.
 #
 
-set $dir=/tmp
+set $dir=/testmnt
 set $nfiles=10000
 set $meandirwidth=20
 set $filesize=cvar(type=cvar-gamma,parameters=mean:131072;gamma:1.5)
-set $nthreads=50
+set $nthreads=1
 set $iosize=1m
 set $meanappendsize=16k
-set $runtime=60
 
 define fileset name=bigfileset,path=$dir,size=$filesize,entries=$nfiles,dirwidth=$meandirwidth,prealloc=80
 
@@ -52,6 +51,6 @@ define process name=filereader,instances=1
   }
 }
 
+run 5
 echo  "File-server Version 3.0 personality successfully loaded"
 
-run $runtime

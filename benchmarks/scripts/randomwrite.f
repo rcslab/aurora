@@ -28,6 +28,7 @@ set $iosize=64k
 set $nthreads=1
 set $workingset=0
 set $directio=0
+set $runtime=30
 
 define file name=largefile1,path=$dir,size=$filesize,reuse
 
@@ -39,6 +40,6 @@ define process name=rand-write,instances=1
   }
 }
 
-run 5
+run 30
 
 echo "Random Write Version 3.0 personality successfully loaded"

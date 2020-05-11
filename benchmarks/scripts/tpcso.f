@@ -29,7 +29,7 @@
 # $nshadows - number of shadow processes
 # $ndbwriters - number of database writers
 
-set $dir=/tmp
+set $dir=/testmnt
 set $eventrate=0
 set $iosize=2k
 set $nshadows=200
@@ -38,7 +38,7 @@ set $runtime=30
 set $usermode=20000
 set $memperthread=1m
 
-debug 1
+# debug 1
 eventgen rate=$eventrate
 
 # Define a datafile and logfile
@@ -253,4 +253,5 @@ define process name=shadow,instances=$nshadows
   }
 }
 
+run 30
 echo "Tpcso Version 2.1 personality successfully loaded"

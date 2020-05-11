@@ -26,16 +26,17 @@
 # $nfiles - number of data files
 # $nthreads - number of worker threads
 
-set $dir=/tmp
+set $dir=/testmnt
 set $cached=false
 set $eventrate=10
 set $meandirwidth=20
 set $nthreads=1
-set $nfiles=10000
+set $nfiles=1000
 set $sync=false
-set $totalfiles=$nfiles * $eventrate
+set $totalfiles=10000
+set $runtime=30
 
-eventgen rate=$eventrate
+eventgen rate=10
 
 define randvar name=$wrtiosize, type=tabular, min=1k, round=1k, randtable =
 {{ 0,   1k,    7k},
@@ -114,4 +115,5 @@ define process name=netclient,instances=1
   }
 }
 
+run 30
 echo  "NetworkFileServer Version 1.0 personality successfully loaded"

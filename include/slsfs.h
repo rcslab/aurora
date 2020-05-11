@@ -9,9 +9,11 @@
 
 struct slos;
 
-#define SLOS_INODES_ROOT (10000)
-#define SLOS_ROOT_INODE (10001)
-#define SLOS_BMAP_INODE (10002)
+#define SLOS_INODES_ROOT (0)
+#define SLOS_ROOT_INODE (1)
+#define SLOS_BMAP_INODE (2)
+#define SLOS_SYSTEM_MAX (3)
+
 #define TOSMP(mp) ((struct slsfsmount *)(mp->mnt_data))
 #define MPTOSLOS(mp) ((TOSMP(mp)->sp_slos))
 #define SLSVP(vp) ((struct slos_node *)(vp->v_data))

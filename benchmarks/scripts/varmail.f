@@ -30,6 +30,7 @@ set $filesize=cvar(type=cvar-gamma,parameters=mean:16384;gamma:1.5)
 set $nthreads=1
 set $iosize=1m
 set $meanappendsize=4k
+set $runtime=30
 
 define fileset name=bigfileset,path=$dir,size=$filesize,entries=$nfiles,dirwidth=$meandirwidth,prealloc=80
 
@@ -53,5 +54,5 @@ define process name=filereader,instances=1
   }
 }
 
-run 5
+run $runtime
 echo  "Varmail Version 3.0 personality successfully loaded"

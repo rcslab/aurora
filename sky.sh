@@ -2,8 +2,6 @@
 
 gstripe destroy st0
 setup_stripe.sh
-gstripe destroy st0
-setup_stripe.sh
 
 DRIVE=/dev/stripe/st0
 
@@ -32,4 +30,7 @@ mount -rw -t slsfs $DRIVE /testmnt
 
 
 #mkdir -p /testmnt/dingdong/hello/2/
+
+# Optimized newfs
+# newfs -j -S 4096 -b 65536 $DRIVE
 
