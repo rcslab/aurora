@@ -23,6 +23,8 @@ int partadd_main(int argc, char *argv[]);
 void partdel_usage(void);
 int partdel_main(int argc, char *argv[]);
 
+void epoch_usage(void);
+int epoch_main(int argc, char *argv[]);
 
 #endif /* _SLSCTL_H_ */
 

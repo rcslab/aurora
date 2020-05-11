@@ -98,8 +98,27 @@ sls_partadd(uint64_t oid, const struct sls_attr attr)
 }
 
 /*
- * Detach a partition from the SLS. If the partition 
- * is being checkpointed periodically, the 
+ * Get the current epoch of the partition.
+ */
+int
+sls_epoch(uint64_t oid, uint64_t *epoch)
+{
+	struct sls_epoch_args args;
+	int ret;
+
+	args.oid = oid;
+	args.ret = epoch;
+	if (sls_ioctl(SLS_EPOCH, &args) != 0) {
+	    perror("sls_epoch");
+	    return -1;
+	}
+
+	return 0;
+}
+
+/*
+ * Detach a partition from the SLS. If the partition
+ * is being checkpointed periodically, the
  * checkpointing stops before detachment.
  */
 int

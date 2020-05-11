@@ -268,7 +268,7 @@ static int
 sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	int flag __unused, struct thread *td)
 {
-	struct proc_param *pparam = NULL;
+	struct sls_epoch_args *eargs = NULL;
 	struct slspart *slsp;
 	int error = 0;
 
@@ -298,17 +298,17 @@ sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		error = sls_restore((struct sls_restore_args *) data);
 		break;
 
-	    /* XXX This is a leftover from forever ago, remove. */
-	    case SLS_PROCSTAT:
-		pparam = (struct proc_param *) data;
+	    case SLS_EPOCH:
+		eargs = (struct sls_epoch_args *) data;
 
 		/* Try to find the process. */
-		slsp = slsp_find(pparam->pid);
+		slsp = slsp_find(eargs->oid);
 		if (slsp == NULL)
 		    return (EINVAL);
 
 		/* Copy out the status of the process. */
-		error = copyout(&slsp->slsp_status, pparam->ret, sizeof(*pparam->ret));
+		error = copyout(&slsp->slsp_epoch, eargs->ret,
+		    sizeof(slsp->slsp_epoch));
 
 		/* Free the reference given by slsp_find(). */
 		slsp_deref(slsp);

@@ -282,7 +282,10 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 
 	SDT_PROBE0(sls, , , dump);
 
+	/* Advance the current epoch. */
+	slsp_epoch_advance(slsp);
 
+	/* Possibly wait until the checkpoint is done. */
 	if (sls_sync)
 	    VFS_SYNC(slos.slsfs_mount, MNT_WAIT);
 

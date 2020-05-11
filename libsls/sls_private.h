@@ -3,7 +3,6 @@
 
 #include "sls_ioctl.h"
 
-int sls_proc(struct proc_param *param);
 int sls_ioctl(long ionum, void *args);
 
 #endif

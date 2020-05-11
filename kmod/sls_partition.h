@@ -22,6 +22,8 @@
 #define	SPROC_CHECKPOINTING 1	/* Process is currently being checkpointed */
 #define SPROC_DETACHED	    2	/* Process has been detached */
 
+#define SPROC_EPOCHINIT	    1	/* Initial epoch for each partition */
+
 struct slspart {
     uint64_t		    slsp_oid;	    /* OID of the partition */
     uint64_t		    slsp_epoch;	    /* Current epoch, incremented after ckpt */
@@ -54,5 +56,6 @@ void slsp_ref(struct slspart *slsp);
 void slsp_deref(struct slspart *slsp);
 
 int slsp_isempty(struct slspart *slsp);
+void slsp_epoch_advance(struct slspart *slsp);
 
 #endif /* _SLSPART_H_ */

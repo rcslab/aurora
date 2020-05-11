@@ -188,6 +188,7 @@ slsp_init(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
 	/* The SLS module itself holds one reference to the partition. */
 	slsp->slsp_refcount = 1;
 	slsp->slsp_status = SPROC_AVAILABLE;
+	slsp->slsp_epoch = SPROC_EPOCHINIT;
 
 	/* Create the set of held processes. */
 	error = slsset_create(&slsp->slsp_procs);
@@ -333,4 +334,10 @@ int
 slsp_isempty(struct slspart *slsp)
 {
 	return (slsp->slsp_procnum == 0);
+}
+
+void
+slsp_epoch_advance(struct slspart *slsp)
+{
+	slsp->slsp_epoch += 1;
 }

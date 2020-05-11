@@ -14,7 +14,7 @@ int sls_attach(uint64_t oid, uint64_t pid);
 int sls_partadd(uint64_t oid, const struct sls_attr attr);
 int sls_partdel(uint64_t oid);
 
-int sls_proc(struct proc_param *param);
+int sls_epoch(uint64_t oid, uint64_t *epoch);
 
 struct sls_stat {
     int type;

@@ -21,9 +21,8 @@ struct sls_restore_args {
 	uint64_t	    daemon; /* Restore the partition as a daemon */
 };
 
-struct proc_param {
-	int	    op;		    /* Operation code (status, stop, etc.) */
-	pid_t	    pid;	    /* PID of process */
+struct sls_epoch_args {
+	uint64_t    oid;	    /* OID of partition */
 	uint64_t    *ret;	    /* Output variable for the ioctl */
 };
 
@@ -42,26 +41,17 @@ struct sls_partdel_args {
 	uint64_t    oid;	/* OID of the partition to be detached from the SLS */
 };
 
-#define SLS_CHECKPOINT		_IOWR('d', 1, struct sls_checkpoint_args)
-#define SLS_RESTORE		_IOWR('d', 2, struct sls_restore_args)
-#define SLS_ATTACH		_IOWR('d', 3, struct sls_attach_args)
-#define SLS_PARTADD		_IOWR('d', 4, struct sls_partadd_args)
-#define SLS_PARTDEL		_IOWR('d', 5, struct sls_partdel_args)
-
-/* XXX These aren't well-defined, remove them and replace w/ sysctls */
-#define SLS_FLUSH_COUNT		_IOR('d', 6, int)
-#define SLS_PROC		_IOWR('d', 7, struct proc_param)
-
-/* 
- * XXX Use an encoding to catch errors like 
- * using the wrong subcommand for a command.
- */
+#define SLS_CHECKPOINT		_IOW('d', 1, struct sls_checkpoint_args)
+#define SLS_RESTORE		_IOW('d', 2, struct sls_restore_args)
+#define SLS_ATTACH		_IOW('d', 3, struct sls_attach_args)
+#define SLS_PARTADD		_IOW('d', 4, struct sls_partadd_args)
+#define SLS_PARTDEL		_IOW('d', 5, struct sls_partdel_args)
+#define SLS_EPOCH		_IOWR('d', 6, struct sls_epoch_args)
 
 /*
- * Opcodes for SLS_SLSP
+ * XXX Use an encoding to catch errors like
+ * using the wrong subcommand for a command.
  */
-#define SLS_PROCSTAT		0  /* Query status of process checkpointing */
-#define SLS_PROCSTOP		1  /* Stop process checkpointing */
 
 /*
  * Values for the mode field of the arguments for SLS_OP

@@ -136,6 +136,7 @@ extern int sls_sync;
 extern int sls_drop_io;
 extern uint64_t sls_pages_grabbed;
 extern uint64_t sls_io_initiated;
+extern uint64_t sls_epoch;
 
 extern uint64_t ckpt_attempted;
 extern uint64_t ckpt_done;

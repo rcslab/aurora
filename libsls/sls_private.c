@@ -34,10 +34,3 @@ sls_ioctl(long ionum, void *args)
 	return status;
 }
 
-/* XXX Will be removed when SLS_PROC gets refactored. */
-int
-sls_proc(struct proc_param *param)
-{
-	return sls_ioctl(SLS_PROC, param);
-}
-
