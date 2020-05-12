@@ -334,6 +334,8 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 	iov.iov_len = sizeof(ino);
 	slos_uioinit(&io, pid * blksize, UIO_WRITE, &iov, 1);
 
+	getnanotime(&tv);
+
 	ino.ino_pid = pid;
 	ino.ino_ctime = tv.tv_sec;
 	ino.ino_ctime_nsec = tv.tv_nsec;

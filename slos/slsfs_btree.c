@@ -237,7 +237,7 @@ fnode_follow(struct fnode *root, const void *key, struct fnode **node)
 			index++;
 		}
 		/* Create an in-memory copy of the next bnode in the path. */
-		fnode_fetch(cur, index, &next);
+		error = fnode_fetch(cur, index, &next);
 		if (error != 0) {
 			break;
 		}
@@ -506,7 +506,6 @@ int
 fnode_iter_next(struct fnode_iter *it)
 {
 	struct dnode *dn = it->it_node->fn_dnode;
-	bnode_ptr ptr;
 
 	/* An invalid iterator is still invalid after iteration . */
 	if (it->it_index == (-1)) {
@@ -522,7 +521,6 @@ fnode_iter_next(struct fnode_iter *it)
 		}
 
 		/* Otherwise switch nodes. */
-		ptr = dn->dn_rightnode;
 		fnode_right(it->it_node, &it->it_node);
 		it->it_index = 0;
 		return (0);
@@ -853,6 +851,9 @@ fnode_split(struct fnode *node)
 	 * This is indirectly recursive, but btrees are shallow so there is no problem
 	 */
 	error = fnode_insert(parent, fnode_getkey(node, mid_i), &right->fn_location);
+	if (error) {
+		return (error);
+	}
 	fnode_write(right);
 
 	return (0);

@@ -277,6 +277,7 @@ slos_bootinit(struct slos *slos)
 	/* Read the btree into memory to find unused space. */
 	error = slos_bootpopulate(slos, alloc);
 	if (error != 0) {
+	    free(alloc->bytemap, M_SLOS);
 	    free(alloc->stack, M_SLOS);
 	    free(alloc, M_SLOS);
 

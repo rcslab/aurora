@@ -1,4 +1,5 @@
 #include <sys/types.h>
+#include <sys/filio.h>
 #include <sys/param.h>
 #include <sys/ktr.h>
 #include <sys/kernel.h>
@@ -48,6 +49,19 @@ slsfs_inactive(struct vop_inactive_args *args)
 	}
 
 	return (error);
+}
+
+static int
+slsfs_ioctl(struct vop_ioctl_args *args)
+{
+	switch (args->a_command) {
+	case FIOSEEKDATA: // Fallthrough
+	case FIOSEEKHOLE:
+		printf("UNSUPPORTED SLSFS IOCTL FIOSEEKDATA/HOLE\n");
+		return (ENOSYS);
+	default:
+		return (ENOTTY);
+	}
 }
 
 static int
@@ -997,7 +1011,7 @@ struct vop_vector sls_vnodeops = {
 	.vop_create =		slsfs_create, 
 	.vop_getattr =		slsfs_getattr,
 	.vop_inactive =		slsfs_inactive,
-	.vop_ioctl =		VOP_PANIC, // TODO
+	.vop_ioctl =		slsfs_ioctl, // TODO
 	.vop_link =		VOP_PANIC, // TODO
 	.vop_lookup =		vfs_cache_lookup, 
 	.vop_markatime =	VOP_PANIC,
