@@ -36,7 +36,6 @@
 #include <slosmm.h>
 #include <btree.h>
 
-#include "slos_alloc.h"
 #include "slsfs_alloc.h"
 
 #include "slsfs_subr.h"

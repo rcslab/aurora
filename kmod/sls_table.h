@@ -9,7 +9,6 @@
 
 #include <sls_data.h>
 #include <slos.h>
-#include <slos_io.h>
 
 #include "sls_internal.h"
 #include "sls_kv.h"

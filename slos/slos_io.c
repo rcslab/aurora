@@ -65,57 +65,6 @@ slos_uioinit(struct uio *auio, uint64_t off, enum uio_rw rwflag,
 	auio->uio_resid = len;
 }
 
-/* 
- * Fill a UIO with len bytes worth of zeros. 
- * Code follows the same logic as the one
- * in dev/null/null.c, and ffs_read_hole().
- */
-int
-slos_uiozero(struct uio *auio, size_t xfersize)
-{
-	ssize_t saved_resid, tlen;
-	uint64_t offset;
-	int error = 0;
-	void *zbuf;
-
-
-	/* 
-	 * Temporarily save offset, it will be 
-	 * restored after we read the hole. 
-	 */
-	offset = auio->uio_offset;
-	auio->uio_offset = 0;
-
-
-	if (xfersize > auio->uio_resid)
-		xfersize = auio->uio_resid;
-
-	zbuf = __DECONST(void *, zero_region);
-	while (xfersize > 0) {
-		/* 
-		 * Read as much of the zero 
-		 * region as possible/needed.
-		 */
-		tlen = min(xfersize, ZERO_REGION_SIZE);
-		saved_resid = auio->uio_resid;
-
-		/* The actual transfer. */
-		error = vn_io_fault_uiomove(zbuf, tlen, auio);
-		if (error != 0)
-			break;
-
-		/* Find out how much was actually transferred. */
-		tlen = saved_resid - auio->uio_resid;
-		xfersize -= tlen;
-		offset += tlen;
-	}
-
-	auio->uio_offset = offset;
-
-
-	return error;
-}
-
 /*
  * Routines for filesystems actually backed by disks. The functions work
  * with the device itself.
@@ -293,7 +242,7 @@ slos_write_disk(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio
 /* 
  * Read from the disk/file backing the SLOS. This bypasses the buffer cache.
  */
-int
+static int
 slos_read(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
 {
 	struct uio *newuio;
@@ -331,7 +280,7 @@ slos_read(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
 /* 
  * Write to the disk/file backing the SLOS. 
  */
-int
+static int
 slos_write(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio)
 {
 	struct uio *newuio;
@@ -408,7 +357,8 @@ slos_readblk(struct slos *slos, uint64_t blkno, void *buf)
 	return slos_opblk(slos, blkno, buf, 0);
 }
 
-/* Write a block from disk into a contiguous buffer, bypassing the buffercache. */
+/* Write a block from disk into a contiguous buffer, bypassing the buffercache. 
+ * */
 int
 slos_writeblk(struct slos *slos, uint64_t blkno, void *buf)
 {
@@ -489,49 +439,6 @@ slos_sbread(struct slos * slos)
 	slos->slos_sb = sb;
 	return 0;
 }
-
-/* Write the superblock back to disk. */
-int
-slos_sbwrite(struct slos *slos)
-{
-	struct slos_diskptr sbptr;
-	struct iovec aiov;
-	struct uio auio;
-	int error;
-
-	/* If we're backed by a file, just call VOP_READ. */
-	if (slos->slos_vp->v_type == VREG) {
-		/* Write the first SLOS_FILEBLKSIZE bytes. */
-		aiov.iov_base = slos->slos_sb;
-		aiov.iov_len = SLOS_FILEBLKSIZE;
-		slos_uioinit(&auio, 0, UIO_WRITE, &aiov, 1);
-
-		/* Issue the write. */
-		error = VOP_WRITE(slos->slos_vp, &auio, 0, curthread->td_ucred);
-
-		return error ;
-	}
-
-	sbptr = (struct slos_diskptr) {
-		.offset = 0,
-		    .size = 1,
-	};
-
-	aiov.iov_base = slos->slos_sb;
-	aiov.iov_len = slos->slos_sb->sb_bsize;
-
-	slos_uioinit(&auio, 0, UIO_WRITE, &aiov, 1);
-
-	/* 
-	 * Since we have the superblock in memory , we can use
-	 * our routines which make use of its fields. No need
-	 * for a raw block operation as in slos_sbread().
-	 */
-	error = slos_write(slos, &sbptr,  &auio);
-
-	return error;
-}
-
 
 #ifdef SLOS_TESTS
 

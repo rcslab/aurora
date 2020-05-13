@@ -34,6 +34,7 @@
 #include <slos.h>
 #include <slsfs.h>
 #include <sls_data.h>
+#include <slos_io.h>
 #include <slos_record.h>
 
 #include "sls_internal.h"

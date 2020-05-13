@@ -90,10 +90,8 @@ int slos_iremove(struct slos *slos, uint64_t pid);
 
 int slos_updatetime(struct slos_node *svp);
 int slos_updateroot(struct slos_node *svp);
-void slos_timechange(struct slos_node *svp);
 
 struct slos_node *slos_iopen(struct slos *slos, uint64_t pid);
-int slos_iclose(struct slos *slos, struct slos_node *vno);
 
 struct slos_node *slos_istat(struct slos *slos, uint64_t inoblk);
 

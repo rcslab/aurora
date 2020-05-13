@@ -9,7 +9,6 @@
 #include <slosmm.h>
 
 #include "slsfs_buf.h"
-#include "slos_alloc.h"
 #include "btree.h"
 
 /*

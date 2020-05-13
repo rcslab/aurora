@@ -22,7 +22,7 @@ do
 	echo $entry
 	filebench -f $entry > $1/$entry.out
 
-	umount -f $MNT
+	umount $MNT
 	kldunload slos.ko
 	gstripe destroy st0
 done

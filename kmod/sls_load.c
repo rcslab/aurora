@@ -1,6 +1,7 @@
 #include <sys/types.h>
 
 #include <sys/conf.h>
+#include <sys/file.h>
 #include <sys/kernel.h>
 #include <sys/limits.h>
 #include <sys/malloc.h>
@@ -39,7 +40,6 @@
 
 #include <slos.h>
 #include <slos_record.h>
-#include <slos_io.h>
 
 /* 
  * Read an info struct from the buffer, if there is enough data,

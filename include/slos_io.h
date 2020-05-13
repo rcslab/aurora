@@ -10,16 +10,10 @@
 
 #include <slos.h>
 
-
-int slos_read(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio);
-int slos_write(struct slos *slos, struct slos_diskptr *diskptr, struct uio *uio);
-
 void slos_uioinit(struct uio *auio, uint64_t off, enum uio_rw rwflag, 
 	struct iovec *aiovs, size_t iovcnt);
-int slos_uiozero(struct uio *auio, size_t len);
 
 int slos_sbread(struct slos *slos);
-int slos_sbwrite(struct slos *slos);
 
 int slos_readblk(struct slos *slos, uint64_t blkno, void *buf);
 int slos_writeblk(struct slos *slos, uint64_t blkno, void *buf);

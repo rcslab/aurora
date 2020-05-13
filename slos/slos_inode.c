@@ -9,7 +9,6 @@
 #include <slos_inode.h>
 #include <slsfs.h>
 
-#include "slos_alloc.h"
 #include "slos_btree.h"
 #include "slos_bnode.h"
 #include "slos_io.h"
@@ -109,6 +108,7 @@ slos_newnode(struct slos* slos, uint64_t pid, struct slos_node **vpp)
 		free(vp, M_SLOS);
 		return (error);
 	}
+
 	vp->sn_pid = vp->sn_ino.ino_pid;
 	vp->sn_uid = vp->sn_ino.ino_uid;
 	vp->sn_gid = vp->sn_ino.ino_gid;
@@ -147,6 +147,7 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 		DBUG("ERROR READING");
 		return NULL;
 	}
+
 	vp = malloc(sizeof(struct slos_node), M_SLOS, M_WAITOK | M_ZERO);
 	/* Move each field separately, translating between the two. */
 	vp->sn_ino = *ino;
@@ -169,8 +170,8 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 	    sizeof(diskptr_t), &compare_vnode_t, "VNode Tree", 0, &vp->sn_tree);
 
 	mtx_init(&vp->sn_mtx, "slosvno", NULL, MTX_DEF);
-
 	free(ino, M_SLOS);
+
 	return vp;
 }
 
@@ -216,84 +217,6 @@ slos_vpfree(struct slos *slos, struct slos_node *vp)
 	mtx_destroy(&vp->sn_mtx);
 
 	free(vp, M_SLOS);
-}
-
-/* Free the on-disk resources for an inode. */
-static void
-slos_ifree(struct slos *slos, struct slos_node *vp)
-{
-#if 0
-	uint64_t prevroot;
-	int error;
-
-	/*
-	 * Detach both the inode and the vnode from 
-	 * the SLOS-wide indexes.
-	 */
-
-	/* Remove the inode from the inodes btree. */
-	error = btree_delete(slos->slos_inodes, vp->sn_pid);
-	if (error != 0)
-		goto error;
-
-	/* 
-	 * If we changed the root of the inode 
-	 * btree, update the superblock. 
-	 */
-	if (slos->slos_inodes->root != slos->slos_sb->sb_inodes.offset) {
-		prevroot = slos->slos_sb->sb_inodes.offset; 
-		slos->slos_sb->sb_inodes.offset = slos->slos_inodes->root;
-
-		error = slos_sbwrite(slos);
-		if (error != 0) {
-			/* If it failed, roll back the change of root. */
-			slos->slos_sb->sb_inodes.offset = prevroot;
-			goto error;
-		}
-	}
-
-	/*
-	 * Free all in-memory resources.
-	 */
-
-	/* 
-	 * While destroying the records themselves 
-	 * in here would be messy, destroying the
-	 * records btree is not.
-	 */
-
-	/* Traverse the tree, one record at a time. */
-	/* 
-	 * XXX Free record-related blocks. This can be left to the GC
-	 * by doing the "deferred transactions" thing.
-	 */
-
-	/* Give the root node of the btree back to the allocator. */
-	slos_free(slos->slos_alloc, DISKPTR_BLOCK(vp->sn_records->root));
-
-	/* Free the inode itself. */
-	slos_free(slos->slos_alloc, DISKPTR_BLOCK(vp->sn_blk));
-
-	/* 
-	 * Remove the in-memory resources. 
-	 */
-
-	slos_vpfree(slos, vp);
-
-	btree_discardelem(slos->slos_inodes);
-
-	return;
-error:
-	btree_keepelem(vp->sn_records);
-	btree_keepelem(slos->slos_inodes);
-
-	/* 
-	 * No matter whether we failed, we still
-	 * don't need the in-memory vnode. Free it. 
-	 */
-	slos_vpfree(slos, vp);
-#endif
-	/* XXX Implement */
 }
 
 /* Create an inode for the process with the given PID. */
@@ -434,13 +357,18 @@ slos_iremove(struct slos *slos, uint64_t pid)
 struct slos_node *
 slos_iopen(struct slos *slos, uint64_t pid)
 {
-	DBUG("Opening Inode %lx\n", pid);
-	struct slos_node *vp = NULL;
 	int error;
-	/* We should not hold this essentially global lock in this object. We 
+	struct slos_node *vp = NULL;
+
+	DBUG("Opening Inode %lx\n", pid);
+
+	/*
+	 * We should not hold this essentially global lock in this object. We 
 	 * can run into a scenario where when we search through the btree, we 
 	 * end up having to sleep while
-	 * we wait for the buffer, current fix is to allow sleeping on this lock*/
+	 * we wait for the buffer, current fix is to allow sleeping on this lock
+	 */
+
 	if (pid == SLOS_INODES_ROOT) {
 		vp = slos_vpimport(slos, slos->slos_sb->sb_root.offset);
 		if (vp == NULL) {
@@ -460,50 +388,15 @@ slos_iopen(struct slos *slos, uint64_t pid)
 	return vp; 
 }
 
-/* 
- * Close an open vnode.
- */
-int
-slos_iclose(struct slos *slos, struct slos_node *vp)
-{
-	int error;
-
-	SLOS_LOCK(slos);
-	/* Export the disk inode if it's still alive. */
-	if (vp->sn_status == SLOS_VALIVE) {
-		error = slos_vpexport(slos, vp);
-		if (error != 0) {
-			SLOS_UNLOCK(slos);
-			return error;
-		}
-	}
-	SLOS_UNLOCK(slos);
-
-	mtx_lock(&vp->sn_mtx);
-	vp->sn_refcnt -= 1;
-	mtx_unlock(&vp->sn_mtx);
-	if (vp->sn_refcnt == 0) {
-		/* The file has been deleted, free it. */
-		if (vp->sn_status == SLOS_VDEAD) {
-			/* Free both the inode and the vnode. */
-			DBUG("iclose vdead\n");
-			slos_ifree(slos, vp);
-		} else {
-			/* Destroy only the in-memory vnode. */
-			DBUG("iclose vpfree\n");
-			slos_vpfree(slos, vp);
-		}
-	} 
-
-	return 0;
-}
-
-// We assume the svp struct is locked
-void 
-slos_timechange(struct slos_node *svp)
+// We assume that svp is under the VOP_LOCK, we currently just check if the svp 
+// being updated is the root itself
+int 
+slos_updatetime(struct slos_node *svp)
 {
 	struct timespec ts;
 	struct slos_inode *ino;
+
+	mtx_lock(&svp->sn_mtx);
 
 	ino = &svp->sn_ino;
 
@@ -514,16 +407,8 @@ slos_timechange(struct slos_node *svp)
 	ino->ino_ctime_nsec = ts.tv_nsec;
 	ino->ino_mtime = ts.tv_sec;
 	ino->ino_mtime_nsec = ts.tv_nsec;
-}
-
-// We assume that svp is under the VOP_LOCK, we currently just check if the svp 
-// being updated is the root itself
-int 
-slos_updatetime(struct slos_node *svp)
-{
-	mtx_lock(&svp->sn_mtx);
-	slos_timechange(svp);
 	mtx_unlock(&svp->sn_mtx);
+
 	return (0);
 }
 

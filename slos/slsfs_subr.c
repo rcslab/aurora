@@ -22,8 +22,6 @@
 #include <slosmm.h>
 #include <btree.h>
 
-#include "../slos/slos_alloc.h"
-
 #include "slsfs.h"
 #include "slsfs_subr.h"
 #include "slsfs_dir.h"

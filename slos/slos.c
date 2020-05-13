@@ -21,7 +21,6 @@
 #include <slos_btree.h>
 #include <slos_record.h>
 
-#include "slos_alloc.h"
 #include "slos_io.h"
 #include "slosmm.h"
 
