@@ -87,6 +87,9 @@ struct slos_node {
 
 LIST_HEAD(slos_vnlist, slos_node);
 
+int slos_init(void);
+int slos_uninit(void);
+
 int slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode);
 int slos_iremove(struct slos *slos, uint64_t pid);
 

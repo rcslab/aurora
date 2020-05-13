@@ -160,6 +160,20 @@ slsfs_allocator_init(struct slos *slos)
 };
 
 /*
+ * Initialize the in-memory allocator state at mount time.
+ */
+int
+slsfs_allocator_uninit(struct slos *slos)
+{
+    slos_vpfree(slos, slos->slsfs_alloc.a_offset);
+    slos->slsfs_alloc.a_offset = NULL;
+    slos_vpfree(slos, slos->slsfs_alloc.a_size);
+    slos->slsfs_alloc.a_size = NULL;
+
+    return (0);
+}
+
+/*
  * Flush the allocator state to disk.
  */
 int

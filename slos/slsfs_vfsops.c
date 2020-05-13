@@ -62,6 +62,9 @@ struct unrhdr *slsid_unr;
 static int
 slsfs_init(struct vfsconf *vfsp)
 {
+	/* Setup slos structures */
+	slos_init();
+
 	/* Get a new unique identifier generator. */
 	slsid_unr = new_unrhdr(SLOS_SYSTEM_MAX, INT_MAX, NULL);
 	fnode_zone = uma_zcreate("Btree Fnode slabs", sizeof(struct fnode), NULL, NULL, NULL, NULL, UMA_ALIGN_PTR, 0);
@@ -83,6 +86,7 @@ slsfs_uninit(struct vfsconf *vfsp)
 	delete_unrhdr(slsid_unr);
 	slsid_unr = NULL;
 	uma_zdestroy(fnode_zone);
+	slos_uninit();
 
 	return (0);
 }
@@ -93,7 +97,6 @@ slsfs_uninit(struct vfsconf *vfsp)
 static int
 slsfs_inodes_init(struct mount *mp, struct slos *slos)
 {
-	struct slos_node *node;
 	int error;
 
 	/* Create the vnode for the inode root. */
@@ -101,8 +104,6 @@ slsfs_inodes_init(struct mount *mp, struct slos *slos)
 	if (error) {
 		return (error);
 	}
-
-	node = SLSVP(slos->slsfs_inodes);
 
 	/* Create the filesystem root. */
 	DBUG("Initing the root inode\n");
@@ -123,7 +124,6 @@ static int
 slsfs_create_slos(struct mount *mp, struct vnode *devvp)
 {
 	int error;
-
 
 	slos.slos_vp = devvp;
 
@@ -289,7 +289,7 @@ slsfs_mountfs(struct vnode *devvp, struct mount *mp)
 		goto error;
 
 	/* Create the in-memory data for the filesystem instance. */
-	smp = (struct slsfsmount *) malloc(sizeof(struct slsfsmount), M_SLSFSMNT, M_WAITOK | M_ZERO);
+	smp = (struct slsfsmount *)malloc(sizeof(struct slsfsmount), M_SLSFSMNT, M_WAITOK | M_ZERO);
 	if (error) {
 		goto error;
 	}
@@ -636,12 +636,14 @@ slsfs_unmount_device(struct slsfs_device *sdev)
 
 	SLOS_UNLOCK(&slos);
 
+	slsfs_allocator_uninit(&slos);
+
 	/* Destroy related in-memory locks. */
 	lockdestroy(&slos.slos_lock);
 	vnode_destroy_vobject(slos.slsfs_dev);
 
 	slos.slsfs_dev = NULL;
-	free(slos.slos_sb, M_SLOS);
+	free(slos.slos_sb, M_SLOS_SB);
 
 	/* Destroy the device. */
 	mtx_destroy(&sdev->g_mtx);
@@ -713,7 +715,7 @@ slsfs_unmount(struct mount *mp, int mntflags)
 {
 	struct slsfs_device *sdev;
 	struct slsfsmount *smp;
-	struct slos * slos;
+	struct slos *slos;
 	int error;
 	int flags = 0;
 
@@ -726,7 +728,7 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	}
 
 	/* Remove all SLOS_related vnodes. */
-	error = vflush(mp, 0, flags | SKIPSYSTEM, curthread);
+	error = vflush(mp, 0, flags/* | SKIPSYSTEM*/, curthread);
 	if (error) {
 		return (error);
 	}
@@ -737,6 +739,14 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	 * vnodes, so this is going to be the last flush we need.
 	 */
 	slsfs_wakeup_syncer(1);
+
+	/* 
+	 * Seems like we don't call reclaim on a reference count drop so I 
+	 * manually call slos_vpfree to release the memory.
+	 */
+	slos_vpfree(slos, SLSVP(slos->slsfs_inodes));
+	vrele(slos->slsfs_inodes);
+	slos->slsfs_inodes = NULL;
 
 	DBUG("Flushed all active vnodes\n");
 	/* Remove the mounted device. */

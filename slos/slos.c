@@ -25,6 +25,7 @@
 #include "slosmm.h"
 
 MALLOC_DEFINE(M_SLOS, "slos", "SLOS");
+MALLOC_DEFINE(M_SLOS_SB, "slos superblock", "SLOSS");
 
 /* We have only one SLOS currently, make it global. */
 struct slos slos;

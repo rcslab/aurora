@@ -6,5 +6,6 @@
 #include <sys/malloc.h>
 
 MALLOC_DECLARE(M_SLOS);
+MALLOC_DECLARE(M_SLOS_SB);
 
 #endif

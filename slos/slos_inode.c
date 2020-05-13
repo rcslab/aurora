@@ -1,9 +1,13 @@
-#include <sys/param.h>
 
-#include <sys/sbuf.h>
-#include <sys/time.h>
-#include <sys/buf.h>
+#include <sys/param.h>
 #include <sys/bio.h>
+#include <sys/buf.h>
+#include <sys/kernel.h>
+#include <sys/malloc.h>
+#include <sys/sbuf.h>
+#include <sys/sysctl.h>
+#include <sys/time.h>
+#include <vm/uma.h>
 
 #include <slos.h>
 #include <slos_inode.h>
@@ -16,6 +20,78 @@
 #include "slsfs.h"
 #include "slsfs_buf.h"
 
+
+static MALLOC_DEFINE(M_SLOS_INO, "slos inodes", "SLOSI");
+
+uma_zone_t slos_node_zone;
+struct sysctl_ctx_list slos_ctx;
+
+#ifdef INVARIANTS
+static void
+slos_node_dtor(void *mem, int size, void *arg)
+{
+	struct slos_node *node = (struct slos_node *)mem;
+
+	mtx_lock(&node->sn_mtx);
+	mtx_unlock(&node->sn_mtx);
+}
+#endif
+
+static int
+slos_node_init(void *mem, int size, int rflags)
+{
+	struct slos_node *node = (struct slos_node *)mem;
+
+	mtx_init(&node->sn_mtx, "slosvno", NULL, MTX_DEF);
+
+	return (0);
+}
+
+static void
+slos_node_fini(void *mem, int size)
+{
+	struct slos_node *node = (struct slos_node *)mem;
+
+	/* Free its resources. */
+	mtx_lock(&node->sn_mtx);
+	mtx_destroy(&node->sn_mtx);
+}
+
+int
+slos_init(void)
+{
+	struct sysctl_oid *root;
+
+	slos_node_zone = uma_zcreate("slos node zone", sizeof(struct slos_node),
+	    NULL,
+#ifdef INVARIANTS
+	    slos_node_dtor,
+#else
+	    NULL,
+#endif
+	    slos_node_init, slos_node_fini, 0, 0);
+
+	sysctl_ctx_init(&slos_ctx);
+	root = SYSCTL_ADD_ROOT_NODE(&slos_ctx, OID_AUTO, "aurora_slos", CTLFLAG_RW, 0,
+	    "Aurora object store statistics and configuration variables");
+	(void) SYSCTL_ADD_UMA_MAX(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "slos_node_zone_max",
+	    CTLFLAG_RW, slos_node_zone, "In-memory node UMA maximum");
+	(void) SYSCTL_ADD_UMA_CUR(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "slos_node_zone_cur",
+	    CTLFLAG_RW, slos_node_zone, "In-memory node UMA current");
+
+	return (0);
+}
+
+int
+slos_uninit(void)
+{
+	sysctl_ctx_free(&slos_ctx);
+
+	uma_zdestroy(slos_node_zone);
+    
+	return (0);;
+}
+
 static int
 compare_vnode_t(const void *k1, const void *k2)
 {
@@ -26,8 +102,9 @@ compare_vnode_t(const void *k1, const void *k2)
 		return 1;
 	} else if (*key1 < *key2) {
 		return -1;
-	} 
-	return 0;
+	}
+
+	return (0);
 }
 
 /*
@@ -39,12 +116,12 @@ slos_iread(struct slos *slos, uint64_t blkno, struct slos_inode **inop)
 	struct slos_inode *ino;
 	int error;
 
-	ino = malloc(slos->slos_sb->sb_bsize, M_SLOS, M_WAITOK);
+	ino = malloc(slos->slos_sb->sb_bsize, M_SLOS_INO, M_WAITOK);
 
 	/* Read the bnode from the disk. */
 	error = slos_readblk(slos, blkno, ino); 
 	if (error != 0) {
-		free(ino, M_SLOS);
+		free(ino, M_SLOS_INO);
 		return error;
 	}
 
@@ -53,13 +130,13 @@ slos_iread(struct slos *slos, uint64_t blkno, struct slos_inode **inop)
 	 * something that's not an inode. 
 	 */
 	if (ino->ino_magic != SLOS_IMAGIC) {
-		free(ino, M_SLOS);
+		free(ino, M_SLOS_INO);
 		return EINVAL;
 	}
 
 	*inop = ino;
 
-	return 0;
+	return (0);
 }
 
 /*
@@ -68,6 +145,7 @@ slos_iread(struct slos *slos, uint64_t blkno, struct slos_inode **inop)
 static int
 slos_iwrite(struct slos *slos, struct slos_inode *ino)
 {
+
 	if (ino->ino_magic != SLOS_IMAGIC)
 		return EINVAL;
 
@@ -78,8 +156,9 @@ slos_iwrite(struct slos *slos, struct slos_inode *ino)
 static int
 slos_readino(struct slos *slos, uint64_t pid, struct slos_inode *ino)
 {
-	struct buf *buf;
 	int error;
+	struct buf *buf;
+
 	VOP_LOCK(slos->slsfs_inodes, LK_SHARED);
 
 	error = slsfs_bread(slos->slsfs_inodes, pid, BLKSIZE(slos), NULL, &buf);
@@ -88,9 +167,11 @@ slos_readino(struct slos *slos, uint64_t pid, struct slos_inode *ino)
 	}
 
 	memcpy(ino, buf->b_data, sizeof(*ino));
+
 	VOP_UNLOCK(slos->slsfs_inodes, 0);
 
 	brelse(buf);
+
 	return (0);
 }
 
@@ -98,14 +179,15 @@ slos_readino(struct slos *slos, uint64_t pid, struct slos_inode *ino)
 int
 slos_newnode(struct slos* slos, uint64_t pid, struct slos_node **vpp)
 {
-	struct slos_node *vp;
 	int error;
+	struct slos_node *vp;
 
 	/* Read the inode from disk. */
-	vp = malloc(sizeof(struct slos_node), M_SLOS, M_WAITOK | M_ZERO);
+	vp = uma_zalloc(slos_node_zone, M_WAITOK);
+
 	error = slos_readino(slos, pid, &vp->sn_ino);
 	if (error) {
-		free(vp, M_SLOS);
+		uma_zfree(slos_node_zone, vp);
 		return (error);
 	}
 
@@ -124,10 +206,9 @@ slos_newnode(struct slos* slos, uint64_t pid, struct slos_node **vpp)
 	fbtree_init(slos->slsfs_dev, vp->sn_ino.ino_btree.offset, sizeof(uint64_t), 
 	    sizeof(diskptr_t), &compare_vnode_t, "Vnode Tree", 0, &vp->sn_tree);
 
-	mtx_init(&vp->sn_mtx, "slosvno", NULL, MTX_DEF);
-
 	*vpp = vp;
-	return 0;
+
+	return (0);
 }
 
 /*
@@ -137,18 +218,19 @@ slos_newnode(struct slos* slos, uint64_t pid, struct slos_node **vpp)
 struct slos_node *
 slos_vpimport(struct slos *slos, uint64_t inoblk)
 {
+	int error;
 	struct slos_inode *ino;
 	struct slos_node *vp = NULL;
-	int error;
 
 	/* Read the inode from disk. */
 	error = slos_iread(slos, inoblk, &ino);
 	if (error != 0) {
 		DBUG("ERROR READING");
-		return NULL;
+		return (NULL);
 	}
 
-	vp = malloc(sizeof(struct slos_node), M_SLOS, M_WAITOK | M_ZERO);
+	vp = uma_zalloc(slos_node_zone, M_WAITOK);
+
 	/* Move each field separately, translating between the two. */
 	vp->sn_ino = *ino;
 	vp->sn_pid = ino->ino_pid;
@@ -169,18 +251,17 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 	fbtree_init(slos->slsfs_dev, ino->ino_btree.offset, sizeof(uint64_t),
 	    sizeof(diskptr_t), &compare_vnode_t, "VNode Tree", 0, &vp->sn_tree);
 
-	mtx_init(&vp->sn_mtx, "slosvno", NULL, MTX_DEF);
-	free(ino, M_SLOS);
+	free(ino, M_SLOS_INO);
 
-	return vp;
+	return (vp);
 }
 
 /* Export an updated vnode into the on-disk inode. */
 int
 slos_vpexport(struct slos *slos, struct slos_node *vp)
 {
-	struct slos_inode *ino;
 	int error;
+	struct slos_inode *ino;
 
 	/* Bring in the inode from the disk. */
 	error = slos_iread(slos, vp->sn_blk, &ino);
@@ -198,25 +279,23 @@ slos_vpexport(struct slos *slos, struct slos_node *vp)
 	/* Write the inode back to the disk. */
 	error = slos_iwrite(slos, ino);
 	if (error != 0) {
-		free(ino, M_SLOS);
+		free(ino, M_SLOS_INO);
 		return error;
 	}
 
 	vp->sn_ino = *ino;
 
-	free(ino, M_SLOS);
-	return 0;
+	free(ino, M_SLOS_INO);
+
+	return (0);
 }
 
 /* Free an in-memory vnode. */
 void
 slos_vpfree(struct slos *slos, struct slos_node *vp)
 {
-	/* Free its resources. */
-	mtx_lock(&vp->sn_mtx);
-	mtx_destroy(&vp->sn_mtx);
 
-	free(vp, M_SLOS);
+	uma_zfree(slos_node_zone, vp);
 }
 
 /* Create an inode for the process with the given PID. */
@@ -229,6 +308,8 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 	struct fnode_iter iter;
 	struct slos_inode ino;
 	diskptr_t ptr;
+	struct uio io;
+	struct iovec iov;
 
 	struct vnode *root_vp = slos->slsfs_inodes;
 	struct slos_node *svp = SLSVP(root_vp);
@@ -251,8 +332,6 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 		return EINVAL;
 	}
 
-	struct uio io;
-	struct iovec iov;
 	iov.iov_base = &ino;
 	iov.iov_len = sizeof(ino);
 	slos_uioinit(&io, pid * blksize, UIO_WRITE, &iov, 1);
@@ -293,7 +372,7 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 	// the proper ino blk number when it syncs
         DBUG("Created inode %lx\n", pid);
 
-	return 0;
+	return (0);
 }
 
 int
@@ -387,7 +466,7 @@ slos_iopen(struct slos *slos, uint64_t pid)
 	}
 	DBUG("Opened Inode %lx\n", pid);
 
-	return vp; 
+	return (vp); 
 }
 
 // We assume that svp is under the VOP_LOCK, we currently just check if the svp 
@@ -417,9 +496,11 @@ slos_updatetime(struct slos_node *svp)
 int 
 slos_updateroot(struct slos_node *svp)
 {
-	struct buf *bp;
 	int error;
+	struct buf *bp;
+
 	VOP_LOCK(slos.slsfs_inodes, LK_EXCLUSIVE);
+
 	error = slsfs_bread(slos.slsfs_inodes, svp->sn_pid, IOSIZE(svp), NULL, &bp);
 	if (error) {
 		VOP_UNLOCK(slos.slsfs_inodes, 0);
@@ -427,7 +508,9 @@ slos_updateroot(struct slos_node *svp)
 	}
 	memcpy(bp->b_data, &svp->sn_ino, sizeof(svp->sn_ino));
 	slsfs_bdirty(bp);
+
 	VOP_UNLOCK(slos.slsfs_inodes, 0);
+
 	return (0);
 }
 

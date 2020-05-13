@@ -401,7 +401,8 @@ slsfs_create(struct vop_create_args *args)
 		return (error);
 	} 
 
-	error = slsfs_add_dirent(dvp, VINUM(vp), name->cn_nameptr, name->cn_namelen, DT_REG);
+	error = slsfs_add_dirent(dvp, VINUM(vp), name->cn_nameptr,
+	    name->cn_namelen, DT_REG);
 	if (error == -1) {
 		return (EIO);
 	}

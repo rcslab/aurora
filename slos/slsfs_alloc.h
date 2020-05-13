@@ -6,4 +6,5 @@
 #define STREE(slos) (&((slos)->slsfs_alloc.a_size->sn_tree))
 
 int slsfs_allocator_init(struct slos *slos);
+int slsfs_allocator_uninit(struct slos *slos);
 int slsfs_allocator_sync(struct slos *slos);

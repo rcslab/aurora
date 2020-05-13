@@ -382,7 +382,7 @@ slos_sbread(struct slos * slos)
 
 	/* If we're backed by a file, just call VOP_READ. */
 	if (slos->slos_vp->v_type == VREG) {
-		sb = malloc(SLOS_FILEBLKSIZE, M_SLOS, M_WAITOK | M_ZERO);
+		sb = malloc(SLOS_FILEBLKSIZE, M_SLOS_SB, M_WAITOK | M_ZERO);
 
 		/* Read the first SLOS_FILEBLKSIZE bytes. */
 		aiov.iov_base = sb;
@@ -411,7 +411,7 @@ slos_sbread(struct slos * slos)
 		return error;
 	}
 
-	sb = malloc(st.st_blksize, M_SLOS, M_WAITOK | M_ZERO);
+	sb = malloc(st.st_blksize, M_SLOS_SB, M_WAITOK | M_ZERO);
 
 	/* 
 	 * Since our read routines use the superblock's data to find
