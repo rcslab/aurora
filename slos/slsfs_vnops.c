@@ -52,19 +52,6 @@ slsfs_inactive(struct vop_inactive_args *args)
 }
 
 static int
-slsfs_ioctl(struct vop_ioctl_args *args)
-{
-	switch (args->a_command) {
-	case FIOSEEKDATA: // Fallthrough
-	case FIOSEEKHOLE:
-		printf("UNSUPPORTED SLSFS IOCTL FIOSEEKDATA/HOLE\n");
-		return (ENOSYS);
-	default:
-		return (ENOTTY);
-	}
-}
-
-static int
 slsfs_getattr(struct vop_getattr_args *args)
 {
 	struct vnode *vp = args->a_vp;
@@ -998,6 +985,107 @@ bad:
 	return (error);
 }
 
+/* Seek an extent. Gets the first start of an extent after the offset. */
+static int
+slsfs_seekextent(struct slos_node *svp, struct uio *uio)
+{
+	struct fnode_iter iter;
+	uint64_t offset;
+	uint64_t size;
+	uint64_t blocks;
+	int error;
+
+	offset = uio->uio_offset / PAGE_SIZE;
+	size = 0;
+
+	/* Get btree for vnode */
+	BTREE_LOCK(&svp->sn_tree, LK_SHARED);
+	error = fbtree_keymax_iter(&svp->sn_tree, &offset, &iter);
+	if (error != 0) {
+		BTREE_UNLOCK(&svp->sn_tree, 0);
+		return (error);
+	}
+
+	if (ITER_ISNULL(iter)) {
+		uio->uio_offset = EOF;
+		uio->uio_resid = 0;
+		goto out;
+	}
+
+	offset = ITER_KEY_T(iter, uint64_t);
+	blocks = (ITER_VAL_T(iter, diskptr_t).size) / PAGE_SIZE;
+	KASSERT(blocks != 0, ("zero IO"));
+
+	uio->uio_offset = offset * PAGE_SIZE;
+	uio->uio_resid = blocks * PAGE_SIZE;
+
+	for (; !ITER_ISNULL(iter); ITER_NEXT(iter)) {
+		if (offset + blocks != ITER_KEY_T(iter, uint64_t))
+			break;
+
+		offset = ITER_KEY_T(iter, uint64_t);
+		blocks = (ITER_VAL_T(iter, diskptr_t).size) / PAGE_SIZE;
+
+		uio->uio_resid += blocks * PAGE_SIZE;
+	}
+
+out:
+	ITER_RELEASE(iter);
+
+	BTREE_UNLOCK(&svp->sn_tree, 0);
+
+	return (0);
+}
+
+/* Assign a type to the node's records. */
+static int
+slsfs_setrstat(struct slos_node *svp, struct slos_rstat *st)
+{
+	svp->sn_ino.ino_rstat = *st;
+	return (0);
+}
+
+/* Get the nodes' record type. */
+static int
+slsfs_getrstat(struct slos_node *svp, struct slos_rstat *st)
+{
+	*st = svp->sn_ino.ino_rstat;
+	return (0);
+}
+
+static int
+slsfs_ioctl(struct vop_ioctl_args *ap)
+{
+	struct vnode *vp = ap->a_vp;
+	u_long com = ap->a_command;
+	struct slos_node *svp = SLSVP(vp);
+	struct slos_rstat *st;
+	struct uio *uio;
+
+	switch(com) {
+	case SLS_SEEK_EXTENT:
+		uio = (struct uio *) ap->a_data;
+		return (slsfs_seekextent(svp, uio));
+
+	case SLS_SET_RSTAT:
+		st = (struct slos_rstat *) ap->a_data;
+		return (slsfs_setrstat(svp, st));
+
+	case SLS_GET_RSTAT:
+		st = (struct slos_rstat *) ap->a_data;
+		return (slsfs_getrstat(svp, st));
+
+	case FIOSEEKDATA: // Fallthrough
+	case FIOSEEKHOLE:
+		printf("UNSUPPORTED SLSFS IOCTL FIOSEEKDATA/HOLE\n");
+		return (ENOSYS);
+
+	default:
+		return (ENOTTY);
+	}
+
+}
+
 struct vop_vector sls_vnodeops = {
 	.vop_default =		&default_vnodeops,
 	.vop_fsync =		slsfs_fsync, 
@@ -1011,7 +1099,7 @@ struct vop_vector sls_vnodeops = {
 	.vop_create =		slsfs_create, 
 	.vop_getattr =		slsfs_getattr,
 	.vop_inactive =		slsfs_inactive,
-	.vop_ioctl =		slsfs_ioctl, // TODO
+	.vop_ioctl =		slsfs_ioctl,
 	.vop_link =		VOP_PANIC, // TODO
 	.vop_lookup =		vfs_cache_lookup, 
 	.vop_markatime =	VOP_PANIC,

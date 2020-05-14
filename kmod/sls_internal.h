@@ -129,6 +129,7 @@ extern struct sysctl_ctx_list aurora_ctx;
 
 /* Statistics and configuration variables accessible through sysctl. */
 extern uint64_t sls_bytes_sent;
+extern uint64_t sls_bytes_received;
 extern unsigned int sls_use_nulldev;
 extern uint64_t sls_iochain_size;
 extern struct file *sls_blackholefp;

@@ -212,6 +212,9 @@ sls_sysctl_init(void)
 	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "bytes_sent",
 			CTLFLAG_RD, &sls_bytes_sent,
 			0, "Bytes sent to the disk");
+	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "bytes_received",
+			CTLFLAG_RD, &sls_bytes_sent,
+			0, "Bytes received from the disk");
 	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "pages_grabbed",
 			CTLFLAG_RD, &sls_pages_grabbed,
 			0, "Pages grabbed by the SLS");

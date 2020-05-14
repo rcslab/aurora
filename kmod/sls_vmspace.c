@@ -53,7 +53,7 @@ slsckpt_vmentry(struct vm_map_entry *entry, struct sbuf *sb)
 	cur_entry.inheritance = entry->inheritance;
 	cur_entry.slsid = (uint64_t) entry;
 	if (entry->object.vm_object != NULL) {
-	    cur_entry.obj = OBJID_START | (OBJID_MASK & ((uint64_t) entry->object.vm_object->objid));
+	    cur_entry.obj = (OBJID_START & (~OBJID_MASK)) | (OBJID_MASK & ((uint64_t) entry->object.vm_object->objid));
 	    cur_entry.type = entry->object.vm_object->type; 
 	} else {
 	    cur_entry.obj = 0;
@@ -108,8 +108,7 @@ slsckpt_vmspace(struct proc *p, struct sbuf *sb, struct slsckpt_data *sckpt_data
 	for (entry = vm_map->header.next; entry != &vm_map->header; 
 		entry = entry->next) {
 
-	    for (obj = entry->object.vm_object; obj != NULL; 
-		    obj = obj->backing_object) {
+	    for (obj = entry->object.vm_object; obj != NULL; obj = obj->backing_object) {
 
 		error = slsckpt_vmobject(p, obj, sckpt_data, target);
 		if (error != 0) 
@@ -173,6 +172,7 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 	    goto out;
 	}
 
+
 	entry->eflags = info->eflags;
 	entry->inheritance = info->inheritance;
 
@@ -196,6 +196,10 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 		vm_page_sunbusy(page);
 	    }
 	}
+
+	/* Set the entry as text if it is backed by a vnode or an object shadowing a vnode. */
+	if (entry->eflags & MAP_ENTRY_VN_EXEC)
+		vm_map_entry_set_vnode_text(entry, true);
 
 	/* XXX restore cred if needed */
 	entry->cred = NULL;

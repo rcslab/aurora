@@ -20,4 +20,6 @@ void slsfs_bufstrategy(struct bufobj *bo, struct buf *bp);
 int slsfs_sync_vp(struct vnode *vp);
 int slsfs_sync_dev(struct slos *slos);
 
+#define EOF (-1)
+
 SDT_PROVIDER_DECLARE(slos);

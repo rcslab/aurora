@@ -1,13 +1,13 @@
 #!/bin/sh
 
-gstripe destroy st0
-gstripe create -s 1048576 -v st0 vtbd1 vtbd2 vtbd3
+#gstripe destroy st0
+#gstripe create -s 1048576 -v st0 vtbd1 vtbd2 vtbd3
 #gstripe create -s 65536 -v st0 nvd0 nvd1 nvd2 nvd3
-gstripe destroy st0
+#gstripe destroy st0
 #gstripe create -s 65536 -v st0 nvd0 nvd1 nvd2 nvd3
-gstripe create -s 1048576 -v st0 vtbd1 vtbd2 vtbd3
+#gstripe create -s 1048576 -v st0 vtbd1 vtbd2 vtbd3
 
-DRIVE=/dev/stripe/st0
+DRIVE=/dev/vtbd1
 
 #DRIVE=/dev/vtbd1
 
@@ -17,11 +17,12 @@ kldload slos/slos.ko
 
 mount -rw -t slsfs $DRIVE /testmnt
 
+kldload kmod/sls.ko
 #fio trace/test.fio
 
 #echo "hello" > /testmnt/hello
 #kldload kmod/sls.ko
-filebench -f benchmarks/scripts/mongo.f
+#filebench -f benchmarks/scripts/mongo.f
 ##sleep 10
 #filebench -f trace/randomrw.f &2> /dev/null
 

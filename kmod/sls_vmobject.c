@@ -34,7 +34,7 @@
 #include "sls_table.h"
 #include "sls_vmobject.h"
 
-int 
+int
 slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_data, int target)
 {
 	struct slsvmobject cur_obj;
@@ -49,7 +49,7 @@ slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_dat
 
 	/* We don't need the anonymous objects for in-memory checkpointing. */
 	if (target == SLS_MEM) {
-	    if ((obj->type == OBJT_DEFAULT) || 
+	    if ((obj->type == OBJT_DEFAULT) ||
 		(obj->type == OBJT_SWAP))
 		return (0);
 	}
@@ -61,8 +61,8 @@ slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_dat
 	cur_obj.type = obj->type;
 	cur_obj.id = obj;
 
-	/* 
-	 * If the backer has the same ID as we do, we're an Aurora shadow. Find 
+	/*
+	 * If the backer has the same ID as we do, we're an Aurora shadow. Find
 	 * the first non-Aurora ancestor.
 	 */
 	curobj = obj;
@@ -150,7 +150,6 @@ slsrest_data(vm_object_t object, struct slsdata *slsdata)
 			VM_PROT_READ | VM_PROT_WRITE);
 
 		memcpy(data, &((char *) pagerun->data)[i << PAGE_SHIFT], PAGE_SIZE);
-
 		vm_page_xunbusy(page);
 	    }
 	}
@@ -192,8 +191,9 @@ slsrest_vmobject(struct slsvmobject *info, struct slskv_table *objtable,
 	     */
 
 	    error = sls_path_to_vn(info->path, &vp);
-	    if (error != 0) 
+	    if (error != 0)  {
 		return error;
+	    }
 	    
 	    /* 
 	     * Get a reference for the vnode, since we're going to use it. 

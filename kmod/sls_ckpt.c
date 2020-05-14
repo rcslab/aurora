@@ -234,8 +234,8 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	    error = slsckpt_metadata(p, slsp, procset, sckpt_data);
 	    if(error != 0) {
 		SLS_DBG("Checkpointing failed\n");
-		slsckpt_cont(procset);
 		KV_ABORT(iter);
+		slsckpt_cont(procset);
 		goto error;
 	    }
 	}

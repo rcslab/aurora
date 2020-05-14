@@ -322,7 +322,8 @@ slskv_iternextbucket(struct slskv_iter *iter)
 	    /* Inspect the current bucket, break if we find any data. */
 	    if (!LIST_EMPTY(&iter->table->buckets[curbucket]))
 		break;
-	} 
+
+	}
 
 
 	/* If there is a nonempty bucket, the iterator points to its first element. */

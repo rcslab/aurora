@@ -9,6 +9,7 @@
 #include <sys/vnode.h>
 
 #include "slos.h"
+#include "slos_record.h"
 #include "btree.h"
 
 struct btree;
@@ -50,6 +51,7 @@ struct slos_inode {
 	uint64_t		ino_asize;		/* Actual size of file on disk */
 	uint64_t		ino_size;		/* Size of file */
 	uint64_t		ino_blocks;		/* Number of on IO blocks */
+	struct slos_rstat	ino_rstat;		/* Type and length of the records held in the node */
 };
 
 

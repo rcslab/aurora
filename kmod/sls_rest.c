@@ -510,6 +510,7 @@ slsrest_fork(uint64_t daemon, char *buf, size_t buflen,
 	if (error != 0)
 	    return (error);
 
+	/* The code below is executed only by the original thread. */
 
 	args = malloc(sizeof(*args), M_SLSMM, M_WAITOK);
 	args->buf = buf;
@@ -517,13 +518,11 @@ slsrest_fork(uint64_t daemon, char *buf, size_t buflen,
 	args->buflen = buflen;
 	args->restdata = restdata;
 
-	/* 
-	 * Set the function to be executed in the kernel for the 
-	 * process' new kthread.
-	 */
+	/* Set the function to be executed in the kernel for the new kthread. */
 	td = FIRST_THREAD_IN_PROC(p2);
 	thread_lock(td);
 
+	/* Set the starting point of execution for the new process. */
 	cpu_fork_kthread_handler(td, slsrest_metadata, (void *) args);
 
 	/* Set the thread to be runnable, specify its priorities. */
@@ -625,6 +624,7 @@ slsrest_dovmobjects(struct slskv_table *metatable, struct slskv_table *datatable
 
 	    if (st->type != SLOSREC_VMOBJ)
 		continue;
+
 	    /* 
 	     * Get the object restored for the given info struct. 
 	     * We take advantage of the fact that the VM object info
@@ -831,6 +831,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	    if (error != 0)
 		goto out;
 
+	    /* Move the in-memory records over to the metatable. */
 	    KV_FOREACH(slsp->slsp_sckpt->sckpt_rectable, iter, slsid, rec) {
 
 		st = malloc(sizeof(*st), M_SLSMM, M_WAITOK);
@@ -845,6 +846,10 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 		}
 	    }
 
+	    /*
+	     * Shadow the objects provided by the in-memory checkpoint. That way we
+	     * do not destroy the in-memory checkpoint by restoring.
+	     */
 	    KV_FOREACH(slsp->slsp_sckpt->sckpt_objtable, iter, obj, shadow) {
 		vm_object_reference(obj);
 
@@ -852,7 +857,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 		vm_ooffset_t offset = 0;
 		vm_object_shadow(&shadow, &offset, ptoa(obj->size));
 
-		error = slskv_add(restdata->objtable, (uint64_t) obj, (uintptr_t) shadow);
+		error = slskv_add(restdata->objtable, (uint64_t) obj->objid, (uintptr_t) shadow);
 		if (error != 0) {
 		    vm_object_deallocate(shadow);
 		    KV_ABORT(iter);

@@ -272,6 +272,8 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 	ino.ino_asize = 0;
 	ino.ino_size = 0;
 	ino.ino_blocks = 0;
+	ino.ino_rstat.type = 0;
+	ino.ino_rstat.len = 0;
 	error = ALLOCATEBLK(slos, BLKSIZE(slos), &ptr);
 	if (error) {
 		return (error);

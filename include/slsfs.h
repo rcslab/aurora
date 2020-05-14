@@ -56,9 +56,12 @@ struct slsfs_device {
     uint64_t			devblocksize;
 };
 
-
 /* Needed by the SLS to create nodes with specific IDs. */
 int slsfs_new_node(struct slos *slos, mode_t mode, uint64_t *oidp);
+
+#define SLS_SEEK_EXTENT _IOWR('s', 1, struct uio *)
+#define SLS_SET_RSTAT	_IOWR('s', 2, struct slos_rstat *)
+#define SLS_GET_RSTAT	_IOWR('s', 3, struct slos_rstat *)
 
 extern struct vop_vector sls_vnodeops;
 #endif // _SLSFS_H_

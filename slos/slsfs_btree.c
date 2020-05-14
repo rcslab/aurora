@@ -454,10 +454,11 @@ fnode_keymax_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 	if (error) {
 		return (error);
 	}
-
-	/* If the tree is empty, there is no maximum. */
+        /* If the tree is empty, there is no maximum. */
 	if (NODE_SIZE(node) == 0) {
-		return (EINVAL);
+	    iter->it_index = -1;
+	    iter->it_node = node;
+	    return (0);
 	}
 
 	/* Traverse the node to find the supremum. */
