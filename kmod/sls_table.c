@@ -22,6 +22,7 @@
 
 #include <machine/param.h>
 #include <machine/reg.h>
+#include <machine/vmparam.h>
 
 #include <vm/pmap.h>
 #include <vm/vm.h>
@@ -58,6 +59,8 @@ size_t sls_bytes_sent;
 size_t sls_bytes_received;
 uint64_t sls_pages_grabbed;
 uint64_t sls_io_initiated;
+/* XXX Turn into sysctl */
+int sls_async_slos = 1;
 
 uma_zone_t slspagerun_zone = NULL;
 
@@ -586,21 +589,51 @@ sls_contig_pages(vm_object_t obj, vm_page_t *page)
 }
 
 /*
+ * Send len bytes of data, starting from physical page m, to vnode vp representing obj.
+ */
+static int
+sls_writeobj_slos_sync(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len)
+{
+	struct iovec aiov;
+	struct uio auio;
+	vm_offset_t data;
+	int error;
+
+	/* Get the starting physical address of the pages. */
+	/* XXX Only tested on amd64 */
+	data = PHYS_TO_DMAP(m->phys_addr);
+
+	/* Create the UIO for the disk. */
+	aiov.iov_base = (void *) data;
+	aiov.iov_len = len;
+
+	/*
+	* The offset of the write adjusted because the first
+	* page-sized chunk holds the metadata of the VM object.
+	*/
+	slos_uioinit(&auio, PAGE_SIZE + IDX_TO_OFF(m->pindex),
+		UIO_WRITE, &aiov, 1);
+
+	/* The write itself. */
+	error = sls_doio(vp, &auio);
+	if (error != 0)
+		return (error);
+
+	return (0);
+}
+
+/*
  * Get the pages of an object in the form of a
  * linked list of contiguous memory areas.
  *
  * This function is not inlined in order to be able to use DTrace on it.
  */
 static int __attribute__ ((noinline))
-sls_objdata(struct vnode *vp, vm_object_t obj)
+sls_writeobj_slos(struct vnode *vp, vm_object_t obj)
 {
 	vm_page_t startpage, page;
 	size_t contig_len;
-	vm_offset_t data;
-	struct iovec aiov;
-	struct uio auio;
 	int error;
-	int x = 0;
 
 	/* Traverse the object's resident pages. */
 	page = TAILQ_FIRST(&obj->memq);
@@ -616,36 +649,13 @@ sls_objdata(struct vnode *vp, vm_object_t obj)
 	     */
 	    startpage = page;
 	    contig_len = sls_contig_pages(obj, &page);
-	    x += contig_len >> PAGE_SHIFT;
 
-	    /* Map the process' data into the kernel. */
-	    data = pmap_map(NULL, startpage->phys_addr,
-		    startpage->phys_addr + contig_len,
-		    VM_PROT_READ | VM_PROT_WRITE);
-	    if (data == 0)
-		return ENOMEM;
-
-	    /* ------------ SLOS-Specific Part ------------ */
-
-	    /* Create the UIO for the disk. */
-	    aiov.iov_base = (void *) data;
-	    aiov.iov_len = contig_len;
-
-	    /*
-	     * The offset of the write adjusted because the first
-	     * page-sized chunk holds the metadata of the VM object.
-	     */
-	    slos_uioinit(&auio, PAGE_SIZE + IDX_TO_OFF(startpage->pindex),
-		    UIO_WRITE, &aiov, 1);
-
-	    /* The write itself. */
-	    error = sls_doio(vp, &auio);
+	    if (sls_async_slos)
+	    	error = slos.slsfs_vmawrite(vp, obj, startpage, contig_len, NULL);
+	    else
+		error = sls_writeobj_slos_sync(vp, obj, startpage, contig_len);
 	    if (error != 0)
-		return (error);
-
-	    /* ------------ End SLOS-Specific Part ------------ */
-
-	    /* XXX Do we need pmap_delete or something of the sort? */
+		    return (error);
 
 	    /* Have we fully traversed the list, or looped around? */
 	    if (page == NULL || startpage->pindex >= page->pindex)
@@ -811,7 +821,7 @@ sls_writedata_slos(struct sls_record *rec, struct slskv_table *objtable)
 	    goto out;
 
 	/* Checkpoint the object. */
-	ret = sls_objdata(vp, obj);
+	ret = sls_writeobj_slos(vp, obj);
 	if (ret != 0)
 	    goto out;
 

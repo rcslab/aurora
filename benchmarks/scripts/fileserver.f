@@ -51,6 +51,6 @@ define process name=filereader,instances=1
   }
 }
 
-run 5
+run 30
 echo  "File-server Version 3.0 personality successfully loaded"
 

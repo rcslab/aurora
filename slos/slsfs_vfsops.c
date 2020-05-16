@@ -1,4 +1,6 @@
 #include <sys/param.h>
+#include <machine/param.h>
+
 #include <sys/systm.h>
 #include <sys/types.h>
 #include <sys/buf.h>
@@ -13,6 +15,7 @@
 #include <sys/module.h>
 #include <sys/namei.h>
 #include <sys/uio.h>
+#include <sys/bio.h>
 #include <sys/priv.h>
 #include <sys/conf.h>
 #include <sys/mutex.h>
@@ -21,12 +24,14 @@
 #include <sys/stat.h>
 #include <sys/proc.h>
 #include <sys/systm.h>
+#include <sys/taskqueue.h>
 
 #include <geom/geom.h>
 #include <geom/geom_vfs.h>
 
 #include <vm/vm.h>
 #include <vm/vm_extern.h>
+#include <vm/vm_page.h>
 
 #include <slos.h>
 #include <slos_record.h>
@@ -55,6 +60,94 @@ extern struct buf_ops bufops_slsfs;
 
 static const char *slsfs_opts[] = { "from" };
 struct unrhdr *slsid_unr;
+
+struct slsfs_taskctx {
+	struct task tk;
+	struct vnode *vp;
+	struct vm_object *vmobj;
+	slsfs_callback cb;
+	vm_page_t startpage;
+	uint64_t size;
+};
+
+static int
+slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t offset, uint64_t size)
+{
+	struct fnode_iter iter;
+	vm_pindex_t key;
+	diskptr_t val;
+	uint64_t end;
+	int error = 0;
+
+	uint64_t finalend = (offset * PAGE_SIZE) + size;
+
+	error = fbtree_keymin_iter(tree, &offset, &iter);
+	if (error) {
+		panic("Error in performwrite keymin");
+	}
+
+	if (!ITER_ISNULL(iter)) {
+		key = ITER_KEY_T(iter, vm_pindex_t);
+		val = ITER_VAL_T(iter, diskptr_t);
+		// We overlap so we have to replace the old key;
+		end = (key * PAGE_SIZE) + val.size;
+		if (end > (offset * PAGE_SIZE)) {
+			KASSERT(((end - (key * PAGE_SIZE)) % PAGE_SIZE) == 0, 
+				("We should always overlap by pages - %lu - %lu", end, key * PAGE_SIZE));
+			// Just have to change the size
+			val.size -= (end - (key * PAGE_SIZE));
+			DBUG("Removing replace\n");
+			error = fbtree_replace(tree, &key, &val);
+			if (error) {
+				panic("Problem with inserting key back into tree");
+			}
+		}
+	}
+
+	ITER_NEXT(iter);
+	while (!ITER_ISNULL(iter)) {
+		key = ITER_KEY_T(iter, vm_pindex_t);
+		val = ITER_VAL_T(iter, diskptr_t);
+		end = (key * PAGE_SIZE) + val.size;
+
+		// Key is completely out of the range, we end now.
+		if ((key * PAGE_SIZE) >= finalend) {
+			break;
+		}
+
+		// Key is partially in range so we can break after finishing 
+		// this key
+		if (end > finalend) {
+			// We have to remove the key as the offset is changing
+			DBUG("Removing fbtree %lu : %lu - %lu: %lu\n", end, finalend, key, val.size);
+			error = fbtree_remove(tree, &key, &val);
+			if (error) {
+				panic("Problem removing fbtree key");
+			}
+			// Add the offset up by blocks
+			val.offset += (end - (key * PAGE_SIZE)) / PAGE_SIZE;
+			// Reduce the size in bytes
+			val.size -= (end - (key * PAGE_SIZE));
+			error = fbtree_insert(tree, &finalend, &val);
+			if (error) {
+				panic("Problem with inserting key back into tree");
+			}
+			break;
+		} 
+
+		// This case is when we completely cover the range so we just 
+		// need to remove the entry
+		error = fbtree_remove(tree, &key, &val);
+		if (error) {
+			panic("Problem removing fbtree key");
+		}
+		ITER_NEXT(iter);
+	}
+	val.offset = 0;
+	val.size = size;
+	error = fbtree_insert(tree, &offset, &val);
+	return (error);
+}
 
 /*
  * Register the Aurora filesystem type with the kernel.
@@ -117,6 +210,130 @@ slsfs_inodes_init(struct mount *mp, struct slos *slos)
 	return (0);
 }
 
+static void
+slsfs_performwrite(void *ctx, int pending)
+{
+	vm_page_t start;
+	struct buf *bp;
+	size_t bytecount;
+	struct slsfs_taskctx *task = (struct slsfs_taskctx *)ctx;
+	struct slos_node *svp = SLSVP(task->vp);
+	struct slos_inode *sivp = &SLSINO(svp);
+	struct fbtree *tree = &svp->sn_tree;
+	size_t offset;
+	int i;
+
+	/* 
+	 * We can do the merging of keys and all the functionality here.  I'm 
+	 * sure this code could be cleaned up but for readability seperating all 
+	 * the cases pretty distinctly
+	 */
+	BTREE_LOCK(tree, LK_EXCLUSIVE);
+	if (task->tk.ta_func == NULL)
+		DBUG("Warning: %s called synchronously\n", __func__);
+
+	slsfs_fbtree_rangeinsert(tree, task->startpage->pindex + 1, task->size);
+	BTREE_UNLOCK(tree, 0);
+
+	bp = malloc(sizeof(struct buf), M_SLOS, M_WAITOK | M_ZERO);
+	vm_pindex_t size = 0;
+	start = task->startpage;
+	i = 0;
+	TAILQ_FOREACH_FROM(start, &task->vmobj->memq, listq) {
+		// We are done grabbing pages;
+		bp->b_pages[i] = start;
+		size += pagesizes[start->psind];
+		if (size == task->size) {
+			break;
+		}
+		i++;
+	}
+
+	/* Now that the btree is edited we must create the buffer to perform the 
+	 * write
+	 */
+
+	bp->b_npages = i + 1;
+	bp->b_pgbefore = 0;
+	bp->b_pgafter = 0;
+	bp->b_offset = 0;
+	bp->b_data = unmapped_buf;
+	bp->b_offset = 0;
+
+	bytecount = bp->b_npages << PAGE_SHIFT;
+	offset = IDX_TO_OFF(task->startpage->pindex + 1);
+	if (offset + bytecount > sivp->ino_size) {
+		sivp->ino_size = offset + bytecount;
+		vnode_pager_setsize(task->vp, sivp->ino_size);
+	}
+
+	bp->b_vp = task->vp;
+	bp->b_bufobj = &task->vp->v_bufobj;
+	bufobj_wref(bp->b_bufobj);
+	bp->b_iocmd = BIO_WRITE;
+	bp->b_rcred = crhold(curthread->td_ucred);
+	bp->b_wcred = crhold(curthread->td_ucred);
+	bp->b_bcount = bp->b_bufsize = bp->b_runningbufspace = bytecount;
+	atomic_add_long(&runningbufspace, bp->b_runningbufspace);
+	bp->b_iodone = bdone;
+	bp->b_lblkno = task->startpage->pindex + 1;
+
+	VOP_LOCK(task->vp, LK_SHARED);
+	bstrategy(bp);
+	VOP_UNLOCK(task->vp, LK_SHARED);
+	bwait(bp, PVM, "slsfs vm wait");
+	for (int i = 0; i < bp->b_npages; i++) {
+		bp->b_pages[i] = NULL;
+	}
+
+	bp->b_vp = NULL;
+	bp->b_bufobj = NULL;
+	free(task, M_SLOS);
+	free(bp, M_SLOS);
+}
+
+static struct slsfs_taskctx *
+slsfs_createtask(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, slsfs_callback cb)
+{
+	struct slsfs_taskctx *ctx;
+
+	ctx = malloc(sizeof(*ctx), M_SLOS, M_WAITOK | M_ZERO);
+	*ctx = (struct slsfs_taskctx) {
+		.vp = vp,
+		.vmobj = obj,
+		.startpage = m,
+		.size = len,
+		.cb = cb
+	};
+
+	return (ctx);
+}
+
+static int
+slsfs_vmawrite(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, slsfs_callback cb)
+{
+	struct slos *slos = SLSVP(vp)->sn_slos;
+	struct slsfs_taskctx *ctx;
+
+	ctx = slsfs_createtask(vp, obj, m, len, cb);
+	TASK_INIT(&ctx->tk, 0, &slsfs_performwrite, ctx);
+	DBUG("Creating task for vnode %p: page index %lu, size %lu\n", vp, m->pindex, len);
+	taskqueue_enqueue(slos->slos_tq, &ctx->tk);
+
+	return (0);
+}
+
+static int
+slsfs_vmwrite(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len)
+{
+	struct slsfs_taskctx *ctx;
+
+	ctx = slsfs_createtask(vp, obj, m, len, NULL);
+	slsfs_performwrite(ctx, 0);
+
+	return (0);
+}
+
 /*
  * Create an in-memory representation of the SLOS.
  */
@@ -159,6 +376,16 @@ slsfs_create_slos(struct mount *mp, struct vnode *devvp)
 	slos.slsfs_syncing = 0;
 	slos.slsfs_checkpointtime = 1;
 	slos.slsfs_mount = mp;
+
+	slos.slsfs_vmwrite= &slsfs_vmwrite;
+	slos.slsfs_vmawrite = &slsfs_vmawrite;
+	DBUG("Creating taskqueue\n");
+	slos.slos_tq = NULL;
+	slos.slos_tq = taskqueue_create("SLOS Taskqueue", M_WAITOK, taskqueue_thread_enqueue, &slos.slos_tq);
+	if (slos.slos_tq == NULL) {
+		panic("Problem creating taskqueue\n");
+	}
+
 	devvp->v_data = &slos;
 
 	// This is all quite hacky just to get it working though
@@ -184,6 +411,12 @@ slsfs_create_slos(struct mount *mp, struct vnode *devvp)
 	slsfs_inodes_init(mp, &slos);
 	VOP_UNLOCK(slos.slos_vp, 0);
 
+	// Start the threads, probably should have a sysctl to define number of 
+	// threads here.
+	error = taskqueue_start_threads(&slos.slos_tq, 10, PVM, "SLOS Taskqueue Threads");
+	if (error) {
+		panic("%d issue starting taskqueue\n", error);
+	}
 	DBUG("SLOS Loaded.\n");
 	return error;
 }
@@ -568,6 +801,7 @@ slsfs_mount(struct mount *mp)
 	/* Get the path where we found the device. */
 	vfs_mountedfrom(mp, from);
 
+	//vmobjecttest(&slos);
 	return (0);
 }
 
@@ -727,13 +961,15 @@ slsfs_unmount(struct mount *mp, int mntflags)
 		flags |= FORCECLOSE;
 	}
 
+	/* Free the slos taskqueue */
+	taskqueue_free(slos->slos_tq);
+	slos->slos_tq = NULL;
+
 	/* Remove all SLOS_related vnodes. */
 	error = vflush(mp, 0, flags/* | SKIPSYSTEM*/, curthread);
 	if (error) {
 		return (error);
 	}
-
-	DBUG("Syncing\n");
 	/*
 	 * Flush the data to the disk. We have already removed all
 	 * vnodes, so this is going to be the last flush we need.
@@ -762,6 +998,7 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	DBUG("Freeing mount info\n");
 	mp->mnt_data = NULL;
 	DBUG("Changing mount flags\n");
+
 
 	/* We've removed the local filesystem info. */
 	MNT_ILOCK(mp);
@@ -852,8 +1089,6 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	vp->v_bufobj.bo_bsize = IOSIZE(svnode);
 	slsfs_init_vnode(vp, ino);
 
-	DBUG("%lu\n", IOSIZE(svnode));
-
 	/* Again, if we're not the inode metanode, add bookkeeping. */
 	/*
 	 * XXX Why? This means we would get a different vnode every time
@@ -867,12 +1102,9 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 			return (error);
 		}
 	}
-
 	DBUG("vget(%p) ino = %ld\n", vp, ino);
-
 	*vpp = vp;
 	return (0);
-
 }
 
 

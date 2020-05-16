@@ -58,6 +58,7 @@ struct slsfs_device {
 
 /* Needed by the SLS to create nodes with specific IDs. */
 int slsfs_new_node(struct slos *slos, mode_t mode, uint64_t *oidp);
+int vmobjecttest(struct slos *slos);
 
 #define SLS_SEEK_EXTENT _IOWR('s', 1, struct uio *)
 #define SLS_SET_RSTAT	_IOWR('s', 2, struct slos_rstat *)

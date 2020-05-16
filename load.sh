@@ -10,6 +10,7 @@
 DRIVE=/dev/vtbd1
 
 #DRIVE=/dev/vtbd1
+make -j5 -DWITH_DFLAGS
 
 ./tools/newosd/newosd $DRIVE
 

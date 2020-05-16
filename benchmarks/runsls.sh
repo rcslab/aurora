@@ -13,7 +13,8 @@ cd scripts
 for entry in `ls *.f`
 do
 	gstripe destroy st0
-	gstripe create -s 65536 -v st0 vtbd1 vtbd2 vtbd3
+	setup_stripe.sh
+	#gstripe create -s 65536 -v st0 nvd0 nvd1 nvd2 nvd3 nvd4
 
 	../../tools/newosd/newosd $DRIVE
 	kldload ../../slos/slos.ko

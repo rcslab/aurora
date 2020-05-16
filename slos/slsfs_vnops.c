@@ -463,6 +463,7 @@ slsfs_retrieve_buf(struct vnode *vp, struct uio *uio, struct buf **bp)
 			blks += 1;
 		}
 		size = omin(MAXBCACHEBUF, blks * blksize);
+		ITER_RELEASE(biter);
 		error = slsfs_bcreate(vp, bno, size, &biter, bp);
 	} else {
 		uint64_t iter_key = ITER_KEY_T(biter, uint64_t);
@@ -471,14 +472,15 @@ slsfs_retrieve_buf(struct vnode *vp, struct uio *uio, struct buf **bp)
 			nextkey = ITER_KEY_T(biter, uint64_t);
 			blks = nextkey - bno;
 			size = omin(MAXBCACHEBUF, uio->uio_resid);
+			ITER_RELEASE(biter);
 			error = slsfs_bcreate(vp, bno, size, &biter, bp);
 		} else {
 			ptr = ITER_VAL_T(biter, diskptr_t);
 			KASSERT(ptr.size >= blksize, ("This should not occur"));
+			ITER_RELEASE(biter);
 			error = slsfs_bread(vp, bno, ptr.size, NULL, bp);
 		}
 	}
-
 	if (error == ROOTCHANGE) {
 		svp->sn_ino.ino_btree = (diskptr_t){ svp->sn_tree.bt_root, IOSIZE(svp) };
 		return (0);
@@ -733,11 +735,11 @@ slsfs_strategy(struct vop_strategy_args *args)
 			}
 			fnode_print(iter.it_node->fn_parent);
 			fnode_print(iter.it_node);
-			panic("whats %p, %lu, %p", vp, bp->b_lblkno, &iter.it_node);
+			panic("whats %p, %lu, %p", vp, bp->b_lblkno, iter.it_node);
 		}
 
 		if (ITER_KEY_T(iter, uint64_t) != bp->b_lblkno) {
-			panic("whats %lu, %p", bp->b_lblkno, &iter.it_node);
+			panic("whats %lu, %p", bp->b_lblkno, iter.it_node);
 		}
 
 		ptr = ITER_VAL_T(iter, diskptr_t);
@@ -753,18 +755,16 @@ slsfs_strategy(struct vop_strategy_args *args)
 			if (ptr.offset == 0) {
 				panic("Uh oh\n");
 			}
-
-			KASSERT(ptr.size <= MAXBCACHEBUF, ("Should not be very largebuffers yet"));
-			memcpy(ITER_VAL(iter), &ptr, SLSVP(vp)->sn_tree.bt_valsize);
-			fnode_write(iter.it_node);
-			KASSERT(ptr.offset != 0, ("Should not give allocation of 0"));
+			fbtree_replace(&SLSVP(vp)->sn_tree, &bp->b_lblkno, &ptr);
 			bp->b_blkno = ptr.offset;
 		} else {
 			bp->b_blkno = (daddr_t) (-1);
 			vfs_bio_clrbuf(bp); 
 			bufdone(bp);
+			ITER_RELEASE(iter);
 			return (0);
 		}
+		ITER_RELEASE(iter);
 	} else {
 		bp->b_blkno = bp->b_lblkno;
 		int change =  bp->b_bufobj->bo_bsize / slos.slos_vp->v_bufobj.bo_bsize;
@@ -1032,9 +1032,6 @@ slsfs_seekextent(struct slos_node *svp, struct uio *uio)
 
 out:
 	ITER_RELEASE(iter);
-
-	BTREE_UNLOCK(&svp->sn_tree, 0);
-
 	return (0);
 }
 

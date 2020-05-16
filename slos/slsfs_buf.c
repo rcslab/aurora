@@ -134,9 +134,8 @@ slsfs_lookupbln(struct slos_node *svp, uint64_t lbn,  struct fnode_iter *iter)
 {
 	int error;
 	uint64_t key = lbn;
-	BTREE_LOCK(&svp->sn_tree, LK_SHARED);
+	BTREE_LOCK(&svp->sn_tree, LK_EXCLUSIVE);
 	error = fbtree_keymin_iter(&svp->sn_tree, &key, iter);
-	BTREE_UNLOCK(&svp->sn_tree, 0);
 
 	return (error);
 }

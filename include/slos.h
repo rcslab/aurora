@@ -2,16 +2,16 @@
 #ifndef _SLOS_H_
 #define _SLOS_H_
 
-#include <sys/uuid.h>
 #include <sys/param.h>
-#include <sys/types.h>
 #include <sys/lock.h>
 #include <sys/lockmgr.h>
 #include <sys/mutex.h>
-#include <vm/uma.h>
 #include <sys/proc.h>
-#include <sys/condvar.h>
+#include <sys/uuid.h>
 
+#include <vm/vm.h>
+#include <vm/vm_object.h>
+#include <vm/uma.h>
 
 #ifdef WITH_DEBUG
 #define DBUG(fmt, ...) do {			    \
@@ -68,6 +68,8 @@ struct slos_diskptr {
 #define SLOS_FLAG_TRIM	0x00000001 /* TRIM Support */
 #define SLOS_FLAG_HASH	0x00000002 /* Checksum Support */
 
+typedef void (*slsfs_callback)(void *context);
+
 struct slos {
 	SLIST_ENTRY(slos)	next_slos;
 
@@ -96,8 +98,11 @@ struct slos {
 	struct btree		*slos_inodes;	/* An index of all inodes */
 
 	struct lock		slos_lock;	/* Sleepable lock */
+	struct taskqueue	*slos_tq;	/* Slos taskqueue */
 
 	int (*slsfs_blkalloc)(struct slos*, size_t, diskptr_t *);
+	int (*slsfs_vmwrite)(struct vnode *, vm_object_t, vm_page_t, size_t);
+	int (*slsfs_vmawrite)(struct vnode *, vm_object_t, vm_page_t, size_t, slsfs_callback);
 };
 
 /* Identifier allocator */
@@ -126,15 +131,18 @@ struct slos_sb {
 	struct slos_diskptr	sb_inodes;	/* pointer to the inode btree */
 	struct slos_diskptr	sb_data;	/* data region */
 	struct slos_diskptr	sb_bootalloc;	/* bootstrap allocator region */
-    /* Identification information */
+
+	/* Identification information */
 	struct uuid		sb_uuid;	/* object store uuid */
 	u_char			sb_name[SLOS_MAXVOLLEN];
-    /* Configuration */
+
+	/* Configuration */
 	uint64_t		sb_ssize;	/* physical disk sector size */
 	uint64_t		sb_bsize;	/* block size used for I/O */
 	uint64_t		sb_asize;	/* allocation size */
 	uint64_t		sb_size;	/* fs size in blocks */
-    /* Summary Information */
+
+	/* Summary Information */
 	uint64_t		sb_numboot;	/* number of boot allocator blocks */
 	uint64_t		sb_numblks;	/* number of blocks */
 	uint8_t			sb_clean;	/* osd clean */
@@ -146,8 +154,6 @@ struct slos_sb {
 };
 
 extern struct slos slos;
-
-
 
 #endif /* _SLOS_H_ */
 

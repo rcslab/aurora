@@ -1278,8 +1278,7 @@ fbtree_test(struct fbtree *tree)
 	return (0);
 }
 
-#ifdef DDB
-#include "opt_ddb.h"
+//#include "opt_ddb.h"
 #include <ddb/ddb.h>
 
 DB_SHOW_COMMAND(fnode, db_fnode)
@@ -1312,4 +1311,3 @@ DB_SHOW_COMMAND(fnode, db_fnode)
 	db_printf("\n");
 }
 
-#endif /* DDB */
