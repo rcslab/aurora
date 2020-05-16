@@ -315,7 +315,6 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 	struct slos_node *svp = SLSVP(root_vp);
 	size_t blksize = IOSIZE(svp);
 
-        DBUG("Creating inode %lx\n", pid);
 	// For now we will use the blkno for our pids
 	error = slsfs_lookupbln(svp, pid, &iter);
 	if (error) {

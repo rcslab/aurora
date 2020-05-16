@@ -71,40 +71,25 @@ struct slsfs_taskctx {
 };
 
 static int
-slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t offset, uint64_t size)
+slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 {
 	struct fnode_iter iter;
 	vm_pindex_t key;
-	diskptr_t val;
+	diskptr_t val, tmp;
 	uint64_t end;
+	uint64_t diff;
 	int error = 0;
 
-	uint64_t finalend = (offset * PAGE_SIZE) + size;
+	KASSERT(size % PAGE_SIZE == 0, ("Size should be multiple of page size, %lu", size));
+	// We must round up to the nearest bcachebuf size, this
 
-	error = fbtree_keymin_iter(tree, &offset, &iter);
+	uint64_t finalend = (lbn * PAGE_SIZE) + size;
+
+	error = fbtree_keymin_iter(tree, &lbn, &iter);
 	if (error) {
 		panic("Error in performwrite keymin");
 	}
 
-	if (!ITER_ISNULL(iter)) {
-		key = ITER_KEY_T(iter, vm_pindex_t);
-		val = ITER_VAL_T(iter, diskptr_t);
-		// We overlap so we have to replace the old key;
-		end = (key * PAGE_SIZE) + val.size;
-		if (end > (offset * PAGE_SIZE)) {
-			KASSERT(((end - (key * PAGE_SIZE)) % PAGE_SIZE) == 0, 
-				("We should always overlap by pages - %lu - %lu", end, key * PAGE_SIZE));
-			// Just have to change the size
-			val.size -= (end - (key * PAGE_SIZE));
-			DBUG("Removing replace\n");
-			error = fbtree_replace(tree, &key, &val);
-			if (error) {
-				panic("Problem with inserting key back into tree");
-			}
-		}
-	}
-
-	ITER_NEXT(iter);
 	while (!ITER_ISNULL(iter)) {
 		key = ITER_KEY_T(iter, vm_pindex_t);
 		val = ITER_VAL_T(iter, diskptr_t);
@@ -115,37 +100,112 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t offset, uint64_t size)
 			break;
 		}
 
-		// Key is partially in range so we can break after finishing 
-		// this key
-		if (end > finalend) {
-			// We have to remove the key as the offset is changing
-			DBUG("Removing fbtree %lu : %lu - %lu: %lu\n", end, finalend, key, val.size);
+		if ((key < lbn)) {
+			if (end > (lbn * PAGE_SIZE)) {
+				tmp = val;
+				tmp.size -= (end - (lbn * PAGE_SIZE));
+				error = fbtree_replace(tree,  &key, &tmp);
+				if (error) {
+					panic("Problem with replacing key < lbn\n");
+				}
+				// This means the key completely overlaps us so we need 
+				// to split it so we need to add a key
+				if (end > finalend) {
+					tmp = val;
+					error = fbtree_remove(tree, &key, &val);
+					if (error && (error != ROOTCHANGE)) {
+						panic("Problem  removing key for replacement\n");
+					}
+					// Get how much we took off
+					diff = finalend - (key * PAGE_SIZE);
+					// Bump our ondisk pointer up
+					if (tmp.offset) {
+						tmp.offset +=  diff / PAGE_SIZE;
+					}
+					key += diff / PAGE_SIZE;
+					// How much we have left
+					tmp.size = finalend - end;
+					error = fbtree_insert(tree, &key, &tmp);
+					if (error && (error != ROOTCHANGE)) {
+						panic("Problem inserting of key that is larger than ours");
+					}
+				}
+			}
+		// Key is our key
+		} else if (key == lbn) {
+			// Key is our key but larger so just replace it
+			if (end > finalend) {
+				tmp = val;
+				error = fbtree_remove(tree, &key, &val);
+				if (error && (error != ROOTCHANGE)) {
+					panic("Problem  removing key for replacement\n");
+				}
+				// Get how much we took off
+				diff = finalend - (key * PAGE_SIZE);
+				// Bump our ondisk pointer up
+				if (tmp.offset) {
+					tmp.offset +=  diff / PAGE_SIZE;
+				}
+				key += diff / PAGE_SIZE;
+				// How much we have left
+				tmp.size = finalend - end;
+				error = fbtree_insert(tree, &key, &tmp);
+				if (error && (error != ROOTCHANGE)) {
+					panic("Problem inserting of key that is larger than ours");
+				}
+			} else {
+				// Key is our key but smaller so we can just 
+				// remove it
+				error = fbtree_remove(tree, &key, &tmp);
+				if (error && (error != ROOTCHANGE)) {
+					panic("Problem replace of key that is larger than ours");
+				} 
+			}
+		// Key is larger then our key but not within our range or else 
+		// would be caught by the break above
+		} else {
+			/* Key is inside our range and so we need to replace 
+			 * the key and push the new key start into the tree.
+			 * This also means we are at our end so we can break
+			 */
+			if (end > finalend) {
+				tmp = val;
+				error = fbtree_remove(tree, &key, &val);
+				if (error && (error != ROOTCHANGE)) {
+					panic("Problem  removing key for replacement\n");
+				}
+				// Get how much we took off
+				diff = finalend - (key * PAGE_SIZE);
+				// Bump our ondisk pointer up
+				if (tmp.offset) {
+					tmp.offset +=  diff / PAGE_SIZE;
+				}
+				key += diff / PAGE_SIZE;
+				// How much we have left
+				tmp.size = finalend - end;
+				error = fbtree_insert(tree, &key, &tmp);
+				if (error && (error != ROOTCHANGE)) {
+					panic("Problem inserting of key that is larger than ours");
+				}
+				break;
+			} 
+			// This case is when we completely cover the range so 
+			// we just need to remove the entry
 			error = fbtree_remove(tree, &key, &val);
 			if (error) {
 				panic("Problem removing fbtree key");
 			}
-			// Add the offset up by blocks
-			val.offset += (end - (key * PAGE_SIZE)) / PAGE_SIZE;
-			// Reduce the size in bytes
-			val.size -= (end - (key * PAGE_SIZE));
-			error = fbtree_insert(tree, &finalend, &val);
-			if (error) {
-				panic("Problem with inserting key back into tree");
-			}
-			break;
-		} 
-
-		// This case is when we completely cover the range so we just 
-		// need to remove the entry
-		error = fbtree_remove(tree, &key, &val);
-		if (error) {
-			panic("Problem removing fbtree key");
 		}
 		ITER_NEXT(iter);
 	}
+
 	val.offset = 0;
 	val.size = size;
-	error = fbtree_insert(tree, &offset, &val);
+	KASSERT(val.size < MAXBCACHEBUF, ("TOO LARGE %lu", val.size));
+	error = fbtree_insert(tree, &lbn, &val);
+	if (error && error != ROOTCHANGE) {
+		panic("Problem adding final keys");
+	}
 	return (error);
 }
 

@@ -476,8 +476,10 @@ slsfs_retrieve_buf(struct vnode *vp, struct uio *uio, struct buf **bp)
 			error = slsfs_bcreate(vp, bno, size, &biter, bp);
 		} else {
 			ptr = ITER_VAL_T(biter, diskptr_t);
-			KASSERT(ptr.size >= blksize, ("This should not occur"));
 			ITER_RELEASE(biter);
+			if (ptr.size > MAXBCACHEBUF) {
+				fnode_print(biter.it_node);
+			}
 			error = slsfs_bread(vp, bno, ptr.size, NULL, bp);
 		}
 	}
@@ -624,7 +626,7 @@ slsfs_read(struct vop_read_args *args)
 
 		off = uio->uio_offset - (bp->b_lblkno * blksize);
 		toread = omin(resid, bp->b_bcount - off);
-		DBUG("%lu --- %lu, %lu\n", resid, bp->b_bcount, off);
+		DBUG("%lu --- %lu, %lu, %p\n", resid, bp->b_bcount, off, vp);
 
 		/* One thing thats weird right now is our inodes and meta data 
 		 * is currently not
@@ -730,10 +732,12 @@ slsfs_strategy(struct vop_strategy_args *args)
 		}
 
 		if (ITER_ISNULL(iter)) {
-			if (!iter.it_node->fn_parent) {
-				fnode_parent(iter.it_node, &iter.it_node->fn_parent);
+			if (iter.it_node->fn_dnode->dn_parent) {
+				if (!iter.it_node->fn_parent) {
+					fnode_parent(iter.it_node, &iter.it_node->fn_parent);
+				}
+				fnode_print(iter.it_node->fn_parent);
 			}
-			fnode_print(iter.it_node->fn_parent);
 			fnode_print(iter.it_node);
 			panic("whats %p, %lu, %p", vp, bp->b_lblkno, iter.it_node);
 		}

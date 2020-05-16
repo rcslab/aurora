@@ -19,6 +19,7 @@ kldload slos/slos.ko
 mount -rw -t slsfs $DRIVE /testmnt
 
 kldload kmod/sls.ko
+
 #fio trace/test.fio
 
 #echo "hello" > /testmnt/hello

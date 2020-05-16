@@ -50,7 +50,7 @@
 
 
 /* The maximum size of a single data transfer */
-uint64_t sls_contig_limit = (16 * 1024 * 1024); 
+uint64_t sls_contig_limit = MAXBCACHEBUF;
 unsigned int sls_use_nulldev = 0;
 int sls_drop_io = 0;
 uint64_t sls_iochain_size = 1;

@@ -510,7 +510,7 @@ fnode_iter_next(struct fnode_iter *it)
 
 	/* An invalid iterator is still invalid after iteration . */
 	if (it->it_index == (-1)) {
-		return (-1);
+		return (0);
 	}
 
 	/* If we've exhausted the current node, switch. */
@@ -518,7 +518,7 @@ fnode_iter_next(struct fnode_iter *it)
 		/* Iteration done. */
 		if (dn->dn_rightnode == 0) {
 			it->it_index = -1;
-			return (-1);
+			return (0);
 		}
 
 		/* Otherwise switch nodes. */
@@ -528,8 +528,11 @@ fnode_iter_next(struct fnode_iter *it)
 	}
 
 	/* Going out of bounds in the node would be catastrophic. */
-	if (it->it_index >= dn->dn_numkeys)
+	if (it->it_index >= dn->dn_numkeys) {
+		fnode_print(it->it_node);
+		printf("%u\n", it->it_index);
 		panic("Should not occur");
+	}
 
 	it->it_index++;
 	return (0);
@@ -821,9 +824,7 @@ fnode_split(struct fnode *node)
 	}
 
 	/* Adjust parent and neighbor pointers. */
-	DBUG("set parent node\n");
 	fnode_setparent(node, parent);
-	DBUG("set parent right\n");
 	fnode_setparent(right, parent);
 
 	right->fn_dnode->dn_rightnode = node->fn_dnode->dn_rightnode;
