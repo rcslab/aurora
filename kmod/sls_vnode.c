@@ -72,7 +72,7 @@ slsckpt_path(struct proc *p, struct vnode *vp, struct sbuf *sb)
 	 * XXX Make sure the unlinked file case is handled. 
 	 */
 	if (error == ENOENT)
-	    return (0);
+		return (0);
 
 	return (0);
 }
@@ -89,17 +89,17 @@ slsrest_path(struct sbuf *path, struct slsfile *info, int *fdp, int seekable)
 
 	/* XXX Permissions/flags. Also, is O_CREAT reasonable? */
 	error = kern_openat(curthread, AT_FDCWD, filepath, 
-		UIO_SYSSPACE, O_RDWR, S_IRWXU);	
+	    UIO_SYSSPACE, O_RDWR, S_IRWXU);	
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	fd = curthread->td_retval[0];
 
 	/* Vnodes are seekable. Fix up the offset here. */
 	if (seekable != 0) {
-	    error = kern_lseek(curthread, fd, info->offset, SEEK_SET);
-	    if (error != 0)
-		return (error);
+		error = kern_lseek(curthread, fd, info->offset, SEEK_SET);
+		if (error != 0)
+			return (error);
 	}
 
 	/* Export the fd to the caller. */

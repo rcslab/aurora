@@ -22,22 +22,22 @@
  * of FreeBSD's existing hashtable functions. 
  */
 struct slskv_pair {
-	uint64_t		key;	/* A 64bit key */
-	uintptr_t		value;	/* Pointer to a value of arbitrary size, 
-					   or possibly the value itself. */
-	LIST_ENTRY(slskv_pair)	next;	/* Used for chaining in the hashtable */
+    uint64_t		key;	/* A 64bit key */
+    uintptr_t		value;	/* Pointer to a value of arbitrary size, 
+				   or possibly the value itself. */
+    LIST_ENTRY(slskv_pair)	next;	/* Used for chaining in the hashtable */
 };
 
 LIST_HEAD(slskv_pairs, slskv_pair);	/* A bucket of the hashtable */
 
 /* The main key-value table. */
 struct slskv_table {
-	struct sx	    sx;			/* Shared-exclusive lock for iteration */
-	struct mtx_padalign mtx[SLSKV_BUCKETS];	/* Per-bucket locking */
-	struct slskv_pairs  *buckets;		/* The buckets of key-value pairs */
-	/* Read-only elements of the struct */
-	u_long		    mask;		/* Hashmask used by the builtin hashtable */
-	void		    *data;		/* Private data */
+    struct sx	    sx;			/* Shared-exclusive lock for iteration */
+    struct mtx_padalign mtx[SLSKV_BUCKETS];	/* Per-bucket locking */
+    struct slskv_pairs  *buckets;		/* The buckets of key-value pairs */
+    /* Read-only elements of the struct */
+    u_long		    mask;		/* Hashmask used by the builtin hashtable */
+    void		    *data;		/* Private data */
 };
 
 int slskv_create(struct slskv_table **tablep);
@@ -85,9 +85,9 @@ void slskv_fini(void);
  * This data structure should be opaque to the users of the table.
  */
 struct slskv_iter {
-	int		    bucket;	/* The bucket currently being dumped */
-	struct slskv_pair   *pair;	/* The KV pair currently being returned */
-	struct slskv_table  *table;	/* The table being currently returned */
+    int		    bucket;	/* The bucket currently being dumped */
+    struct slskv_pair   *pair;	/* The KV pair currently being returned */
+    struct slskv_table  *table;	/* The table being currently returned */
 };
 
 struct slskv_iter slskv_iterstart(struct slskv_table *table);
@@ -95,31 +95,31 @@ int slskv_itercont(struct slskv_iter *iter, uint64_t *key, uintptr_t *value);
 void slskv_iterabort(struct slskv_iter *iter);
 
 #define KV_FOREACH_POP_UNLOCKED(table, kvkey, kvvalue) \
-	_Static_assert(sizeof(kvkey) == sizeof(uint64_t), "popping into variable of the wrong size"); \
-	_Static_assert(sizeof(kvvalue) == sizeof(uintptr_t), "popping into variable of the wrong size"); \
-	while (slskv_pop_unlocked(table, (uint64_t *) &kvkey, (uintptr_t *) &kvvalue) == 0)
+    _Static_assert(sizeof(kvkey) == sizeof(uint64_t), "popping into variable of the wrong size"); \
+_Static_assert(sizeof(kvvalue) == sizeof(uintptr_t), "popping into variable of the wrong size"); \
+while (slskv_pop_unlocked(table, (uint64_t *) &kvkey, (uintptr_t *) &kvvalue) == 0)
 
 #define KV_FOREACH_POP(table, kvkey, kvvalue) \
-	_Static_assert(sizeof(kvkey) == sizeof(uint64_t), "popping into variable of the wrong size"); \
-	_Static_assert(sizeof(kvvalue) == sizeof(uintptr_t), "popping into variable of the wrong size"); \
-	while (slskv_pop(table, (uint64_t *) &kvkey, (uintptr_t *) &kvvalue) == 0)
+    _Static_assert(sizeof(kvkey) == sizeof(uint64_t), "popping into variable of the wrong size"); \
+_Static_assert(sizeof(kvvalue) == sizeof(uintptr_t), "popping into variable of the wrong size"); \
+while (slskv_pop(table, (uint64_t *) &kvkey, (uintptr_t *) &kvvalue) == 0)
 
 #define KVSET_FOREACH_POP(settable, setvalue) \
-	_Static_assert(sizeof(setvalue) == sizeof(uint64_t), "popping into variable of the wrong size"); \
-	while (slsset_pop(settable, (uint64_t *) &setvalue) == 0)
+    _Static_assert(sizeof(setvalue) == sizeof(uint64_t), "popping into variable of the wrong size"); \
+while (slsset_pop(settable, (uint64_t *) &setvalue) == 0)
 
 #define KVSET_FOREACH_POP_UNLOCKED(settable, setvalue) \
-	_Static_assert(sizeof(setvalue) == sizeof(uint64_t), "popping into variable of the wrong size"); \
-	while (slsset_pop_unlocked(settable, (uint64_t *) &setvalue) == 0)
+    _Static_assert(sizeof(setvalue) == sizeof(uint64_t), "popping into variable of the wrong size"); \
+while (slsset_pop_unlocked(settable, (uint64_t *) &setvalue) == 0)
 
 #define KV_FOREACH(table, iter, kvkey, kvvalue) \
-	_Static_assert(sizeof(kvkey) == sizeof(uint64_t), "popping into variable of the wrong size"); \
-	_Static_assert(sizeof(kvvalue) == sizeof(uintptr_t), "popping into variable of the wrong size"); \
-	for (iter = slskv_iterstart(table); slskv_itercont(&iter, (uint64_t *) &kvkey, (uintptr_t *) &kvvalue) != SLSKV_ITERDONE;)
+    _Static_assert(sizeof(kvkey) == sizeof(uint64_t), "popping into variable of the wrong size"); \
+_Static_assert(sizeof(kvvalue) == sizeof(uintptr_t), "popping into variable of the wrong size"); \
+for (iter = slskv_iterstart(table); slskv_itercont(&iter, (uint64_t *) &kvkey, (uintptr_t *) &kvvalue) != SLSKV_ITERDONE;)
 
 #define KVSET_FOREACH(settable, iter, setvalue) \
-	_Static_assert(sizeof(setvalue) == sizeof(uint64_t), "popping into variable of the wrong size"); \
-	for (iter = slskv_iterstart(settable); slskv_itercont(&iter, (uint64_t *) &setvalue, (uintptr_t *) &setvalue) != SLSKV_ITERDONE;)
+    _Static_assert(sizeof(setvalue) == sizeof(uint64_t), "popping into variable of the wrong size"); \
+for (iter = slskv_iterstart(settable); slskv_itercont(&iter, (uint64_t *) &setvalue, (uintptr_t *) &setvalue) != SLSKV_ITERDONE;)
 
 #define KV_ABORT(iter) do { (slskv_iterabort(&(iter))); } while (0)
 

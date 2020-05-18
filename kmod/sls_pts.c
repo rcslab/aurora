@@ -124,14 +124,14 @@ slsckpt_ttyinq_read(struct ttyinq *ti, struct sbuf *ptssb)
 	/* Write the data to the main sbuf. */
 	data = sbuf_data(sb);
 	datasize = sbuf_len(sb);
-		
+
 	error = sbuf_bcat(ptssb, &datasize, sizeof(datasize));
 	if (error != 0) 
-	    goto out;
+		goto out;
 
 	error = sbuf_bcat(ptssb, data, datasize);
 	if (error != 0)
-	    goto out;
+		goto out;
 
 out:
 	sbuf_delete(sb);
@@ -203,14 +203,14 @@ slsckpt_ttyoutq_read(struct ttyoutq *to, struct sbuf *ptssb)
 	/* Write the data to the main sbuf. */
 	data = sbuf_data(sb);
 	datasize = sbuf_len(sb);
-		
+
 	error = sbuf_bcat(ptssb, &datasize, sizeof(datasize));
 	if (error != 0) 
-	    goto out;
+		goto out;
 
 	error = sbuf_bcat(ptssb, data, datasize);
 	if (error != 0)
-	    goto out;
+		goto out;
 
 out:
 	sbuf_delete(sb);
@@ -245,16 +245,16 @@ slsckpt_pts_mst(struct proc *p, struct tty *pts, struct sbuf *sb)
 	/* Add it to the record. */
 	error = sbuf_bcat(sb, (void *) &slspts, sizeof(slspts));
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	/* Get the data. */
 	error = slsckpt_ttyinq_read(&pts->t_inq, sb);
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	error = slsckpt_ttyoutq_read(&pts->t_outq, sb);
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	return (0);
 }
@@ -277,7 +277,7 @@ slsckpt_pts_slv(struct proc *p, struct vnode *vp, struct sbuf *sb)
 	/* Add it to the record. */
 	error = sbuf_bcat(sb, (void *) &slspts, sizeof(slspts));
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	return (0);
 }
@@ -304,7 +304,7 @@ slsrest_pts(struct slskv_table *filetable,  struct slspts *slspts, int *fdp)
 	 */
 	error = falloc(curthread, &masterfp, &masterfd, 0);
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	/* 
 	 * XXX Actually check whether we want NOCTTY, or else manually
@@ -312,8 +312,8 @@ slsrest_pts(struct slskv_table *filetable,  struct slspts *slspts, int *fdp)
 	 */
 	error = pts_alloc(FREAD | FWRITE | O_NOCTTY, curthread, masterfp);
 	if (error != 0)
-	    goto error;
-    
+		goto error;
+
 	tty = masterfp->f_data;
 	tty->t_flags = slspts->flags;
 	/* 
@@ -326,12 +326,12 @@ slsrest_pts(struct slskv_table *filetable,  struct slspts *slspts, int *fdp)
 	path = malloc(PATH_MAX, M_SLSMM, M_WAITOK);
 	strlcpy(path, DEVFS_ROOT, sizeof(DEVFS_ROOT));
 	strlcat(path, devtoname(tty->t_dev), PATH_MAX);
-	
+
 	error = kern_openat(curthread, AT_FDCWD, path,
-		UIO_SYSSPACE, O_RDWR, S_IRWXU);
+	    UIO_SYSSPACE, O_RDWR, S_IRWXU);
 	free(path, M_SLSMM);
 	if (error != 0)
-	    goto error;
+		goto error;
 
 	/* As in the case of pipes, we add the peer to the table ourselves. */
 	slavefd = curthread->td_retval[0];
@@ -345,56 +345,56 @@ slsrest_pts(struct slskv_table *filetable,  struct slspts *slspts, int *fdp)
 	 * with the fd that we return to it.
 	 */
 	if (slspts->ismaster != 0) {
-	    error = slskv_add(filetable, slspts->peerid, (uintptr_t) slavefp);
-	    if (error != 0) {
+		error = slskv_add(filetable, slspts->peerid, (uintptr_t) slavefp);
+		if (error != 0) {
+			kern_close(curthread, slavefd);
+			goto error;
+		}
+
+		*fdp = masterfd;
+		/* Get a reference on behalf of the hashtable. */
+		if (!fhold(slavefp)) {
+			error = EBADF;
+			goto error;
+
+		}
+		/* Remove it from this process and this fd. */
 		kern_close(curthread, slavefd);
-		goto error;
-	    }
-
-	    *fdp = masterfd;
-	    /* Get a reference on behalf of the hashtable. */
-	    if (!fhold(slavefp)) {
-		error = EBADF;
-		goto error;
-
-	    }
-	    /* Remove it from this process and this fd. */
-	    kern_close(curthread, slavefd);
 
 	} else {
-	    error = slskv_add(filetable, slspts->peerid, (uintptr_t) masterfp);
-	    if (error != 0) {
+		error = slskv_add(filetable, slspts->peerid, (uintptr_t) masterfp);
+		if (error != 0) {
+			kern_close(curthread, masterfd);
+			return (error);
+		}
+
+		*fdp = slavefd;
+		/* Get a reference on behalf of the hashtable. */
+		if (!fhold(masterfp)) {
+			error = EBADF;
+			goto error;
+
+		}
+		/* Remove it from this process and this fd. */
 		kern_close(curthread, masterfd);
-		return (error);
-	    }
-
-	    *fdp = slavefd;
-	    /* Get a reference on behalf of the hashtable. */
-	    if (!fhold(masterfp)) {
-		error = EBADF;
-		goto error;
-
-	    }
-	    /* Remove it from this process and this fd. */
-	    kern_close(curthread, masterfd);
 
 	}
 
 	/* Fill back in the tty input and output queues. */
 	if (slspts->inq != NULL) {
-	    written = ttyinq_write(&tty->t_inq, slspts->inq, slspts->inqlen, 0);
-	    if (written != slspts->inqlen) {
-		error = EINVAL;
-		goto error;
-	    }
+		written = ttyinq_write(&tty->t_inq, slspts->inq, slspts->inqlen, 0);
+		if (written != slspts->inqlen) {
+			error = EINVAL;
+			goto error;
+		}
 	}
 
 	if (slspts->outq != NULL) {
-	    written = ttyoutq_write(&tty->t_outq, slspts->outq, slspts->outqlen);
-	    if (written != slspts->outqlen) {
-		error = EINVAL;
-		goto error;
-	    }
+		written = ttyoutq_write(&tty->t_outq, slspts->outq, slspts->outqlen);
+		if (written != slspts->outqlen) {
+			error = EINVAL;
+			goto error;
+		}
 	}
 
 	/* We got an extra reference, release it as in posix_openpt(). */

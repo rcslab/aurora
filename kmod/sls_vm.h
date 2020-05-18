@@ -20,9 +20,9 @@
 #include "sls_kv.h"
 
 #define OBJT_ISANONYMOUS(obj) \
-	((obj != NULL) && \
-	((obj->type == OBJT_DEFAULT) || \
-	 (obj->type == OBJT_SWAP)))
+    ((obj != NULL) && \
+     ((obj->type == OBJT_DEFAULT) || \
+      (obj->type == OBJT_SWAP)))
 
 int slsvm_object_shadow(struct slskv_table *objtable, vm_object_t *objp);
 void slsvm_objtable_collapse(struct slskv_table *objtable);

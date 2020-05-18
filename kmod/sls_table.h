@@ -18,10 +18,10 @@ struct slos_node;
 
 /* A run of contiguous pages for a VM object */
 struct slspagerun {
-	uint64_t	    idx;    /* The starting page offset in the object */
-	uint64_t	    len;    /* The length of the page run in bytes */
-	void		    *data;  /* The data for the pages */
-	LIST_ENTRY(slspagerun) next;   /* The next run for the object */
+    uint64_t	    idx;    /* The starting page offset in the object */
+    uint64_t	    len;    /* The length of the page run in bytes */
+    void		    *data;  /* The data for the pages */
+    LIST_ENTRY(slspagerun) next;   /* The next run for the object */
 };
 
 /* A linked list of page runs */

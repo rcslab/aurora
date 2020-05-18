@@ -81,14 +81,14 @@ slsckpt_posixshm(struct shmfd *shmfd, struct sbuf *sb)
 	 */
 	error = sbuf_bcat(sb, &slsposixshm, sizeof(slsposixshm));
 	if (error != 0) 
-	    return (error);
+		return (error);
 
 	/* Write down the path, if it exists. */
 	if (shmfd->shm_path != NULL) {
-	    len = strnlen(shmfd->shm_path, PATH_MAX);
-	    error = sls_path_append(shmfd->shm_path, len, sb);
-	    if (error != 0)
-		return (error);
+		len = strnlen(shmfd->shm_path, PATH_MAX);
+		error = sls_path_append(shmfd->shm_path, len, sb);
+		if (error != 0)
+			return (error);
 	}
 
 	return (0);
@@ -107,23 +107,23 @@ slsrest_posixshm(struct slsposixshm *info, struct slskv_table *objtable, int *fd
 	/* First and foremost, go fetch the object backing the shared memory. */
 	error = slskv_find(objtable, info->object, (uintptr_t *) &obj);
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	path = (info->sb != NULL) ? sbuf_data(info->sb) : SHM_ANON;
 
 	/* First try to create the shared memory mapping. */
 	error = kern_shm_open(curthread, path, UIO_SYSSPACE, 
-		O_RDWR | O_CREAT | O_EXCL, info->mode, NULL);
+	    O_RDWR | O_CREAT | O_EXCL, info->mode, NULL);
 	if (error != 0) {
-	    /* Maybe it's already created then? */
-	    error = kern_shm_open(curthread, path, UIO_SYSSPACE,
+		/* Maybe it's already created then? */
+		error = kern_shm_open(curthread, path, UIO_SYSSPACE,
 		    O_RDWR, info->mode, NULL);
-	    if (error != 0)
-		return (error);
+		if (error != 0)
+			return (error);
 
-	    /* It was - return the fd and let the main code take care of the rest. */
-	    *fdp = curthread->td_retval[0];
-	    return (0);
+		/* It was - return the fd and let the main code take care of the rest. */
+		*fdp = curthread->td_retval[0];
+		return (0);
 	}
 
 	/* Otherwise we just created it. */

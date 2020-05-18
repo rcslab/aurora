@@ -69,9 +69,9 @@ uma_zone_t slspagerun_zone = NULL;
  * along with the size of their metadata. 
  */
 static uint64_t sls_datastructs[] =  { 
-    SLOSREC_VMOBJ, 
+	SLOSREC_VMOBJ, 
 #ifdef SLS_TEST
-    SLOSREC_TESTDATA, 
+	SLOSREC_TESTDATA, 
 #endif
 };
 
@@ -177,8 +177,8 @@ sls_isdata(uint64_t type)
 	int i;
 
 	for (i = 0; i < sizeof(sls_datastructs) / sizeof(*sls_datastructs); i++) {
-	    if (sls_datastructs[i] == type)
-		return (1);
+		if (sls_datastructs[i] == type)
+			return (1);
 	}
 
 	return (0);
@@ -233,7 +233,7 @@ sls_readrecord_slos(struct vnode *vp, void **recordp, uint64_t offset, struct sl
  */
 static int
 sls_readmeta_slos(struct vnode *vp, struct slskv_table *table,
-		void **recordp, uint64_t *lenp)
+    void **recordp, uint64_t *lenp)
 {
 	struct slos_rstat *st;
 	void *record;
@@ -244,16 +244,16 @@ sls_readmeta_slos(struct vnode *vp, struct slskv_table *table,
 
 	error = sls_readrecord_slos(vp, &record, 0, st);
 	if (error != 0) {
-	    free(st, M_SLSMM);
-	    return (error);
+		free(st, M_SLSMM);
+		return (error);
 	}
 
 	/* Add the record to the table to be parsed into info structs later. */
 	error = slskv_add(table, (uint64_t) record, (uintptr_t) st);
 	if (error != 0) {
-	    free(st, M_SLSMM);
-	    free(record, M_SLSMM);
-	    return (error);
+		free(st, M_SLSMM);
+		free(record, M_SLSMM);
+		return (error);
 	}
 
 	*recordp = record;
@@ -269,7 +269,7 @@ sls_readmeta_slos(struct vnode *vp, struct slskv_table *table,
  */
 static int
 sls_readdata_slos(struct vnode *vp, struct slskv_table *metatable,
-	struct slskv_table *datatable)
+    struct slskv_table *datatable)
 {
 	struct thread *td = curthread;
 	struct slspagerun *pagerun;
@@ -285,7 +285,7 @@ sls_readdata_slos(struct vnode *vp, struct slskv_table *metatable,
 	/* First read the object metadata. The data gets read separately. */
 	error = sls_readmeta_slos(vp, metatable, &record, &len);
 	if (error != 0)
-	    return error;
+		return error;
 
 	/* Start from the first page. */
 	/* XXX Change so we get a more dynamic start. */
@@ -302,57 +302,57 @@ sls_readdata_slos(struct vnode *vp, struct slskv_table *metatable,
 
 	error = slskv_add(datatable, (uint64_t) record, (uintptr_t) data);
 	if (error != 0)
-	    return error;
+		return error;
 
 	for (;;) {
-	    slos_uioinit(&auio, offset, UIO_READ, &aiov, 1);
-	    /* Find the extent starting with the offset provided. */
-	    VOP_UNLOCK(vp, 0);
-	    error = VOP_IOCTL(vp, SLS_SEEK_EXTENT, &auio, 0, NULL, td);
-	    VOP_LOCK(vp, LK_EXCLUSIVE);
-	    if (error != 0) {
-		SLS_DBG("extent seek failed with %d\n", error);
-		return (error);
-	    }
+		slos_uioinit(&auio, offset, UIO_READ, &aiov, 1);
+		/* Find the extent starting with the offset provided. */
+		VOP_UNLOCK(vp, 0);
+		error = VOP_IOCTL(vp, SLS_SEEK_EXTENT, &auio, 0, NULL, td);
+		VOP_LOCK(vp, LK_EXCLUSIVE);
+		if (error != 0) {
+			SLS_DBG("extent seek failed with %d\n", error);
+			return (error);
+		}
 
-	    /* Get the new extent. If we get no more data, we're done. */
-	    len = auio.uio_resid;
-	    if (len == 0)
-		break;
+		/* Get the new extent. If we get no more data, we're done. */
+		len = auio.uio_resid;
+		if (len == 0)
+			break;
 
-	    /* Otherwise allocate a buffer for the data. */
-	    pages = malloc(len, M_SLSMM, M_WAITOK);
+		/* Otherwise allocate a buffer for the data. */
+		pages = malloc(len, M_SLSMM, M_WAITOK);
 
-	    /* Create the UIO for the disk. */
-	    aiov.iov_base = pages;
-	    aiov.iov_len = len;
+		/* Create the UIO for the disk. */
+		aiov.iov_base = pages;
+		aiov.iov_len = len;
 
-	    /* Update the point from which we will look for the next offset. */
-	    pindex = OFF_TO_IDX(auio.uio_offset) - 1;
-	    offset = auio.uio_offset + auio.uio_resid;
+		/* Update the point from which we will look for the next offset. */
+		pindex = OFF_TO_IDX(auio.uio_offset) - 1;
+		offset = auio.uio_offset + auio.uio_resid;
 
-	    /* The read itself. */
-	    error =  sls_doio(vp, &auio);
-	    if (error != 0) {
-		free(pages, M_SLSMM);
-		return (error);
-	    }
+		/* The read itself. */
+		error =  sls_doio(vp, &auio);
+		if (error != 0) {
+			free(pages, M_SLSMM);
+			return (error);
+		}
 
-	    /* Add the new pagerun to the list. */
-	    pagerun = uma_zalloc(slspagerun_zone, M_WAITOK);
+		/* Add the new pagerun to the list. */
+		pagerun = uma_zalloc(slspagerun_zone, M_WAITOK);
 
-	    /*
-	     * The pages start from the 2nd 4K block in the record.
-	     * Moreover, the index of the pages in the object
-	     * correspond to page-sized chunks.
-	     */
-	    pagerun->idx = pindex;
-	    pagerun->len = len;
-	    pagerun->data = pages;
+		/*
+		 * The pages start from the 2nd 4K block in the record.
+		 * Moreover, the index of the pages in the object
+		 * correspond to page-sized chunks.
+		 */
+		pagerun->idx = pindex;
+		pagerun->len = len;
+		pagerun->data = pages;
 
-	    /* Increment the offset by the amount of bytes read. */
+		/* Increment the offset by the amount of bytes read. */
 
-	    LIST_INSERT_HEAD(data, pagerun, next);
+		LIST_INSERT_HEAD(data, pagerun, next);
 	}
 
 	return 0;
@@ -365,8 +365,8 @@ sls_free_metatable(struct slskv_table *metatable)
 	void *record;
 
 	KV_FOREACH_POP(metatable, record, st) {
-	    free(st, M_SLSMM);
-	    free(record, M_SLSMM);
+		free(st, M_SLSMM);
+		free(record, M_SLSMM);
 	}
 
 	slskv_destroy(metatable);
@@ -380,10 +380,10 @@ sls_free_datatable(struct slskv_table *datatable)
 	void *record;
 
 	KV_FOREACH_POP(datatable, record, data) {
-	    LIST_FOREACH_SAFE(pagerun, &data, next, tmp) {
-		free(pagerun->data, M_SLSMM);
-		free(pagerun, M_SLSMM);
-	    }
+		LIST_FOREACH_SAFE(pagerun, &data, next, tmp) {
+			free(pagerun->data, M_SLSMM);
+			free(pagerun, M_SLSMM);
+		}
 	}
 
 	slskv_destroy(datatable);
@@ -414,7 +414,7 @@ sls_read_slos_manifest(uint64_t oid, uint64_t **ids, size_t *idlen)
 	/* Get the list of SLOS records for this checkpoint. */
 	ret = sls_readrecord_slos(vp, &record, 0, &st);
 	if (ret != 0)
-	    goto out;
+		goto out;
 
 	*ids = (uint64_t *) record;
 	*idlen = st.len / sizeof(**ids);
@@ -422,7 +422,7 @@ sls_read_slos_manifest(uint64_t oid, uint64_t **ids, size_t *idlen)
 out:
 	close_error = VOP_CLOSE(vp, mode, NULL, td);
 	if (close_error != 0)
-	    SLS_DBG("error %d, could not close slos node", close_error);
+		SLS_DBG("error %d, could not close slos node", close_error);
 
 	vput(vp);
 
@@ -431,7 +431,7 @@ out:
 
 static int
 sls_read_slos_record(uint64_t oid, struct slskv_table *metatable,
-	struct slskv_table *datatable)
+    struct slskv_table *datatable)
 {
 	struct thread *td = curthread;
 	int close_error, error, ret;
@@ -466,19 +466,19 @@ sls_read_slos_record(uint64_t oid, struct slskv_table *metatable,
 	 * metadata. We will manually read the data later.
 	 */
 	if (sls_isdata(st.type)) {
-	    ret = sls_readdata_slos(vp, metatable, datatable);
-	    if (ret != 0)
-		goto out;
+		ret = sls_readdata_slos(vp, metatable, datatable);
+		if (ret != 0)
+			goto out;
 	} else {
-	    ret = sls_readmeta_slos(vp, metatable, &record, NULL);
-	    if (ret != 0)
-		goto out;
+		ret = sls_readmeta_slos(vp, metatable, &record, NULL);
+		if (ret != 0)
+			goto out;
 	}
 
 out:
 	close_error = VOP_CLOSE(vp, mode, NULL, td);
 	if (close_error != 0)
-	    SLS_DBG("error %d, could not close slos node", close_error);
+		SLS_DBG("error %d, could not close slos node", close_error);
 
 	vput(vp);
 
@@ -488,7 +488,7 @@ out:
 /* Reads in a record from the SLOS and saves it in the record table. */
 int
 sls_read_slos(uint64_t oid, struct slskv_table **metatablep,
-	struct slskv_table **datatablep)
+    struct slskv_table **datatablep)
 {
 	struct slskv_table *metatable, *datatable;
 	uint64_t *ids = NULL;
@@ -498,12 +498,12 @@ sls_read_slos(uint64_t oid, struct slskv_table **metatablep,
 	/* Create the tables that hold the data and metadata of the checkpoint. */
 	error = slskv_create(&metatable);
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	error = slskv_create(&datatable);
 	if (error != 0) {
-	    slskv_destroy(metatable);
-	    return (error);
+		slskv_destroy(metatable);
+		return (error);
 	}
 
 	/* 
@@ -512,13 +512,13 @@ sls_read_slos(uint64_t oid, struct slskv_table **metatablep,
 	 */
 	error = sls_read_slos_manifest(oid, &ids, &idlen);
 	if (error != 0)
-	    goto error;
+		goto error;
 
 	for (i = 0; i < idlen; i++) {
 
-	    error = sls_read_slos_record(ids[i], metatable, datatable);
-	    if (error != 0)
-		goto error;
+		error = sls_read_slos_record(ids[i], metatable, datatable);
+		if (error != 0)
+			goto error;
 
 	}
 
@@ -560,26 +560,26 @@ sls_contig_pages(vm_object_t obj, vm_page_t *page)
 	sls_pages_grabbed += (pagesizes[prev->psind] / PAGE_SIZE);
 
 	TAILQ_FOREACH_FROM(cur, &obj->memq, listq) {
-	    /* Pages need to be physically and logically contiguous. */
-	    if (prev->phys_addr + pagesizes[prev->psind] != cur->phys_addr ||
-		prev->pindex + OFF_TO_IDX(pagesizes[prev->psind]) != cur->pindex)
-		break;
+		/* Pages need to be physically and logically contiguous. */
+		if (prev->phys_addr + pagesizes[prev->psind] != cur->phys_addr ||
+		    prev->pindex + OFF_TO_IDX(pagesizes[prev->psind]) != cur->pindex)
+			break;
 
-	    /* 
-	     * XXX Not sure we need this. Even if the run is gigantic, we do
-	     * no copies, and the IO layer surely has a way of coping with 
-	     * massive IOs.
-	     */
-	    if (contig_len > sls_contig_limit)
-		break;
+		/* 
+		 * XXX Not sure we need this. Even if the run is gigantic, we do
+		 * no copies, and the IO layer surely has a way of coping with 
+		 * massive IOs.
+		 */
+		if (contig_len > sls_contig_limit)
+			break;
 
-	    /* 
-	     * Add the size of the "right" page to 
-	     * the total, since it's contiguous.
-	     */
-	    contig_len += pagesizes[cur->psind];
-	    prev = cur;
-	    sls_pages_grabbed += (pagesizes[cur->psind] / PAGE_SIZE);
+		/* 
+		 * Add the size of the "right" page to 
+		 * the total, since it's contiguous.
+		 */
+		contig_len += pagesizes[cur->psind];
+		prev = cur;
+		sls_pages_grabbed += (pagesizes[cur->psind] / PAGE_SIZE);
 	}
 
 	/* Pass the new index into the page list to the caller. */
@@ -608,11 +608,11 @@ sls_writeobj_slos_sync(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t le
 	aiov.iov_len = len;
 
 	/*
-	* The offset of the write adjusted because the first
-	* page-sized chunk holds the metadata of the VM object.
-	*/
+	 * The offset of the write adjusted because the first
+	 * page-sized chunk holds the metadata of the VM object.
+	 */
 	slos_uioinit(&auio, PAGE_SIZE + IDX_TO_OFF(m->pindex),
-		UIO_WRITE, &aiov, 1);
+	    UIO_WRITE, &aiov, 1);
 
 	/* The write itself. */
 	error = sls_doio(vp, &auio);
@@ -638,28 +638,28 @@ sls_writeobj_slos(struct vnode *vp, vm_object_t obj)
 	/* Traverse the object's resident pages. */
 	page = TAILQ_FIRST(&obj->memq);
 	while (page != NULL) {
-	    /*
-	     * Split the memory into contiguous chunks.
-	     * By doing so, we can efficiently dump the
-	     * data to the backend. The alternative
-	     * would be sending out the data one page
-	     * at a time, which would fragment the IOs
-	     * and kill performance. The list of resident
-	     * pages is being iterated in the call below.
-	     */
-	    startpage = page;
-	    contig_len = sls_contig_pages(obj, &page);
+		/*
+		 * Split the memory into contiguous chunks.
+		 * By doing so, we can efficiently dump the
+		 * data to the backend. The alternative
+		 * would be sending out the data one page
+		 * at a time, which would fragment the IOs
+		 * and kill performance. The list of resident
+		 * pages is being iterated in the call below.
+		 */
+		startpage = page;
+		contig_len = sls_contig_pages(obj, &page);
 
-	    if (sls_async_slos)
-	    	error = slos.slsfs_vmawrite(vp, obj, startpage, contig_len, NULL);
-	    else
-		error = sls_writeobj_slos_sync(vp, obj, startpage, contig_len);
-	    if (error != 0)
-		    return (error);
+		if (sls_async_slos)
+			error = slos.slsfs_vmawrite(vp, obj, startpage, contig_len, NULL);
+		else
+			error = sls_writeobj_slos_sync(vp, obj, startpage, contig_len);
+		if (error != 0)
+			return (error);
 
-	    /* Have we fully traversed the list, or looped around? */
-	    if (page == NULL || startpage->pindex >= page->pindex)
-		break;
+		/* Have we fully traversed the list, or looped around? */
+		if (page == NULL || startpage->pindex >= page->pindex)
+			break;
 	}
 
 	return 0;
@@ -689,7 +689,7 @@ sls_writemeta_slos(struct sls_record *rec, struct vnode **vpp, bool overwrite)
 
 	record = sbuf_data(sb);
 	if (record == NULL)
-	    return (EINVAL);
+		return (EINVAL);
 
 	len = sbuf_len(sb);
 
@@ -710,10 +710,10 @@ sls_writemeta_slos(struct sls_record *rec, struct vnode **vpp, bool overwrite)
 	if (overwrite) {
 		/* XXX Truncate */
 		/*
-		error = slsfs_truncate(vp, 0);
-		if (error != 0)
-			goto error;
-		*/
+		   error = slsfs_truncate(vp, 0);
+		   if (error != 0)
+		   goto error;
+		   */
 	}
 
 	/* Open the record for writing. */
@@ -740,7 +740,7 @@ sls_writemeta_slos(struct sls_record *rec, struct vnode **vpp, bool overwrite)
 	/* Keep reading until we get all the info. */
 	error = sls_doio(vp, &auio);
 	if (error != 0)
-	    goto error;
+		goto error;
 
 	/* Pass the open vnode to the caller if needed. */
 	if (vpp != NULL) {
@@ -751,7 +751,7 @@ sls_writemeta_slos(struct sls_record *rec, struct vnode **vpp, bool overwrite)
 	/* Else we're done with the vnode. */
 	error = VOP_CLOSE(vp, mode, NULL, td);
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	vput(vp);
 
@@ -759,9 +759,9 @@ sls_writemeta_slos(struct sls_record *rec, struct vnode **vpp, bool overwrite)
 
 error:
 	if (vp != NULL) {
-	    close_error = VOP_CLOSE(vp, mode, NULL, td);
-	    if (close_error != 0)
-		SLS_DBG("error %d, could not close SLSFS vnode\n", close_error);
+		close_error = VOP_CLOSE(vp, mode, NULL, td);
+		if (close_error != 0)
+			SLS_DBG("error %d, could not close SLSFS vnode\n", close_error);
 	}
 
 	if (vpp != NULL)
@@ -793,7 +793,7 @@ sls_writedata_slos(struct sls_record *rec, struct slskv_table *objtable)
 	/* The record number returned is the unique record ID. */
 	error = sls_writemeta_slos(rec, &vp, false);
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	/* The node will exist, since we called sls_writemeta_slos().*/
 	error = VOP_OPEN(vp, mode, NULL, td, NULL);
@@ -813,23 +813,23 @@ sls_writedata_slos(struct sls_record *rec, struct slskv_table *objtable)
 	 */
 	obj = (vm_object_t) info->id;
 	if ((obj->type != OBJT_DEFAULT && (obj->type != OBJT_SWAP)))
-	    goto out;
+		goto out;
 
 	/* Get the shadow we created for the object from the table. */
 	ret = slskv_find(objtable, (uint64_t) obj, (uintptr_t *) &newobj);
 	if (ret != 0)
-	    goto out;
+		goto out;
 
 	/* Checkpoint the object. */
 	ret = sls_writeobj_slos(vp, obj);
 	if (ret != 0)
-	    goto out;
+		goto out;
 
 out:
 	error = VOP_CLOSE(vp, mode, NULL, td);
 	if (error != 0) {
-	    SLS_DBG("error %d could not close slos node\n", error);
-	    return (ret);
+		SLS_DBG("error %d could not close slos node\n", error);
+		return (ret);
 	}
 
 	vput(vp);
@@ -845,18 +845,18 @@ sls_write_slos_manifest(uint64_t oid, struct sbuf *sb)
 
 	error = sbuf_finish(sb);
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	/* Write out the manifest to the vnode. */
 	rec = (struct sls_record) {
-	    .srec_id = oid,
-	    .srec_type = SLOSREC_MANIFEST,
-	    .srec_sb = sb,
+		.srec_id = oid,
+		    .srec_type = SLOSREC_MANIFEST,
+		    .srec_sb = sb,
 	};
 
 	error = sls_writemeta_slos(&rec, NULL, true);
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	return (0);
 }
@@ -878,33 +878,33 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 	/* Use the current time as the record number. */
 
 	KV_FOREACH_POP(sckpt_data->sckpt_rectable, slsid, rec) {
-	    /*
-	     * VM object records are special, since we need to dump
-	     * actual memory along with the metadata.
-	     */
-	    if (sls_isdata(rec->srec_type))
-		error = sls_writedata_slos(rec, sckpt_data->sckpt_objtable);
-	    else
-		error = sls_writemeta_slos(rec, NULL, true);
-	    if (error != 0) {
-		    SLS_DBG("Writing the record failed with %d", error);
-		sbuf_delete(sb_manifest);
-		return (error);
-	    }
+		/*
+		 * VM object records are special, since we need to dump
+		 * actual memory along with the metadata.
+		 */
+		if (sls_isdata(rec->srec_type))
+			error = sls_writedata_slos(rec, sckpt_data->sckpt_objtable);
+		else
+			error = sls_writemeta_slos(rec, NULL, true);
+		if (error != 0) {
+			SLS_DBG("Writing the record failed with %d", error);
+			sbuf_delete(sb_manifest);
+			return (error);
+		}
 
-	    /* Attach the new record to the checkpoint manifest. */
-	    error = sbuf_bcat(sb_manifest, &rec->srec_id, sizeof(rec->srec_id));
-	    if (error != 0) {
-		sbuf_delete(sb_manifest);
-		return (error);
-	    }
+		/* Attach the new record to the checkpoint manifest. */
+		error = sbuf_bcat(sb_manifest, &rec->srec_id, sizeof(rec->srec_id));
+		if (error != 0) {
+			sbuf_delete(sb_manifest);
+			return (error);
+		}
 
-	    /* XXX Free as we go. */
+		/* XXX Free as we go. */
 	}
 
 	error = sls_write_slos_manifest(oid, sb_manifest);
 	if (error != 0)
-	    return (error);
+		return (error);
 
 
 	sbuf_delete(sb_manifest);
@@ -941,35 +941,35 @@ slstable_mkobj(vm_object_t *objp)
 	 * with probability (DATA_SIZE / VMOBJ_SIZE).
 	 */
 	for (i = 0; i < VMOBJ_SIZE; i++) {
-	    /* Flip a coin to see if we get this page. */
-	    if (random() % VMOBJ_SIZE >= DATA_SIZE)
-		continue;
+		/* Flip a coin to see if we get this page. */
+		if (random() % VMOBJ_SIZE >= DATA_SIZE)
+			continue;
 
-	    VM_OBJECT_WLOCK(obj);
+		VM_OBJECT_WLOCK(obj);
 
-	    /* 
-	     * Get a new page for the object and fill it with data. 
-	     * This is the same procedure as when restoring the pages
-	     * of a process, except that here we fill them with random data.
-	     */
-	    page = vm_page_alloc(obj, i, VM_ALLOC_NORMAL);
-	    if (page == NULL) {
-		/* If we get an error here, we just return what we have. */
+		/* 
+		 * Get a new page for the object and fill it with data. 
+		 * This is the same procedure as when restoring the pages
+		 * of a process, except that here we fill them with random data.
+		 */
+		page = vm_page_alloc(obj, i, VM_ALLOC_NORMAL);
+		if (page == NULL) {
+			/* If we get an error here, we just return what we have. */
+			VM_OBJECT_WUNLOCK(obj);
+			break;
+		}
+
+		page->valid = VM_PAGE_BITS_ALL;
+
 		VM_OBJECT_WUNLOCK(obj);
-		break;
-	    }
 
-	    page->valid = VM_PAGE_BITS_ALL;
-
-	    VM_OBJECT_WUNLOCK(obj);
-
-	    /* Map it into the kernel, fill it with data. */
-	    data = (char *) pmap_map(NULL, page->phys_addr, 
+		/* Map it into the kernel, fill it with data. */
+		data = (char *) pmap_map(NULL, page->phys_addr, 
 		    page->phys_addr + PAGE_SIZE,
 		    VM_PROT_READ | VM_PROT_WRITE);
 
-	    for (j = 0; j < PAGE_SIZE; j++)
-		data[j] = 'a' + (random() % ('z' - 'a'));
+		for (j = 0; j < PAGE_SIZE; j++)
+			data[j] = 'a' + (random() % ('z' - 'a'));
 
 	}
 
@@ -985,7 +985,7 @@ slstable_mkobj(vm_object_t *objp)
  */
 static int
 slstable_mkinfo(struct slskv_table *origtable, struct slskv_table *backuptable, 
-	uint64_t slsid, uint64_t type) 
+    uint64_t slsid, uint64_t type) 
 {
 	struct sbuf *sb, *sbbak;
 	meta_info *minfo;
@@ -1008,42 +1008,42 @@ slstable_mkinfo(struct slskv_table *origtable, struct slskv_table *backuptable,
 	 * for data, since it holds the address of the VM object.
 	 */
 	if (slsid == 0)
-	    minfo->slsid = (uint64_t) minfo;
+		minfo->slsid = (uint64_t) minfo;
 	else 
-	    minfo->slsid = slsid;
+		minfo->slsid = slsid;
 
 	minfo->sbid = (uint64_t) sb;
 	for (i = 0; i < INFO_SIZE; i++)
-	    minfo->data[i] = 'a' + random() % ('z' - 'a');
+		minfo->data[i] = 'a' + random() % ('z' - 'a');
 
 
 	/* Copy over to the sbuf. */
 	error = sbuf_bcpy(sb, (void *) minfo, sizeof(*minfo));
 	if (error != 0)
-	    goto out;
+		goto out;
 
 	/* Copy over to the sbuf. */
 	error = sbuf_bcpy(sbbak, (void *) minfo, sizeof(*minfo));
 	if (error != 0)
-	    goto out;
+		goto out;
 
 	error = sbuf_finish(sb);
 	if (error != 0)
-	    goto out;
+		goto out;
 
 	error = sbuf_finish(sbbak);
 	if (error != 0)
-	    goto out;
+		goto out;
 
 	/* Add the sbuf to the "before" table. */
 	error = slskv_add(origtable, (uint64_t) sb, type);
 	if (error != 0)
-	    goto out;
+		goto out;
 
 	/* Add the sbuf to the "before" table. */
 	error = slskv_add(backuptable, (uint64_t) sbbak, type);
 	if (error != 0)
-	    goto out;
+		goto out;
 
 out:
 
@@ -1059,7 +1059,7 @@ out:
  */
 static int
 slstable_testmeta(struct slskv_table *origtable, 
-	meta_info *record, uint64_t type)
+    meta_info *record, uint64_t type)
 {
 	struct sbuf *sb = NULL;
 	meta_info *origrecord; 
@@ -1069,8 +1069,8 @@ slstable_testmeta(struct slskv_table *origtable,
 	/* Find the sbuf that corresponds to the new element. */
 	error = slskv_find(origtable, record->sbid, (uintptr_t *) &origtype);
 	if (error != 0) {
-	    printf("ERROR: Retrieved element not found in the original table\n");
-	    goto out;
+		printf("ERROR: Retrieved element not found in the original table\n");
+		goto out;
 	}
 
 	/* 
@@ -1078,9 +1078,9 @@ slstable_testmeta(struct slskv_table *origtable,
 	 * if it fails, we have probably read garbage.
 	 */
 	if (origtype != type) {
-	    error = EINVAL;
-	    printf("ERROR: Original type is %ld, type found is %ld\n", origtype, type);
-	    goto out;
+		error = EINVAL;
+		printf("ERROR: Original type is %ld, type found is %ld\n", origtype, type);
+		goto out;
 	}
 
 	/* 
@@ -1092,27 +1092,27 @@ slstable_testmeta(struct slskv_table *origtable,
 	sb = (struct sbuf *) record->sbid;
 	error = sbuf_finish(sb);
 	if (error != 0)
-	    goto out;
+		goto out;
 
 	/* Unpack the original record from the sbuf. */
 	origrecord = (meta_info *) sbuf_data(sb);
 	if (origrecord == NULL) {
-	    error = EINVAL;
-	    goto out;
+		error = EINVAL;
+		goto out;
 	}
 
 	/* Compare the original and retrieved records. They should be identical. */
 	if (memcmp(origrecord, record, sizeof(*origrecord))) {
-	    printf("ERROR: Retrieved record differs from the original\n");
-	    printf("Original data: %.*s\n", INFO_SIZE, origrecord->data);
-	    printf("Retrieved data: %.*s\n", INFO_SIZE, record->data);
-	    error = EINVAL;
+		printf("ERROR: Retrieved record differs from the original\n");
+		printf("Original data: %.*s\n", INFO_SIZE, origrecord->data);
+		printf("Retrieved data: %.*s\n", INFO_SIZE, record->data);
+		error = EINVAL;
 	}
 
 out:
 
 	if (sb != NULL)
-	    sbuf_delete(sb);
+		sbuf_delete(sb);
 
 	return error;
 }
@@ -1138,100 +1138,100 @@ slstable_testdata(struct slskv_table *datatable, vm_object_t obj, meta_info *rec
 	page = TAILQ_FIRST(&obj->memq); 
 	while (page != NULL) {
 
-	    /* Get the next contiguous chunk of pages*/
-	    startpage = page;
-	    contig_len = sls_contig_pages(obj, &page);
+		/* Get the next contiguous chunk of pages*/
+		startpage = page;
+		contig_len = sls_contig_pages(obj, &page);
 
-	    /* Map the data in. */
-	    data = (char *) pmap_map(NULL, startpage->phys_addr, 
+		/* Map the data in. */
+		data = (char *) pmap_map(NULL, startpage->phys_addr, 
 		    startpage->phys_addr + PAGE_SIZE,
 		    VM_PROT_READ | VM_PROT_WRITE);
 
-	    /* Create the list node. */
-	    pagerun = uma_zalloc(slspagerun_zone, M_WAITOK);
-	    pagerun->idx = startpage->pindex;
-	    pagerun->len = contig_len;
-	    pagerun->data = data;
+		/* Create the list node. */
+		pagerun = uma_zalloc(slspagerun_zone, M_WAITOK);
+		pagerun->idx = startpage->pindex;
+		pagerun->len = contig_len;
+		pagerun->data = data;
 
 
-	    /* 
-	     * Insert the new element at the _tail_ of 
-	     * the list, and update the tail variable. 
-	     */
-	    LIST_INSERT_HEAD(&olddata, pagerun, next);
+		/* 
+		 * Insert the new element at the _tail_ of 
+		 * the list, and update the tail variable. 
+		 */
+		LIST_INSERT_HEAD(&olddata, pagerun, next);
 
-	    last = pagerun;
-	    
-	    /* Have we fully traversed all pages, or looped around? */
-	    if (page == NULL || startpage->pindex >= page->pindex)
-		break;
+		last = pagerun;
+
+		/* Have we fully traversed all pages, or looped around? */
+		if (page == NULL || startpage->pindex >= page->pindex)
+			break;
 	}
 
 	/* Bring in the restored list. */
 	error = slskv_find(datatable, (uint64_t) record, (uintptr_t *) &newdata);
 	if (error != 0) {
-	    printf("ERROR: Restored data for VM object metadata not found\n");
-	    goto out;
+		printf("ERROR: Restored data for VM object metadata not found\n");
+		goto out;
 	}
 
 	for (;;) {
-	    /* If one of the lists is emptied out, we're done. */
-	    if (LIST_EMPTY(newdata) || LIST_EMPTY(&olddata))
-		break;
+		/* If one of the lists is emptied out, we're done. */
+		if (LIST_EMPTY(newdata) || LIST_EMPTY(&olddata))
+			break;
 
-	    /* Pop the lists, compare the pageruns. */
-	    oldrun = LIST_FIRST(&olddata);
-	    LIST_REMOVE(oldrun, next);
+		/* Pop the lists, compare the pageruns. */
+		oldrun = LIST_FIRST(&olddata);
+		LIST_REMOVE(oldrun, next);
 
-	    newrun = LIST_FIRST(newdata);
-	    LIST_REMOVE(newrun, next);
+		newrun = LIST_FIRST(newdata);
+		LIST_REMOVE(newrun, next);
 
-	    if (oldrun->idx != newrun->idx) {
-		printf("ERROR: Pagerun indices different in original and restored data\n");
-		printf("Old index: %lu. New index: %lu.\n", oldrun->idx, newrun->idx);
-		error = EINVAL;
-		break;
-	    }
+		if (oldrun->idx != newrun->idx) {
+			printf("ERROR: Pagerun indices different in original and restored data\n");
+			printf("Old index: %lu. New index: %lu.\n", oldrun->idx, newrun->idx);
+			error = EINVAL;
+			break;
+		}
 
-	    if (oldrun->len != newrun->len) {
-		printf("ERROR: Pagerun lengths different in original and restored data\n");
-		printf("Old length: %lu. New length: %lu.\n", oldrun->len, newrun->len);
-		error = EINVAL;
-		break;
-	    }
+		if (oldrun->len != newrun->len) {
+			printf("ERROR: Pagerun lengths different in original and restored data\n");
+			printf("Old length: %lu. New length: %lu.\n", oldrun->len, newrun->len);
+			error = EINVAL;
+			break;
+		}
 
-	    oldpages = (char *) oldrun->data;
-	    newpages = (char *) newrun->data;
-	    if (memcmp(newpages, oldpages, oldrun->len) != 0) {
-		printf("ERROR: Old and new pageruns have different pages.\n");
-		printf("First 32 bytes of old pages: %.32s\n", oldpages);
-		printf("First 32 bytes of new pages: %.32s\n", newpages);
-		break;
-	    }
+		oldpages = (char *) oldrun->data;
+		newpages = (char *) newrun->data;
+		if (memcmp(newpages, oldpages, oldrun->len) != 0) {
+			printf("ERROR: Old and new pageruns have different pages.\n");
+			printf("First 32 bytes of old pages: %.32s\n", oldpages);
+			printf("First 32 bytes of new pages: %.32s\n", newpages);
+			break;
+		}
 
-	    free(newrun->data, M_SLSMM);
-	    uma_zfree(slspagerun_zone, oldrun);
-	    uma_zfree(slspagerun_zone, newrun);
+		free(newrun->data, M_SLSMM);
+		uma_zfree(slspagerun_zone, oldrun);
+		uma_zfree(slspagerun_zone, newrun);
 	}
 
 	/* The lists must be of the same size, so they must be empty simultaneously. */
 	if (!(LIST_EMPTY(newdata) && LIST_EMPTY(&olddata))) {
-	    printf("ERROR: Original and restored list have different sizes\n");
-	    error = EINVAL;
+		printf("ERROR: Original and restored list have different sizes\n");
+		error = EINVAL;
 	}
 
 
 out:
 	/* We don't need the pages anymore after this function. */
 	LIST_FOREACH_SAFE(pagerun, &olddata, next, tmp) {
-	    LIST_REMOVE(pagerun, next);
-	    uma_zfree(slspagerun_zone, pagerun);
+		LIST_REMOVE(pagerun, next);
+		uma_zfree(slspagerun_zone, pagerun);
 	}
-	    
+
 	LIST_FOREACH_SAFE(pagerun, newdata, next, tmp) {
-	    LIST_REMOVE(pagerun, next);
-	    free(pagerun->data, M_SLSMM);
-	    uma_zfree(slspagerun_zone, pagerun);
+		LIST_REMOVE(pagerun, next);
+		free(pagerun->data, M_SLSMM);
+		uma_zfree(slspagerun_zone, pagerun);
 	}
 
 	return error;
@@ -1257,11 +1257,11 @@ slstable_test(void)
 	/* Create a vnode in the SLOS for testing. */
 	error = slos_icreate(&slos, VNODE_ID);
 	if (error != 0)
-	    return error;
+		return error;
 
 	vp = slos_iopen(&slos, VNODE_ID);
 	if (vp == NULL)
-	    goto out;
+		goto out;
 
 	/* 
 	 * The table with the original info structs, plays the role
@@ -1269,7 +1269,7 @@ slstable_test(void)
 	 */
 	error = slskv_create(&origtable);
 	if (error != 0)
-	    goto out;
+		goto out;
 
 	/*
 	 * A backup table for the original data. When writing the data out,
@@ -1280,7 +1280,7 @@ slstable_test(void)
 	 */
 	error = slskv_create(&backuptable);
 	if (error != 0)
-	    goto out;
+		goto out;
 
 
 	/* 
@@ -1288,34 +1288,34 @@ slstable_test(void)
 	 * are just binary blobs - they don't have actual user data that needs saving.
 	 */
 	for (i = 0; i < META_INFOS; i++) {
-	    error = slstable_mkinfo(origtable, backuptable, 0, SLOSREC_TESTMETA);
-	    if (error != 0)
-		goto out;
+		error = slstable_mkinfo(origtable, backuptable, 0, SLOSREC_TESTMETA);
+		if (error != 0)
+			goto out;
 	}
 
 
 	for (i = 0; i < DATA_INFOS; i++) {
-	    /* Create the data-holding objects. */
-	    error = slstable_mkobj(&obj);
-	    if (error != 0)
-		goto out;
+		/* Create the data-holding objects. */
+		error = slstable_mkobj(&obj);
+		if (error != 0)
+			goto out;
 
-	    /* For each object, create an sbuf, associate the two. */
-	    error = slstable_mkinfo(origtable, backuptable, (uint64_t) obj, SLOSREC_TESTDATA);
-	    if (error != 0)
-		goto out;
+		/* For each object, create an sbuf, associate the two. */
+		error = slstable_mkinfo(origtable, backuptable, (uint64_t) obj, SLOSREC_TESTDATA);
+		if (error != 0)
+			goto out;
 
 	}
 
 	/* Write the data generated to the SLOS. */
 	error = sls_write_slos(vp, backuptable);
 	if (error != 0)
-	    goto out;
+		goto out;
 
 	/* Read the data back. */
 	error = sls_read_slos(vp, &metatable, &datatable);
 	if (error != 0)
-	    return error;
+		return error;
 
 	/* 
 	 * Pop all entries in the metadata table. For each entry we conduct a 
@@ -1327,109 +1327,109 @@ slstable_test(void)
 	 */
 	KV_FOREACH_POP(metatable, record, st) {
 
-	    switch (st->type) {
-	    case SLOSREC_TESTMETA:
-		/* Test only the metadata, since there is no data. */
-		error = slstable_testmeta(origtable, record, st->type);
-		if (error != 0) {
-		    KV_ABORT(iter);
-		    goto out;
+		switch (st->type) {
+		case SLOSREC_TESTMETA:
+			/* Test only the metadata, since there is no data. */
+			error = slstable_testmeta(origtable, record, st->type);
+			if (error != 0) {
+				KV_ABORT(iter);
+				goto out;
+			}
+
+			break;
+
+		case SLOSREC_TESTDATA:
+			/* A data record also has metadata; test it separately. */
+			error = slstable_testmeta(origtable, record, st->type);
+			if (error != 0) {
+				KV_ABORT(iter);
+				goto out;
+			}
+
+			/* Go check the data itself. */
+			error = slstable_testdata(datatable, 
+			    (vm_object_t) record->slsid, record);
+			if (error != 0) {
+				KV_ABORT(iter);
+				goto out;
+			}
+
+			break;
+
+		default:
+			printf("ERROR: Invalid type found: %ld.\n", st->type);
+			printf("Valid types: %x, %x\n", SLOSREC_TESTMETA, SLOSREC_TESTDATA);
+			KV_ABORT(iter);
+			goto out;
+
 		}
 
-		break;
-
-	    case SLOSREC_TESTDATA:
-		/* A data record also has metadata; test it separately. */
-		error = slstable_testmeta(origtable, record, st->type);
-		if (error != 0) {
-		    KV_ABORT(iter);
-		    goto out;
-		}
-
-		/* Go check the data itself. */
-		error = slstable_testdata(datatable, 
-			(vm_object_t) record->slsid, record);
-		if (error != 0) {
-		    KV_ABORT(iter);
-		    goto out;
-		}
-
-		break;
-
-	    default:
-		printf("ERROR: Invalid type found: %ld.\n", st->type);
-		printf("Valid types: %x, %x\n", SLOSREC_TESTMETA, SLOSREC_TESTDATA);
-		KV_ABORT(iter);
-		goto out;
-
-	    }
-
-	    /* The record and its metadata aren't needed anymore, so we free both. */
-	    free(st, M_SLSMM);
-	    free(record, M_SLSMM);
+		/* The record and its metadata aren't needed anymore, so we free both. */
+		free(st, M_SLSMM);
+		free(record, M_SLSMM);
 	}
 
 	lost_elements = 0;
 	KV_FOREACH_POP(origtable, sb, type) {
-	    sbuf_delete(sb);
-	    lost_elements += 1;
+		sbuf_delete(sb);
+		lost_elements += 1;
 	}
 
 	if (lost_elements != 0) {
-	    printf("ERROR: Lost %lu elements between checkpoint and restore\n", lost_elements);
-	    goto out;
+		printf("ERROR: Lost %lu elements between checkpoint and restore\n", lost_elements);
+		goto out;
 	}
 
 	printf("Everything went OK.\n");
 out:
-	
-	if (origtable != NULL) {
-	    KV_FOREACH_POP(origtable, sb, type)
-		sbuf_delete(sb);
 
-	    slskv_destroy(origtable);
+	if (origtable != NULL) {
+		KV_FOREACH_POP(origtable, sb, type)
+		    sbuf_delete(sb);
+
+		slskv_destroy(origtable);
 	}
 
 	/* The backup table has the same data as the original - all sbufs have been destroyed. */
 	if (backuptable != NULL)
-	    slskv_destroy(backuptable);
-	
+		slskv_destroy(backuptable);
+
 	if (metatable != NULL) {
-	    KV_FOREACH_POP(metatable, record, st) {
-		free(st, M_SLSMM);
-		free(record, M_SLSMM);
-	    }
-
-	    slskv_destroy(metatable);
-	}
-
-	
-	if (datatable != NULL) {
-	    KV_FOREACH_POP(datatable, record, slsdata) {
-		LIST_FOREACH_SAFE(pagerun, slsdata, next, tmppagerun) {
-		    LIST_REMOVE(pagerun, next);
-		    free(pagerun->data, M_SLSMM);
-		    uma_zfree(slspagerun_zone, pagerun);
+		KV_FOREACH_POP(metatable, record, st) {
+			free(st, M_SLSMM);
+			free(record, M_SLSMM);
 		}
 
-		free(slsdata, M_SLSMM);
-	    }
+		slskv_destroy(metatable);
+	}
 
-	    slskv_destroy(datatable);
+
+	if (datatable != NULL) {
+		KV_FOREACH_POP(datatable, record, slsdata) {
+			LIST_FOREACH_SAFE(pagerun, slsdata, next, tmppagerun) {
+				LIST_REMOVE(pagerun, next);
+				free(pagerun->data, M_SLSMM);
+				uma_zfree(slspagerun_zone, pagerun);
+			}
+
+			free(slsdata, M_SLSMM);
+		}
+
+		slskv_destroy(datatable);
 	}
 
 	if (vp != NULL) {
-	    sloserror = slos_iclose(&slos, vp);
-	    if (sloserror != 0) {
-		printf("ERROR: slos_iclose failed\n");
-		return error;
-	    }
+		sloserror = slos_iclose(&slos, vp);
+		if (sloserror != 0) {
+			printf("ERROR: slos_iclose failed\n");
+			return error;
+		}
 
-	    sloserror = slos_iremove(&slos, VNODE_ID);
-	    if (sloserror != 0) {
-		printf("ERROR: slos_iremove failed with %d\n", error);
-		return error;
-	    }
+		sloserror = slos_iremove(&slos, VNODE_ID);
+		if (sloserror != 0) {
+			printf("ERROR: slos_iremove failed with %d\n", error);
+			return error;
+		}
 	}
 
 	return error;

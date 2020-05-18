@@ -61,7 +61,7 @@ slsckpt_pipe(struct proc *p, struct file *fp, struct sbuf *sb)
 	struct pipe *pipe, *peer;
 	struct slspipe info;
 	int error;
-	
+
 	/* Get the current pipe and its peer. */
 	pipe = (struct pipe *) fp->f_data;
 	peer = pipe->pipe_peer;
@@ -80,15 +80,15 @@ slsckpt_pipe(struct proc *p, struct file *fp, struct sbuf *sb)
 	 * a record for it.
 	 */
 	info.peer = (uint64_t) peer;
-	
+
 	/* Write out the data. */
 	error = sbuf_bcat(sb, (void *) &info, sizeof(info));
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	error = sbuf_bcat(sb, pipe->pipe_buffer.buffer, pipe->pipe_buffer.cnt);
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	/* XXX Account for pipe direct mappings */
 
@@ -108,15 +108,15 @@ slsrest_pipe(struct slskv_table *filetable, struct slspipe *ppinfo, int *fdp)
 	/* Create both ends of the pipe. */
 	error = kern_pipe(curthread, filedes, O_NONBLOCK, NULL, NULL);
 	if (error != 0)
-	    return error;
+		return error;
 
 	/* Check whether we are the read or the write end. */
 	if (ppinfo->iswriteend) {
-	    localfd = filedes[1];
-	    peerfd = filedes[0];
+		localfd = filedes[1];
+		peerfd = filedes[0];
 	} else {
-	    localfd = filedes[0];
-	    peerfd = filedes[1];
+		localfd = filedes[0];
+		peerfd = filedes[1];
 	}
 
 	fp = FDTOFP(curthread->td_proc, localfd);
@@ -128,7 +128,7 @@ slsrest_pipe(struct slskv_table *filetable, struct slspipe *ppinfo, int *fdp)
 	pipe->pipe_buffer.out = ppinfo->pipebuf.out;
 	/* Check if the data fits in the newly created pipe. */
 	if (pipe->pipe_buffer.size < ppinfo->pipebuf.cnt)
-	    return (EINVAL);
+		return (EINVAL);
 
 	memcpy(pipe->pipe_buffer.buffer, ppinfo->data, ppinfo->pipebuf.cnt);
 
@@ -148,15 +148,15 @@ slsrest_pipe(struct slskv_table *filetable, struct slspipe *ppinfo, int *fdp)
 	 */
 	error = slskv_add(filetable, ppinfo->peer, (uintptr_t) peerfp);
 	if (error != 0) {
-	    kern_close(curthread, localfd);
-	    kern_close(curthread, peerfd);
-	    return (error);
+		kern_close(curthread, localfd);
+		kern_close(curthread, peerfd);
+		return (error);
 	}
 
 	/* Get a reference on behalf of the hashtable. */
 	if (!fhold(peerfp)) {
-	    kern_close(curthread, peerfd);
-	    return (EBADF);
+		kern_close(curthread, peerfd);
+		return (EBADF);
 	}
 
 	/* Remove it from this process and this fd. */

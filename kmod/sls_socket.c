@@ -86,86 +86,86 @@ slsckpt_sockbuf(struct sockbuf *sockbuf, struct slsckpt_data *sckpt_data)
 	 * by reading the mbuf flags and checking for M_EOR.
 	 */
 	for (packetm = sockbuf->sb_mb; packetm != NULL; 
-		packetm = packetm->m_nextpkt) {
+	    packetm = packetm->m_nextpkt) {
 
-	    for (m = packetm; m != NULL; m = m->m_next) {
-		slsmbuf.magic = SLSMBUF_ID;
-		slsmbuf.slsid = (uint64_t) sockbuf;
-		/* We associate the mbufs with the socket buffer. */
-		slsmbuf.type = packetm->m_type;
-		slsmbuf.flags = packetm->m_flags;
-		slsmbuf.len = packetm->m_len;
+		for (m = packetm; m != NULL; m = m->m_next) {
+			slsmbuf.magic = SLSMBUF_ID;
+			slsmbuf.slsid = (uint64_t) sockbuf;
+			/* We associate the mbufs with the socket buffer. */
+			slsmbuf.type = packetm->m_type;
+			slsmbuf.flags = packetm->m_flags;
+			slsmbuf.len = packetm->m_len;
 
-		/* Dump the metadata of the mbuf. */
-		sbuf_bcat(sb, &slsmbuf, sizeof(slsmbuf));
+			/* Dump the metadata of the mbuf. */
+			sbuf_bcat(sb, &slsmbuf, sizeof(slsmbuf));
 
-		/* Get the data itself. */
-		sbuf_bcat(sb, mtod(m, caddr_t), slsmbuf.len);
+			/* Get the data itself. */
+			sbuf_bcat(sb, mtod(m, caddr_t), slsmbuf.len);
 
-		/* 
-		 * If we just dumped a UNIX SCM_RIGHTS message, also dump the
-		 * filedescent it's pointing to, which holds pointers to the
-		 * file descriptors and their capabilities.
-		 */
-		if (m->m_type == MT_CONTROL) {
-		    /* Seems like there can be multiple messages in a control packet. */
-		    cm = mtod(m, struct cmsghdr *);
-		    clen = cm->cmsg_len;
+			/* 
+			 * If we just dumped a UNIX SCM_RIGHTS message, also dump the
+			 * filedescent it's pointing to, which holds pointers to the
+			 * file descriptors and their capabilities.
+			 */
+			if (m->m_type == MT_CONTROL) {
+				/* Seems like there can be multiple messages in a control packet. */
+				cm = mtod(m, struct cmsghdr *);
+				clen = cm->cmsg_len;
 
-		    while (cm != NULL) {
-			/* We only care about passing file descriptors. */
-			if ((cm->cmsg_level == SOL_SOCKET) &&
-			    (cm->cmsg_type != SCM_RIGHTS)) {
+				while (cm != NULL) {
+					/* We only care about passing file descriptors. */
+					if ((cm->cmsg_level == SOL_SOCKET) &&
+					    (cm->cmsg_type != SCM_RIGHTS)) {
 
-			    /* The data is a pointer to a bunch of filedescents. */
-			    fdescent = (struct filedescent **) CMSG_DATA(cm);
-			    datalen = (caddr_t) cm + cm->cmsg_len - (caddr_t) fdescent;
-			    numfds = datalen / sizeof(*fdescent);
+						/* The data is a pointer to a bunch of filedescents. */
+						fdescent = (struct filedescent **) CMSG_DATA(cm);
+						datalen = (caddr_t) cm + cm->cmsg_len - (caddr_t) fdescent;
+						numfds = datalen / sizeof(*fdescent);
 
-			    /* 
-			     * Dump the array of filedescents into the record. 
-			     * XXX This code makes the assumption that the file that
-			     * is being transferred is still open in some table.
-			     * This is not necessarily true, since the sender may
-			     * close the fd after sending it and before the receiver
-			     * gets the control message. We need to check the file table
-			     * if the file has been checkpointed, and if not, to 
-			     * checkpoint it ourselves.
-			     */
-			    sbuf_bcat(sb, &numfds, sizeof(numfds));
-			    for (i = 0; i < numfds; i++)
-				sbuf_bcat(sb, fdescent[i], sizeof(*fdescent[i]));
+						/* 
+						 * Dump the array of filedescents into the record. 
+						 * XXX This code makes the assumption that the file that
+						 * is being transferred is still open in some table.
+						 * This is not necessarily true, since the sender may
+						 * close the fd after sending it and before the receiver
+						 * gets the control message. We need to check the file table
+						 * if the file has been checkpointed, and if not, to 
+						 * checkpoint it ourselves.
+						 */
+						sbuf_bcat(sb, &numfds, sizeof(numfds));
+						for (i = 0; i < numfds; i++)
+							sbuf_bcat(sb, fdescent[i], sizeof(*fdescent[i]));
+					}
+
+					/* Check if there are any more messages in the mbuf. */
+					if (CMSG_SPACE(datalen) < clen) {
+						/* If so, go further into the array. */
+						clen -= CMSG_SPACE(datalen);
+						cm = (struct cmsghdr *) ((caddr_t) cm + CMSG_SPACE(datalen));
+					} else {
+						/* Otherwise we're done. */
+						clen = 0;
+						cm = NULL;
+					}
+				}
 			}
-
-			/* Check if there are any more messages in the mbuf. */
-			if (CMSG_SPACE(datalen) < clen) {
-			    /* If so, go further into the array. */
-			    clen -= CMSG_SPACE(datalen);
-			    cm = (struct cmsghdr *) ((caddr_t) cm + CMSG_SPACE(datalen));
-			} else {
-			    /* Otherwise we're done. */
-			    clen = 0;
-			    cm = NULL;
-			}
-		    }
 		}
-	    }
 	}
 
 	SOCKBUF_UNLOCK(sockbuf);
 	error = sbuf_finish(sb);
 	if (error != 0) {
-	    sbuf_delete(sb);
-	    return (error);
+		sbuf_delete(sb);
+		return (error);
 	}
 
 	rec = sls_getrecord(sb, (uint64_t) slsmbuf.slsid, SLOSREC_SOCKBUF);
 	/* Add the new buffer to the tables. */
 	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) sockbuf, (uintptr_t) rec);
 	if (error != 0) {
-	    free(rec, M_SLSMM);
-	    sbuf_delete(sb);
-	    return (error);
+		free(rec, M_SLSMM);
+		sbuf_delete(sb);
+		return (error);
 	}
 
 	return (0);
@@ -180,7 +180,7 @@ slsckpt_sock_un(struct socket *so, struct slssock *info)
 
 	unpcb = sotounpcb(so);
 	if (unpcb->unp_addr != NULL)
-	    memcpy(&info->un, unpcb->unp_addr, sizeof(info->un));
+		memcpy(&info->un, unpcb->unp_addr, sizeof(info->un));
 
 
 	/* 
@@ -191,10 +191,10 @@ slsckpt_sock_un(struct socket *so, struct slssock *info)
 	 * or a named datagram socket, in which case we don't.
 	 */
 	if (unpcb->unp_conn != NULL) {
-	    sopeer = unpcb->unp_conn->unp_socket;
-	    info->unpeer = (uint64_t) sopeer;
-	    info->peer_rcvid = (uint64_t) &sopeer->so_rcv;
-	    info->peer_sndid = (uint64_t) &sopeer->so_snd;
+		sopeer = unpcb->unp_conn->unp_socket;
+		info->unpeer = (uint64_t) sopeer;
+		info->peer_rcvid = (uint64_t) &sopeer->so_rcv;
+		info->peer_sndid = (uint64_t) &sopeer->so_snd;
 	}
 	info->bound = (unpcb->unp_vnode != NULL) ? 1 : 0;
 
@@ -226,7 +226,7 @@ slsckpt_sock_in(struct socket *so, struct slssock *info)
 
 int
 slsckpt_socket(struct proc *p, struct socket *so, 
-	struct sbuf *sb, struct slsckpt_data *sckpt_data)
+    struct sbuf *sb, struct slsckpt_data *sckpt_data)
 {
 	struct slssock info;
 	int error;
@@ -243,62 +243,62 @@ slsckpt_socket(struct proc *p, struct socket *so,
 	info.type = so->so_proto->pr_type;
 	info.state = so->so_state;
 	info.options = so->so_options;
-	
+
 	/* Get the address depending on the type. */
 	switch (info.family) {
 	case AF_INET:
-	    error = slsckpt_sock_in(so, &info);
-	    break;
+		error = slsckpt_sock_in(so, &info);
+		break;
 
 	case AF_LOCAL:
-	    error = slsckpt_sock_un(so, &info);
-	    break;
+		error = slsckpt_sock_un(so, &info);
+		break;
 
 	default:
-	    panic("%s: Unknown protocol family %d\n", __func__, info.family);
+		panic("%s: Unknown protocol family %d\n", __func__, info.family);
 	}
 
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	switch (info.type) {
 	case SOCK_STREAM:
 	case SOCK_SEQPACKET:
-	    info.backlog = so->sol_qlimit;
-	    break;
+		info.backlog = so->sol_qlimit;
+		break;
 
 	case SOCK_DGRAM:
 	case SOCK_RAW:
 	case SOCK_RDM:
-	    break;
+		break;
 
 	default:
-	    panic("%s: Unknown protocol type %d\n", __func__, info.type);
+		panic("%s: Unknown protocol type %d\n", __func__, info.type);
 	}
 
 	/* Write it out to the SLS record. */
 	error = sbuf_bcat(sb, (void *) &info, sizeof(info));
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	/* Get the rcv and snd buffers if not empty,  add their IDs to the socket. */
 
 	if (so->so_rcv.sb_mbcnt != 0) {
-	    info.rcvid = (uint64_t) &so->so_rcv;
-	    error = slsckpt_sockbuf(&so->so_rcv, sckpt_data);
-	    if (error != 0)
-		return (error);
+		info.rcvid = (uint64_t) &so->so_rcv;
+		error = slsckpt_sockbuf(&so->so_rcv, sckpt_data);
+		if (error != 0)
+			return (error);
 	} else {
-	    info.rcvid = 0;
+		info.rcvid = 0;
 	}
 
 	if (so->so_snd.sb_mbcnt != 0) {
-	    info.sndid = (uint64_t) &so->so_snd;
-	    error = slsckpt_sockbuf(&so->so_snd, sckpt_data);
-	    if (error != 0)
-		return (error);
+		info.sndid = (uint64_t) &so->so_snd;
+		error = slsckpt_sockbuf(&so->so_snd, sckpt_data);
+		if (error != 0)
+			return (error);
 	} else {
-	    info.sndid = 0;
+		info.sndid = 0;
 	}
 
 	return (0);
@@ -312,7 +312,7 @@ slsrest_sockbuf(struct slskv_table *table, uint64_t sockbufid, struct sockbuf *s
 
 	/* If the buffer is empty, we don't need to do anything else. */
 	if (sockbufid == 0)
-	    return (0);
+		return (0);
 
 	/* 
 	 * Associate it with the buffer - it should be fully built already.
@@ -321,22 +321,22 @@ slsrest_sockbuf(struct slskv_table *table, uint64_t sockbufid, struct sockbuf *s
 	 */
 	error = slskv_find(table, sockbufid, (uintptr_t *) &m);
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	/* If we had no data, we're done. */
 	if (m == NULL)
-	    return (0);
+		return (0);
 
 	sb->sb_mb = m;
 	sb->sb_mbtail= m_last(m);
 
 	/* Adjust sockbuf state for the new mbuf chain. */
 	for (recm = m; recm != NULL; recm = m->m_nextpkt)  {
-	    /* The final value of the field will be that of the final record. */
-	    sb->sb_lastrecord = recm;
+		/* The final value of the field will be that of the final record. */
+		sb->sb_lastrecord = recm;
 
-	    /* Adjust bookkeeping.*/
-	    sballoc(sb, m);
+		/* Adjust bookkeeping.*/
+		sballoc(sb, m);
 	}
 
 
@@ -373,9 +373,9 @@ slsrest_uipc_bindat(struct socket *so, struct sockaddr *nam)
 	soun = (struct sockaddr_un *)nam;
 
 	KASSERT((soun->sun_len <= sizeof(struct sockaddr_un)), 
-		("socket path size too large"));
+	    ("socket path size too large"));
 	KASSERT((soun->sun_len > offsetof(struct sockaddr_un, sun_path)), 
-		("socket path size too small"));
+	    ("socket path size too small"));
 
 	sb = sbuf_new_auto();
 	sbuf_bcpy(sb, soun->sun_path, strnlen(soun->sun_path, UNADDR_MAX));
@@ -385,8 +385,8 @@ slsrest_uipc_bindat(struct socket *so, struct sockaddr *nam)
 
 	error = sls_path_to_vn(sb, &vp);
 	if (error != 0) {
-	    sbuf_delete(sb);
-	    return (error);
+		sbuf_delete(sb);
+		return (error);
 	}
 
 	soun = (struct sockaddr_un *) sodupsockaddr(nam, M_WAITOK);
@@ -406,7 +406,7 @@ slsrest_uipc_bindat(struct socket *so, struct sockaddr *nam)
 
 int
 slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
-	struct slssock *info, struct slsfile *finfo, int *fdp)
+    struct slssock *info, struct slsfile *finfo, int *fdp)
 {
 	struct sockaddr *addr;
 	struct socket *so, *sopeer;
@@ -421,7 +421,7 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 	/* Create the new socket. */
 	error = kern_socket(td, info->family, info->type, info->proto);
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	fd = td->td_retval[0];
 
@@ -431,123 +431,123 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 
 	/* Restore the socket's nonblocking/async state. */
 	if ((info->state & SS_ASYNC) != 0)
-	    kern_fcntl_freebsd(td, fd, F_SETFL, O_ASYNC);
+		kern_fcntl_freebsd(td, fd, F_SETFL, O_ASYNC);
 	if ((info->state & SS_NBIO) != 0)
-	    kern_fcntl_freebsd(td, fd, F_SETFL, O_NONBLOCK);
+		kern_fcntl_freebsd(td, fd, F_SETFL, O_NONBLOCK);
 
 	/*
 	 * XXX Set any other options we can.
 	 */
 	switch (info->family) {
 	case AF_INET:
-	    addr = (struct sockaddr *) &info->in;
+		addr = (struct sockaddr *) &info->in;
 
-	    /* Check if the socket is bound. */
-	    if (info->bound == 0)
+		/* Check if the socket is bound. */
+		if (info->bound == 0)
+			break;
+		/* 
+		 * We use bind() instead of setting the address directly because
+		 * we need to let the kernel know we are reserving the address.
+		 */
+		error = kern_bindat(td, AT_FDCWD, fd, addr);
+		if (error != 0)
+			goto error;
+
 		break;
-	    /* 
-	    * We use bind() instead of setting the address directly because
-	    * we need to let the kernel know we are reserving the address.
-	    */
-	    error = kern_bindat(td, AT_FDCWD, fd, addr);
-	    if (error != 0)
-		goto error;
-
-	    break;
 
 	case AF_LOCAL:
-	    addr = (struct sockaddr *) &info->un;
-	    /* 
-	     * Check if the socket has a peer. If it does, then it is 
-	     * either a UNIX stream data socket, or it is a socket
-	     * created using socketpair(); in both cases, it has a peer,
-	     * so we create it alongside it.
-	     */
-	    if (info->unpeer != 0) {
+		addr = (struct sockaddr *) &info->un;
+		/* 
+		 * Check if the socket has a peer. If it does, then it is 
+		 * either a UNIX stream data socket, or it is a socket
+		 * created using socketpair(); in both cases, it has a peer,
+		 * so we create it alongside it.
+		 */
+		if (info->unpeer != 0) {
 
-		/* Create the socket peer. */
-		error = kern_socket(td, info->family, info->type, info->proto);
-		if (error != 0)
-		    goto error;
+			/* Create the socket peer. */
+			error = kern_socket(td, info->family, info->type, info->proto);
+			if (error != 0)
+				goto error;
 
-		peerfd = td->td_retval[0];
-		peerfp = FDTOFP(td->td_proc, peerfd);
-		sopeer = (struct socket *) peerfp->f_data;
+			peerfd = td->td_retval[0];
+			peerfp = FDTOFP(td->td_proc, peerfd);
+			sopeer = (struct socket *) peerfp->f_data;
 
-		/* Restore the peer's 's nonblocking/async state. */
-		if ((info->state & SS_ASYNC) != 0)
-		    kern_fcntl_freebsd(td, peerfd, F_SETFL, O_ASYNC);
-		if ((info->state & SS_NBIO) != 0)
-		    kern_fcntl_freebsd(td, fd, F_SETFL, O_NONBLOCK);
+			/* Restore the peer's 's nonblocking/async state. */
+			if ((info->state & SS_ASYNC) != 0)
+				kern_fcntl_freebsd(td, peerfd, F_SETFL, O_ASYNC);
+			if ((info->state & SS_NBIO) != 0)
+				kern_fcntl_freebsd(td, fd, F_SETFL, O_NONBLOCK);
 
-		/* Connect the two sockets. See kern_socketpair(). */
-		error = soconnect2(so, sopeer);
-		if (error != 0)
-		    goto error;
+			/* Connect the two sockets. See kern_socketpair(). */
+			error = soconnect2(so, sopeer);
+			if (error != 0)
+				goto error;
 
-		if (info->type == SOCK_DGRAM) {
-		    /* 
-		     * Datagram connections are asymetric, so 
-		     * repeat the process to the other direction.
-		     */
-		    error = soconnect2(sopeer, so);
-		    if (error != 0)
-			goto error;
-		} else if (so->so_proto->pr_flags & PR_CONNREQUIRED) {
-		    /* Use credentials to make the stream socket exclusive to the peer. */
-		    unpcb = sotounpcb(so);
-		    unpeerpcb = sotounpcb(sopeer);
-		    unp_copy_peercred(td, unpcb, unpeerpcb, unpcb);
+			if (info->type == SOCK_DGRAM) {
+				/* 
+				 * Datagram connections are asymetric, so 
+				 * repeat the process to the other direction.
+				 */
+				error = soconnect2(sopeer, so);
+				if (error != 0)
+					goto error;
+			} else if (so->so_proto->pr_flags & PR_CONNREQUIRED) {
+				/* Use credentials to make the stream socket exclusive to the peer. */
+				unpcb = sotounpcb(so);
+				unpeerpcb = sotounpcb(sopeer);
+				unp_copy_peercred(td, unpcb, unpeerpcb, unpcb);
+			}
+
+			break;
+		} 
+
+		/* 
+		 * We assume it is either a listening socket, or a 
+		 * datagram socket. The only case where we don't bind
+		 * is if it is a datagram client socket, in which case
+		 * we just leave it be.
+		 */
+		if (info->bound == 0)
+			break;
+
+		/* 
+		 * The bind() function for UNIX sockets makes assumptions 
+		 * that do not hold here, so we use our own custom version.
+		 */
+		error = slsrest_uipc_bindat(so, addr);
+		if (error != 0) {
+			kern_close(td, fd);
+			return (error);
 		}
 
 		break;
-	    } 
-
-	    /* 
-	     * We assume it is either a listening socket, or a 
-	     * datagram socket. The only case where we don't bind
-	     * is if it is a datagram client socket, in which case
-	     * we just leave it be.
-	     */
-	    if (info->bound == 0)
-		break;
-
-	    /* 
-	     * The bind() function for UNIX sockets makes assumptions 
-	     * that do not hold here, so we use our own custom version.
-	     */
-	    error = slsrest_uipc_bindat(so, addr);
-	    if (error != 0) {
-		kern_close(td, fd);
-		return (error);
-	    }
-
-	    break;
 
 	default:
-	    panic("%s: Unknown protocol family %d\n", __func__, info->family);
+		panic("%s: Unknown protocol family %d\n", __func__, info->family);
 
 	}
 
 	/* Check if we need to listen for incoming connections. */
 	if ((info->options & SO_ACCEPTCONN) != 0) {
-	    error = kern_listen(td, fd, info->backlog);
-	    if (error != 0)
-		goto error;
+		error = kern_listen(td, fd, info->backlog);
+		if (error != 0)
+			goto error;
 	}
 
 	if (peerfd >= 0) {
-	    error = slskv_add(table, info->unpeer, (uintptr_t) peerfp);
-	    if (error != 0)
-		goto error;
+		error = slskv_add(table, info->unpeer, (uintptr_t) peerfp);
+		if (error != 0)
+			goto error;
 
-	    /* Get a hold for the table, before closing the fd. */
-	    if (!fhold(peerfp)) {
-		error = EBADF;
-		goto error;
-	    }
+		/* Get a hold for the table, before closing the fd. */
+		if (!fhold(peerfp)) {
+			error = EBADF;
+			goto error;
+		}
 
-	    kern_close(td, peerfd);
+		kern_close(td, peerfd);
 	}
 
 	*fdp = fd;
@@ -555,28 +555,28 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 	/* Restore the data into the socket buffers. */
 	error = slsrest_sockbuf(sockbuftable, info->rcvid, &so->so_rcv);
 	if (error != 0)
-	    goto error;
+		goto error;
 
 	error = slsrest_sockbuf(sockbuftable, info->sndid, &so->so_snd);
 	if (error != 0)
-	    goto error;
+		goto error;
 
 	/* If we also created our peer, restore its buffers, too. */
 	if (sopeer != NULL) {
-	    error = slsrest_sockbuf(sockbuftable, info->peer_rcvid, &sopeer->so_rcv);
-	    if (error != 0)
-		goto error;
+		error = slsrest_sockbuf(sockbuftable, info->peer_rcvid, &sopeer->so_rcv);
+		if (error != 0)
+			goto error;
 
-	    error = slsrest_sockbuf(sockbuftable, info->peer_sndid, &sopeer->so_snd);
-	    if (error != 0)
-		goto error;
+		error = slsrest_sockbuf(sockbuftable, info->peer_sndid, &sopeer->so_snd);
+		if (error != 0)
+			goto error;
 	}
 
 	return (0);
 
 error:
 	if (peerfd >= 0)
-	    kern_close(td, peerfd);
+		kern_close(td, peerfd);
 	kern_close(td, fd);
 
 	return (error);

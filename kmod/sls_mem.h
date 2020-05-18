@@ -21,8 +21,8 @@ void sls_shadow(vm_object_t shadow, vm_object_t source, vm_ooffset_t offset);
 
 /* SYSV shared memory state (taken from the kernel) */
 struct shmmap_state {
-	vm_offset_t va;
-	int shmid;
+    vm_offset_t va;
+    int shmid;
 };
 
 #endif /* _SLS_MEM_H_ */

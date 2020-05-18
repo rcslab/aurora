@@ -29,66 +29,66 @@ slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 	int error, i;
 
 	for (i = 0; i < shmalloced; i++) {
-	    if ((shmsegs[i].u.shm_perm.mode & SHMSEG_ALLOCATED) == 0)
-		continue;
+		if ((shmsegs[i].u.shm_perm.mode & SHMSEG_ALLOCATED) == 0)
+			continue;
 
-	    /* Allocate an sbuf if we haven't already. */
-	    if (sb == NULL)
-		sb = sbuf_new_auto();
+		/* Allocate an sbuf if we haven't already. */
+		if (sb == NULL)
+			sb = sbuf_new_auto();
 
-	    /* Dump the metadata to the records table. */
-	    slssysvshm.magic = SLSSYSVSHM_ID;
-	    /* XXX Use the encoding for the rest of the object? */
-	    slssysvshm.slsid = (uint64_t) shmsegs[i].object;
-	    slssysvshm.key = shmsegs[i].u.shm_perm.key;
-	    slssysvshm.shm_segsz = shmsegs[i].u.shm_segsz;
-	    slssysvshm.mode = shmsegs[i].u.shm_perm.mode;
-	    slssysvshm.segnum = i;
+		/* Dump the metadata to the records table. */
+		slssysvshm.magic = SLSSYSVSHM_ID;
+		/* XXX Use the encoding for the rest of the object? */
+		slssysvshm.slsid = (uint64_t) shmsegs[i].object;
+		slssysvshm.key = shmsegs[i].u.shm_perm.key;
+		slssysvshm.shm_segsz = shmsegs[i].u.shm_segsz;
+		slssysvshm.mode = shmsegs[i].u.shm_perm.mode;
+		slssysvshm.segnum = i;
 
-	    error = sbuf_bcat(sb, (void *) &slssysvshm, sizeof(slssysvshm));
-	    if (error != 0)
-		goto error;
+		error = sbuf_bcat(sb, (void *) &slssysvshm, sizeof(slssysvshm));
+		if (error != 0)
+			goto error;
 
-	    /* If we have already shadowed, we can just mend the reference. */
-	    error = slskv_find(objtable, (uint64_t) obj, (uintptr_t *) &shadow);
-	    if (error == 0) {
-		vm_object_reference(shadow);
-		shmsegs[i].object = shadow;
-		vm_object_deallocate(obj);
-	    } else {
-		/* Shadow the object and add it to the table. */
-		obj = shmsegs[i].object;
-		vm_object_reference(obj);
+		/* If we have already shadowed, we can just mend the reference. */
+		error = slskv_find(objtable, (uint64_t) obj, (uintptr_t *) &shadow);
+		if (error == 0) {
+			vm_object_reference(shadow);
+			shmsegs[i].object = shadow;
+			vm_object_deallocate(obj);
+		} else {
+			/* Shadow the object and add it to the table. */
+			obj = shmsegs[i].object;
+			vm_object_reference(obj);
 
-		offset = 0;
-		vm_object_shadow(&shmsegs[i].object, &offset, ptoa(obj->size));
+			offset = 0;
+			vm_object_shadow(&shmsegs[i].object, &offset, ptoa(obj->size));
 
-		/* It's impossible for us to have checkpointed the object yet. */
-		error = slskv_add(objtable, (uint64_t) obj, (uintptr_t) shmsegs[i].object);
-		KASSERT((error == 0), ("VM object already checkpointed"));
-	    }
+			/* It's impossible for us to have checkpointed the object yet. */
+			error = slskv_add(objtable, (uint64_t) obj, (uintptr_t) shmsegs[i].object);
+			KASSERT((error == 0), ("VM object already checkpointed"));
+		}
 
 	}
 
 	/* If we have no SYSV segments, don't store any data at all. */
 	if (sb == NULL)
-	    return (0);
+		return (0);
 
 	error = sbuf_finish(sb);
 	if (error != 0)
-	    goto error;
+		goto error;
 
 	rec = sls_getrecord(sb, (uint64_t) shmsegs, SLOSREC_SYSVSHM);
 	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) shmsegs, (uintptr_t) rec);
 	if (error != 0) {
-	    free(rec, M_SLSMM);
-	    goto error;
+		free(rec, M_SLSMM);
+		goto error;
 	}
 
 	return (0);
 error:
 	if (sb != NULL)
-	    sbuf_delete(sb);
+		sbuf_delete(sb);
 
 	return (error);
 }
@@ -111,12 +111,12 @@ slsrest_sysvshm(struct slssysvshm *slssysvshm, struct slskv_table *objtable)
 	 */
 	shmseg = &shmsegs[slssysvshm->segnum];
 	if ((shmseg->u.shm_perm.mode & SHMSEG_ALLOCATED) != 0)
-	    return (EINVAL);
-	
+		return (EINVAL);
+
 	/* Get the restored object for the segment. */
 	error = slskv_find(objtable, slssysvshm->slsid, (uintptr_t *) &obj);
 	if (error != 0)
-	    return (EINVAL);
+		return (EINVAL);
 
 	/* 
 	 * Recreate the segment, similarly to how it's done 
@@ -124,19 +124,19 @@ slsrest_sysvshm(struct slssysvshm *slssysvshm, struct slskv_table *objtable)
 	 */
 
 	shmseg->object = obj;
-        shmseg->u.shm_perm.cuid = shmseg->u.shm_perm.uid = cred->cr_uid;
-        shmseg->u.shm_perm.cgid = shmseg->u.shm_perm.gid = cred->cr_gid;
-        shmseg->u.shm_perm.mode = (slssysvshm->mode & ACCESSPERMS) | SHMSEG_ALLOCATED;
-        shmseg->u.shm_perm.key = slssysvshm->key;
-        shmseg->u.shm_perm.seq = (shmseg->u.shm_perm.seq + 1) & 0x7fff;
-        shmseg->cred = crhold(cred);
-        shmseg->u.shm_segsz = slssysvshm->shm_segsz;
-        shmseg->u.shm_cpid = curthread->td_proc->p_pid;
-        shmseg->u.shm_lpid = shmseg->u.shm_nattch = 0;
-        shmseg->u.shm_atime = shmseg->u.shm_dtime = 0;
-        shmseg->u.shm_ctime = time_second;
-        shm_committed += btoc(slssysvshm->shm_segsz);
-        shm_nused++;
+	shmseg->u.shm_perm.cuid = shmseg->u.shm_perm.uid = cred->cr_uid;
+	shmseg->u.shm_perm.cgid = shmseg->u.shm_perm.gid = cred->cr_gid;
+	shmseg->u.shm_perm.mode = (slssysvshm->mode & ACCESSPERMS) | SHMSEG_ALLOCATED;
+	shmseg->u.shm_perm.key = slssysvshm->key;
+	shmseg->u.shm_perm.seq = (shmseg->u.shm_perm.seq + 1) & 0x7fff;
+	shmseg->cred = crhold(cred);
+	shmseg->u.shm_segsz = slssysvshm->shm_segsz;
+	shmseg->u.shm_cpid = curthread->td_proc->p_pid;
+	shmseg->u.shm_lpid = shmseg->u.shm_nattch = 0;
+	shmseg->u.shm_atime = shmseg->u.shm_dtime = 0;
+	shmseg->u.shm_ctime = time_second;
+	shm_committed += btoc(slssysvshm->shm_segsz);
+	shm_nused++;
 
 	printf("Restored\n");
 

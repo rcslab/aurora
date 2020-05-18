@@ -46,12 +46,12 @@ sls_vn_to_path(struct vnode *vp, struct sbuf **sbp)
 	error = vn_fullpath(curthread, vp, &fullpath, &freepath);
 	vrele(vp);
 	if (error != 0)
-	    goto error; 
+		goto error; 
 
 	len = strnlen(fullpath, PATH_MAX);
 	error = sbuf_bcpy(sb, fullpath, len);
 	if (error != 0)
-	    goto error;
+		goto error;
 
 	sbuf_finish(sb);
 
@@ -76,15 +76,15 @@ sls_path_append(const char *data, size_t len, struct sbuf *sb)
 
 	error = sbuf_bcat(sb, (void *) &(magic), sizeof(magic));
 	if (error != 0)
-	    return error;
+		return error;
 
 	error = sbuf_bcat(sb, (void *) &len, sizeof(len));
 	if (error != 0)
-	    return error;
+		return error;
 
 	error = sbuf_bcat(sb, data, len);
 	if (error != 0) 
-	    return error;
+		return error;
 
 
 	return 0;
@@ -100,7 +100,7 @@ sls_vn_to_path_append(struct vnode *vp, struct sbuf *sb)
 
 	error = sls_vn_to_path(vp, &path);
 	if (error != 0)
-	    return error;
+		return error;
 
 	data = sbuf_data(path);
 	len = sbuf_len(path);
@@ -128,7 +128,7 @@ sls_path_to_vn(struct sbuf *sb, struct vnode **vpp)
 	NDINIT(&backing_file, LOOKUP, FOLLOW, UIO_SYSSPACE, path, curthread);
 	error = namei(&backing_file);
 	if (error != 0)
-	    return error;
+		return error;
 
 	*vpp = backing_file.ni_vp;
 

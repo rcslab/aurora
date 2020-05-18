@@ -57,8 +57,8 @@ slsvm_object_shadow(struct slskv_table *objtable, vm_object_t *objp)
 	//printf("Shadow pair (%p, %p)\n", obj, *objp);
 	error = slskv_add(objtable, (uint64_t) obj, (uintptr_t) *objp);
 	if (error != 0) {
-	    vm_object_deallocate(*objp);
-	    return (error);
+		vm_object_deallocate(*objp);
+		return (error);
 	}
 
 	return (0);
@@ -69,10 +69,10 @@ slsvm_objtable_collapse(struct slskv_table *objtable)
 {
 	struct slskv_iter iter;
 	vm_object_t obj, shadow;
-	
+
 	/* Remove the Aurora - created shadow. */
 	KV_FOREACH(objtable, iter, obj, shadow) {
-	    vm_object_deallocate(obj);
+		vm_object_deallocate(obj);
 	}
 
 	/* XXX Don't forget the SYSV shared memory table! */
@@ -86,10 +86,10 @@ static void
 slsvm_entry_zap(struct proc *p, struct vm_map_entry *entry, vm_object_t obj)
 {
 	if (((entry->eflags & MAP_ENTRY_NEEDS_COPY) == 0) &&
-		((entry->protection & VM_PROT_WRITE) != 0)) {
-	    pmap_protect_pglist(&p->p_vmspace->vm_pmap, 
-		entry->start, entry->end, entry->start - entry->offset,
-		&obj->memq, entry->protection & ~VM_PROT_WRITE, AURORA_PMAP_TEST_FULL);
+	    ((entry->protection & VM_PROT_WRITE) != 0)) {
+		pmap_protect_pglist(&p->p_vmspace->vm_pmap, 
+		    entry->start, entry->end, entry->start - entry->offset,
+		    &obj->memq, entry->protection & ~VM_PROT_WRITE, AURORA_PMAP_TEST_FULL);
 	}
 }
 
@@ -104,15 +104,15 @@ slsvm_object_zap(vm_object_t obj)
 	 * to do extra bookkeeping in the object.
 	 */
 	TAILQ_FOREACH(m, &obj->memq, listq)
-		pmap_remove_all(m);
+	    pmap_remove_all(m);
 }
 
 static void
 slsvm_entry_protect(struct proc *p, struct vm_map_entry *entry)
 {
 	if (((entry->eflags & MAP_ENTRY_NEEDS_COPY) == 0) &&
-		((entry->protection & VM_PROT_WRITE) != 0)) {
-	    pmap_protect(&p->p_vmspace->vm_pmap,
+	    ((entry->protection & VM_PROT_WRITE) != 0)) {
+		pmap_protect(&p->p_vmspace->vm_pmap,
 		    entry->start, entry->end,
 		    entry->protection & ~VM_PROT_WRITE);
 	}
@@ -139,19 +139,19 @@ slsvm_object_copy(struct proc *p, struct vm_map_entry *entry, vm_object_t obj)
 	KASSERT(obj->backing_object->type != OBJT_DEAD, ("object %p is dead", obj->backing_object));
 
 	TAILQ_FOREACH_SAFE(cur, &obj->backing_object->memq, listq, tmp)  {
-	    /* Check if already copied. */
-	    original = vm_page_lookup(obj, cur->pindex);
-	    if (original != NULL)
-		continue;
+		/* Check if already copied. */
+		original = vm_page_lookup(obj, cur->pindex);
+		if (original != NULL)
+			continue;
 
-	    /* Otherwise create a blank copy, and fix up the page tables. */
-	    copy = vm_page_grab(obj, cur->pindex, VM_ALLOC_NORMAL | VM_ALLOC_NOBUSY);
-	    /* Copy the data into the page and mark it as valid. */
-	    pmap_copy_page(cur, copy);
-	    copy->valid = VM_PAGE_BITS_ALL;
+		/* Otherwise create a blank copy, and fix up the page tables. */
+		copy = vm_page_grab(obj, cur->pindex, VM_ALLOC_NORMAL | VM_ALLOC_NOBUSY);
+		/* Copy the data into the page and mark it as valid. */
+		pmap_copy_page(cur, copy);
+		copy->valid = VM_PAGE_BITS_ALL;
 
-	    vaddr = entry->start - entry->offset + IDX_TO_OFF(cur->pindex);
-	    pmap_enter(&p->p_vmspace->vm_pmap, vaddr, copy, entry->protection,
+		vaddr = entry->start - entry->offset + IDX_TO_OFF(cur->pindex);
+		pmap_enter(&p->p_vmspace->vm_pmap, vaddr, copy, entry->protection,
 		    VM_PROT_WRITE | VM_PROT_COPY, 0);
 	}
 	VM_OBJECT_WUNLOCK(obj->backing_object);
@@ -201,26 +201,26 @@ slsvm_proc_shadow(struct proc *p, struct slskv_table *table, int is_fullckpt)
 		 * Guard entries are null.
 		 */
 		if (!OBJT_ISANONYMOUS(obj))
-		    continue;
+			continue;
 
 		/*
 		 * Check if we have already shadowed the object. If we did,
 		 * have the process map point to the shadow.
 		 */
 		if (slskv_find(table, (uint64_t) obj, (uintptr_t *) &vmshadow) == 0) {
-		    /* If the object is not shadowed, we don't need to do anything else */
-		    if (vmshadow == NULL)
-			    continue;
-		    /* The object is already zapped */
-		    slsvm_entry_zap(p, entry, obj);
-		    entry->object.vm_object = vmshadow;
-		    VM_OBJECT_WLOCK(vmshadow);
-		    vm_object_clear_flag(vmshadow, OBJ_ONEMAPPING);
-		    slsvm_object_reftransfer(obj, vmshadow);
-		    VM_OBJECT_WUNLOCK(vmshadow);
-		    SLS_DBG("(TRANSFER) Object %p has %d references\n", obj, obj->ref_count);
-		    SLS_DBG("(TRANSFER) Shadow %p has %d references\n", vmshadow, vmshadow->ref_count);
-		    continue;
+			/* If the object is not shadowed, we don't need to do anything else */
+			if (vmshadow == NULL)
+				continue;
+			/* The object is already zapped */
+			slsvm_entry_zap(p, entry, obj);
+			entry->object.vm_object = vmshadow;
+			VM_OBJECT_WLOCK(vmshadow);
+			vm_object_clear_flag(vmshadow, OBJ_ONEMAPPING);
+			slsvm_object_reftransfer(obj, vmshadow);
+			VM_OBJECT_WUNLOCK(vmshadow);
+			SLS_DBG("(TRANSFER) Object %p has %d references\n", obj, obj->ref_count);
+			SLS_DBG("(TRANSFER) Shadow %p has %d references\n", vmshadow, vmshadow->ref_count);
+			continue;
 		}
 
 		/* Shadow the object, retain it in Aurora. */
@@ -228,7 +228,7 @@ slsvm_proc_shadow(struct proc *p, struct slskv_table *table, int is_fullckpt)
 		slsvm_entry_zap(p, entry, obj);
 		error = slsvm_object_shadow(table, &entry->object.vm_object);
 		if (error != 0)
-		    goto error;
+			goto error;
 
 
 		/* 
@@ -236,22 +236,22 @@ slsvm_proc_shadow(struct proc *p, struct slskv_table *table, int is_fullckpt)
 		 * checkpointed this object before. 
 		 */
 		if ((!is_fullckpt) && (obj->flags & OBJ_AURORA))
-		    continue;
+			continue;
 
 		/* Checkpoint down the tree. */
 		obj = obj->backing_object;
 		while (OBJT_ISANONYMOUS(obj)) {
-		    vm_object_reference(obj);
-		    obj->flags |= OBJ_AURORA;
-		    /* These objects have no shadows. */
-		    error = slskv_add(table, (uint64_t) obj, (uintptr_t) NULL);
-		    if (error != 0) {
-			/* Already in the table. */
-			vm_object_deallocate(obj);
-			break;
-		    }
+			vm_object_reference(obj);
+			obj->flags |= OBJ_AURORA;
+			/* These objects have no shadows. */
+			error = slskv_add(table, (uint64_t) obj, (uintptr_t) NULL);
+			if (error != 0) {
+				/* Already in the table. */
+				vm_object_deallocate(obj);
+				break;
+			}
 
-		    obj = obj->backing_object;
+			obj = obj->backing_object;
 		}
 	}
 
@@ -274,12 +274,12 @@ slsvm_procset_shadow(slsset *procset, struct slskv_table *table, int is_fullckpt
 	int error;
 
 	KVSET_FOREACH(procset, iter, p) {
-	    SDT_PROBE0(sls, , , procset_loop);
-	    error = slsvm_proc_shadow(p, table, is_fullckpt);
-	    if (error != 0) {
-		KV_ABORT(iter);
-		return (error);
-	    }
+		SDT_PROBE0(sls, , , procset_loop);
+		error = slsvm_proc_shadow(p, table, is_fullckpt);
+		if (error != 0) {
+			KV_ABORT(iter);
+			return (error);
+		}
 	}
 
 	return (0);

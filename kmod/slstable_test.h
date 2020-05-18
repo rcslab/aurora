@@ -22,10 +22,10 @@
  */
 #define DATA_MAGIC 0xbadcafe
 typedef struct data_info {
-	uint64_t magic;
-	uint64_t slsid;
-	uint64_t sbid;
-	uint8_t  data[INFO_SIZE];
+    uint64_t magic;
+    uint64_t slsid;
+    uint64_t sbid;
+    uint8_t  data[INFO_SIZE];
 } data_info;
 
 /*

@@ -53,16 +53,16 @@ slsckpt_vmentry(struct vm_map_entry *entry, struct sbuf *sb)
 	cur_entry.inheritance = entry->inheritance;
 	cur_entry.slsid = (uint64_t) entry;
 	if (entry->object.vm_object != NULL) {
-	    cur_entry.obj = (OBJID_START & (~OBJID_MASK)) | (OBJID_MASK & ((uint64_t) entry->object.vm_object->objid));
-	    cur_entry.type = entry->object.vm_object->type; 
+		cur_entry.obj = (OBJID_START & (~OBJID_MASK)) | (OBJID_MASK & ((uint64_t) entry->object.vm_object->objid));
+		cur_entry.type = entry->object.vm_object->type; 
 	} else {
-	    cur_entry.obj = 0;
-	    cur_entry.type = OBJT_DEAD;
+		cur_entry.obj = 0;
+		cur_entry.type = OBJT_DEAD;
 	}
 
 	error = sbuf_bcat(sb, (void *) &cur_entry, sizeof(cur_entry));
 	if (error != 0)
-	    return (ENOMEM);
+		return (ENOMEM);
 
 	return (0);
 }
@@ -81,46 +81,46 @@ slsckpt_vmspace(struct proc *p, struct sbuf *sb, struct slsckpt_data *sckpt_data
 	vm_map = &vmspace->vm_map;
 
 	slsvmspace = (struct slsvmspace) {
-	    .magic = SLSVMSPACE_ID,
-	    .vm_swrss = vmspace->vm_swrss,
-	    .vm_tsize = vmspace->vm_tsize,
-	    .vm_dsize = vmspace->vm_dsize,
-	    .vm_ssize = vmspace->vm_ssize,
-	    .vm_taddr = vmspace->vm_taddr,
-	    .vm_daddr = vmspace->vm_daddr,
-	    .vm_maxsaddr = vmspace->vm_maxsaddr,
-	    .nentries = vm_map->nentries,
-	    .has_shm = ((vmspace->vm_shm != NULL) ? 1 : 0),
+		.magic = SLSVMSPACE_ID,
+		    .vm_swrss = vmspace->vm_swrss,
+		    .vm_tsize = vmspace->vm_tsize,
+		    .vm_dsize = vmspace->vm_dsize,
+		    .vm_ssize = vmspace->vm_ssize,
+		    .vm_taddr = vmspace->vm_taddr,
+		    .vm_daddr = vmspace->vm_daddr,
+		    .vm_maxsaddr = vmspace->vm_maxsaddr,
+		    .nentries = vm_map->nentries,
+		    .has_shm = ((vmspace->vm_shm != NULL) ? 1 : 0),
 	};
 
 	error = sbuf_bcat(sb, (void *) &slsvmspace, sizeof(slsvmspace));
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	/* Get the table wholesale (it's not large, so just grab all of it). */
 	if (slsvmspace.has_shm != 0) {
-	    error = sbuf_bcat(sb, vmspace->vm_shm, shminfo.shmseg * sizeof(*vmspace->vm_shm));
-	    if (error != 0)
-		return (error);
+		error = sbuf_bcat(sb, vmspace->vm_shm, shminfo.shmseg * sizeof(*vmspace->vm_shm));
+		if (error != 0)
+			return (error);
 	}
 
 	/* Checkpoint all objects, including their ancestors. */
 	for (entry = vm_map->header.next; entry != &vm_map->header; 
-		entry = entry->next) {
+	    entry = entry->next) {
 
-	    for (obj = entry->object.vm_object; obj != NULL; obj = obj->backing_object) {
+		for (obj = entry->object.vm_object; obj != NULL; obj = obj->backing_object) {
 
-		error = slsckpt_vmobject(p, obj, sckpt_data, target);
-		if (error != 0) 
-		    return (error);
-	    }
+			error = slsckpt_vmobject(p, obj, sckpt_data, target);
+			if (error != 0) 
+				return (error);
+		}
 	}
 
 	for (entry = vm_map->header.next; entry != &vm_map->header;
-		entry = entry->next) {
-	    error = slsckpt_vmentry(entry, sb);
-	    if (error != 0)
-		return (error);
+	    entry = entry->next) {
+		error = slsckpt_vmentry(entry, sb);
+		if (error != 0)
+			return (error);
 	}
 
 	return (0);
@@ -143,9 +143,9 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 
 	/* Find an object if it exists. */
 	if (slskv_find(objtable, (uint64_t) info->obj, (uintptr_t *) &object) != 0)
-	    object = NULL;
+		object = NULL;
 	else
-	    vm_object_reference(object);
+		vm_object_reference(object);
 
 	/* 
 	 * Unfortunately, vm_map_entry_create is static, and so is
@@ -159,17 +159,17 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 	vm_map_lock(map);
 	guard = (info->eflags & MAP_ENTRY_GUARD) ? MAP_CREATE_GUARD : 0;
 	error = vm_map_insert(map, object, info->offset, 
-		    info->start, info->end, 
-		    info->protection, info->max_protection, guard);
+	    info->start, info->end, 
+	    info->protection, info->max_protection, guard);
 	if (error != 0)
-	    goto out;
+		goto out;
 
 
 	/* Get the entry from the map. */
 	contained = vm_map_lookup_entry(map, info->start, &entry);
 	if (contained == FALSE) {
-	    error = EINVAL;
-	    goto out;
+		error = EINVAL;
+		goto out;
 	}
 
 
@@ -177,24 +177,24 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 	entry->inheritance = info->inheritance;
 
 	if (object != NULL) {
-	    /* Enter the object's pages to the map's pmap. */
-	    TAILQ_FOREACH(page, &object->memq, listq) {
+		/* Enter the object's pages to the map's pmap. */
+		TAILQ_FOREACH(page, &object->memq, listq) {
 
-		/* Compute the virtual address for the page. */
-		vaddr = IDX_TO_VADDR(page->pindex, entry->start, entry->offset);
+			/* Compute the virtual address for the page. */
+			vaddr = IDX_TO_VADDR(page->pindex, entry->start, entry->offset);
 
-		vm_page_sbusy(page);
+			vm_page_sbusy(page);
 
-		/* If the page is within the entry's bounds, add it to the map. */
-		VM_OBJECT_WLOCK(object);
-		error = pmap_enter(vm_map_pmap(map), vaddr, page, 
-			entry->protection, VM_PROT_READ, page->psind);
-		VM_OBJECT_WUNLOCK(object);
-		if (error != 0)
-		    printf("Error: pmap_enter_failed\n");
+			/* If the page is within the entry's bounds, add it to the map. */
+			VM_OBJECT_WLOCK(object);
+			error = pmap_enter(vm_map_pmap(map), vaddr, page, 
+			    entry->protection, VM_PROT_READ, page->psind);
+			VM_OBJECT_WUNLOCK(object);
+			if (error != 0)
+				printf("Error: pmap_enter_failed\n");
 
-		vm_page_sunbusy(page);
-	    }
+			vm_page_sunbusy(page);
+		}
 	}
 
 	/* Set the entry as text if it is backed by a vnode or an object shadowing a vnode. */
@@ -226,30 +226,30 @@ slsrest_vmentry_file(struct vm_map *map, struct slsvmentry *entry, struct slskv_
 	/* If we have an object, it has to have been restored. */
 	error = slskv_find(objtable, (uint64_t) entry->obj, (uintptr_t *) &object);
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	vp = (struct vnode *) object->handle;
 	error = sls_vn_to_path(vp, &sb);
 	if (error != 0)
-	    return (EINVAL);
+		return (EINVAL);
 
 	if (entry->protection == VM_PROT_NONE) {
-	    error = EPERM;
-	    goto done;
+		error = EPERM;
+		goto done;
 	}
 
 	rprot = entry->protection & (VM_PROT_READ | VM_PROT_WRITE);
 	if (rprot == VM_PROT_WRITE)
-	    flags = O_WRONLY;
+		flags = O_WRONLY;
 	else if (rprot == VM_PROT_READ)
-	    flags = O_RDONLY;
+		flags = O_RDONLY;
 	else
-	    flags = O_RDWR;
+		flags = O_RDWR;
 
 	error = kern_openat(curthread, AT_FDCWD, sbuf_data(sb), 
-		UIO_SYSSPACE, flags, S_IRWXU);
+	    UIO_SYSSPACE, flags, S_IRWXU);
 	if (error != 0)
-	    goto done;
+		goto done;
 
 	fd = curthread->td_retval[0];
 
@@ -261,25 +261,25 @@ slsrest_vmentry_file(struct vm_map *map, struct slsvmentry *entry, struct slskv_
 	 */
 	flags = MAP_SHARED | MAP_FIXED;
 	if (entry->eflags & MAP_ENTRY_NOSYNC)
-	    flags |= MAP_NOSYNC;
+		flags |= MAP_NOSYNC;
 	if (entry->eflags & MAP_ENTRY_NOCOREDUMP)
-	    flags |= MAP_NOCORE;
+		flags |= MAP_NOCORE;
 
 	error = kern_mmap(curthread, entry->start, entry->end - entry->start, 
-		entry->protection, flags, fd, entry->offset);
+	    entry->protection, flags, fd, entry->offset);
 
 	vref(vp);
 
 	if (entry->eflags & MAP_ENTRY_VN_EXEC)
-	    VOP_SET_TEXT(vp);
+		VOP_SET_TEXT(vp);
 
 done:
 
 	if (fd >= 0)
-	    kern_close(curthread, fd);
+		kern_close(curthread, fd);
 
 	if (sb != NULL)
-	    sbuf_delete(sb);
+		sbuf_delete(sb);
 
 	return (error);
 }
@@ -293,43 +293,43 @@ slsrest_vmentry(struct vm_map *map, struct slsvmentry *entry, struct slskv_table
 
 	/* If it's a guard page use the code for anonymous/empty/physical entries. */
 	if (entry->obj == 0) 
-	    return slsrest_vmentry_anon(map, entry, objtable);
+		return slsrest_vmentry_anon(map, entry, objtable);
 
 
 	/* Jump table for restoring the entries. */
 	switch (entry->type) {
 	case OBJT_DEFAULT:
 	case OBJT_SWAP:
-	    return slsrest_vmentry_anon(map, entry, objtable);
+		return slsrest_vmentry_anon(map, entry, objtable);
 
 	case OBJT_PHYS:
-	    return slsrest_vmentry_anon(map, entry, objtable);
+		return slsrest_vmentry_anon(map, entry, objtable);
 
 	case OBJT_VNODE:
-	    return slsrest_vmentry_file(map, entry, objtable);
+		return slsrest_vmentry_file(map, entry, objtable);
 
-	/* 
-	 * Right now we only support the HPET counter. If we 
-	 * end up supporting more devices, we need to find 
-	 * a way to get the names from the mapped objects.
-	 * Is it even possible, though? Even in procstat 
-	 * we don't see the name of the mapped device.
-	 */
+		/* 
+		 * Right now we only support the HPET counter. If we 
+		 * end up supporting more devices, we need to find 
+		 * a way to get the names from the mapped objects.
+		 * Is it even possible, though? Even in procstat 
+		 * we don't see the name of the mapped device.
+		 */
 	case OBJT_DEVICE:
-	    error = kern_openat(curthread, AT_FDCWD, "/dev/hpet0",
+		error = kern_openat(curthread, AT_FDCWD, "/dev/hpet0",
 		    UIO_SYSSPACE, O_RDWR, S_IRWXU);
-	    if (error != 0)
-		return (error);
+		if (error != 0)
+			return (error);
 
-	    fd = curthread->td_retval[0];
-	    error = kern_mmap(curthread, entry->start, entry->end - entry->start, 
+		fd = curthread->td_retval[0];
+		error = kern_mmap(curthread, entry->start, entry->end - entry->start, 
 		    entry->protection, MAP_SHARED, fd, entry->offset);
 
-	    kern_close(curthread, fd);
-	    return (error);
+		kern_close(curthread, fd);
+		return (error);
 
 	default:
-	    return (EINVAL);
+		return (EINVAL);
 	}
 }
 
@@ -365,7 +365,7 @@ slsrest_vmspace(struct proc *p, struct slsvmspace *info, struct shmmap_state *sh
 	vmspace->vm_maxsaddr = info->vm_maxsaddr; 
 
 	if (shmstate != NULL)
-	    vmspace->vm_shm = shmstate;
+		vmspace->vm_shm = shmstate;
 
 	return (0);
 }

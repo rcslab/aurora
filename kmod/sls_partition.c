@@ -48,11 +48,11 @@ slsckpt_create(struct slsckpt_data **sckpt_datap)
 
 	error = slskv_create(&sckpt_data->sckpt_rectable);
 	if (error != 0)
-	    goto error;
+		goto error;
 
 	error = slskv_create(&sckpt_data->sckpt_objtable);
 	if (error != 0)
-	    goto error;
+		goto error;
 
 	*sckpt_datap = sckpt_data;
 
@@ -61,8 +61,8 @@ slsckpt_create(struct slsckpt_data **sckpt_datap)
 error:
 
 	if (sckpt_data != NULL) {
-	    slskv_destroy(sckpt_data->sckpt_objtable);
-	    slskv_destroy(sckpt_data->sckpt_rectable);
+		slskv_destroy(sckpt_data->sckpt_objtable);
+		slskv_destroy(sckpt_data->sckpt_rectable);
 	}
 
 	free(sckpt_data, M_SLSMM);
@@ -77,20 +77,20 @@ slsckpt_destroy(struct slsckpt_data *sckpt_data)
 	uint64_t slsid;
 
 	if (sckpt_data == NULL)
-	    return;
+		return;
 
 	if (sckpt_data->sckpt_objtable != NULL) {
-	    slsvm_objtable_collapse(sckpt_data->sckpt_objtable);
-	    slskv_destroy(sckpt_data->sckpt_objtable);
+		slsvm_objtable_collapse(sckpt_data->sckpt_objtable);
+		slskv_destroy(sckpt_data->sckpt_objtable);
 	}
 
 	if (sckpt_data->sckpt_objtable != NULL) {
-	    KV_FOREACH_POP(sckpt_data->sckpt_rectable, slsid, rec) {
-		sbuf_delete(rec->srec_sb);
-		free(rec, M_SLSMM);
-	    }
+		KV_FOREACH_POP(sckpt_data->sckpt_rectable, slsid, rec) {
+			sbuf_delete(rec->srec_sb);
+			free(rec, M_SLSMM);
+		}
 
-	    slskv_destroy(sckpt_data->sckpt_rectable);
+		slskv_destroy(sckpt_data->sckpt_rectable);
 	}
 
 	free(sckpt_data, M_SLSMM);
@@ -105,7 +105,7 @@ slsp_find(uint64_t oid)
 	/* XXX LOCKING - See slsp_deref */
 	/* Get the partition if it exists. */
 	if (slskv_find(slsm.slsm_parts, oid, (uintptr_t *) &slsp) != 0)
-	    return (NULL);
+		return (NULL);
 
 	/* We found the process, take a reference to it. */
 	slsp_ref(slsp);
@@ -123,11 +123,11 @@ slsp_attach(uint64_t oid, pid_t pid)
 
 	/* Make sure the PID isn't in the SLS already. */
 	if (slskv_find(slsm.slsm_procs, pid, &oldoid) == 0)
-	    return (EINVAL);
+		return (EINVAL);
 
 	/* Make sure the partition actually exists. */
 	if (slskv_find(slsm.slsm_parts, oid, (uintptr_t *) &slsp) != 0)
-	    return (EINVAL);
+		return (EINVAL);
 
 	error = slskv_add(slsm.slsm_procs, pid, (uintptr_t) oid);
 	KASSERT(error == 0, ("PID already in the SLS"));
@@ -136,7 +136,7 @@ slsp_attach(uint64_t oid, pid_t pid)
 	KASSERT(error == 0, ("PID already in the partition"));
 
 	slsp->slsp_procnum += 1;
-	
+
 	return (0);
 }
 
@@ -148,14 +148,14 @@ slsp_detach(uint64_t oid, pid_t pid)
 
 	/* Make sure the partition actually exists. */
 	if (slskv_find(slsm.slsm_parts, oid, (uintptr_t *) &slsp) != 0)
-	    return (EINVAL);
+		return (EINVAL);
 
 	/* Remove the process from both the partition and the SLS. */
 	slskv_del(slsm.slsm_procs, pid);
 	slsset_del(slsp->slsp_procs, pid);
 
 	slsp->slsp_procnum -= 1;
-	
+
 	return (0);
 }
 
@@ -193,7 +193,7 @@ slsp_init(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
 	/* Create the set of held processes. */
 	error = slsset_create(&slsp->slsp_procs);
 	if (error != 0)
-	    goto error;
+		goto error;
 
 	*slspp = slsp;
 
@@ -201,7 +201,7 @@ slsp_init(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
 
 error:
 	if (slsp != NULL && slsp->slsp_procs != NULL)
-	    slsset_destroy(slsp->slsp_procs);
+		slsset_destroy(slsp->slsp_procs);
 
 	free(slsp, M_SLSMM);
 
@@ -226,12 +226,12 @@ slsp_fini(struct slspart *slsp)
 
 	/* Remove any references to VM objects we may have. */
 	if (slsp->slsp_objects != NULL) {
-	    slsvm_objtable_collapse(slsp->slsp_objects);
-	    slskv_destroy(slsp->slsp_objects);
+		slsvm_objtable_collapse(slsp->slsp_objects);
+		slskv_destroy(slsp->slsp_objects);
 	}
 
 	if (slsp->slsp_sckpt != NULL)
-	    slsckpt_destroy(slsp->slsp_sckpt);
+		slsckpt_destroy(slsp->slsp_sckpt);
 
 	free(slsp, M_SLSMM);
 }
@@ -249,22 +249,22 @@ slsp_add(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
 	 */
 	slsp = slsp_find(oid);
 	if (slsp != NULL) {
-	    /* We got a reference to the process with slsp_find, release it. */
+		/* We got a reference to the process with slsp_find, release it. */
 
-	    slsp_deref(slsp);
-	    return (EINVAL);
+		slsp_deref(slsp);
+		return (EINVAL);
 	}
 
 	/* If we didn't find it, create one. */
 	error = slsp_init(oid, attr, &slsp);
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	/* Add the partition to the table. */
 	error = slskv_add(slsm.slsm_parts, oid, (uintptr_t) slsp);
 	if (error != 0) {
-	    slsp_fini(slsp);
-	    return (error);
+		slsp_fini(slsp);
+		return (error);
 	}
 
 	/* Export the partition to the caller. */
@@ -281,7 +281,7 @@ slsp_del(uint64_t oid)
 
 	/* If the partition doesn't actually exist, we're done. */
 	if (slskv_find(slsm.slsm_parts, oid, (uintptr_t *) &slsp) != 0)
-	    return;
+		return;
 
 	/* Remove the process from the table, and destroy the struct itself. */
 	slskv_del(slsm.slsm_parts, oid);
@@ -298,11 +298,11 @@ slsp_delall(void)
 
 	/* If we never completed initialization, abort. */
 	if (slsm.slsm_parts == NULL)
-	    return;
+		return;
 
 	/* Destroy all partitions. */
 	while (slskv_pop(slsm.slsm_parts, &oid, (uintptr_t *) &slsp) == 0)
-	    slsp_fini(slsp);
+		slsp_fini(slsp);
 
 	/* Remove all processes from the global table.  */
 	slskv_destroy(slsm.slsm_procs);
@@ -326,7 +326,7 @@ slsp_deref(struct slspart *slsp)
 	atomic_add_int(&slsp->slsp_refcount, -1);
 
 	if (slsp->slsp_refcount == 0)
-	    slsp_del(slsp->slsp_oid);
+		slsp_del(slsp->slsp_oid);
 
 }
 

@@ -68,40 +68,40 @@ slsckpt_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
 	/* Write the kqueue itself to the sbuf. */
 	error = sbuf_bcat(sb, (void *) &kqinfo, sizeof(kqinfo));
 	if (error != 0)
-	    return (error);
+		return (error);
 
 
 	/* Traverse all lists of knotes in the kqueue. */
 	for (i = 0; i < kq->kq_knlistsize; i++) {
-	    /* Get all knotes from each list. */
-	    SLIST_FOREACH(kn, &kq->kq_knlist[i], kn_link) {
-		/* 
-		 * XXX Check whether any knotes are in flux. 
-		 * This is erring on the side of caution, since
-		 * I'm not sure what being in flux would do for us.
-		 */
-		if (kn != NULL && (kn->kn_influx > 0))
-		    panic("knote in flux while checkpointing");
-		
-		/* 
-		 * 
-		 * Get all relevant fields. Most of them are 
-		 * from the kevent struct the knote points to.
-		 */
-		kevinfo.status = kn->kn_status;
-		kevinfo.ident = kn->kn_kevent.ident;
-		kevinfo.filter = kn->kn_kevent.filter;
-		kevinfo.flags = kn->kn_kevent.flags;
-		kevinfo.fflags = kn->kn_kevent.fflags;
-		kevinfo.data = kn->kn_kevent.data;
-		kevinfo.slsid= (uint64_t) kn;
-		kevinfo.magic = SLSKEVENT_ID;
+		/* Get all knotes from each list. */
+		SLIST_FOREACH(kn, &kq->kq_knlist[i], kn_link) {
+			/* 
+			 * XXX Check whether any knotes are in flux. 
+			 * This is erring on the side of caution, since
+			 * I'm not sure what being in flux would do for us.
+			 */
+			if (kn != NULL && (kn->kn_influx > 0))
+				panic("knote in flux while checkpointing");
 
-		/* Write each kevent to the sbuf. */
-		error = sbuf_bcat(sb, (void *) &kevinfo, sizeof(kevinfo));
-		if (error != 0)
-		    return (error);
-	    }
+			/* 
+			 * 
+			 * Get all relevant fields. Most of them are 
+			 * from the kevent struct the knote points to.
+			 */
+			kevinfo.status = kn->kn_status;
+			kevinfo.ident = kn->kn_kevent.ident;
+			kevinfo.filter = kn->kn_kevent.filter;
+			kevinfo.flags = kn->kn_kevent.flags;
+			kevinfo.fflags = kn->kn_kevent.fflags;
+			kevinfo.data = kn->kn_kevent.data;
+			kevinfo.slsid= (uint64_t) kn;
+			kevinfo.magic = SLSKEVENT_ID;
+
+			/* Write each kevent to the sbuf. */
+			error = sbuf_bcat(sb, (void *) &kevinfo, sizeof(kevinfo));
+			if (error != 0)
+				return (error);
+		}
 	}
 
 	return (0);
@@ -126,7 +126,7 @@ slsrest_kqueue(struct slskqueue *kqinfo, int *fdp)
 	/* Create a kqueue for the process. */
 	error = kern_kqueue(curthread, 0, NULL);
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	/* Grab the open file and pass it to the caller. */
 	*fdp = curthread->td_retval[0];
@@ -149,32 +149,32 @@ slsrest_kevents(int fd, slsset *slskevs)
 
 	/* For each kqinfo, create a kevent and register it. */
 	KVSET_FOREACH_POP(slskevs, slskev) {
-	    kev = malloc(sizeof(*kev), M_SLSMM, M_WAITOK);
+		kev = malloc(sizeof(*kev), M_SLSMM, M_WAITOK);
 
-	    kev->ident = slskev->ident;
-	    /* XXX Right now we only need EVFILT_READ, which we 
-	    * aren't getting at checkpoint time. Find out why.
-	    */
-	    kev->filter = slskev->filter; 
-	    kev->flags = slskev->flags;
-	    kev->fflags = slskev->fflags;
-	    kev->data = slskev->data;
-	    /* Add the kevent to the kqueue */
-	    kev->flags = EV_ADD;
+		kev->ident = slskev->ident;
+		/* XXX Right now we only need EVFILT_READ, which we 
+		 * aren't getting at checkpoint time. Find out why.
+		 */
+		kev->filter = slskev->filter; 
+		kev->flags = slskev->flags;
+		kev->fflags = slskev->fflags;
+		kev->data = slskev->data;
+		/* Add the kevent to the kqueue */
+		kev->flags = EV_ADD;
 
-	    /* If any of the events were disabled , keep them that way. */
-	    if ((slskev->status & KN_DISABLED) != 0)
-		kev->flags |= EV_DISABLE;
+		/* If any of the events were disabled , keep them that way. */
+		if ((slskev->status & KN_DISABLED) != 0)
+			kev->flags |= EV_DISABLE;
 
-	    printf("Registering kevent for fd %d\n", fd);
-	    error = kqfd_register(fd, kev, curthread, 1);
-	    if (error != 0) {
-		/* 
-		* We don't handle restoring certain types of
-		* fds like IPv6 sockets yet.
-		*/
-		SLS_DBG("(BUG) fd for kevent %ld not restored\n", kev->ident);
-	    }
+		printf("Registering kevent for fd %d\n", fd);
+		error = kqfd_register(fd, kev, curthread, 1);
+		if (error != 0) {
+			/* 
+			 * We don't handle restoring certain types of
+			 * fds like IPv6 sockets yet.
+			 */
+			SLS_DBG("(BUG) fd for kevent %ld not restored\n", kev->ident);
+		}
 	}
 
 	return (0);

@@ -43,7 +43,7 @@ struct slspart {
 LIST_HEAD(slsp_list, slspart);
 
 struct slspart *slsp_find(uint64_t oid);
-    
+
 int slsp_attach(uint64_t oid, pid_t pid);
 int slsp_detach(uint64_t oid, pid_t pid);
 

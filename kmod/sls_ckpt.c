@@ -58,7 +58,7 @@
 
 #define SLS_RUNNABLE(proc, slsp) \
     (atomic_load_int(&slsp->slsp_status) != 0 && \
-    SLS_PROCALIVE(proc))
+	SLS_PROCALIVE(proc))
 
 SDT_PROVIDER_DEFINE(sls);
 
@@ -81,7 +81,7 @@ uint64_t ckpt_done;
 static void slsckpt_stop(slsset *procset);
 static int sls_checkpoint(slsset *procset, struct slspart *slsp);
 static int slsckpt_metadata(struct proc *p, struct slspart *slsp, 
-	slsset *procset, struct slsckpt_data *sckpt_data);
+    slsset *procset, struct slsckpt_data *sckpt_data);
 
 
 /*
@@ -94,10 +94,10 @@ slsckpt_stop(slsset *procset)
 	struct proc *p;
 
 	KVSET_FOREACH(procset, iter, p) {
-	    /* Force all threads to the kernel-user boundary. */
-	    PROC_LOCK(p);
-	    thread_single(p, SINGLE_BOUNDARY);
-	    PROC_UNLOCK(p);
+		/* Force all threads to the kernel-user boundary. */
+		PROC_LOCK(p);
+		thread_single(p, SINGLE_BOUNDARY);
+		PROC_UNLOCK(p);
 	}
 }
 
@@ -111,10 +111,10 @@ slsckpt_cont(slsset *procset)
 	struct proc *p;
 
 	KVSET_FOREACH(procset, iter, p) {
-	    /* Free each process from the boundary. */
-	    PROC_LOCK(p);
-	    thread_single_end(p, SINGLE_BOUNDARY);
-	    PROC_UNLOCK(p);
+		/* Free each process from the boundary. */
+		PROC_LOCK(p);
+		thread_single_end(p, SINGLE_BOUNDARY);
+		PROC_UNLOCK(p);
 	}
 }
 
@@ -131,10 +131,10 @@ slsckpt_metadata(struct proc *p, struct slspart *slsp, slsset *procset, struct s
 	/* Dump the process state */
 	PROC_LOCK(p);
 	if (!SLS_PROCALIVE(p)) {
-	    SLS_DBG("proc trying to die, exiting ckpt\n");
-	    error = ESRCH;
-	    PROC_UNLOCK(p);
-	    goto out;
+		SLS_DBG("proc trying to die, exiting ckpt\n");
+		error = ESRCH;
+		PROC_UNLOCK(p);
+		goto out;
 	}
 	PROC_UNLOCK(p);
 
@@ -142,42 +142,42 @@ slsckpt_metadata(struct proc *p, struct slspart *slsp, slsset *procset, struct s
 
 	error = slsckpt_proc(p, sb, procset);
 	if (error != 0) {
-	    SLS_DBG("Error: slsckpt_proc failed with error code %d\n", error);
-	    goto out;
+		SLS_DBG("Error: slsckpt_proc failed with error code %d\n", error);
+		goto out;
 	}
 	SDT_PROBE0(sls, , , proc);
 
 	error = slsckpt_vmspace(p, sb, sckpt_data, slsp->slsp_attr.attr_target);
 	if (error != 0) {
-	    SLS_DBG("Error: slsckpt_vmspace failed with error code %d\n", error);
-	    goto out;
+		SLS_DBG("Error: slsckpt_vmspace failed with error code %d\n", error);
+		goto out;
 	}
 
 	SDT_PROBE0(sls, , , vm);
 	/* XXX This has to be last right now, because the filedesc is not in its own record. */
 	error = slsckpt_filedesc(p, sckpt_data, sb);
 	if (error != 0) {
-	    SLS_DBG("Error: slsckpt_filedesc failed with error code %d\n", error);
-	    goto out;
+		SLS_DBG("Error: slsckpt_filedesc failed with error code %d\n", error);
+		goto out;
 	}
 
 	SDT_PROBE0(sls, , , file);
 	error = sbuf_finish(sb);
 	if (error != 0)
-	    goto out;
+		goto out;
 
 	rec = sls_getrecord(sb, (uint64_t) p, SLOSREC_PROC);
 	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) p, (uintptr_t) rec);
 	if (error != 0) {
-	    free(rec, M_SLSMM);
-	    goto out;
+		free(rec, M_SLSMM);
+		goto out;
 	}
 
 out:
 
 	if (error != 0) {
-	    slskv_del(sckpt_data->sckpt_rectable, (uint64_t) sb);
-	    sbuf_delete(sb);
+		slskv_del(sckpt_data->sckpt_rectable, (uint64_t) sb);
+		sbuf_delete(sb);
 	}
 
 	return error;
@@ -211,7 +211,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	 */
 	error = slsckpt_create(&sckpt_data);
 	if (error != 0)
-	    return (error);
+		return (error);
 
 	/* 
 	 * If there is no previous checkpoint, then we are doing a full checkpoint. 
@@ -223,29 +223,29 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	/* Shadow SYSV shared memory. */
 	error = slsckpt_sysvshm(sckpt_data, sckpt_data->sckpt_objtable);
 	if (error != 0) {
-	    slsckpt_cont(procset);
-	    goto error;
+		slsckpt_cont(procset);
+		goto error;
 	}
 
 	SDT_PROBE0(sls, , , sysv);
 
 	/* Get the data from all processes in the partition. */
 	KVSET_FOREACH(procset, iter, p) {
-	    error = slsckpt_metadata(p, slsp, procset, sckpt_data);
-	    if(error != 0) {
-		SLS_DBG("Checkpointing failed\n");
-		KV_ABORT(iter);
-		slsckpt_cont(procset);
-		goto error;
-	    }
+		error = slsckpt_metadata(p, slsp, procset, sckpt_data);
+		if(error != 0) {
+			SLS_DBG("Checkpointing failed\n");
+			KV_ABORT(iter);
+			slsckpt_cont(procset);
+			goto error;
+		}
 	}
 
 	/* Shadow the objects to be dumped. */
 	error = slsvm_procset_shadow(procset, sckpt_data->sckpt_objtable, is_fullckpt);
 	if (error != 0) {
-	    SLS_DBG("shadowing failed with %d\n", error);
-	    slsckpt_cont(procset);
-	    goto error;
+		SLS_DBG("shadowing failed with %d\n", error);
+		slsckpt_cont(procset);
+		goto error;
 	}
 
 	SDT_PROBE0(sls, , , shadow);
@@ -255,29 +255,29 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 
 	switch (slsp->slsp_attr.attr_target) {
 	case SLS_OSD:
-	    /*
-	    * The cleanest way for this to go away is by splitting
-	    * different SLS records to different on-disk inodes. This
-	    * is definitely possible, and depending on the SLOS it can
-	    * even be faster. However, right now it's not very useful,
-	    * since the SLOS isn't there yet in terms of speed.
-	    */
-	    error = sls_write_slos(slsp->slsp_oid, sckpt_data);
-	    if (error != 0) {
-		SLS_DBG("sls_write_slos return %d\n", error);
-		goto error;
-	    }
+		/*
+		 * The cleanest way for this to go away is by splitting
+		 * different SLS records to different on-disk inodes. This
+		 * is definitely possible, and depending on the SLOS it can
+		 * even be faster. However, right now it's not very useful,
+		 * since the SLOS isn't there yet in terms of speed.
+		 */
+		error = sls_write_slos(slsp->slsp_oid, sckpt_data);
+		if (error != 0) {
+			SLS_DBG("sls_write_slos return %d\n", error);
+			goto error;
+		}
 
-	    break;
+		break;
 
 	case SLS_MEM:
-	    /* Associate the checkpoint with the partition. */
-	    slsp->slsp_sckpt = sckpt_data;
-	    sckpt_data = NULL;
-	    break;
+		/* Associate the checkpoint with the partition. */
+		slsp->slsp_sckpt = sckpt_data;
+		sckpt_data = NULL;
+		break;
 
 	default:
-	    panic("Invalid target %d\n", slsp->slsp_attr.attr_target);
+		panic("Invalid target %d\n", slsp->slsp_attr.attr_target);
 	}
 
 	SDT_PROBE0(sls, , , dump);
@@ -287,7 +287,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 
 	/* Possibly wait until the checkpoint is done. */
 	if (sls_sync)
-	    VFS_SYNC(slos.slsfs_mount, MNT_WAIT);
+		VFS_SYNC(slos.slsfs_mount, MNT_WAIT);
 
 	SDT_PROBE0(sls, , , sync);
 
@@ -337,32 +337,32 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	 */
 	switch (slsp->slsp_attr.attr_mode) {
 	case SLS_FULL:
-	    /* Destroy the shadows completely. We don't keep any between iterations. */
-	    slsckpt_destroy(sckpt_data);
-	    sckpt_data = NULL;
-	    break;
+		/* Destroy the shadows completely. We don't keep any between iterations. */
+		slsckpt_destroy(sckpt_data);
+		sckpt_data = NULL;
+		break;
 
-	/* XXX For now we assume deep deltas. */
+		/* XXX For now we assume deep deltas. */
 	case SLS_DELTA:
 	case SLS_DEEP:
-	    /* Destroy the old shadows, now only the new ones remain. */
-	    sckpt_old = slsp->slsp_sckpt;
-	    if (sckpt_old != NULL)
-		slsckpt_destroy(sckpt_old);
-	    slsp->slsp_sckpt = sckpt_data;
-	    break;
+		/* Destroy the old shadows, now only the new ones remain. */
+		sckpt_old = slsp->slsp_sckpt;
+		if (sckpt_old != NULL)
+			slsckpt_destroy(sckpt_old);
+		slsp->slsp_sckpt = sckpt_data;
+		break;
 
 	case SLS_SHALLOW:
-	    /* Destroy the new shadow, provided we already have an old one. */
-	    sckpt_old = slsp->slsp_sckpt;
-	    if (sckpt_old != NULL)
-		slsckpt_destroy(sckpt_data);
-	    else 
-		slsp->slsp_sckpt = sckpt_data;
-	    break;
+		/* Destroy the new shadow, provided we already have an old one. */
+		sckpt_old = slsp->slsp_sckpt;
+		if (sckpt_old != NULL)
+			slsckpt_destroy(sckpt_data);
+		else 
+			slsp->slsp_sckpt = sckpt_data;
+		break;
 
 	default:
-	    panic("invalid mode %d\n", slsp->slsp_attr.attr_mode);
+		panic("invalid mode %d\n", slsp->slsp_attr.attr_mode);
 	}
 
 	SDT_PROBE0(sls, , , dedup);
@@ -376,7 +376,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 error:
 	/* Undo existing VM object tree modifications. */
 	if (sckpt_data != NULL)
-	    slsckpt_destroy(sckpt_data);
+		slsckpt_destroy(sckpt_data);
 
 	return (error);
 }
@@ -391,37 +391,37 @@ slsckpt_gather_processes(struct slspart *slsp, slsset *procset)
 	int error;
 
 	KVSET_FOREACH(slsp->slsp_procs, iter, pid) {
-	    /* Remove the PID of the unavailable process from the set. */
-	    if (deadpid != 0) {
-		slsp_detach(slsp->slsp_oid, deadpid);
-		deadpid = 0;
-	    }
+		/* Remove the PID of the unavailable process from the set. */
+		if (deadpid != 0) {
+			slsp_detach(slsp->slsp_oid, deadpid);
+			deadpid = 0;
+		}
 
-	    /* Does the process still exist? */
-	    error = pget(pid, PGET_WANTREAD, &p);
-	    if (error != 0) {
-		deadpid = pid;
-		continue;
-	    }
+		/* Does the process still exist? */
+		error = pget(pid, PGET_WANTREAD, &p);
+		if (error != 0) {
+			deadpid = pid;
+			continue;
+		}
 
-	    /* Is the process exiting? */
-	    if (!SLS_RUNNABLE(p, slsp)) {
-		PRELE(p);
-		deadpid = pid;
-		continue;
-	    }
+		/* Is the process exiting? */
+		if (!SLS_RUNNABLE(p, slsp)) {
+			PRELE(p);
+			deadpid = pid;
+			continue;
+		}
 
-	    /* Add it to the set of processes to be checkpointed. */
-	    error = slsset_add_unlocked(procset, (uint64_t) p);
-	    if (error != 0) {
-		KV_ABORT(iter);
-		return (error);
-	    }
+		/* Add it to the set of processes to be checkpointed. */
+		error = slsset_add_unlocked(procset, (uint64_t) p);
+		if (error != 0) {
+			KV_ABORT(iter);
+			return (error);
+		}
 	}
 
 	/* Cleanup any leftover dead PIDs. */
 	if (deadpid != 0)
-	    slsp_detach(slsp->slsp_oid, deadpid);
+		slsp_detach(slsp->slsp_oid, deadpid);
 
 	return (0);
 }
@@ -441,24 +441,24 @@ slsckpt_gather_children_once(slsset *procset, int *new_procs)
 	new_procs = 0;
 
 	KVSET_FOREACH(procset, iter, p) {
-	    /* Check for new children. */
-	    LIST_FOREACH(pchild, &p->p_children, p_sibling) {
-		if (slsset_find_unlocked(procset, (uint64_t) pchild) != 0) {
-		    /* We found a child that didn't exist before. */
-		    if (!SLS_PROCALIVE(pchild))
-			continue;
+		/* Check for new children. */
+		LIST_FOREACH(pchild, &p->p_children, p_sibling) {
+			if (slsset_find_unlocked(procset, (uint64_t) pchild) != 0) {
+				/* We found a child that didn't exist before. */
+				if (!SLS_PROCALIVE(pchild))
+					continue;
 
-		    new_procs += 1;
+				new_procs += 1;
 
-		    PHOLD(pchild);
-		    error = slsset_add_unlocked(procset, (uint64_t) pchild);
-		    if (error != 0) {
-			KV_ABORT(iter);
-			return (error);
-		    }
+				PHOLD(pchild);
+				error = slsset_add_unlocked(procset, (uint64_t) pchild);
+				if (error != 0) {
+					KV_ABORT(iter);
+					return (error);
+				}
 
+			}
 		}
-	    }
 	}
 
 	return (0);
@@ -472,9 +472,9 @@ slsckpt_gather_children(slsset *procset)
 	int error;
 
 	do {
-	    error = slsckpt_gather_children_once(procset, &new_procs);
-	    if (error != 0)
-		return (error);
+		error = slsckpt_gather_children_once(procset, &new_procs);
+		if (error != 0)
+			return (error);
 	} while (new_procs > 0);
 
 	return (0);
@@ -499,76 +499,76 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	/* Check if the partition is available for checkpointing. */
 
 	if (atomic_cmpset_int(&slsp->slsp_status, SPROC_AVAILABLE,
-		    SPROC_CHECKPOINTING) == 0) {
-	    ckpt_attempted += 1;
-	    printf("Overlapping checkpoints\n");
-	    SLS_DBG("Partition %ld in state %d\n", slsp->slsp_oid, slsp->slsp_status);
-	    goto out;
+	    SPROC_CHECKPOINTING) == 0) {
+		ckpt_attempted += 1;
+		printf("Overlapping checkpoints\n");
+		SLS_DBG("Partition %ld in state %d\n", slsp->slsp_oid, slsp->slsp_status);
+		goto out;
 	}
 
 	/* The set of processes we are going to checkpoint. */
 	error = slsset_create(&procset);
 	if (error != 0) {
-	    ckpt_attempted += 1;
-	    goto out;
+		ckpt_attempted += 1;
+		goto out;
 	}
 
 	for (;;) {
-	    ckpt_attempted += 1;
-	    /* Check if the partition got detached from the SLS. */
-	    if (slsp->slsp_status != SPROC_CHECKPOINTING)
-		break;
+		ckpt_attempted += 1;
+		/* Check if the partition got detached from the SLS. */
+		if (slsp->slsp_status != SPROC_CHECKPOINTING)
+			break;
 
-	    /* Gather all processes still running. */
-	    error = slsckpt_gather_processes(slsp, procset);
-	    if (error != 0)
-		break;
-
-	    nanotime(&tstart);
-
-	    if (slsp_isempty(slsp))
-		break;
-
-	    /* 
-	     * If we recursively checkpoint, we don't actually enter the children
-	     * into the SLS permanently, but only checkpoint them in this iteration.
-	     * This only matters if the parent dies, in which case the children will
-	     * not be checkpointed anymore; this makes sense because we mainly want
-	     * the children because they might be part of the state of the parent,
-	     * if we actually care about them we can add them to the SLS.
-	     */
-
-	    /* If we're not recursively checkpointing, abort the search. */
-	    if (args->recurse != 0) {
-		error = slsckpt_gather_children(procset);
+		/* Gather all processes still running. */
+		error = slsckpt_gather_processes(slsp, procset);
 		if (error != 0)
-		    break;
-	    }
+			break;
 
-	    SDT_PROBE0(sls, , , start);
-	    slsckpt_stop(procset);
-	    SDT_PROBE0(sls, , , stopped);
+		nanotime(&tstart);
 
-	    /* Checkpoint the process once. */
-	    ckpt_done += 1;
-	    sls_checkpoint(procset, slsp);
-	    nanotime(&tend);
+		if (slsp_isempty(slsp))
+			break;
 
-	    /* Release all checkpointed processes. */
-	    KVSET_FOREACH_POP(procset, p)
-		PRELE(p);
+		/* 
+		 * If we recursively checkpoint, we don't actually enter the children
+		 * into the SLS permanently, but only checkpoint them in this iteration.
+		 * This only matters if the parent dies, in which case the children will
+		 * not be checkpointed anymore; this makes sense because we mainly want
+		 * the children because they might be part of the state of the parent,
+		 * if we actually care about them we can add them to the SLS.
+		 */
 
-	    /* If the interval is 0, checkpointing is non-periodic. Finish up. */
-	    if (slsp->slsp_attr.attr_period == 0)
-		break;
+		/* If we're not recursively checkpointing, abort the search. */
+		if (args->recurse != 0) {
+			error = slsckpt_gather_children(procset);
+			if (error != 0)
+				break;
+		}
 
-	    /* Else compute how long we need to wait until we need to checkpoint again. */
-	    msec_elapsed = (TONANO(tend) - TONANO(tstart)) / (1000 * 1000);
-	    msec_left = slsp->slsp_attr.attr_period - msec_elapsed;
-	    if (msec_left > 0)
-		pause_sbt("slscpt", SBT_1MS * msec_left, 0, C_HARDCLOCK | C_CATCH);
+		SDT_PROBE0(sls, , , start);
+		slsckpt_stop(procset);
+		SDT_PROBE0(sls, , , stopped);
 
-	    SLS_DBG("Woke up\n");
+		/* Checkpoint the process once. */
+		ckpt_done += 1;
+		sls_checkpoint(procset, slsp);
+		nanotime(&tend);
+
+		/* Release all checkpointed processes. */
+		KVSET_FOREACH_POP(procset, p)
+		    PRELE(p);
+
+		/* If the interval is 0, checkpointing is non-periodic. Finish up. */
+		if (slsp->slsp_attr.attr_period == 0)
+			break;
+
+		/* Else compute how long we need to wait until we need to checkpoint again. */
+		msec_elapsed = (TONANO(tend) - TONANO(tstart)) / (1000 * 1000);
+		msec_left = slsp->slsp_attr.attr_period - msec_elapsed;
+		if (msec_left > 0)
+			pause_sbt("slscpt", SBT_1MS * msec_left, 0, C_HARDCLOCK | C_CATCH);
+
+		SLS_DBG("Woke up\n");
 	}
 
 	/*
@@ -587,10 +587,10 @@ out:
 	slsp_deref(slsp);
 
 	if (procset != NULL) {
-	    /* Release any process references gained. */
-	    KVSET_FOREACH_POP(procset, p)
-		PRELE(p);
-	    slskv_destroy(procset);
+		/* Release any process references gained. */
+		KVSET_FOREACH_POP(procset, p)
+		    PRELE(p);
+		slskv_destroy(procset);
 	}
 
 	/* Free the arguments passed to the kthread. */
