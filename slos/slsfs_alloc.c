@@ -122,9 +122,9 @@ slsfs_allocator_init(struct slos *slos)
 
 	// We just have to readjust the elements in the btree since we are not
 	// using them for the same purpose of keeping track of data
-	fbtree_init(slos->slsfs_dev, offt->sn_tree.bt_root, sizeof(uint64_t), sizeof(uint64_t),
+	fbtree_init(offt->sn_fdev, offt->sn_tree.bt_root, sizeof(uint64_t), sizeof(uint64_t),
 	    &uint64_t_comp, "Off Tree", 0, OTREE(slos));
-	fbtree_init(slos->slsfs_dev, sizet->sn_tree.bt_root, sizeof(uint64_t), sizeof(uint64_t),
+	fbtree_init(sizet->sn_fdev, sizet->sn_tree.bt_root, sizeof(uint64_t), sizeof(uint64_t),
 	    &uint64_t_comp, "Size Tree", 0, STREE(slos));
 
 	// New tree add the initial amount allocations.  Im just making some

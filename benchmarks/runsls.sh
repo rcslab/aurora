@@ -14,7 +14,7 @@ for entry in `ls *.f`
 do
 	gstripe destroy st0
 	setup_stripe.sh
-	#gstripe create -s 65536 -v st0 nvd0 nvd1 nvd2 nvd3 nvd4
+	#gstripe create -s 65536 -v st0 nvd0 nvd1 nvd2 nvd3
 
 	../../tools/newosd/newosd $DRIVE
 	kldload ../../slos/slos.ko

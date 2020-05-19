@@ -175,9 +175,31 @@ slos_readino(struct slos *slos, uint64_t pid, struct slos_inode *ino)
 	return (0);
 }
 
+static int
+slos_setupfakedev(struct slos *slos, struct slos_node *vp)
+{
+	struct vnode *devvp;
+	int error;
+
+	error = getnewvnode("SLSFS Fake VNode", slos->slsfs_mount, &sls_vnodeops, &vp->sn_fdev);
+	if (error) {
+		panic("Problem getting fake vnode for device\n");
+	}
+
+	devvp = vp->sn_fdev;
+	/* Set up the necessary backend state to be able to do IOs to the device. */
+	devvp->v_bufobj.bo_ops = &bufops_slsfs;
+	devvp->v_bufobj.bo_bsize = slos->slos_sb->sb_bsize;
+	devvp->v_type = VCHR;
+	devvp->v_data = slos;
+	devvp->v_vflag |= VV_SYSTEM;
+
+	return (0);
+}
+
 /* Read an existing node into the buffer cache. */
 int
-slos_newnode(struct slos* slos, uint64_t pid, struct slos_node **vpp)
+slos_newnode(struct slos *slos, uint64_t pid, struct slos_node **vpp)
 {
 	int error;
 	struct slos_node *vp;
@@ -203,7 +225,12 @@ slos_newnode(struct slos* slos, uint64_t pid, struct slos_node **vpp)
 	vp->sn_status = SLOS_VALIVE;
 	vp->sn_refcnt = 0;
 
-	fbtree_init(slos->slsfs_dev, vp->sn_ino.ino_btree.offset, sizeof(uint64_t), 
+	error = slos_setupfakedev(slos, vp);
+	if (error) {
+		panic("Issue creating fake device");
+	}
+
+	fbtree_init(vp->sn_fdev, vp->sn_ino.ino_btree.offset, sizeof(uint64_t), 
 	    sizeof(diskptr_t), &compare_vnode_t, "Vnode Tree", 0, &vp->sn_tree);
 
 	*vpp = vp;
@@ -248,7 +275,12 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 	/* The refcount will be incremented by the caller. */
 	vp->sn_refcnt = 0;
 
-	fbtree_init(slos->slsfs_dev, ino->ino_btree.offset, sizeof(uint64_t),
+	error = slos_setupfakedev(slos, vp);
+	if (error) {
+		panic("Issue creating fake device");
+	}
+
+	fbtree_init(vp->sn_fdev, ino->ino_btree.offset, sizeof(uint64_t),
 	    sizeof(diskptr_t), &compare_vnode_t, "VNode Tree", 0, &vp->sn_tree);
 
 	free(ino, M_SLOS_INO);
@@ -294,7 +326,7 @@ slos_vpexport(struct slos *slos, struct slos_node *vp)
 void
 slos_vpfree(struct slos *slos, struct slos_node *vp)
 {
-
+	fbtree_destroy(&vp->sn_tree);
 	uma_zfree(slos_node_zone, vp);
 }
 
@@ -303,7 +335,6 @@ int
 slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 {
 	int error;
-	struct buf *bp;
 	struct timespec tv;
 	struct fnode_iter iter;
 	struct slos_inode ino;
@@ -316,18 +347,18 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 	size_t blksize = IOSIZE(svp);
 
 	// For now we will use the blkno for our pids
+	VOP_LOCK(root_vp, LK_EXCLUSIVE);
 	error = slsfs_lookupbln(svp, pid, &iter);
 	if (error) {
 		return (error);
 	}
+	VOP_UNLOCK(root_vp, LK_EXCLUSIVE);
 
-	VOP_LOCK(root_vp, LK_EXCLUSIVE);
 	if (ITER_ISNULL(iter) || ITER_KEY_T(iter, uint64_t) != pid) {
 		ITER_RELEASE(iter);
 	} else {
 		ITER_RELEASE(iter);
-		VOP_UNLOCK(root_vp, 0);
-                DBUG("Failed to create inode %lx\n", pid);
+		DBUG("Failed to create inode %lx\n", pid);
 		return EINVAL;
 	}
 
@@ -357,14 +388,8 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 		return (error);
 	}
 	ino.ino_btree = ptr;
+	VOP_LOCK(root_vp, LK_EXCLUSIVE);
 	VOP_WRITE(root_vp, &io, 0, NULL);
-
-	bp = getblk(slos->slsfs_dev, ptr.offset, BLKSIZE(slos), 0, 0, 0);
-	if (error) {
-		return (error);
-	}
-	vfs_bio_clrbuf(bp);
-	bqrelse(bp);
 	VOP_UNLOCK(root_vp, 0);
 
 	// We will use this private pointer as a way to change this ino with 
@@ -438,7 +463,9 @@ struct slos_node *
 slos_iopen(struct slos *slos, uint64_t pid)
 {
 	int error;
+	struct vnode *fdev;
 	struct slos_node *vp = NULL;
+	struct buf *bp;
 
 	DBUG("Opening Inode %lx\n", pid);
 
@@ -463,6 +490,18 @@ slos_iopen(struct slos *slos, uint64_t pid)
 			return NULL;
 		}
 	}
+	if (vp->sn_ino.ino_blk == -1) {
+		fdev = vp->sn_fdev;
+		bp = getblk(fdev, vp->sn_ino.ino_btree.offset, BLKSIZE(slos), 0, 0, 0);
+		if (bp == NULL) {
+			panic("uh oh - could not get fake device block");
+		}
+		bzero(bp->b_data, bp->b_bcount);
+		bp->b_flags |= B_MANAGED;
+		bawrite(bp);
+		vp->sn_ino.ino_blk = 0;
+	}
+
 	DBUG("Opened Inode %lx\n", pid);
 
 	return (vp); 
@@ -478,6 +517,7 @@ slos_updatetime(struct slos_node *svp)
 
 	mtx_lock(&svp->sn_mtx);
 
+	svp->sn_status |= SLOS_DIRTY;
 	ino = &svp->sn_ino;
 
 	vfs_timestamp(&ts);
@@ -499,6 +539,7 @@ slos_updateroot(struct slos_node *svp)
 	struct buf *bp;
 
 	VOP_LOCK(slos.slsfs_inodes, LK_EXCLUSIVE);
+	DBUG("Updating root\n");
 
 	error = slsfs_bread(slos.slsfs_inodes, svp->sn_pid, IOSIZE(svp), NULL, &bp);
 	if (error) {

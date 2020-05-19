@@ -74,7 +74,6 @@ struct slos {
 	SLIST_ENTRY(slos)	next_slos;
 
 	struct vnode		*slos_vp;	/* The vnode for the disk device */
-	struct vnode		*slsfs_dev;
 	struct vnode		*slsfs_inodes;
 
 	uint64_t		slsfs_dirtybufcnt;

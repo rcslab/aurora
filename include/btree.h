@@ -6,6 +6,8 @@
 #include <sys/vnode.h>
 #include <sys/mutex.h>
 #include <sys/queue.h>
+#include <sys/pctrie.h>
+#include <sys/bufobj.h>
 #include <slos.h>
 #include <slsfs.h>
 
@@ -17,7 +19,6 @@ typedef uint32_t fb_valsize;
 
 #define BT_INTERNAL 0x1
 #define ROOTCHANGE (256)
-#define INTERNALSPLIT (257)
 
 extern uma_zone_t fnodes_zone;
 
@@ -74,12 +75,6 @@ struct alloc_d {
  * Allocation state is held in the first block of the file, this is just a 
  * simple ordered free list.
  */
-
-struct buflist {
-    struct buf *l_buf;
-    LIST_ENTRY(buflist) l_entry;
-};
-
 struct fbtree {
 	struct vnode	*bt_backend;	/* The vnode representing our backend */
 	fb_keysize	bt_keysize;	/* Size of keys */
@@ -98,7 +93,6 @@ struct fbtree {
 	void		*bt_hash;
 	u_long		bt_hashmask;
 
-	LIST_HEAD(dirtybuf, buflist) bt_dirtybuf;
 	size_t		bt_dirtybuf_cnt;
 
 	compare_t	comp;

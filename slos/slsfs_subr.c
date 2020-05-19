@@ -27,6 +27,10 @@
 #include "slsfs_dir.h"
 #include "slsfs_buf.h"
 
+#define SYNCERR (-1)
+#define DONE (0)
+#define DIRTY (1)
+
 struct buf_ops bufops_slsfs = {
 	.bop_name	=   "slsfs_bufops",
 	.bop_strategy	=   slsfs_bufstrategy,
@@ -135,55 +139,8 @@ int
 slsfs_truncate(struct vnode *vp, size_t size)
 {
 	struct bufobj *bo;
-	struct buf *bp, *nbp;
-
 	bo = &vp->v_bufobj;
-	DBUG("TRUNCATING to size %lu\n", size);
-
-restart:
-	BO_LOCK(bo);
-
-restart_locked:
-	/* Remove any clean buffers from the vnode's lists. */
-	TAILQ_FOREACH_SAFE(bp, &bo->bo_clean.bv_hd, b_bobufs, nbp) {
-		if (BUF_LOCK(bp, LK_EXCLUSIVE | LK_NOWAIT, NULL))
-			goto restart_locked;
-
-		bremfree(bp);
-		bp->b_flags |= (B_INVAL | B_RELBUF);
-		bp->b_flags &= ~(B_ASYNC | B_MANAGED);
-
-		BO_UNLOCK(bo);
-		brelse(bp);
-		BO_LOCK(bo);
-	}
-
-	/* Flush any dirty buffers held by the vnode. */
-	TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, nbp) {
-		if (BUF_LOCK(bp,
-		    LK_EXCLUSIVE | LK_SLEEPFAIL | LK_INTERLOCK,
-		    BO_LOCKPTR(bo)) == ENOLCK)
-			goto restart;
-
-		bp->b_flags |= (B_INVAL | B_RELBUF);
-		bp->b_flags &= ~(B_ASYNC | B_MANAGED);
-		brelse(bp);
-
-		if (atomic_load_64(&slos.slsfs_dirtybufcnt)) {
-			atomic_subtract_64(&slos.slsfs_dirtybufcnt, 1);
-		}
-
-		BO_LOCK(bo);
-	}
-
-	/*
-	 * XXX Where does the actual truncation take place? For example, the
-	 * size argument of this function never gets used.
-	 */
-
-	BO_UNLOCK(bo);
-
-	return (0);
+	return bufobj_invalbuf(bo, 0, 0, 0);
 }
 
 /* Flush a vnode's data to the disk. */
@@ -193,7 +150,7 @@ slsfs_sync_vp(struct vnode *vp)
 	struct slos *slos = SLSVP(vp)->sn_slos;
 	struct bufobj *bo = &vp->v_bufobj;
 	struct buf *bp, *tbd;
-	int error;
+	struct vnode *fvp = SLSVP(vp)->sn_fdev;
 
 	/*
 	 * XXX Do we assume we have the vnode lock? If so
@@ -210,6 +167,7 @@ slsfs_sync_vp(struct vnode *vp)
 	}
 	BO_UNLOCK(bo);
 
+	slsfs_sync_dev(fvp);
 	/*
 	 * Trying to update the time on the vnode holding the inodes
 	 * dirties it which means we have to sync it to disk again,
@@ -219,11 +177,6 @@ slsfs_sync_vp(struct vnode *vp)
 	if (vp == slos->slsfs_inodes)
 		return (0);
 
-	/* Update the last modified timestamps for the vnode. */
-	error = slos_updatetime(SLSVP(vp));
-	if (error != 0)
-		return (error);
-
 	return (0);
 }
 
@@ -231,18 +184,18 @@ slsfs_sync_vp(struct vnode *vp)
  * Flush out the dirty buffers of the device backing the given SLOS.
  */
 int
-slsfs_sync_dev(struct slos *slos)
+slsfs_sync_dev(struct vnode *vp)
 {
 	struct buf *bp, *tbd;
-	struct bufobj *bo = &slos->slsfs_dev->v_bufobj;
+	struct bufobj *bo = &vp->v_bufobj;
 
 	TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
 		if (BUF_LOCK(bp, LK_EXCLUSIVE | LK_SLEEPFAIL, NULL)) {
 			continue;
 		}
+		DBUG("Syncing device buffer %p\n", bp);
 		slsfs_bundirty(bp);
 	}
-
 	return (0);
 }
 
@@ -284,7 +237,7 @@ slsfs_bufstrategy(struct bufobj *bo, struct buf *bp)
 	vp = bp->b_vp;
 	// The device is a VCHR but we still want to use vop strategy on it
 	// This is to allow us to bypass using BMAP operations on the vnode
-	KASSERT(vp->v_type != VCHR || vp == slos.slsfs_dev, ("Wrong vnode in buf strategy"));
+	KASSERT(vp->v_type != VCHR || (vp->v_vflag & VV_SYSTEM), ("Wrong vnode in buf strategy %p", vp));
 	error  = VOP_STRATEGY(vp, bp);
 	KASSERT(error == 0, ("VOP_STRATEGY failed"));
 }

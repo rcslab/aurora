@@ -17,6 +17,7 @@ struct btree;
 #define SLOS_VALIVE	(0x1)
 #define SLOS_VDEAD	(0x10)
 #define SLOS_RENAME	(0x100)
+#define SLOS_DIRTY	(0x1000)
 
 #define SVPBLK(svp) (svp->sn_slos->slos_sb->sb_bsize);
 #define INUM(node) (node->sn_ino->ino_pid);
@@ -74,6 +75,8 @@ struct slos_node {
 	struct mtx		sn_mtx;			/* vnode mutex */
 	struct slos_inode	sn_ino;			/* On disk representation of the slos */
 	struct slos		*sn_slos;		/* Slos the node belong to */
+
+	struct vnode		*sn_fdev;		/* Fake vnode for btree back */
 };
 
 /* Inode flags */

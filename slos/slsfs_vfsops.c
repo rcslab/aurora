@@ -25,6 +25,7 @@
 #include <sys/proc.h>
 #include <sys/systm.h>
 #include <sys/taskqueue.h>
+#include <sys/pctrie.h>
 
 #include <geom/geom.h>
 #include <geom/geom_vfs.h>
@@ -56,6 +57,7 @@ static vfs_root_t	slsfs_root;
 static vfs_statfs_t	slsfs_statfs;
 static vfs_vget_t	slsfs_vget;
 static vfs_sync_t	slsfs_sync;
+
 extern struct buf_ops bufops_slsfs;
 
 static const char *slsfs_opts[] = { "from" };
@@ -448,25 +450,8 @@ slsfs_create_slos(struct mount *mp, struct vnode *devvp)
 
 	devvp->v_data = &slos;
 
-	// This is all quite hacky just to get it working though
-	/* Get a vnode for the device. XXX Is this for direct IOs? */
-	error = getnewvnode("SLSFS Fake VNode", mp, &sls_vnodeops, &slos.slsfs_dev);
-	if (error) {
-		printf("Problem getting fake vnode for device\n");
-		return (error);
-	}
-
-	/* Set up the necessary backend state to be able to do IOs to the device. */
-	DBUG("Blocksize %lu\n", slos.slos_sb->sb_bsize);
-	slos.slsfs_dev->v_bufobj.bo_ops = &bufops_slsfs;
-	slos.slsfs_dev->v_bufobj.bo_bsize = slos.slos_sb->sb_bsize;
-	DBUG("OldType %x\n", slos.slsfs_dev->v_type);
-	slos.slsfs_dev->v_type = VCHR;
-	slos.slsfs_dev->v_data = &slos;
-	slos.slsfs_dev->v_vflag |= VV_SYSTEM;
-
-	DBUG("Setup Fake Device\n");
-	/* Initialize in memory the allocator and the vnode used for inode bookkeeping. */
+	/* Initialize in memory the allocator and the vnode used for inode 
+	 * bookkeeping. */
 	slsfs_allocator_init(&slos);
 	slsfs_inodes_init(mp, &slos);
 	VOP_UNLOCK(slos.slos_vp, 0);
@@ -638,7 +623,7 @@ slsfs_checkpoint(struct mount *mp)
 	struct vnode *vp, *mvp;
 	struct thread *td;
 	struct bufobj *bo;
-	int error;
+	int error, dirty;
 
 	td = curthread;
 	/* Go throught the list of vnodes attached to the filesystem. */
@@ -661,16 +646,22 @@ slsfs_checkpoint(struct mount *mp)
 		// abstraction, meaning make a fake inode and fake slos_node
 		// for it as well.
 		/* Only sync the vnode if it has been dirtied. */
-		if (bo->bo_dirty.bv_cnt) {
-			/* XXX Why return on an error? We should keep going 
-			 * with the rest. */
-			error = slsfs_sync_vp(vp);
-			if (error) {
+		/* XXX Why return on an error? We should keep going with the 
+		 * rest. */
+		if ((vp->v_vflag & VV_SYSTEM) || ((vp->v_type != VDIR) && (vp->v_type != VREG))) {
+			vput(vp);
+			continue;
+		}
+		if (SLSVP(vp)->sn_status & SLOS_DIRTY) {
+			dirty = slsfs_sync_vp(vp);
+			if (dirty == -1) {
 				vput(vp);
 				return;
 			}
 
 			/* Update the inode root with the inode's new information. */
+			DBUG("Updating root\n");
+			SLSVP(vp)->sn_status &= ~(SLOS_DIRTY);
 			error = slos_updateroot(SLSVP(vp));
 			if (error) {
 				vput(vp);
@@ -691,13 +682,6 @@ slsfs_checkpoint(struct mount *mp)
 
 	// Just a hack for now to get this thing working XXX Same
 	/* Sync any raw device buffers. */
-	VOP_LOCK(slos.slsfs_dev, LK_EXCLUSIVE);
-	error = slsfs_sync_dev(&slos);
-	if (error) {
-		VOP_UNLOCK(slos.slsfs_dev, 0);
-		return;
-	}
-	VOP_UNLOCK(slos.slsfs_dev, 0);
 }
 
 /*
@@ -793,6 +777,12 @@ slsfs_init_fs(struct mount *mp)
 		vput(svp);
 	}
 
+	/* FOR BTREE TESTING
+	struct vnode *test;
+	SLS_VALLOC(vp, 0, NULL, &test);
+	fbtree_test(&SLSVP(test)->sn_tree);
+	panic("test done");
+	*/
 	vput(vp);
 
 	return (0);
@@ -860,8 +850,6 @@ slsfs_mount(struct mount *mp)
 
 	/* Get the path where we found the device. */
 	vfs_mountedfrom(mp, from);
-
-	//vmobjecttest(&slos);
 	return (0);
 }
 
@@ -934,9 +922,7 @@ slsfs_unmount_device(struct slsfs_device *sdev)
 
 	/* Destroy related in-memory locks. */
 	lockdestroy(&slos.slos_lock);
-	vnode_destroy_vobject(slos.slsfs_dev);
 
-	slos.slsfs_dev = NULL;
 	free(slos.slos_sb, M_SLOS_SB);
 
 	/* Destroy the device. */
@@ -1079,7 +1065,6 @@ slsfs_init_vnode(struct vnode *vp, uint64_t ino)
 		vp->v_vflag |= VV_ROOT;
 	} else if (ino == SLOS_INODES_ROOT) {
 		vp->v_type = VREG;
-		vp->v_vflag |= VV_SYSTEM;
 	} else {
 		vp->v_type = IFTOVT(mp->sn_ino.ino_mode);
 	}

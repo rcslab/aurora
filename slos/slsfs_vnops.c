@@ -101,7 +101,7 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 
 	DBUG("Reclaiming vnode %p\n", vp);
 
-	if (vp == slos.slsfs_dev || vp == slos.slsfs_inodes) {
+	if (vp == slos.slsfs_inodes) {
 		DBUG("Special vnode trying to be reclaimed\n");
 	}
 
@@ -110,7 +110,7 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 	vp->v_data = NULL;
 	cache_purge(vp);
 	vnode_destroy_vobject(vp);
-	if (vp !=  slos.slsfs_dev) {
+	if (vp->v_vflag & VV_SYSTEM) {
 		vfs_hash_remove(vp);
 	}
 	DBUG("Done reclaiming vnode %p\n", vp);
@@ -186,7 +186,7 @@ slsfs_readdir(struct vop_readdir_args *args)
 		return (ENOTDIR);
 	}
 
-	DBUG("READING DIRECTORY\n");
+	DBUG("READING DIRECTORY %lu\n", filesize);
 	if ((io->uio_offset < filesize) &&
 	    (io->uio_resid >= sizeof(struct dirent)))
 	{
@@ -253,8 +253,6 @@ slsfs_readdir(struct vop_readdir_args *args)
 static int
 slsfs_close(struct vop_close_args *args)
 {
-	
-	DBUG("close\n");
 	return (0);
 }
 
@@ -500,12 +498,11 @@ slsfs_write(struct vop_write_args *args)
 
 	struct vnode *vp = args->a_vp;
 	struct slos_node *svp = SLSVP(vp);
-	struct slos_inode *sivp = &SLSINO(svp);
 	size_t blksize = IOSIZE(svp);
 	struct uio *uio = args->a_uio;
 	int ioflag = args->a_ioflag;
 
-	filesize =  sivp->ino_size;
+	filesize =  svp->sn_ino.ino_size;
 
 	// Check if full
 	if (uio->uio_offset < 0) {
@@ -532,8 +529,8 @@ slsfs_write(struct vop_write_args *args)
 	}
 
 	if (uio->uio_offset + uio->uio_resid > filesize)  {
-		sivp->ino_size = uio->uio_offset + uio->uio_resid;
-		vnode_pager_setsize(vp, sivp->ino_size);
+		svp->sn_ino.ino_size = uio->uio_offset + uio->uio_resid;
+		vnode_pager_setsize(vp, svp->sn_ino.ino_size);
 	}
 
 	int modified = 0;
@@ -568,6 +565,10 @@ slsfs_write(struct vop_write_args *args)
 		 */
 		slsfs_bdirty(bp);
 		modified++;
+	}
+	
+	if (modified) {
+		svp->sn_status |= SLOS_DIRTY;
 	}
 
 	return (error);
@@ -610,6 +611,7 @@ slsfs_read(struct vop_read_args *args)
 		panic("bad file type");
 	}
 
+	DBUG("Reading filesize %lu - %lu\n", SLSVP(vp)->sn_pid, filesize);
 	if (uio->uio_offset >= filesize) {
 		return (0);
 	}
@@ -722,7 +724,7 @@ slsfs_strategy(struct vop_strategy_args *args)
 	struct fnode_iter iter;
 
         CTR2(KTR_SPARE5, "slsfs_strategy vp=%p blkno=%x\n", vp, bp->b_lblkno);
-	if (vp != slos.slsfs_dev) {
+	if (vp->v_type != VCHR) {
 		KASSERT(bp->b_lblkno != (-1), 
 			("No logical block number should be -1 - vnode effect %lu", 
 			 SLSVP(vp)->sn_pid));
@@ -775,10 +777,17 @@ slsfs_strategy(struct vop_strategy_args *args)
 		SDT_PROBE3(slos, , , slsfs_deviceblk, bp->b_blkno, bp->b_bufobj->bo_bsize, change);
 	}
 
-	KASSERT(bp->b_blkno != 0, ("Fucking die"));
+	KASSERT(bp->b_blkno != 0, ("Fucking die %p - %p", bp, vp));
 	int change =  bp->b_bufobj->bo_bsize / slos.slos_vp->v_bufobj.bo_bsize;
 	bp->b_blkno = bp->b_blkno * change;
 	bp->b_iooffset = dbtob(bp->b_blkno);
+	/* FOR BETTER BUF TRACKING
+	if (bp->b_iocmd == BIO_WRITE) {
+		DBUG("BIOWRITE : bp(%p), vp(%p:%lu) - %lu:%lu, %lu\n", bp, vp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno, bp->b_iooffset);
+	} else {
+		DBUG("BIOREAD : bp(%p), vp(%p:%lu) - %lu:%lu, %lu\n", bp, vp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno, bp->b_iooffset);
+	}
+	*/
 
 	g_vfs_strategy(&slos.slos_vp->v_bufobj, bp);
 

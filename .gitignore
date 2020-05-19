@@ -64,3 +64,8 @@ slsfifo
 slssysvshm
 .clangd
 .ccls-cache
+dd.sh
+load.sh
+sky.sk
+sls.sh
+unload.sh

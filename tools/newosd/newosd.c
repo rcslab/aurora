@@ -33,6 +33,7 @@ struct bnode *broot;
 #define SZROOTBLK   2
 #define BKTBLK	    3
 
+
 /* Used in init_bnode below. */
 #define max(a, b) (((a) > (b)) ? (a) : (b))
 

@@ -98,11 +98,13 @@ slsfs_bread(struct vnode *vp, uint64_t lbn, size_t size, struct ucred *cred, str
 void
 slsfs_bdirty(struct buf *buf)
 {
-	/*
-	 * This B_MANAGED tells the buffer cache to not release our buffer to
-	 * any queue when using bqrelse or brelse.  To be able to invalidate or
-	 * fully release a buffer, this flag must be unset.
-	 */
+	// If we are dirtying a buf thats already que'd for a write we should
+	// not signal another bawrite as the system will panic wondering why we 
+	if (buf->b_flags & B_DELWRI) {
+		bqrelse(buf);
+		return;
+	}
+
 	buf->b_flags |= B_CLUSTEROK;
 
         /* Be aggressive and start the IO immediately. */
@@ -119,9 +121,8 @@ slsfs_bdirty(struct buf *buf)
 int
 slsfs_bundirty(struct buf *buf)
 {
-	buf->b_flags &= ~(B_INVAL | B_CACHE | B_MANAGED);
-	buf->b_flags |= B_REMFREE;
-
+	buf->b_flags &= ~(B_INVAL | B_CACHE);
+	bremfree(buf);
 	return bwrite(buf);
 }
 

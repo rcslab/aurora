@@ -23,7 +23,7 @@
 # Use is subject to license terms.
 #
 set $dir=/testmnt
-set $filesize=2g
+set $filesize=1g
 set $iosize=64k
 set $nthreads=1
 set $workingset=0

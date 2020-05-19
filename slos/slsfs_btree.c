@@ -10,6 +10,8 @@
 #include <sys/lock.h>
 #include <sys/vnode.h>
 #include <sys/rwlock.h>
+#include <sys/bufobj.h>
+#include <sys/pctrie.h>
 #include <machine/atomic.h>
 
 #include "slosmm.h"
@@ -47,36 +49,19 @@ ftree_stats(struct fbtree *tree)
 }
 
 /*
- * Write out a tree node to disk.
+ * Write out a tree node to disk. This is a no-op as currently writes are 
+ * within the code where they need to be and if we need to change state based 
+ * on a write or release buf locks it can be done here. Currently buffers are 
+ * not locked as changes are required to be under the btree lock but if we need 
+ * a more concurrenty BTree then we will need to implement hand over hand 
+ * locking on the buffers themselves.
  */
 void
 fnode_write(struct fnode *node)
 {
-	struct fbtree *tree = node->fn_tree;
-	struct buflist *bl;
-
-	int found = 0;
-	/**
-	 * This is a feature currently not used - but didn't want to take it
-	 * out just yet.  This gives us the ability to track each dirty buf of
-	 * a specific btree.  This is because btrees are usuaully backed by the
-	 * same vnode backend.
-	 */
-	if (tree->bt_flags & FBT_TRACKBUF) {
-		LIST_FOREACH(bl, &tree->bt_dirtybuf, l_entry) {
-			if (bl->l_buf == node->fn_buf) {
-				found = 1;
-				break;
-			}
-		}
-
-		if (!found) {
-			bl = malloc(sizeof(struct buflist), M_SLOS, M_WAITOK);
-			bl->l_buf = node->fn_buf;
-			LIST_INSERT_HEAD(&tree->bt_dirtybuf, bl, l_entry);
-			tree->bt_dirtybuf_cnt++;
-		}
-	}
+	BUF_LOCK(node->fn_buf, LK_EXCLUSIVE, NULL);
+	bawrite(node->fn_buf);
+	return;
 }
 
 /*
@@ -118,7 +103,8 @@ void
 fnode_print(struct fnode *node)
 {
 	int i;
-	printf("%s - NODE: %lu, rightnode: %lu\n", node->fn_tree->bt_name, node->fn_location, node->fn_dnode->dn_rightnode);
+	printf("%s - NODE(%p): %lu, rightnode: %lu\n", node->fn_tree->bt_name, node, node->fn_location, node->fn_dnode->dn_rightnode);
+	printf("%u size\n", NODE_SIZE(node));
 	if (NODE_FLAGS(node) & BT_INTERNAL) {
 		bnode_ptr *p = fnode_getval(node, 0);
 		printf("| C %lu |", *p);
@@ -127,6 +113,15 @@ fnode_print(struct fnode *node)
 			uint64_t __unused *t = fnode_getkey(node, i);
 			printf("| K 0x%lx || C 0x%lx |", *t, *p);
 		}
+		printf("\nChild memory\n");
+		for (int i = 0; i <= NODE_SIZE(node); i++) {
+			if (node->fn_pointers[i] != NULL) {
+				struct fnode *n = (struct fnode *)node->fn_pointers[i];
+				printf("| node(%lu) |", n->fn_location);
+			} else {
+				printf("| NULL |");
+			}
+		}
 	} else {
 		for (i = 0; i < NODE_SIZE(node); i++) {
 			uint64_t *t = fnode_getkey(node, i);
@@ -134,13 +129,7 @@ fnode_print(struct fnode *node)
 			printf("| 0x%lx -> 0x%lx, 0x%lx |,", *t, v->offset, v->size);
 		}
 	}
-	if (!node->fn_right) {
-		fnode_right(node, &node->fn_right);
-	}
-	printf("\n");
-	if (node->fn_right != NULL) {
-		fnode_print(node->fn_right);
-	}
+	printf("\n\n");
 }
 
 /*
@@ -156,16 +145,16 @@ fnode_print(struct fnode *node)
  * bdwrite -> dirty the buffer to be synced on next checkpoint
  */
 static int
-fnode_getbufptr(struct vnode *vp, bnode_ptr ptr, struct buf **bp)
+fnode_getbufptr(struct fbtree *tree, bnode_ptr ptr, struct buf **bp)
 {
 	struct buf *buf;
 	int error;
 
-	struct slos *slos = (struct slos *)vp->v_data;
+	struct slos *slos = (struct slos *)tree->bt_backend->v_data;
 
 	CTR2(KTR_SPARE5, "fnode_getbufptr vp=%p ptr=%d", vp, ptr);
 	KASSERT(ptr != 0, ("Should never be 0"));
-	error = bread(vp, ptr, slos->slos_sb->sb_bsize, curthread->td_ucred, &buf);
+	error = bread(tree->bt_backend, ptr, slos->slos_sb->sb_bsize, curthread->td_ucred, &buf);
 	if (error) {
 		DBUG("Error reading block\n");
 		return (EIO);
@@ -179,19 +168,33 @@ fnode_getbufptr(struct vnode *vp, bnode_ptr ptr, struct buf **bp)
 int
 fnode_fetch(struct fnode *node, int index, struct fnode **next)
 {
-	bnode_ptr ptr;
+	bnode_ptr *ptr;
+	struct fnode *tmpnode;
+	int error = 0;
 	if (node->fn_pointers[index] == NULL) {
-		ptr = *(bnode_ptr *)fnode_getval(node, index);
-		if (ptr == 0) {
-			printf("%d index\n", index);
+		ptr = (bnode_ptr *)fnode_getval(node, index);
+		if (*ptr == 0) {
 			fnode_print(node);
 			panic("Should not be zero");
 		}
-		fnode_init(node->fn_tree, ptr, (struct fnode **)&node->fn_pointers[index]);
-	} 
+		error = fnode_init(node->fn_tree, *ptr, (struct fnode **)&node->fn_pointers[index]);
+		tmpnode = (struct fnode *)node->fn_pointers[index];
+		KASSERT(tmpnode->fn_location == *ptr, ("Should be equal new"));
+	}  else {
+		ptr = (bnode_ptr *)fnode_getval(node, index);
+		tmpnode = (struct fnode *)node->fn_pointers[index];
+		// This is a fallback just in case to get things running should 
+		// be looked at later
+		if (tmpnode->fn_location != *ptr) {
+			error = fnode_init(node->fn_tree, *ptr, (struct fnode **)&node->fn_pointers[index]);
+			tmpnode = (struct fnode *)node->fn_pointers[index];
+		}
+	}
 
-	*next = (struct fnode *)node->fn_pointers[index];
-	return (0);
+	// We have to do this cause the buffer may have been freed from under 
+	// us so we init to check initilize in case this has occured
+	*next = tmpnode;
+	return (error);
 }
 
 /*
@@ -207,6 +210,7 @@ fnode_follow(struct fnode *root, const void *key, struct fnode **node)
 	int index, start, end, mid, compare;
 
 	cur = root;
+	KASSERT(root->fn_inited, ("Should be inited for follow"));
 
 	while (NODE_FLAGS(cur) & BT_INTERNAL) {
 		// Linear search for now
@@ -218,7 +222,7 @@ fnode_follow(struct fnode *root, const void *key, struct fnode **node)
 				mid = (start + end) / 2;
 				keyt = fnode_getkey(cur, mid);
 				compare = NODE_COMPARE(cur, keyt, key);
-				if (compare <= 0) {
+				if (compare < 0) {
 					start = mid + 1;
 				} else {
 					index = mid;
@@ -233,14 +237,17 @@ fnode_follow(struct fnode *root, const void *key, struct fnode **node)
 			index = 0;
 		}
 
-		if (NODE_COMPARE(cur, fnode_getkey(cur, index), key) < 0) {
+		if (NODE_COMPARE(cur, fnode_getkey(cur, index), key) <= 0) {
 			index++;
 		}
-		/* Create an in-memory copy of the next bnode in the path. */
+		/* Create an in-memory copy of the next bnode in the path. We 
+		 * do not handle this currently so panicing */
 		error = fnode_fetch(cur, index, &next);
 		if (error != 0) {
-			break;
+			panic("Issue fetching\n");
 		}
+
+		KASSERT(next->fn_inited, ("Should be inited"));
 
 		/*
 		 * Lazily fix up erroneous parent pointers. This is
@@ -249,15 +256,13 @@ fnode_follow(struct fnode *root, const void *key, struct fnode **node)
 		 */
 		if (next->fn_dnode->dn_parent != cur->fn_location) {
 			next->fn_dnode->dn_parent = cur->fn_location;
-			next->fn_parent = cur;
 			fnode_write(next);
 		}
+		next->fn_parent = cur;
 
 		/* Prepare to traverse the next node. */
 		cur = next;
 	}
-
-	/* XXX This is going to trigger if we get an error in fnode_init */
 
 	*node = cur;
 	KASSERT((NODE_FLAGS(*node) & BT_INTERNAL) == 0, ("Node still internal\n"));
@@ -281,7 +286,6 @@ fbtree_init(struct vnode *backend, bnode_ptr ptr, fb_keysize keysize,
 	tree->bt_flags = flags;
 	strcpy(tree->bt_name, name);
 	tree->bt_dirtybuf_cnt = 0;
-	bzero(&tree->bt_dirtybuf, sizeof(tree->bt_dirtybuf));
 	tree->bt_rootnode = NULL;
 
 	if (!lock_initialized(&tree->bt_lock.lock_object)) {
@@ -356,6 +360,7 @@ fnode_keymin_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 	struct fnode *node;
 
 	// Follow catches if this is an external node or not
+	KASSERT(root->fn_inited, ("Should be inited"));
 	error = fnode_follow(root, key, &node);
 	if (error) {
 		return (error);
@@ -408,7 +413,9 @@ fnode_keymin(struct fnode *root, void *key, void *value)
 		return (error);
 	}
 
-	KASSERT(iter.it_index != (-1), ("Should find something - %lu - %p", *(uint64_t *)key, &iter.it_node));
+	if (ITER_ISNULL(iter)) {
+		return EINVAL;
+	}
 
 	/* Copy the pair out and release the node buffer. */
 	memcpy(value, ITER_VAL(iter), root->fn_tree->bt_valsize);
@@ -429,7 +436,6 @@ fbtree_keymin_iter(struct fbtree *tree, void *key, struct fnode_iter *iter)
 	error = fnode_init(tree, tree->bt_root, &tree->bt_rootnode);
 	if (error) {
 		DBUG("Problem initing\n");
-		BTREE_UNLOCK(tree, 0);
 		return (error);
 	}
 
@@ -528,6 +534,37 @@ fbtree_keymax_iter(struct fbtree *tree, void *key, struct fnode_iter *iter)
 	return (error);
 }
 
+/* 
+ * All Btrees are backed by their own fake device vnode so we need to purge the
+ * vnodes clean and dirty lists and then also free the fnodes attached to them
+ */
+void 
+fbtree_destroy(struct fbtree *tree)
+{
+	struct fnode *fp;
+	struct buf *bp, *nbp;
+	struct bufobj *bo = &tree->bt_backend->v_bufobj;
+	TAILQ_FOREACH_SAFE(bp, &bo->bo_clean.bv_hd, b_bobufs, nbp) {
+		BUF_LOCK(bp, LK_EXCLUSIVE, 0);
+		fp = bp->b_fsprivate2;
+		bp->b_fsprivate2 = NULL;
+		bp->b_flags &= ~(B_MANAGED);
+		uma_zfree(fnode_zone, fp);
+		brelse(bp);
+	}
+
+	TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, nbp) {
+		BUF_LOCK(bp, LK_EXCLUSIVE, 0);
+		fp = bp->b_fsprivate2;
+		bp->b_fsprivate2 = NULL;
+		bp->b_flags &= ~(B_MANAGED);
+		uma_zfree(fnode_zone, fp);
+		brelse(bp);
+	}
+
+	vinvalbuf(tree->bt_backend, 0, 0, 0);
+}
+
 /*
  *  Iterate through the keys of the btree, traversing external bnodes if necessary.
  */
@@ -542,7 +579,7 @@ fnode_iter_next(struct fnode_iter *it)
 	}
 
 	/* If we've exhausted the current node, switch. */
-	if (it->it_index == dn->dn_numkeys) {
+	if (it->it_index == dn->dn_numkeys - 1) {
 		/* Iteration done. */
 		if (dn->dn_rightnode == 0) {
 			it->it_index = -1;
@@ -608,12 +645,11 @@ static int
 fnode_create(struct fbtree *tree, bnode_ptr ptr, struct fnode *node, int type)
 {
 	int error;
-	struct vnode *vp = tree->bt_backend;
 
 	KASSERT(ptr != 0, ("Why are you making a blk on the allocator block"));
 
 	/* Get the new bnode's block into the cache. */
-	error = fnode_getbufptr(vp, ptr, &node->fn_buf);
+	error = fnode_getbufptr(tree, ptr, &node->fn_buf);
 	if (error) {
 		DBUG("Problem with fnode_getbufptr\n");
 		return (error);
@@ -626,10 +662,12 @@ fnode_create(struct fbtree *tree, bnode_ptr ptr, struct fnode *node, int type)
 	node->fn_max_ext = MAX_NUM_EXTERNAL(node);
 	node->fn_dnode->dn_flags = type;
 	node->fn_inited = 1;
+	bzero(node->fn_pointers, sizeof(void *) * 300);
 
 	// Node max is dependent on type to calculate correctly
 	node->fn_values = (char *)node->fn_keys + (NODE_MAX(node) * NODE_KS(node));
 	node->fn_buf->b_flags |= B_MANAGED;
+	node->fn_buf->b_fsprivate2 = node;
 	bqrelse(node->fn_buf);
 
 	return (0);
@@ -685,6 +723,8 @@ fnode_insert_at(struct fnode *node, void *key, void *value, int i)
 		src = fnode_getval(node, i + 1);
 		memmove(src + NODE_VS(node), src, (NODE_SIZE(node) - i) * NODE_VS(node));
 		fnode_setval(node, i + 1, value);
+		memmove(&node->fn_pointers[i + 2], &node->fn_pointers[i + 1], (300 - i) * sizeof(void *));
+		node->fn_pointers[i + 1] = NULL;
 	} else {
 		src = fnode_getval(node, i);
 		memmove(src + NODE_VS(node), src, (NODE_SIZE(node) - i) * NODE_VS(node));
@@ -723,6 +763,7 @@ fnode_newroot(struct fnode *node, struct fnode **root)
 	 * but the caller should fix it up.
 	 */
 	fnode_setval(newroot, 0, &node->fn_location);
+	newroot->fn_pointers[0] = node;
 
 	// XXX Gotta inform the inode its attached to to change? Do we pass it a
 	// function when this occurs to execute the update on it?
@@ -733,9 +774,6 @@ fnode_newroot(struct fnode *node, struct fnode **root)
 	tree->bt_root = newroot->fn_location;
 	tree->bt_rootnode = newroot;
 	*root = newroot;
-
-	ftree_stats(node->fn_tree);
-
 	return (0);
 }
 
@@ -787,6 +825,8 @@ fnode_balance(struct fnode *left, struct fnode *right, size_t i)
 		/* Value i stays with the left node, so start from value i + 1. */
 		src = fnode_getval(left, i + 1);
 		memcpy(fnode_getval(right, 0), src,  sizeof(bnode_ptr) * (NODE_SIZE(right) + 1));
+		memcpy(&right->fn_pointers[0], &left->fn_pointers[i + 1],  sizeof(void *) * (NODE_SIZE(right) + 1));
+		bzero(&left->fn_pointers[i + 1], sizeof(void *) * (300 - i + 1));
 	} else {
 		src = fnode_getval(left, i);
 		memcpy(fnode_getval(right, 0), src,  NODE_VS(right) * NODE_SIZE(right));
@@ -810,12 +850,93 @@ fnode_parent(struct fnode *node, struct fnode **parent)
 	return (0);
 }
 
-
-static void
-fnode_setright(struct fnode *node, struct fnode *right)
+static int 
+fnode_verifypointers(struct fnode *node)
 {
-	node->fn_dnode->dn_rightnode = right->fn_location;
-	node->fn_right = right;
+	if (NODE_FLAGS(node) & BT_INTERNAL) {
+		for (int i = 0; i <= NODE_SIZE(node); i++) {
+			bnode_ptr p = *(bnode_ptr *)fnode_getval(node, i);
+			if (node->fn_pointers[i] != NULL) {
+				struct fnode *n = (struct fnode *)node->fn_pointers[i];
+				KASSERT(p == n->fn_location, ("Should be the same"));
+			}
+		}
+	}
+	return (0);
+}
+
+
+static int
+fnode_verifysplit(void *space, struct fnode *left, struct fnode *right, struct fnode *parent, void *op, size_t mid)
+{
+	struct fnode node, oldparent;
+	struct fnode_iter first, split;
+	bnode_ptr p;
+	node.fn_dnode = space;
+	node.fn_location = -1;
+	node.fn_keys = node.fn_dnode->dn_data;
+	node.fn_tree = left->fn_tree;
+	node.fn_max_int = MAX_NUM_INTERNAL(&node);
+	node.fn_max_ext = MAX_NUM_EXTERNAL(&node);
+	node.fn_values = (char *)node.fn_keys + (NODE_MAX(&node) * NODE_KS(&node));
+	node.fn_inited = 1;
+
+	oldparent.fn_dnode = op;
+	oldparent.fn_location = -1;
+	oldparent.fn_keys = oldparent.fn_dnode->dn_data;
+	oldparent.fn_tree = left->fn_tree;
+	oldparent.fn_max_int = MAX_NUM_INTERNAL(&node);
+	oldparent.fn_max_ext = MAX_NUM_EXTERNAL(&node);
+	oldparent.fn_values = (char *)oldparent.fn_keys + (NODE_MAX(&oldparent) * NODE_KS(&oldparent));
+	oldparent.fn_inited = 1;
+
+	first.it_node = &node;
+	first.it_index = 0;
+
+	split.it_node = left;
+	split.it_index = 0;
+
+	if (NODE_FLAGS(&node)  & BT_INTERNAL) {
+	} else {
+		KASSERT(NODE_SIZE(&node) == NODE_SIZE(left) + NODE_SIZE(right), ("Should be equal"));
+		while (first.it_index < NODE_SIZE(&node)) {
+			KASSERT(!ITER_ISNULL(split), ("This should not be null"));
+			uint64_t k1 = ITER_KEY_T(first, uint64_t);
+			uint64_t k2 = ITER_KEY_T(split, uint64_t);
+			KASSERT(k1 == k2, ("Should be equal %lu - %lu", k1, k2));
+			first.it_index += 1;
+			ITER_NEXT(split);
+		}
+
+		// Key structure is OK - moving to make sure parent is 
+		// correctly done
+		uint64_t key = *(uint64_t *)fnode_getkey(&node, mid);
+		uint64_t fkey = *(uint64_t *)fnode_getkey(right, mid);
+		KASSERT(key >= fkey, ("Key should follow invariant %lu : %lu", key, fkey));
+
+		first.it_node = &oldparent;
+		first.it_index = 0;
+		// Assert parent is correct
+		for (int i = 0; i < NODE_SIZE(parent); i++) {
+			uint64_t k1 = *(uint64_t *)fnode_getkey(parent, i);
+			// Found the key check is children are correctly placed
+			if (NODE_COMPARE(parent, &k1, &key) == 0) {
+				p = *(bnode_ptr *)fnode_getval(parent, i);
+				KASSERT(p == right->fn_location, ("Should be left child\n"));
+				i++;
+			} else {
+				uint64_t k2 = ITER_KEY_T(first, uint64_t);
+				p = *(bnode_ptr *)fnode_getval(parent, i);
+				bnode_ptr old = *(bnode_ptr *)fnode_getval(&oldparent, i);
+				KASSERT(k1 == k2, ("Should still have same keys"));
+				KASSERT(p == old, ("Children should still be the same"));
+				ITER_NEXT(first);
+			}
+		}
+	}
+	free(space, M_SLOS);
+	free(op, M_SLOS);
+	return (0);
 }
 
 /* [0 (less than 5)] 5 [1( greater than 5 by less than 10] 10 [2] 15 [3]
@@ -841,7 +962,7 @@ fnode_split(struct fnode *node)
 		KASSERT(node->fn_location != node->fn_tree->bt_root, ("Problem with fnode - %p", node));
 
 	}  else {
-		fnode_parent(node, &parent);
+		parent = node->fn_parent;
 	}
 
 	/* Make the right node. */
@@ -858,7 +979,7 @@ fnode_split(struct fnode *node)
 	right->fn_dnode->dn_rightnode = node->fn_dnode->dn_rightnode;
 	right->fn_right = node->fn_right;
 
-	fnode_setright(node, right);
+	node->fn_dnode->dn_rightnode = right->fn_location;
 
 	KASSERT(right->fn_location != 0, ("Why did this get allocated here"));
 	KASSERT(node->fn_dnode->dn_parent != 0, ("Should have a parent now\n"));
@@ -871,7 +992,6 @@ fnode_split(struct fnode *node)
 	 */
 	mid_i = NODE_SIZE(node) / 2;
 	fnode_balance(node, right, mid_i);
-
 	// Don't need to write the left node, as once it pops from insert it
 	// will be dirtied.
 	/*
@@ -884,7 +1004,10 @@ fnode_split(struct fnode *node)
 	if (error) {
 		return (error);
 	}
+	// Remove the right side and let it be recreated when someone searches 
+	// for it so it is correctly linked in
 	fnode_write(right);
+	uma_zfree(fnode_zone, right);
 
 	return (0);
 }
@@ -929,11 +1052,6 @@ fnode_internal_insert(struct fnode *node, void *key, bnode_ptr *val)
 	/* Split the internal node if over capacity. */
 	if ((NODE_SIZE(node) + 1) == NODE_MAX(node)) {
 		error = fnode_split(node);
-		if (error) {
-			return (error);
-		}
-
-		return (INTERNALSPLIT);
 	}
 
 	return (error);
@@ -981,6 +1099,7 @@ fnode_external_insert(struct fnode *node, void *key, void *value)
 
 	return (error);
 }
+
 
 /*
  * Insert a key-value pair into a btree node.
@@ -1238,24 +1357,23 @@ int
 fnode_init(struct fbtree *tree, bnode_ptr ptr, struct fnode **fn)
 {
 	int error;
-	struct vnode *vp = tree->bt_backend;
 	struct fnode *node;
 
 	if (*fn == NULL) {
 		fnode_alloc((void **)&node);
 	} else {
-	    node = *fn;
+		node = *fn;
 	}
 
-	if (node->fn_dnode) {
+	if (node->fn_inited && node->fn_buf != NULL) {
 		return (0);
 	}
 
 	CTR2(KTR_SPARE5, "fnode_init vp=%p ptr=%d", vp, ptr);
 	/* Read the data from the disk into the buffer cache. */
-	error = fnode_getbufptr(vp, ptr, &node->fn_buf);
+	error = fnode_getbufptr(tree, ptr, &node->fn_buf);
 	if (error) {
-		*fn = NULL;
+		printf("Problem getting buf\n");
 		return (error);
 	}
 
@@ -1271,6 +1389,7 @@ fnode_init(struct fbtree *tree, bnode_ptr ptr, struct fnode **fn)
 	*fn = node;
 
 	node->fn_buf->b_flags |= B_MANAGED;
+	node->fn_buf->b_fsprivate2 = node;
 	bqrelse(node->fn_buf);
 
 	return (0);
@@ -1281,24 +1400,33 @@ fbtree_test(struct fbtree *tree)
 {
 	int error;
 	int size = 10000 * 2;
+	struct fnode_iter iter;
 	size_t  *keys = (size_t *)malloc(sizeof(size_t) * size, M_SLOS, M_WAITOK);
 	srandom(1);
 	for (int i = 0; i < size; i++) {
 		keys[i] = random();
 		size_t bigboi = i;
 		error = fbtree_insert(tree, &keys[i], &bigboi);
-		if (error) {
+		if (error && error != ROOTCHANGE) {
 			DBUG("%d ERROR\n", error);
 		}
 		for (int t = 0; t < i; t++) {
-			size_t bigboi;
-			error = fbtree_get(tree, &keys[t], &bigboi);
+			error = fbtree_keymin_iter(tree, &keys[t], &iter);
 			if (error) {
 				DBUG("%d ERROR\n", error);
-				DBUG("KEY %lu - %lu", keys[t], keys[t]);
+				DBUG("KEY %lu", keys[t]);
 				panic("Problem");
 			}
-			KASSERT(bigboi == t, ("Test not equal"));
+			if (ITER_ISNULL(iter)) {
+				DBUG("KEY %lu\n", keys[t]);
+				fnode_print(iter.it_node);
+				fnode_parent(iter.it_node, &iter.it_node->fn_parent);
+				fnode_print(iter.it_node->fn_parent);
+
+				fnode_follow(iter.it_node->fn_parent, &keys[t], &iter.it_node);
+				panic("Problem");
+			}
+			KASSERT(ITER_VAL_T(iter, size_t) == t, ("Test not equal"));
 		}
 	}
 
@@ -1307,7 +1435,8 @@ fbtree_test(struct fbtree *tree)
 	return (0);
 }
 
-//#include "opt_ddb.h"
+#ifdef DDB
+#include "opt_ddb.h"
 #include <ddb/ddb.h>
 
 DB_SHOW_COMMAND(fnode, db_fnode)
@@ -1339,4 +1468,4 @@ DB_SHOW_COMMAND(fnode, db_fnode)
 	}
 	db_printf("\n");
 }
-
+#endif

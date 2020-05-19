@@ -75,7 +75,7 @@ slsfs_add_dirent(struct vnode *vp, uint64_t ino, char *nameptr, long namelen, ui
 	if (type == DT_DIR) {
 		SLSINO(svp).ino_nlink++;
 	}
-	SLSINO(svp).ino_size = dir->d_off + sizeof(struct dirent);
+	svp->sn_ino.ino_size = dir->d_off + sizeof(struct dirent);
 	// XXX This is actually incorrect -- we are flushing an update to disk 
 	// when we havnt actually made the change to directory on disk, this 
 	// probably cleans itself up when we make the changes to inodes though 
@@ -215,10 +215,6 @@ slsfs_unlink_dir(struct vnode *dvp, struct vnode *vp, struct componentname *name
 
 	// Update inode size to disk
 	slos_updatetime(sdvp);
-	error  = slos_updateroot(sdvp);
-	if (error) {
-		return (error);
-	}
 
 	return (0);
 }

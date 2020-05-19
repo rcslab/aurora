@@ -54,5 +54,5 @@ define process name=filereader,instances=1
   }
 }
 
-run $runtime
+run 30
 echo  "Varmail Version 3.0 personality successfully loaded"

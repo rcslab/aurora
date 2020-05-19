@@ -33,6 +33,7 @@ struct slos;
 #define SLS_VGET(aa, bb, cc, dd) (aa->v_mount->mnt_op->vfs_vget(aa->v_mount, bb, cc, dd))
 
 extern uma_zone_t fnode_zone;
+extern struct buf_ops bufops_slsfs;
 
 struct slsfsmount {
     STAILQ_ENTRY(slsfsmount)	sp_next_mount;

@@ -18,7 +18,7 @@ void slsfs_bufbdflush(struct bufobj *bufobj, struct buf *buf);
 void slsfs_bufstrategy(struct bufobj *bo, struct buf *bp);
 
 int slsfs_sync_vp(struct vnode *vp);
-int slsfs_sync_dev(struct slos *slos);
+int slsfs_sync_dev(struct vnode *vp);
 
 #define EOF (-1)
 
