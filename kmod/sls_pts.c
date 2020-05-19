@@ -315,12 +315,15 @@ slsrest_pts(struct slskv_table *filetable,  struct slspts *slspts, int *fdp)
 		goto error;
 
 	tty = masterfp->f_data;
-	tty->t_flags = slspts->flags;
+	/* XXX See if there are flags we can (slspts->flags to t_flags).  */
+
+	KASSERT(tty->t_dev != NULL, ("device is null"));
+	KASSERT(tty->t_dev->si_devsw != NULL, ("cdevsw is null"));
+
 	/* 
 	 * XXX Check whether we need the rest of the shell's parameters in any case,
 	 * and how to properly restore them if we do.
 	 */
-
 
 	/* Get the name of the slave side. */
 	path = malloc(PATH_MAX, M_SLSMM, M_WAITOK);
@@ -339,6 +342,7 @@ slsrest_pts(struct slskv_table *filetable,  struct slspts *slspts, int *fdp)
 
 	vp = slavefp->f_vnode;
 	vref(vp);
+
 	/* 
 	 * We always save the peer in this function, regardless of whether it's master. 
 	 * That's because the caller always looks at the slsid field, and combines it
@@ -358,6 +362,7 @@ slsrest_pts(struct slskv_table *filetable,  struct slspts *slspts, int *fdp)
 			goto error;
 
 		}
+
 		/* Remove it from this process and this fd. */
 		kern_close(curthread, slavefd);
 
@@ -403,11 +408,9 @@ slsrest_pts(struct slskv_table *filetable,  struct slspts *slspts, int *fdp)
 	return (0);
 
 error:
-
 	free(slspts->inq, M_SLSMM);
 	free(slspts->outq, M_SLSMM);
 	fdclose(curthread, masterfp, masterfd);
-	fdrop(masterfp, curthread);
 
 	return (error);
 }

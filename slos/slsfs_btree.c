@@ -125,13 +125,13 @@ fnode_print(struct fnode *node)
 		for (int i = 0; i < NODE_SIZE(node); i++) {
 			p = fnode_getval(node, i + 1);
 			uint64_t __unused *t = fnode_getkey(node, i);
-			printf("| K %lu || C %lu |", *t, *p);
+			printf("| K 0x%lx || C 0x%lx |", *t, *p);
 		}
 	} else {
 		for (i = 0; i < NODE_SIZE(node); i++) {
-			uint64_t __unused *t = fnode_getkey(node, i);
-			diskptr_t __unused *v = fnode_getval(node, i);
-			printf("| %lu -> %lu, %lu |,", *t, v->offset, v->size);
+			uint64_t *t = fnode_getkey(node, i);
+			diskptr_t *v = fnode_getval(node, i);
+			printf("| 0x%lx -> 0x%lx, 0x%lx |,", *t, v->offset, v->size);
 		}
 	}
 	if (!node->fn_right) {
@@ -443,11 +443,11 @@ fbtree_keymin_iter(struct fbtree *tree, void *key, struct fnode_iter *iter)
 static int
 fnode_keymax_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 {
+	struct fnode *node, *right;
 	int error;
 	void *val;
 	int diff;
 	int mid;
-	struct fnode *node;
 
 	// Follow catches if this is an external node or not
 	error = fnode_follow(root, key, &node);
@@ -471,14 +471,42 @@ fnode_keymax_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 		}
 	}
 
+	/*
+	 * Due to the way we follow the value down the tree, we need to make
+	 * sure we are actually the largest value in the tree, and there is no
+	 * key to the right.
+	 */
+	if (mid == NODE_SIZE(node)) {
+		error = fnode_right(node, &right);
+		if (error != 0)
+			return (error);
+
+		/* If there is no right node there is no such value. */
+		if (right == NULL) {
+			iter->it_node = node;
+			iter->it_index = -1;
+			return (0);
+		}
+
+		/* Make sure the node actually has keys larger than key. */
+		val = fnode_getkey(right, 0);
+		KASSERT(NODE_COMPARE(right, val, key) > 0 ,
+		    ("leftmost key %lu smaller than key %lu",
+		    * (uint64_t *) val, * (uint64_t *) key));
+
+		/* Return the smallest key of the right node. */
+		node = right;
+		mid = 0;
+	}
+
 	iter->it_node = node;
 	iter->it_index = mid;
 
-	/* If we went out of bounds, there is no supremum for the key. */
-	if ((mid == NODE_SIZE(node)) || (mid < 0))
-		iter->it_index = -1;
+	/* We should be in bounds at this point. */
+	KASSERT(((mid >= 0) && (mid < NODE_SIZE(node))), ("invalid mid %d", mid));
 
 	return (0);
+
 }
 
 /*

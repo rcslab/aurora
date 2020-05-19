@@ -38,6 +38,9 @@ int sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data);
 /* Zone for the pageruns. */
 extern uma_zone_t slspagerun_zone;
 
+struct sls_record *sls_getrecord(struct sbuf *sb, uint64_t slsid, uint64_t type);
+void sls_record_destroy(struct sls_record *rec);
+
 #ifdef SLS_TEST
 int slstable_test(void);
 #endif /* SLS_TEST */

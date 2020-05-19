@@ -143,6 +143,10 @@ sls_partadd(struct sls_partadd_args *args)
 	    (args->attr.attr_target != SLS_MEM))
 		return (EINVAL);
 
+	/* Only full checkpoints make sense if in-memory. */
+	if (args->attr.attr_target == SLS_MEM)
+		args->attr.attr_mode = SLS_FULL;
+
 	/*
 	 * Check that the attributes to be passed
 	 * to the SLS process are valid.

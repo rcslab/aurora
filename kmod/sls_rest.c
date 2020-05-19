@@ -603,7 +603,7 @@ slsrest_dovmobjects(struct slskv_table *metatable, struct slskv_table *datatable
 
 		slsdata = NULL;
 		if (datatable != NULL) {
-			error = slskv_find(datatable, (uint64_t) record, (uintptr_t *) &slsdata);
+			error = slskv_find(datatable, slsvmobject.slsid, (uintptr_t *) &slsdata);
 			if (error != 0) {
 				KV_ABORT(iter);
 				return (error);
@@ -782,9 +782,42 @@ error:
 }
 
 static int
+slsrest_rectable_to_metatable(struct slskv_table *rectable, struct slskv_table **metatablep)
+{
+	struct slskv_iter iter;
+	struct sls_record *rec;
+	struct slos_rstat *st;
+	uint64_t slsid;
+	int error;
+
+	error = slskv_create(metatablep);
+	if (error != 0)
+		return (error);
+
+	/* Move the in-memory records over to the metatable. */
+	KV_FOREACH(rectable, iter, slsid, rec) {
+
+		st = malloc(sizeof(*st), M_SLSMM, M_WAITOK);
+		st->type = rec->srec_type;
+		st->len = sbuf_len(rec->srec_sb);
+
+		error = slskv_add(*metatablep, (uint64_t) sbuf_data(rec->srec_sb), (uintptr_t) st);
+		if (error != 0) {
+			free(st, M_SLSMM);
+			KV_ABORT(iter);
+			return (error);
+		}
+	}
+
+
+	return (0);
+}
+
+static int
 sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 {
 	struct slskv_table *metatable = NULL, *datatable = NULL;
+	struct slskv_table *rectable = NULL;
 	struct slspagerun *pagerun, *tmppagerun;
 	struct slsrest_data *restdata;
 	struct slsdata *slsdata;
@@ -811,40 +844,35 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	if (slsp == NULL)
 		goto out;
 
+	/* XXX Very messy because we're transitioning from the 
+	 * metatable/datatable thingy into slsckpt_data even in restores. We'll 
+	 * do away from the table juggling soon enough.
+	 */
 	switch (slsp->slsp_attr.attr_target) {
 	case SLS_OSD:
-
-		/* XXX Temporary until we change to multiple inodes per checkpoint. */
-		SLS_DBG("Opening inode\n");
-
-		SLS_DBG("Reading in data\n");
-
-		/* Bring in the whole checkpoint in the form of SLOS records. */
-		error = sls_read_slos(oid, &metatable, &datatable);
+		error = slskv_create(&rectable);
 		if (error != 0)
 			goto out;
+
+		/* Bring in the whole checkpoint in the form of SLOS records. */
+		error = sls_read_slos(oid, &rectable, &datatable);
+		if (error != 0)
+			goto out;
+
+		error = slsrest_rectable_to_metatable(rectable, &metatable);
+		if (error != 0)
+			goto out;
+
+		/* Destroy the record table, since we moved the data. */
+		slskv_destroy(rectable);
+		rectable = NULL;
 
 		break;
 
 	case SLS_MEM:
-		error = slskv_create(&metatable);
+		error = slsrest_rectable_to_metatable(slsp->slsp_sckpt->sckpt_rectable, &metatable);
 		if (error != 0)
 			goto out;
-
-		/* Move the in-memory records over to the metatable. */
-		KV_FOREACH(slsp->slsp_sckpt->sckpt_rectable, iter, slsid, rec) {
-
-			st = malloc(sizeof(*st), M_SLSMM, M_WAITOK);
-			st->type = rec->srec_type;
-			st->len = sbuf_len(rec->srec_sb);
-
-			error = slskv_add(metatable, (uint64_t) sbuf_data(rec->srec_sb), (uintptr_t) st);
-			if (error != 0) {
-				free(st, M_SLSMM);
-				KV_ABORT(iter);
-				goto out;
-			}
-		}
 
 		/*
 		 * Shadow the objects provided by the in-memory checkpoint. That way we
@@ -983,7 +1011,7 @@ out:
 	}
 
 	if ((datatable != NULL) && (slsp->slsp_attr.attr_target != SLS_MEM)) {
-		KV_FOREACH_POP(datatable, record, slsdata) {
+		KV_FOREACH_POP(datatable, slsid, slsdata) {
 			LIST_FOREACH_SAFE(pagerun, slsdata, next, tmppagerun) {
 				LIST_REMOVE(pagerun, next);
 				free(pagerun->data, M_SLSMM);
@@ -993,6 +1021,12 @@ out:
 		}
 		/* The table itself. */
 		slskv_destroy(datatable);
+	}
+
+	if (rectable != NULL) {
+		KV_FOREACH_POP(rectable, slsid, rec)
+		    sls_record_destroy(rec);
+		slskv_destroy(rectable);
 	}
 
 	/* Leave the reference we got when searching for the partition. */

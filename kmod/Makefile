@@ -23,4 +23,8 @@ DEBUG_FLAGS += -DWITH_DEBUG
 DEBUG_FLAGS += -DWITNESS
 .endif
 
+.ifdef TEST
+DEBUG_FLAGS += -DSLS_TEST
+.endif
+
 .include <bsd.kmod.mk>

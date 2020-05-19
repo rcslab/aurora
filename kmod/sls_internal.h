@@ -143,5 +143,16 @@ extern uint64_t ckpt_attempted;
 extern uint64_t ckpt_done;
 SDT_PROVIDER_DECLARE(sls);
 
+#define SLS_ERROR(func, error)				    \
+    do {						    \
+	printf("%s: %s in line %d (%s) failed with %d\n",   \
+	    __FILE__, #func, __LINE__, __func__, error);	    \
+    } while (0)
+
+#define SLS_BREAKPOINT()					    \
+    do {							    \
+	printf("%s: %s, line %d\n", __FILE__, __func__, __LINE__);  \
+    } while (0)
+
 #endif /* _SLS_H_ */
 

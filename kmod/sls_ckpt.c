@@ -227,6 +227,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 		goto error;
 	}
 
+	SDT_PROBE0(sls, , , dump);
 	SDT_PROBE0(sls, , , sysv);
 
 	/* Get the data from all processes in the partition. */
@@ -327,6 +328,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	 * This means that the middle object eventually holds all pages,
 	 * and we should possibly do a deep checkpoint to fix that.
 	 */
+	SDT_PROBE0(sls, , , dump);
 
 	/* 
 	 * XXX In-memory checkpoints are ONLY full checkpoints (the very concept
@@ -337,7 +339,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	 */
 	switch (slsp->slsp_attr.attr_mode) {
 	case SLS_FULL:
-		/* Destroy the shadows completely. We don't keep any between iterations. */
+		/* Destroy the shadows. We don't keep any between iterations. */
 		slsckpt_destroy(sckpt_data);
 		sckpt_data = NULL;
 		break;
@@ -353,7 +355,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 		break;
 
 	case SLS_SHALLOW:
-		/* Destroy the new shadow, provided we already have an old one. */
+		/* Destroy the new shadow, if we already have an old one. */
 		sckpt_old = slsp->slsp_sckpt;
 		if (sckpt_old != NULL)
 			slsckpt_destroy(sckpt_data);
@@ -366,7 +368,6 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	}
 
 	SDT_PROBE0(sls, , , dedup);
-
 
 	slsp->slsp_epoch += 1;
 	SLS_DBG("Checkpointed partition once\n");
