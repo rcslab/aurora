@@ -2,7 +2,7 @@
 
 set -euo
 
-TEST="array"
+TEST="llist"
 SLSCTL="tools/slsctl/slsctl"
 OID="5"
 BACKEND="memory"

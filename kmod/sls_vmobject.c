@@ -32,6 +32,7 @@
 #include "sls_mm.h"
 #include "sls_path.h"
 #include "sls_table.h"
+#include "sls_vm.h"
 #include "sls_vmobject.h"
 
 int
@@ -48,11 +49,8 @@ slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_dat
 		return (0);
 
 	/* We don't need the anonymous objects for in-memory checkpointing. */
-	if (target == SLS_MEM) {
-		if ((obj->type == OBJT_DEFAULT) ||
-		    (obj->type == OBJT_SWAP))
-			return (0);
-	}
+	if ((target == SLS_MEM) && OBJT_ISANONYMOUS(obj))
+		return (0);
 
 	/* First time we come across it, create a buffer for the info struct. */
 	sb = sbuf_new_auto();
@@ -123,43 +121,8 @@ error:
 	return (error);
 }
 
-static void
-slsrest_data(vm_object_t object, struct slsdata *slsdata)
-{
-	struct slspagerun *pagerun; 
-	vm_page_t page;
-	char *data;
-	int i;
-
-	VM_OBJECT_WLOCK(object);
-
-	LIST_FOREACH(pagerun, slsdata, next) {
-		/* XXX Do one page_alloc per pagerun */
-		for (i = 0; i < (pagerun->len >> PAGE_SHIFT); i++) {
-			page = vm_page_alloc(object, pagerun->idx + i, VM_ALLOC_NORMAL);
-			if (page == NULL) {
-				VM_OBJECT_WUNLOCK(object);
-				return;
-			}
-
-			page->valid = VM_PAGE_BITS_ALL;
-
-			/* Copy the data over to the VM Object's pages */
-			data = (char *) pmap_map(NULL, page->phys_addr,
-			    page->phys_addr + PAGE_SIZE,
-			    VM_PROT_READ | VM_PROT_WRITE);
-
-			memcpy(data, &((char *) pagerun->data)[i << PAGE_SHIFT], PAGE_SIZE);
-			vm_page_xunbusy(page);
-		}
-	}
-
-	VM_OBJECT_WUNLOCK(object);
-}
-
 int
-slsrest_vmobject(struct slsvmobject *info, struct slskv_table *objtable, 
-    struct slsdata *slsdata)
+slsrest_vmobject(struct slsvmobject *info, struct slskv_table *objtable)
 {
 	vm_object_t object;
 	struct vnode *vp;
@@ -173,13 +136,7 @@ slsrest_vmobject(struct slsvmobject *info, struct slskv_table *objtable,
 		 */
 		/* FALLTHROUGH */
 	case OBJT_SWAP:
-
-		/* Simple vm_allocate*/
-		object = vm_object_allocate(OBJT_DEFAULT, info->size);
-
-		/* Restore any data pages the object might have. */
-		slsrest_data(object, slsdata);
-
+		panic("object of type %d should have already been restored", info->type);
 		break;
 
 	case OBJT_VNODE:

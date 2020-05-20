@@ -87,21 +87,17 @@ struct slos {
 	struct mount		*slsfs_mount;
 
 	struct slos_sb		*slos_sb;	/* The superblock of the filesystem */
-	struct slos_bootalloc	*slos_bootalloc;/* The bootstrap alloc for the device */
-	struct slos_blkalloc	*slos_alloc;    /* The allocator for the device */
 	struct slsfs_blkalloc	slsfs_alloc;
 
 	struct g_consumer	*slos_cp;	/* The geom consumer used to talk to disk */
 	struct g_provider	*slos_pp;	/* The geom producer */ 
 
-	struct btree		*slos_inodes;	/* An index of all inodes */
-
 	struct lock		slos_lock;	/* Sleepable lock */
 	struct taskqueue	*slos_tq;	/* Slos taskqueue */
 
 	int (*slsfs_blkalloc)(struct slos*, size_t, diskptr_t *);
-	int (*slsfs_vmwrite)(struct vnode *, vm_object_t, vm_page_t, size_t);
-	int (*slsfs_vmawrite)(struct vnode *, vm_object_t, vm_page_t, size_t, slsfs_callback);
+	int (*slsfs_io)(struct vnode *, vm_object_t, vm_page_t, size_t, int);
+	int (*slsfs_io_async)(struct vnode *, vm_object_t, vm_page_t, size_t, int, slsfs_callback);
 };
 
 /* Identifier allocator */

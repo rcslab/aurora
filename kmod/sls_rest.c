@@ -571,12 +571,10 @@ slsrest_shadow(vm_object_t shadow, vm_object_t source, vm_ooffset_t offset)
 }
 
 static int 
-slsrest_dovmobjects(struct slskv_table *metatable, struct slskv_table *datatable, 
-    struct slskv_table *objtable)
+slsrest_dovmobjects(struct slskv_table *metatable, struct slskv_table *objtable)
 {
 	struct slsvmobject slsvmobject, *slsvmobjectp;
 	vm_object_t parent, object;
-	struct slsdata *slsdata;
 	struct slskv_iter iter;
 	struct slos_rstat *st;
 	size_t buflen;
@@ -599,19 +597,8 @@ slsrest_dovmobjects(struct slskv_table *metatable, struct slskv_table *datatable
 			return (error);
 		}
 
-		/* Find the data associated with the object. */
-
-		slsdata = NULL;
-		if (datatable != NULL) {
-			error = slskv_find(datatable, slsvmobject.slsid, (uintptr_t *) &slsdata);
-			if (error != 0) {
-				KV_ABORT(iter);
-				return (error);
-			}
-		}
-
 		/* Restore the object. */
-		error = slsrest_vmobject(&slsvmobject, objtable, slsdata);
+		error = slsrest_vmobject(&slsvmobject, objtable);
 		if (error != 0) {
 			KV_ABORT(iter);
 			return (error);
@@ -816,11 +803,10 @@ slsrest_rectable_to_metatable(struct slskv_table *rectable, struct slskv_table *
 static int
 sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 {
-	struct slskv_table *metatable = NULL, *datatable = NULL;
+	struct slskv_table *metatable = NULL;
 	struct slskv_table *rectable = NULL;
-	struct slspagerun *pagerun, *tmppagerun;
+	struct slskv_table *objtable = NULL;
 	struct slsrest_data *restdata;
-	struct slsdata *slsdata;
 	vm_object_t obj, shadow;
 	struct sls_record *rec;
 	struct slskv_iter iter;
@@ -855,9 +841,13 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 			goto out;
 
 		/* Bring in the whole checkpoint in the form of SLOS records. */
-		error = sls_read_slos(oid, &rectable, &datatable);
+		error = sls_read_slos(oid, &rectable, &objtable);
 		if (error != 0)
 			goto out;
+
+		/* Again, bandaid until we remove extraneous state. */
+		slskv_destroy(restdata->objtable);
+		restdata->objtable = objtable;
 
 		error = slsrest_rectable_to_metatable(rectable, &metatable);
 		if (error != 0)
@@ -903,7 +893,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	 * Recreate the VM object tree. When restoring from the SLOS we recreate everything, while
 	 * when restoring from memory all anonymous objects are already there.
 	 */
-	error = slsrest_dovmobjects(metatable, datatable, restdata->objtable);
+	error = slsrest_dovmobjects(metatable, restdata->objtable);
 	if (error != 0)
 		goto out;
 
@@ -1008,19 +998,6 @@ out:
 		}
 
 		slskv_destroy(metatable);
-	}
-
-	if ((datatable != NULL) && (slsp->slsp_attr.attr_target != SLS_MEM)) {
-		KV_FOREACH_POP(datatable, slsid, slsdata) {
-			LIST_FOREACH_SAFE(pagerun, slsdata, next, tmppagerun) {
-				LIST_REMOVE(pagerun, next);
-				free(pagerun->data, M_SLSMM);
-				uma_zfree(slspagerun_zone, pagerun);
-			}
-			free(slsdata, M_SLSMM);
-		}
-		/* The table itself. */
-		slskv_destroy(datatable);
 	}
 
 	if (rectable != NULL) {

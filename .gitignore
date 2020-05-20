@@ -39,6 +39,10 @@ tools/newosd/newosd
 tools/slsctl/slsctl
 tools/slsdb/slsdb
 
+load.sh
+unload.sh
+sls.sh
+
 *.a
 *.ko
 *.o

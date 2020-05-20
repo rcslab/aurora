@@ -590,7 +590,7 @@ slsfs_read(struct vop_read_args *args)
 	size_t blksize = IOSIZE(svp);
 	struct uio *uio = args->a_uio;
 
-	svp = SLSVP(vp); 
+	svp = SLSVP(vp);
 	sivp = &SLSINO(svp);
 	filesize =  sivp->ino_size;
 

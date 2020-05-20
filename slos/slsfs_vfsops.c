@@ -69,6 +69,7 @@ struct slsfs_taskctx {
 	struct vm_object *vmobj;
 	slsfs_callback cb;
 	vm_page_t startpage;
+	int iotype;
 	uint64_t size;
 };
 
@@ -89,7 +90,7 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 
 	error = fbtree_keymin_iter(tree, &lbn, &iter);
 	if (error) {
-		panic("Error in performwrite keymin");
+		panic("Error in fbtree_range_insert");
 	}
 
 	while (!ITER_ISNULL(iter)) {
@@ -273,7 +274,7 @@ slsfs_inodes_init(struct mount *mp, struct slos *slos)
 }
 
 static void
-slsfs_performwrite(void *ctx, int pending)
+slsfs_performio(void *ctx, int pending)
 {
 	vm_page_t start;
 	struct buf *bp;
@@ -282,24 +283,33 @@ slsfs_performwrite(void *ctx, int pending)
 	struct slos_node *svp = SLSVP(task->vp);
 	struct slos_inode *sivp = &SLSINO(svp);
 	struct fbtree *tree = &svp->sn_tree;
+	int iotype = task->iotype;
+	vm_pindex_t size; 
 	size_t offset;
 	int i;
 
+	KASSERT(iotype == BIO_READ || iotype == BIO_WRITE, ("invalid IO type %d", iotype));
 	/* 
 	 * We can do the merging of keys and all the functionality here.  I'm 
-	 * sure this code could be cleaned up but for readability seperating all 
-	 * the cases pretty distinctly
+	 * sure this code could be cleaned up but for readability separating all 
+	 * the cases pretty distinctly.
+	 *
+	 * This is only needed for writes, reads are just a bio.
 	 */
-	BTREE_LOCK(tree, LK_EXCLUSIVE);
-	if (task->tk.ta_func == NULL)
-		DBUG("Warning: %s called synchronously\n", __func__);
+	if (iotype == BIO_WRITE) {
+		BTREE_LOCK(tree, LK_EXCLUSIVE);
+		if (task->tk.ta_func == NULL)
+			DBUG("Warning: %s called synchronously\n", __func__);
 
-	slsfs_fbtree_rangeinsert(tree, task->startpage->pindex + 1, task->size);
-	BTREE_UNLOCK(tree, 0);
+		slsfs_fbtree_rangeinsert(tree, task->startpage->pindex + 1, task->size);
+		BTREE_UNLOCK(tree, 0);
 
-	bp = malloc(sizeof(struct buf), M_SLOS, M_WAITOK | M_ZERO);
-	vm_pindex_t size = 0;
+	}
+
+	bp = malloc(sizeof(struct buf), M_SLOS, M_WAITOK);
+	size = 0;
 	start = task->startpage;
+
 	i = 0;
 	TAILQ_FOREACH_FROM(start, &task->vmobj->memq, listq) {
 		// We are done grabbing pages;
@@ -332,7 +342,7 @@ slsfs_performwrite(void *ctx, int pending)
 	bp->b_vp = task->vp;
 	bp->b_bufobj = &task->vp->v_bufobj;
 	bufobj_wref(bp->b_bufobj);
-	bp->b_iocmd = BIO_WRITE;
+	bp->b_iocmd = iotype;
 	bp->b_rcred = crhold(curthread->td_ucred);
 	bp->b_wcred = crhold(curthread->td_ucred);
 	bp->b_bcount = bp->b_bufsize = bp->b_runningbufspace = bytecount;
@@ -355,7 +365,7 @@ slsfs_performwrite(void *ctx, int pending)
 }
 
 static struct slsfs_taskctx *
-slsfs_createtask(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, slsfs_callback cb)
+slsfs_createtask(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int iotype, slsfs_callback cb)
 {
 	struct slsfs_taskctx *ctx;
 
@@ -365,20 +375,21 @@ slsfs_createtask(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, sls
 		.vmobj = obj,
 		.startpage = m,
 		.size = len,
-		.cb = cb
+		.iotype = iotype,
+		.cb = cb,
 	};
 
 	return (ctx);
 }
 
 static int
-slsfs_vmawrite(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, slsfs_callback cb)
+slsfs_io_async(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int iotype, slsfs_callback cb)
 {
 	struct slos *slos = SLSVP(vp)->sn_slos;
 	struct slsfs_taskctx *ctx;
 
-	ctx = slsfs_createtask(vp, obj, m, len, cb);
-	TASK_INIT(&ctx->tk, 0, &slsfs_performwrite, ctx);
+	ctx = slsfs_createtask(vp, obj, m, len, iotype, cb);
+	TASK_INIT(&ctx->tk, 0, &slsfs_performio, ctx);
 	DBUG("Creating task for vnode %p: page index %lu, size %lu\n", vp, m->pindex, len);
 	taskqueue_enqueue(slos->slos_tq, &ctx->tk);
 
@@ -386,12 +397,12 @@ slsfs_vmawrite(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, slsfs
 }
 
 static int
-slsfs_vmwrite(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len)
+slsfs_io(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int iotype)
 {
 	struct slsfs_taskctx *ctx;
 
-	ctx = slsfs_createtask(vp, obj, m, len, NULL);
-	slsfs_performwrite(ctx, 0);
+	ctx = slsfs_createtask(vp, obj, m, len, iotype, NULL);
+	slsfs_performio(ctx, 0);
 
 	return (0);
 }
@@ -439,8 +450,8 @@ slsfs_create_slos(struct mount *mp, struct vnode *devvp)
 	slos.slsfs_checkpointtime = 1;
 	slos.slsfs_mount = mp;
 
-	slos.slsfs_vmwrite= &slsfs_vmwrite;
-	slos.slsfs_vmawrite = &slsfs_vmawrite;
+	slos.slsfs_io = &slsfs_io;
+	slos.slsfs_io_async = &slsfs_io_async;
 	DBUG("Creating taskqueue\n");
 	slos.slos_tq = NULL;
 	slos.slos_tq = taskqueue_create("SLOS Taskqueue", M_WAITOK, taskqueue_thread_enqueue, &slos.slos_tq);

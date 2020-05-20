@@ -3,16 +3,16 @@
 #gstripe destroy st0
 #gstripe create -s 1048576 -v st0 vtbd1 vtbd2 vtbd3
 #gstripe create -s 65536 -v st0 nvd0 nvd1 nvd2 nvd3
-gstripe destroy st0
+#gstripe destroy st0
 #gstripe create -s 65536 -v st0 nvd0 nvd1 nvd2 nvd3
-gstripe create -s 65536 -v st0 vtbd1 vtbd2 vtbd3
+#gstripe create -s 65536 -v st0 vtbd1 vtbd2 vtbd3
 #gstripe create -s 1048576 -v st0 vtbd1 vtbd2 vtbd3
 set -euo
 
-DRIVE=/dev/stripe/st0
+#DRIVE=/dev/stripe/st0
 
-#DRIVE=/dev/vtbd1
-#make -j5 -DWITH_DFLAGS
+DRIVE=/dev/vtbd1
+make -j5 -DWITH_DFLAGS -DTEST
 
 ./tools/newosd/newosd $DRIVE
 
@@ -20,6 +20,7 @@ kldload slos/slos.ko
 
 mount -rw -t slsfs $DRIVE /testmnt
 
+kldload kmod/sls.ko
 #fio trace/test.fio
 
 #echo "hello" > /testmnt/hello

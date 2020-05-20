@@ -6,9 +6,9 @@
 #define INFO_SIZE   (20)	/* Size of the data of the test structs. */
 #define VMOBJ_SIZE  (1024)	/* Extent of the test's VM objects, in pages */
 #define VNODE_ID    (0xabcdef)	/* ID of the testing vnode in the SLOS */
-#define DATA_INFOS  (16)	/* Number of data structs */
+#define DATA_INFOS  (32)	/* Number of data structs */
 #define META_INFOS  (128)	/* Number of meta structs */
-#define DATA_SIZE   (256) /* Average number of resident pages per object */
+#define DATA_SIZE   (512) /* Average number of resident pages per object */
 
 /* 
  * Struct that plays the role of vm_object_info structs, since it holds
@@ -23,7 +23,8 @@
 #define DATA_MAGIC 0xbadcafe
 typedef struct data_info {
     uint64_t magic;
-    uint64_t slsid;
+    uint64_t slsid; /* Unique ID, doubles as a pointer. */
+    uint64_t size;  /* The size of the object. */
     uint8_t  data[INFO_SIZE];
 } data_info;
 
