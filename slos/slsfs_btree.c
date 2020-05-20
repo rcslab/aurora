@@ -850,6 +850,7 @@ fnode_parent(struct fnode *node, struct fnode **parent)
 	return (0);
 }
 
+#ifdef INVARIANTS
 static int 
 fnode_verifypointers(struct fnode *node)
 {
@@ -938,6 +939,7 @@ fnode_verifysplit(void *space, struct fnode *left, struct fnode *right, struct f
 	free(op, M_SLOS);
 	return (0);
 }
+#endif // INVARIANTS
 
 /* [0 (less than 5)] 5 [1( greater than 5 by less than 10] 10 [2] 15 [3]
  * Find element thats greater than it than take that index
@@ -1456,13 +1458,13 @@ DB_SHOW_COMMAND(fnode, db_fnode)
 		db_printf("| C %lu |", *p);
 		for (int i = 0; i < NODE_SIZE(node); i++) {
 			p = fnode_getval(node, i + 1);
-			size_t __unused *t = fnode_getkey(node, i);
+			size_t *t = fnode_getkey(node, i);
 			db_printf("| K %lu || C %lu |", *t, *p);
 		}
 	} else {
 		for (i = 0; i < NODE_SIZE(node); i++) {
-			uint64_t __unused *t = fnode_getkey(node, i);
-			diskptr_t __unused *v = fnode_getval(node, i);
+			uint64_t *t = fnode_getkey(node, i);
+			diskptr_t *v = fnode_getval(node, i);
 			db_printf("| %lu -> %lu, %lu |,", *t, v->offset, v->size);
 		}
 	}

@@ -9,7 +9,9 @@
 #include <sys/namei.h>
 #include <sys/rwlock.h>
 #include <sys/bio.h>
+#include <vm/vm.h>
 #include <vm/uma.h>
+#include <vm/vm_extern.h>
 
 #include <geom/geom.h>
 #include <geom/geom_vfs.h>
@@ -139,8 +141,19 @@ int
 slsfs_truncate(struct vnode *vp, size_t size)
 {
 	struct bufobj *bo;
+	struct slos_node *svp = SLSVP(vp);
+	size_t filesize = svp->sn_ino.ino_size;
 	bo = &vp->v_bufobj;
-	return bufobj_invalbuf(bo, 0, 0, 0);
+	if (size == 0) {
+		return bufobj_invalbuf(bo, 0, 0, 0);
+	} else if (size > filesize) {
+		svp->sn_ino.ino_size = size;
+		vnode_pager_setsize(vp, svp->sn_ino.ino_size);
+	} else {
+		return ENOSYS;
+	}
+
+	return (0);
 }
 
 /* Flush a vnode's data to the disk. */

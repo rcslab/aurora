@@ -28,10 +28,7 @@ slsfs_bcreate(struct vnode *vp, uint64_t lbn, size_t size, struct fnode_iter *it
 	struct slos_node *svp = SLSVP(vp);
 	int error = 0;
 
-	if (size < IOSIZE(svp)) {
-		size = IOSIZE(svp);
-	}
-	KASSERT((size % IOSIZE(svp)) == 0 , ("Multiples of block size"));
+	size = roundup(size, IOSIZE(svp));
 	DBUG("Creating block at %lu of size %lu for node %p\n", lbn, size, vp);
 
 	/*

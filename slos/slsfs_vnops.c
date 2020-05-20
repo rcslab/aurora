@@ -797,8 +797,13 @@ slsfs_strategy(struct vop_strategy_args *args)
 static int
 slsfs_setattr(struct vop_setattr_args *args)
 {
-	DBUG("Set attr\n");
-	return (0);
+	struct vnode *vp = args->a_vp;
+	struct vattr *vap = args->a_vap;
+	int error = 0;
+	if (vap->va_size != (u_quad_t)VNOVAL) {
+		error = slsfs_truncate(vp, vap->va_size);
+	}
+	return (error);
 }
 
 static int
