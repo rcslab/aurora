@@ -70,7 +70,6 @@ struct slos_node {
 	uint64_t		sn_status;		/* status of vnode */
 	uint64_t		sn_refcnt;		/* reference count */
 	LIST_ENTRY(slos_node)	sn_entries;		/* link for in-memory vnodes */
-	struct btree		*sn_records;		/* records btree */
 	struct fbtree		sn_tree;		/* Data btree */
 	struct mtx		sn_mtx;			/* vnode mutex */
 	struct slos_inode	sn_ino;			/* On disk representation of the slos */

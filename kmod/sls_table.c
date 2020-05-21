@@ -857,7 +857,7 @@ sls_writemeta_slos(struct sls_record *rec, struct vnode **vpp, bool overwrite)
 	oid = rec->srec_id;
 	error = slsfs_new_node(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
 	if (error != 0)
-		return (EINVAL);
+		return (error);
 
 	error = VFS_VGET(slos.slsfs_mount, oid, LK_EXCLUSIVE, &vp);
 	if (error != 0)

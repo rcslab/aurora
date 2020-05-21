@@ -17,8 +17,9 @@ typedef int (*compare_t)(const void *, const void *);
 typedef uint32_t fb_keysize;
 typedef uint32_t fb_valsize;
 
-#define BT_INTERNAL 0x1
+#define BT_INTERNAL (0x1)
 #define ROOTCHANGE (256)
+#define FNODE_PTRSIZE (300)
 
 extern uma_zone_t fnodes_zone;
 
@@ -125,7 +126,7 @@ struct fnode {
 	size_t		fn_max_ext;
 	void		*fn_values;	/* Pointer to values list */
 	void		*fn_keys;	/* Pointer to keys list */
-	void		*fn_pointers[300];
+	void		*fn_pointers[FNODE_PTRSIZE];
 };
 
 /*
@@ -163,12 +164,11 @@ size_t fbtree_size(struct fbtree *tree);
 
 
 /* Read operations */
-int fbtree_keymin(struct fbtree *tree, const void *key, void *value);
-//int fbtree_keymax(struct fbtree *tree, void *key, void *value);
 int fbtree_keymax_iter(struct fbtree *tree, void *key, struct fnode_iter *iter);
 int fbtree_keymin_iter(struct fbtree *tree, void *key, struct fnode_iter *iter);
 int fbtree_iterat(struct fbtree *tree, const void *key, struct fnode_iter *iter);
 int fbtree_get(struct fbtree *tree, const void *key, void *value);
+int fnode_keymax(struct fnode *root, void *key, void *value);
 
 /* Write operations */
 int fbtree_insert(struct fbtree *tree, void *key, void *value);
@@ -177,5 +177,10 @@ int fbtree_replace(struct fbtree *tree, void *key, void *value);
 
 int fbtree_test(struct fbtree *tree);
 void fnode_print(struct fnode *node);
+void fnode_print_internal(struct fnode *node);
+void fnode_print_level(struct fnode *node);
+
+int slsfs_fbtree_test(void);
+
 
 #endif /* _FB_BTREE_H_ */

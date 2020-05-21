@@ -608,6 +608,17 @@ slsfs_mountfs(struct vnode *devvp, struct mount *mp)
 	mp->mnt_kern_flag |= MNTK_USES_BCACHE;
 	MNT_IUNLOCK(mp);
 
+#ifdef SLOS_TEST
+
+	printf("Testing fbtreecomponent...\n");
+	error = slsfs_fbtree_test();
+	if (error != 0)
+		printf("ERROR: Test failed with %d\n", error);
+
+	/* XXX Returning an error locks up the mounting process. */
+
+#endif /* SLOS_TEST */
+
 	return (0);
 error:
 	if (smp != NULL) {

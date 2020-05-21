@@ -306,8 +306,6 @@ slos_vpexport(struct slos *slos, struct slos_node *vp)
 
 	memcpy(ino->ino_procname, vp->sn_procname, SLOS_NAMELEN);
 
-	ino->ino_records = DISKPTR(vp->sn_records->root, 1);
-
 	/* Write the inode back to the disk. */
 	error = slos_iwrite(slos, ino);
 	if (error != 0) {

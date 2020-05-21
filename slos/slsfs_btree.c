@@ -1,7 +1,7 @@
 #include <sys/param.h>
+
 #include <sys/systm.h>
 #include <sys/uio.h>
-#include <sys/types.h>
 #include <sys/bio.h>
 #include <sys/buf.h>
 #include <btree.h>
@@ -10,6 +10,7 @@
 #include <sys/lock.h>
 #include <sys/vnode.h>
 #include <sys/rwlock.h>
+#include <sys/stat.h>
 #include <sys/bufobj.h>
 #include <sys/pctrie.h>
 #include <machine/atomic.h>
@@ -22,6 +23,7 @@
 
 #define NODE_LOCK(node, flags) (BUF_LOCK((node)->fn_buf, flags, NULL))
 #define NODE_ISLOCKED(node) (BUF_ISLOCKED((node)->fn_buf))
+#define FBTREE_ERROR(error) ((error) != 0 && (error) != ROOTCHANGE)
 
 uma_zone_t fnode_zone;
 
@@ -33,7 +35,7 @@ fnode_alloc(void **node)
 	((struct fnode *)(*node))->fn_right = NULL;
 	((struct fnode *)(*node))->fn_parent = NULL;
 	((struct fnode *)(*node))->fn_dnode = NULL;
-	bzero(((struct fnode *)(*node))->fn_pointers, sizeof(void *) * 300);
+	bzero(((struct fnode *)(*node))->fn_pointers, sizeof(void *) * FNODE_PTRSIZE);
 }
 
 static void
@@ -103,6 +105,7 @@ void
 fnode_print(struct fnode *node)
 {
 	int i;
+
 	printf("%s - NODE(%p): %lu, rightnode: %lu\n", node->fn_tree->bt_name, node, node->fn_location, node->fn_dnode->dn_rightnode);
 	printf("%u size\n", NODE_SIZE(node));
 	if (NODE_FLAGS(node) & BT_INTERNAL) {
@@ -111,7 +114,7 @@ fnode_print(struct fnode *node)
 		for (int i = 0; i < NODE_SIZE(node); i++) {
 			p = fnode_getval(node, i + 1);
 			uint64_t __unused *t = fnode_getkey(node, i);
-			printf("| K 0x%lx || C 0x%lx |", *t, *p);
+			printf("| K %lu || C %lu |", *t, *p);
 		}
 		printf("\nChild memory\n");
 		for (int i = 0; i <= NODE_SIZE(node); i++) {
@@ -126,10 +129,51 @@ fnode_print(struct fnode *node)
 		for (i = 0; i < NODE_SIZE(node); i++) {
 			uint64_t *t = fnode_getkey(node, i);
 			diskptr_t *v = fnode_getval(node, i);
-			printf("| 0x%lx -> 0x%lx, 0x%lx |,", *t, v->offset, v->size);
+			printf("| %lu -> %lu, %lu |,", *t, v->offset, v->size);
 		}
 	}
 	printf("\n\n");
+}
+
+/* Print a whole level of the btree, starting from the */
+void
+fnode_print_level(struct fnode *node)
+{
+
+	KASSERT(node != NULL, ("nonexistent node"));
+	do {
+		fnode_print(node);
+
+		if (!node->fn_right)
+			fnode_right(node, &node->fn_right);
+
+		node = node->fn_right;
+	} while (node != NULL);
+
+}
+
+/* Print an internal node and all its immediate children. */
+void
+fnode_print_internal(struct fnode *parent)
+{
+	struct fnode *child;
+	int error;
+	int i;
+
+	KASSERT((NODE_FLAGS(parent) & BT_INTERNAL) != 0, ("Checking external node"));
+
+	printf("=====PARENT=====\n");
+	fnode_print(parent);
+	for (i = 0; i <= NODE_SIZE(parent); i++) {
+		/* Get the next child. If */
+		error = fnode_fetch(parent, i, &child);
+		if (error != 0) {
+			DBUG("Warning: fnode_fetch failed with %d in %s\n", error, __func__);
+			return;
+		}
+		printf("-----CHILD %d-----\n", i);
+		fnode_print(child);
+	}
 }
 
 /*
@@ -516,6 +560,32 @@ fnode_keymax_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 }
 
 /*
+ * Find the smallest key in the subtree that's larger than or equal to the key.
+ */
+int
+fnode_keymax(struct fnode *root, void *key, void *value)
+{
+	int error;
+	struct fnode_iter iter;
+
+	/* Get the location of the minimum key-value pair. */
+	error = fnode_keymax_iter(root, key, &iter);
+	if (error) {
+		return (error);
+	}
+
+	if (ITER_ISNULL(iter)) {
+		return EINVAL;
+	}
+
+	/* Copy the pair out and release the node buffer. */
+	memcpy(value, ITER_VAL(iter), root->fn_tree->bt_valsize);
+	memcpy(key, ITER_KEY(iter), root->fn_tree->bt_keysize);
+
+	return (0);
+}
+
+/*
  * Find the smallest key in the tree that's larger than or equal to the key provided.
  */
 int
@@ -721,11 +791,14 @@ fnode_insert_at(struct fnode *node, void *key, void *value, int i)
 	/* The offset of the value in the node depends if it's internal or external. */
 	if (NODE_FLAGS(node) & BT_INTERNAL) {
 		src = fnode_getval(node, i + 1);
+		/* Move over the on-disk children, and add the new one.  */
 		memmove(src + NODE_VS(node), src, (NODE_SIZE(node) - i) * NODE_VS(node));
 		fnode_setval(node, i + 1, value);
-		memmove(&node->fn_pointers[i + 2], &node->fn_pointers[i + 1], (300 - i) * sizeof(void *));
+		/* Same for in-memory, mark the new one as nonresident.  */
+		memmove(&node->fn_pointers[i + 2], &node->fn_pointers[i + 1], (FNODE_PTRSIZE - i) * sizeof(void *));
 		node->fn_pointers[i + 1] = NULL;
 	} else {
+		/* Otherwise just scoot over the values, no pointers here.  */
 		src = fnode_getval(node, i);
 		memmove(src + NODE_VS(node), src, (NODE_SIZE(node) - i) * NODE_VS(node));
 		fnode_setval(node, i, value);
@@ -941,9 +1014,9 @@ fnode_verifysplit(void *space, struct fnode *left, struct fnode *right, struct f
 }
 #endif // INVARIANTS
 
-/* [0 (less than 5)] 5 [1( greater than 5 by less than 10] 10 [2] 15 [3]
- * Find element thats greater than it than take that index
- * */
+/*
+ * Split a btree node in two children and reorganize the tree accordingly.
+ */
 static int
 fnode_split(struct fnode *node)
 {
@@ -1034,7 +1107,10 @@ fnode_internal_insert(struct fnode *node, void *key, bnode_ptr *val)
 			mid = (start + end) / 2;
 			keyt = fnode_getkey(node, mid);
 			compare = NODE_COMPARE(node, keyt, key);
-			if (compare <= 0) {
+			/* We can't enter duplicates. */
+			if (compare == 0) {
+				return (EINVAL);
+			} else if (compare < 0) {
 				start = mid + 1;
 			} else {
 				index = mid;
@@ -1077,7 +1153,10 @@ fnode_external_insert(struct fnode *node, void *key, void *value)
 			mid = (start + end) / 2;
 			keyt = fnode_getkey(node, mid);
 			compare = NODE_COMPARE(node, keyt, key);
-			if (compare <= 0) {
+			/* Can't enter duplicates. */
+			if (compare == 0) {
+				return (EINVAL);
+			} else if (compare < 0) {
 				start = mid + 1;
 			} else {
 				index = mid;
@@ -1308,7 +1387,7 @@ fbtree_insert(struct fbtree *tree, void *key, void *value)
 
 	/* Add it to the node. */
 	error = fnode_insert(node, key, value);
-	if (error != ROOTCHANGE) {
+	if (FBTREE_ERROR(error)) {
 		return (error);
 	}
 
@@ -1436,6 +1515,275 @@ fbtree_test(struct fbtree *tree)
 
 	return (0);
 }
+
+#ifdef SLOS_TEST
+
+/* Constants for the testing function. */
+
+#define KEYSPACE    50000 /* Number of keys used */
+#define KEYINCR     100   /* Size of key range */
+#define ITERATIONS  100000  /* Number of iterations */
+#define CHECKPER    10000 /* Iterations between full tree checks */
+#define VALSIZE     (sizeof(uint64_t)) /* Size of the btree's values */
+#define POISON      'b'   /* Poison byte for the values. */
+
+#define PINSERT     40    /* Weight of insert operation */
+#define PDELETE     60    /* Weight of delete operation */
+#define PSEARCH     20    /* Weight of search operation */
+#define PKEYLIMIT   20    /* Weight of keymin/keymax operations */
+
+#define FBTEST_ID   (0xabcdef)  /* OID of the fbtree vnode for testing. */
+
+/*
+ * Randomized test for the btree. At each round the program randomly
+ * selects whether to insert, delete, or search for a random key.
+ * By holding information whether the number should be found, and
+ * checking the result of the operation, we can verify that each
+ * operation properly succeeds or fails.
+ *
+ * Periodically, we also do full checks of the tree, traversing it
+ * and verifying that its ordering and size invariants hold.
+ */
+int
+slsfs_fbtree_test(void)
+{
+
+	struct fbtree *btree;
+	int error, i, j;
+	uint64_t *keys;
+	int *is_there, *was_there;
+	int operation, index, key_present;
+	uint64_t key, limkey;
+	void *value;
+	uint64_t minkey, maxkey;
+	struct slos_node *svp;
+	struct vnode *vp;
+	void **values;
+	uint64_t oid;
+
+	oid = FBTEST_ID;
+	error = slsfs_new_node(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
+	if (error != 0)
+		return (error);
+
+	/* We just create a random vnode and grab its data tree for the test. */
+	error = VFS_VGET(slos.slsfs_mount, oid, LK_EXCLUSIVE, &vp);
+	if (error != 0)
+		return (error);
+
+	svp = SLSVP(vp);
+	btree = &svp->sn_tree;
+
+	/*
+	 * Our values are of arbitrary size, so create a random legible string
+	 * of characters for each one. We reuse the buffer later.
+	 */
+	value = malloc(VALSIZE, M_SLOS, M_WAITOK);
+
+
+	/*
+	 * One of the arrays is the actual numbers, the other
+	 * checks whether the number is there, the third checks
+	 * whether the number was ever in the btree. Since the numbers
+	 * generated increase strictly monotonically, we don't
+	 * need to worry about duplicates.
+	 */
+	keys = malloc(sizeof(*keys) * KEYSPACE, M_SLOS, M_WAITOK);
+	is_there = malloc(sizeof(*is_there) * KEYSPACE, M_SLOS, M_WAITOK | M_ZERO);
+	was_there = malloc(sizeof(*was_there) * KEYSPACE, M_SLOS, M_WAITOK | M_ZERO);
+
+	printf("Starting test\n");
+
+	/*
+	 * Begin from 1, because we'd like to keep 0 for invalid keys during
+	 * tests (while testing the upper bound, key - 1 is used to denote an
+	 * invalid upper bound. The dual of this for an upper bound on the
+	 * values of the keys is to disallow the use of the value UINT64_MAX,
+	 * but, provided KEYINCR * KEYSPACE is small relative to that value,
+	 * there is no possibility of it arising.
+	 */
+	keys[0] = 1;
+	for (i = 1; i < KEYSPACE; i++)
+		keys[i] = keys[i - 1] + 1 + (random() % KEYINCR);
+
+	values = malloc(sizeof(*values) * KEYSPACE, M_SLOS, M_WAITOK);
+	for (i = 0; i < KEYSPACE; i++) {
+		values[i] = malloc(VALSIZE, M_SLOS, M_WAITOK);
+		for (j = 0; j < VALSIZE - 1; j++)
+			((char *) values[i])[j] = 'a' + (random() % ('z' - 'a'));
+		((char *) values[i])[VALSIZE - 1] = '\0';
+	}
+
+	for (i = 0; i < ITERATIONS; i++) {
+		operation = random() % (PINSERT + PDELETE + PSEARCH + PKEYLIMIT);
+		index = random() % (KEYSPACE - 1);
+
+		key = keys[index];
+		key_present = is_there[index];
+
+		if (operation < PINSERT) {
+
+			/* Value is irrelevant, so have it be the the key. */
+			error = fbtree_insert(btree, &key, values[index]);
+			if (FBTREE_ERROR(error) && !key_present) {
+				printf("ERROR: Insertion of nonduplicate failed\n");
+				goto out;
+			} else if (!FBTREE_ERROR(error) && key_present) {
+				printf("ERROR: Insertion of duplicate succeeded\n");
+				error = EINVAL;
+				goto out;
+			}
+
+			error = fbtree_get(btree, &key, value);
+			if (FBTREE_ERROR(error)) {
+				printf("ERROR %d: Search of just inserted key %lx failed\n", error, key);
+				goto out;
+			}
+
+			is_there[index] = 1;
+			was_there[index] = 1;
+		} else if (operation < PINSERT + PDELETE) {
+
+#if 0
+			printf("Deleting %lx\n", key);
+			error = fbtree_remove(btree, &key, value);
+			if (error != 0 && key_present) {
+				printf("ERROR: Deletion of existing key failed\n");
+				goto out;
+			} else if (error == 0 && !key_present) {
+				printf("ERROR: Deletion of nonexistent key succeeded\n");
+				error = EINVAL;
+				goto out;
+			}
+
+			is_there[index] = 0;
+
+			/* Check if the popped value is the expected one. */
+			if (error == 0 && (memcmp(value, values[index], VALSIZE) != 0)) {
+				printf("ERROR: Value %.*s not equal to expected %.*s\n",
+				    (int) VALSIZE, (char *) value, (int) VALSIZE, (char *) values[index]);
+				error = EINVAL;
+				goto out;
+
+			}
+#endif
+		} else if (operation < PINSERT + PDELETE + PSEARCH) {
+
+			error = fbtree_get(btree, &key, value);
+			if (FBTREE_ERROR(error) && key_present) {
+				printf("ERROR: Search of existing key failed\n");
+				goto out;
+			} else if (!FBTREE_ERROR(error) && !key_present) {
+				printf("ERROR: Search of nonexistent key succeeded\n");
+				error = EINVAL;
+				goto out;
+			}
+
+			if (!FBTREE_ERROR(error) && (memcmp(value, values[index], VALSIZE) != 0)) {
+				printf("ERROR: Value %.*s not equal to expected %.*s\n",
+				    (int) VALSIZE, (char *) value, (int) VALSIZE, (char *) values[index]);
+				error = EINVAL;
+				goto out;
+
+			}
+
+		} else {
+			limkey = key;
+
+			/*
+			 * Try to find the lower bound of the key.
+			 * The initial value is a sentinel that shows
+			 * the key is smaller than all others in the tree.
+			 */
+			minkey = key + 1;
+			for (j = index; j >= 0; j--) {
+				if (is_there[j]) {
+					minkey = keys[j];
+					break;
+				}
+			}
+
+			error = fnode_keymin(btree->bt_rootnode, &limkey, value);
+			if (error != 0 && minkey <= key) {
+				printf("ERROR: Lower bound %lu for key %lu not found\n", minkey, key);
+				error = EINVAL;
+				goto out;
+			}
+
+			if (error == 0 && minkey != limkey) {
+				printf("ERROR: Lower bound for key %lu should be %lu, is %lu\n",
+				    key, minkey, limkey);
+				error = EINVAL;
+				goto out;
+
+			}
+
+			/*
+			 * Do the dual of the above
+			 * operations to find the upper bound.
+			 */
+			limkey = key;
+			maxkey = key - 1;
+			for (j = index; j < KEYSPACE; j++) {
+				if (is_there[j]) {
+					maxkey = keys[j];
+					break;
+				}
+			}
+
+			error = fnode_keymax(btree->bt_rootnode, &limkey, value);
+			if (error != 0 && maxkey >= key) {
+				printf("ERROR: Upper bound %lu for key %lu not found\n", maxkey, key);
+				error = EINVAL;
+				goto out;
+			}
+
+			if (error == 0 && maxkey != limkey) {
+				printf("ERROR: Upper bound for key %lu should be %lu, is %lu\n",
+				    key, maxkey, limkey);
+				error = EINVAL;
+				goto out;
+
+			}
+
+		}
+
+#if 0
+		/*
+		 * Every once in a while we do a full tree check. This check makes sure both
+		 * invariants of the tree are held (ordering and node capacity).
+		 */
+		if (i % CHECKPER == 0) {
+			if (btree_test(btree, keys, is_there, was_there, values) != 0) {
+				printf("ERROR: Integrity of btree violated\n");
+				error = EINVAL;
+				goto out;
+			}
+		}
+#endif
+	}
+
+	error = 0;
+out:
+	printf("Iterations: %d\n", i);
+
+	for (i = 0; i < KEYSPACE; i++)
+		free(values[i], M_SLOS);
+	free(values, M_SLOS);
+
+	free(value, M_SLOS);
+
+	free(keys, M_SLOS);
+	free(is_there, M_SLOS);
+	free(was_there, M_SLOS);
+
+	vput(vp);
+	/* XXX Destroy the on-disk node created when we have reclamation. */
+
+	return error;
+}
+
+#endif /* SLOS_TEST */
 
 #ifdef DDB
 #include "opt_ddb.h"
