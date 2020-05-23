@@ -7,6 +7,7 @@ BEGIN
     cmds = 0;
 }
 
+fbt::dofilewrite:entry,
 fbt::ffs_read:entry,
 fbt::ffs_write:entry
 {
@@ -14,13 +15,7 @@ fbt::ffs_write:entry
     this->traceme = 1;
 }
 
-/*
-io:::start
-/this->traceme && args[0] != NULL/
-{
-    @disk[args[1]->device_name, args[1]->unit_number, args[0]->bio_cmd] = count();
-}
-*/
+fbt::dofilewrite:return,
 fbt::ffs_read:return,
 fbt::ffs_write:return
 {
@@ -37,5 +32,4 @@ END
     printa(@counts);
     printf("Sums\n");
     printa(@total);
-/*    printa(@disk); */
 }

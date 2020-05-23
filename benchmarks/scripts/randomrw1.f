@@ -1,6 +1,6 @@
 set $dir=/testmnt
 set $filesize=2g
-set $iosize=64k
+set $iosize=1m
 set $nthreads=1
 set $workingset=0
 set $directio=0

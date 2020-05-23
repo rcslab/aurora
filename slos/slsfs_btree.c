@@ -397,9 +397,10 @@ static int
 fnode_keymin_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 {
 	int error;
-	void *val;
-	int diff;
-	int mid;
+	void *keyt;
+	int mid, start, compare;
+	int end;
+	int index;
 
 	struct fnode *node;
 
@@ -418,26 +419,26 @@ fnode_keymin_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 	}
 
 	KASSERT((NODE_FLAGS(node) & (BT_INTERNAL)) == 0, ("Should be on a external node now"));
-
-	/* Traverse the node to find the infimum. */
-	for(mid = 0; mid < NODE_SIZE(node); mid++) {
-		val = fnode_getkey(node, mid);
-		diff = NODE_COMPARE(node, val, key);
-		if (diff > 0) {
-			mid--;
-			break;
-		}
-		if (diff == 0) {
+	start = 0;
+	end = NODE_SIZE(node) - 1;
+	index = -1;
+	while (start <= end) {
+		mid = (start + end) / 2;
+		keyt = fnode_getkey(node, mid);
+		compare = NODE_COMPARE(node, keyt, key);
+		if (compare < 0) {
+			start = mid + 1;
+		} else if (compare > 0) {
+			end = mid - 1;
+		} else {
+			index = mid;
 			break;
 		}
 	}
+	/* Traverse the node to find the infimum. */
 
 	iter->it_node = node;
-	iter->it_index = mid;
-
-	/* If we went out of bounds, there is no infimum for the key. */
-	if ((mid == NODE_SIZE(node)) || (mid < 0))
-		iter->it_index = -1;
+	iter->it_index = index;
 
 	return (0);
 }

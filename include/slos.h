@@ -30,10 +30,6 @@ typedef struct slos_diskptr diskptr_t;
 
 extern uma_zone_t fnodes_zone;
 
-struct slsfs_blkalloc {
-	struct slos_node *a_offset;
-	struct slos_node *a_size;
-};
 
 /*
  * SLOS Pointer
@@ -41,6 +37,12 @@ struct slsfs_blkalloc {
 struct slos_diskptr {
 	uint64_t    offset;	/* The block offset of the first block of the region. */
 	uint64_t    size;	/* The size of the region in blocks. */
+};
+
+struct slsfs_blkalloc {
+	struct slos_node *a_offset;
+	struct slos_node *a_size;
+	struct slos_diskptr chunk;
 };
 
 /* Block size for file-backed SLOSes. */

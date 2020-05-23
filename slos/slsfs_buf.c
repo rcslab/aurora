@@ -46,6 +46,7 @@ slsfs_bcreate(struct vnode *vp, uint64_t lbn, size_t size, struct fnode_iter *it
 		BTREE_UNLOCK(&svp->sn_tree, 0);
 	} else {
 		error = fnode_insert(iter->it_node, &lbn, &ptr);
+		ITER_RELEASE(*iter);
 	}
 
 	if (error == ROOTCHANGE) {
@@ -106,7 +107,6 @@ slsfs_bdirty(struct buf *buf)
 
         /* Be aggressive and start the IO immediately. */
 	bawrite(buf);
-
 	return;
 }
 

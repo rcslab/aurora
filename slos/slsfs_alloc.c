@@ -7,6 +7,7 @@
 #include "slsfs_alloc.h"
 
 #define NEWOSDSIZE (30)
+#define AMORTIZED_CHUNK (1000)
 
 /*
  * Generic uint64_t comparison function.
@@ -25,28 +26,33 @@ uint64_t_comp(const void *k1, const void *k2)
 	return 0;
 }
 
-/*
- * Generic block allocator for the SLOS. We never explicitly free.
- */
 static int
-slsfs_blkalloc(struct slos *slos, size_t bytes, diskptr_t *ptr)
+fast_path(struct slos *slos, uint64_t blocks, diskptr_t *ptr)
+{
+	uint64_t blksize = BLKSIZE(slos);
+	diskptr_t *chunk = &slos->slsfs_alloc.chunk;
+	if (chunk->size >=  blocks * blksize) {
+		ptr->offset = chunk->offset;
+		ptr->size = blocks * blksize;
+		chunk->offset += blocks;
+		chunk->size -= blocks *blksize;
+		return (0);
+	}
+	return (-1);
+}
+
+static int
+allocate_chunk(struct slos *slos, diskptr_t *ptr)
 {
 	struct fnode_iter iter;
 	uint64_t temp;
-	int error;
-	uint64_t asked;
 	uint64_t fullsize;
 	uint64_t off;
 	uint64_t location;
+
 	uint64_t blksize = BLKSIZE(slos);
-
-	/* Get an extent large enough to cover the allocation. */
-	asked = (bytes / blksize);
-	if (bytes % blksize)
-		asked += 1;
-
-	BTREE_LOCK(STREE(slos), LK_EXCLUSIVE);
-	BTREE_LOCK(OTREE(slos), LK_EXCLUSIVE);
+	uint64_t asked = AMORTIZED_CHUNK;
+	int error;
 
 	fbtree_keymax_iter(STREE(slos), &asked, &iter);
 	fullsize = ITER_KEY_T(iter, uint64_t);
@@ -92,13 +98,43 @@ slsfs_blkalloc(struct slos *slos, size_t bytes, diskptr_t *ptr)
 		panic("Problem removing element in allocation");
 	}
 
-	BTREE_UNLOCK(OTREE(slos), 0);
-	BTREE_UNLOCK(STREE(slos), 0);
-
 	ptr->offset = location;
 	ptr->size = asked * blksize;
-
 	return (0);
+}
+
+/*
+ * Generic block allocator for the SLOS. We never explicitly free.
+ */
+static int
+slsfs_blkalloc(struct slos *slos, size_t bytes, diskptr_t *ptr)
+{
+	uint64_t asked;
+	uint64_t blksize = BLKSIZE(slos);
+	diskptr_t *chunk = &slos->slsfs_alloc.chunk;
+	int error;
+
+	/* Get an extent large enough to cover the allocation. */
+	asked = (bytes + blksize - 1) / blksize;
+	BTREE_LOCK(STREE(slos), LK_EXCLUSIVE);
+	while (true) {
+		if (!fast_path(slos, asked, ptr)) {
+			BTREE_UNLOCK(STREE(slos), 0);
+			return (0);
+		}
+
+		BTREE_LOCK(OTREE(slos), LK_EXCLUSIVE);
+		if (chunk->size > bytes) {
+			BTREE_UNLOCK(OTREE(slos), 0);
+			continue;
+		}
+		error = allocate_chunk(slos, &slos->slsfs_alloc.chunk);
+		if (error) {
+			panic("Problem allocating\n");
+		}
+		
+		BTREE_UNLOCK(OTREE(slos), 0);
+	}
 }
 
 /*
@@ -119,6 +155,8 @@ slsfs_allocator_init(struct slos *slos)
 
 	slos->slsfs_alloc.a_offset = offt;
 	slos->slsfs_alloc.a_size = sizet;
+	slos->slsfs_alloc.chunk.offset = 0;
+	slos->slsfs_alloc.chunk.size = 0;
 
 	// We just have to readjust the elements in the btree since we are not
 	// using them for the same purpose of keeping track of data

@@ -1,4 +1,3 @@
-#
 # CDDL HEADER START
 #
 # The contents of this file are subject to the terms of the
@@ -19,27 +18,28 @@
 # CDDL HEADER END
 #
 #
-# Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
+# Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# ident	"%Z%%M%	%I%	%E% SMI"
+
 set $dir=/testmnt
-set $filesize=1g
+set $filesize=2g
 set $iosize=64k
+set $iters=100
 set $nthreads=1
-set $workingset=0
-set $directio=0
-set $runtime=30
 
-define file name=largefile1,path=$dir,size=$filesize,reuse
+define file name=bigfile,path=$dir,size=$filesize,prealloc,reuse
 
-define process name=rand-write,instances=1
+define process name=filewriter,instances=1
 {
-  thread name=rand-thread,memsize=5m,instances=$nthreads
+  thread name=filewriterthread,memsize=10m,instances=$nthreads
   {
-    flowop write name=rand-write1,filename=largefile1,iosize=$iosize,random,workingset=$workingset,directio=$directio
+    flowop write name=write-file,filename=bigfile,random,dsync,iosize=$iosize,iters=$iters
+    flowop fsync name=sync-file
   }
 }
 
 run 30
 
-echo "Random Write Version 3.0 personality successfully loaded"
+echo  "FileMicro-WriteRandDsync Version 2.1 personality successfully loaded"

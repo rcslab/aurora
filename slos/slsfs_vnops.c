@@ -461,7 +461,6 @@ slsfs_retrieve_buf(struct vnode *vp, struct uio *uio, struct buf **bp)
 			blks += 1;
 		}
 		size = omin(MAXBCACHEBUF, blks * blksize);
-		ITER_RELEASE(biter);
 		error = slsfs_bcreate(vp, bno, size, &biter, bp);
 	} else {
 		uint64_t iter_key = ITER_KEY_T(biter, uint64_t);
@@ -470,7 +469,6 @@ slsfs_retrieve_buf(struct vnode *vp, struct uio *uio, struct buf **bp)
 			nextkey = ITER_KEY_T(biter, uint64_t);
 			blks = nextkey - bno;
 			size = omin(MAXBCACHEBUF, uio->uio_resid);
-			ITER_RELEASE(biter);
 			error = slsfs_bcreate(vp, bno, size, &biter, bp);
 		} else {
 			ptr = ITER_VAL_T(biter, diskptr_t);
@@ -728,7 +726,11 @@ slsfs_strategy(struct vop_strategy_args *args)
 		KASSERT(bp->b_lblkno != (-1), 
 			("No logical block number should be -1 - vnode effect %lu", 
 			 SLSVP(vp)->sn_pid));
-		error = slsfs_lookupbln(SLSVP(vp), bp->b_lblkno, &iter);
+		error = BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_SHARED);
+		if (error) {
+			panic("Problem getting lock %d\n", error);
+		}
+		error = fbtree_keymin_iter(&SLSVP(vp)->sn_tree, &bp->b_lblkno, &iter);
 		if (error != 0) {
 		    return (error);
 		}
@@ -761,6 +763,7 @@ slsfs_strategy(struct vop_strategy_args *args)
 			if (ptr.offset == 0) {
 				panic("Uh oh\n");
 			}
+			BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_UPGRADE);
 			fbtree_replace(&SLSVP(vp)->sn_tree, &bp->b_lblkno, &ptr);
 			bp->b_blkno = ptr.offset;
 		} else {

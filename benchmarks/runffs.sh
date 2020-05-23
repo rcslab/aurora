@@ -6,21 +6,40 @@ then
     exit
 fi
 
-gstripe destroy st0
-setup_stripe.sh
+if [ -z $2 ]
+then
+    echo "Require number of runs"
+    exit
+fi
+
+
+#gstripe destroy st0
+gstripe create -s 65536 -v st0 nvd0 nvd1 #nvd2 nvd3
 
 DRIVE=/dev/stripe/st0
+
 MNT=/testmnt
 
-newfs -j -S 4096 -b 65536 $DRIVE
-mount $DRIVE $MNT
-cd scripts
-for entry in `ls *.f`
+for run in $(seq 1 $2)
 do
-	echo $entry
-	filebench -f $entry > $1/$entry.out
-done
-cd ..
+	DIR=$1/$run
+	mkdir $DIR
 
-umount $MNT
+	echo ""
+	echo "Run $run of $2 started..."
+	echo ""
+
+	newfs -j -S 4096 -b 65536 $DRIVE
+	mount $DRIVE $MNT
+	cd scripts
+	for entry in `ls *.f`
+	do
+		echo $entry
+		filebench -f $entry > $DIR/$entry.out
+	done
+	cd ..
+	umount $MNT
+done;
 gstripe destroy st0
+
+

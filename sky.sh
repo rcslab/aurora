@@ -1,7 +1,7 @@
 #!/bin/sh
 
 gstripe destroy st0
-setup_stripe.sh
+gstripe create -s 65536 -v st0 nvd0 nvd1 nvd2 nvd3
 
 DRIVE=/dev/stripe/st0
 
@@ -20,7 +20,7 @@ mount -rw -t slsfs $DRIVE /testmnt
 #kldload kmod/sls.ko
 #filebench -f trace/varmail.f &2> /dev/null
 ##sleep 10
-#filebench -f trace/randomrw.f &2> /dev/null
+filebench -f benchmarks/scripts/randomrw.f
 
 #kldunload sls
 #umount /testmnt
