@@ -436,57 +436,6 @@ slsfs_remove(struct vop_remove_args *args)
 }
 
 static int
-slsfs_retrieve_buf(struct vnode *vp, struct uio *uio, struct buf **bp)
-{
-	struct fnode_iter biter;
-	diskptr_t ptr;
-	int error;
-	uint64_t size, nextkey, blks;
-
-	struct slos_node *svp = SLSVP(vp);
-	size_t blksize = IOSIZE(svp);
-	uint64_t bno = uio->uio_offset / blksize;
-
-	DBUG("Attemping to retrieve buffer %lu bno\n", bno);
-	error = slsfs_lookupbln(svp, bno, &biter);
-	if (error) {
-		DBUG("%d\n", error);
-		return (error);
-	}
-	
-	blks = (uio->uio_resid / blksize);
-
-	if (ITER_ISNULL(biter)) {
-		if ( uio->uio_resid % blksize ) {
-			blks += 1;
-		}
-		size = omin(MAXBCACHEBUF, blks * blksize);
-		error = slsfs_bcreate(vp, bno, size, &biter, bp);
-	} else {
-		uint64_t iter_key = ITER_KEY_T(biter, uint64_t);
-		if (iter_key != bno) {
-			ITER_NEXT(biter);
-			nextkey = ITER_KEY_T(biter, uint64_t);
-			blks = nextkey - bno;
-			size = omin(MAXBCACHEBUF, uio->uio_resid);
-			error = slsfs_bcreate(vp, bno, size, &biter, bp);
-		} else {
-			ptr = ITER_VAL_T(biter, diskptr_t);
-			ITER_RELEASE(biter);
-			if (ptr.size > MAXBCACHEBUF) {
-				fnode_print(biter.it_node);
-			}
-			error = slsfs_bread(vp, bno, ptr.size, NULL, bp);
-		}
-	}
-	if (error == ROOTCHANGE) {
-		svp->sn_ino.ino_btree = (diskptr_t){ svp->sn_tree.bt_root, IOSIZE(svp) };
-		return (0);
-	}
-	return (error);
-}
-
-static int
 slsfs_write(struct vop_write_args *args)
 {
 	struct buf *bp;
@@ -544,14 +493,14 @@ slsfs_write(struct vop_write_args *args)
 	while(uio->uio_resid) {
 		// Grab the key thats closest to offset, but not over it
 		// Mask out the lower order bits so we just have the block;
-		error = slsfs_retrieve_buf(vp, uio, &bp);
+		error = slsfs_retrieve_buf(vp, uio->uio_offset, uio->uio_resid, &bp);
 		if (error) {
 			DBUG("Problem getting buffer for write %d\n", error);
 			return (error);
 		}
 
 		off = uio->uio_offset - (bp->b_lblkno * blksize);
-		KASSERT(off < bp->b_bcount, ("Offset should inside buf"));
+		KASSERT(off < bp->b_bcount, ("Offset should inside buf, %p", bp));
 		xfersize = omin(uio->uio_resid, bp->b_bcount - off);
 
 		KASSERT(xfersize != 0, ("No 0 uio moves slsfs write"));
@@ -618,7 +567,7 @@ slsfs_read(struct vop_read_args *args)
 	DBUG("READING global off %lu, global size %lu\n", uio->uio_offset, uio->uio_resid); 
 	while(resid) {
 
-		error = slsfs_retrieve_buf(vp, uio, &bp);
+		error = slsfs_retrieve_buf(vp, uio->uio_offset, uio->uio_resid, &bp);
 		if (error) {
 			DBUG("Problem getting buffer for write %d\n", error);
 			return (error);
@@ -711,6 +660,18 @@ slsfs_print(struct vop_print_args *args)
 	return (0);
 }
 
+static void
+adjust_ptr(uint64_t lbln, uint64_t bln, diskptr_t *ptr) 
+{
+	if (bln == lbln) {
+		return;
+	}
+	
+	KASSERT(lbln > bln, ("Should be slightly larger %lu : %lu", lbln, bln));
+	uint64_t off = lbln - bln;
+	ptr->offset += off;
+}
+
 static int
 slsfs_strategy(struct vop_strategy_args *args)
 {
@@ -720,7 +681,13 @@ slsfs_strategy(struct vop_strategy_args *args)
 	struct buf *bp = args->a_bp;
 	struct vnode *vp = args->a_vp;
 	struct fnode_iter iter;
-
+	//FOR BETTER BUF TRACKING
+	/*if (bp->b_iocmd == BIO_WRITE) {*/
+		/*printf("BIOWRITE : bp(%p), vp(%p:%lu) - %lu:%lu, %lu\n", bp, vp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno, bp->b_iooffset);*/
+	/*} else {*/
+		/*printf("BIOREAD : bp(%p), vp(%p:%lu) - %lu:%lu, %lu\n", bp, vp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno, bp->b_iooffset);*/
+	/*}*/
+	
         CTR2(KTR_SPARE5, "slsfs_strategy vp=%p blkno=%x\n", vp, bp->b_lblkno);
 	if (vp->v_type != VCHR) {
 		KASSERT(bp->b_lblkno != (-1), 
@@ -747,15 +714,17 @@ slsfs_strategy(struct vop_strategy_args *args)
 		}
 
 		if (ITER_KEY_T(iter, uint64_t) != bp->b_lblkno) {
-			panic("whats %lu, %p", bp->b_lblkno, iter.it_node);
+			if (!INTERSECT(iter, bp->b_lblkno, IOSIZE(SLSVP(vp)))) {
+				panic("Key not found");
+			}
 		}
 
 		ptr = ITER_VAL_T(iter, diskptr_t);
-
 		if (ptr.offset != (0))  {
+			adjust_ptr(bp->b_lblkno, ITER_KEY_T(iter, uint64_t), &ptr);
 			bp->b_blkno = ptr.offset;
 		} else if (bp->b_iocmd == BIO_WRITE) {
-			error = ALLOCATEBLK(SLSVP(vp)->sn_slos, bp->b_bcount, &ptr);
+			error = ALLOCATEBLK(SLSVP(vp)->sn_slos, ptr.size, &ptr);
 			if (error) {
 				panic("UH OH");
 			}
@@ -763,8 +732,8 @@ slsfs_strategy(struct vop_strategy_args *args)
 			if (ptr.offset == 0) {
 				panic("Uh oh\n");
 			}
-			BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_UPGRADE);
 			fbtree_replace(&SLSVP(vp)->sn_tree, &bp->b_lblkno, &ptr);
+			adjust_ptr(bp->b_lblkno, ITER_KEY_T(iter, uint64_t), &ptr);
 			bp->b_blkno = ptr.offset;
 		} else {
 			bp->b_blkno = (daddr_t) (-1);
@@ -784,13 +753,6 @@ slsfs_strategy(struct vop_strategy_args *args)
 	int change =  bp->b_bufobj->bo_bsize / slos.slos_vp->v_bufobj.bo_bsize;
 	bp->b_blkno = bp->b_blkno * change;
 	bp->b_iooffset = dbtob(bp->b_blkno);
-	/* FOR BETTER BUF TRACKING
-	if (bp->b_iocmd == BIO_WRITE) {
-		DBUG("BIOWRITE : bp(%p), vp(%p:%lu) - %lu:%lu, %lu\n", bp, vp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno, bp->b_iooffset);
-	} else {
-		DBUG("BIOREAD : bp(%p), vp(%p:%lu) - %lu:%lu, %lu\n", bp, vp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno, bp->b_iooffset);
-	}
-	*/
 
 	g_vfs_strategy(&slos.slos_vp->v_bufobj, bp);
 

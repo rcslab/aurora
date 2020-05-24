@@ -426,10 +426,11 @@ fnode_keymin_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 		mid = (start + end) / 2;
 		keyt = fnode_getkey(node, mid);
 		compare = NODE_COMPARE(node, keyt, key);
-		if (compare < 0) {
-			start = mid + 1;
-		} else if (compare > 0) {
+		if (compare > 0) {
 			end = mid - 1;
+		} else if (compare < 0) {
+			index = mid;
+			start = mid + 1;
 		} else {
 			index = mid;
 			break;

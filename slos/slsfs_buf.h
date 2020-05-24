@@ -5,12 +5,20 @@
 
 #include <slos_inode.h>
 
+#define ENDPOINT(iter, blksize) \
+	(ITER_KEY_T((iter), uint64_t) * blksize) +\
+	(ITER_VAL_T((iter), diskptr_t).size)
+#define INTERSECT(leftiter, right, blksize) \
+	(ENDPOINT(leftiter, blksize) > (right * blksize))
+
 /*
  * Given some vnode, bcreate will create a struct buf at the given logical
  * block number (lbn), of size xfersize and allocate it and attach it to the 
  * given pointer at buf.
  */
-int slsfs_bcreate(struct vnode *node, uint64_t lbn, size_t xfersize, struct fnode_iter *iter, struct buf **buf);
+int slsfs_balloc(struct vnode *node, uint64_t lbn, size_t xfersize, struct buf **buf);
+
+int slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, struct buf **bp);
 
 /*
  * Given some vnode will read in the buffer associated with the logical block 

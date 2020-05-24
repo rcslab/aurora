@@ -49,7 +49,7 @@ slsfs_add_dirent(struct vnode *vp, uint64_t ino, char *nameptr, long namelen, ui
 	} 
 
 	if (!bp) {
-		error = slsfs_bcreate(vp, blks, blksize, NULL, &bp);
+		error = slsfs_retrieve_buf(vp, blks * blksize, blksize, &bp);
 		if (error) {
 			DBUG("Problem creating buffer at %lu\n", blks);
 			return (error);

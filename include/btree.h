@@ -54,7 +54,7 @@ extern uma_zone_t fnodes_zone;
 //#define ITER_RELEASE(iter) (bqrelse((iter).it_node->fn_buf))
 #define ITER_RELEASE(iter)  (BTREE_UNLOCK((iter).it_node->fn_tree, 0));
 #define ITER_NEXT(iter) (fnode_iter_next(&(iter)))
-#define ITER_ISNULL(iter) (iter.it_index == -1)
+#define ITER_ISNULL(iter) ((iter).it_index == -1)
 
 #define BTREE_LOCK(tree, flags) (lockmgr(&(tree)->bt_lock, flags, 0))
 #define BTREE_UNLOCK(tree, flags) (lockmgr(&(tree)->bt_lock, LK_RELEASE | flags, 0))

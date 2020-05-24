@@ -1,7 +1,7 @@
 #!/bin/sh
 
 gstripe destroy st0
-gstripe create -s 65536 -v st0 nvd0 nvd1 nvd2 nvd3
+gstripe create -s 65536 -v st0 nvd0 nvd1 #nvd2 nvd3
 
 DRIVE=/dev/stripe/st0
 
