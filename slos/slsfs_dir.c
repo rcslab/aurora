@@ -72,10 +72,8 @@ slsfs_add_dirent(struct vnode *vp, uint64_t ino, char *nameptr, long namelen, ui
 	DBUG("Placing directory %s at offset %lu\n",  dir->d_name, dir->d_off);
 
 	slsfs_bdirty(bp);
-	if (type == DT_DIR) {
-		SLSINO(svp).ino_nlink++;
-	}
 	svp->sn_ino.ino_size = dir->d_off + sizeof(struct dirent);
+	svp->sn_status |= SLOS_DIRTY;
 	// XXX This is actually incorrect -- we are flushing an update to disk 
 	// when we havnt actually made the change to directory on disk, this 
 	// probably cleans itself up when we make the changes to inodes though 
@@ -116,6 +114,8 @@ slsfs_init_dir(struct vnode *dvp, struct vnode *vp, struct componentname *name)
 		error = slsfs_add_dirent(dvp, 
 		    SVINUM(svp), name->cn_nameptr, name->cn_namelen, DT_DIR);
 	}
+	SLSVP(vp)->sn_ino.ino_nlink = 2;
+	slos_updateroot(SLSVP(vp));
 
 	return (error);
 }
@@ -207,12 +207,8 @@ slsfs_unlink_dir(struct vnode *dvp, struct vnode *vp, struct componentname *name
 	if (last_bp != del_bp) {
 		slsfs_bdirty(del_bp);
 	}
-
-	// Update the links and size;
-	if (vp->v_type == VDIR) {
-		SLSINO(sdvp).ino_nlink--;
-	}
-
+	
+	SLSVP(dvp)->sn_status |= SLOS_DIRTY;
 	// Update inode size to disk
 	slos_updatetime(sdvp);
 

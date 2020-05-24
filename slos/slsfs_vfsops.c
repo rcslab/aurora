@@ -640,7 +640,7 @@ error:
  * Flush all dirty buffers related to the SLOS to the backend.
  */
 static void
-slsfs_checkpoint(struct mount *mp)
+slsfs_checkpoint(struct mount *mp, int closing)
 {
 	struct vnode *vp, *mvp;
 	struct thread *td;
@@ -675,7 +675,7 @@ slsfs_checkpoint(struct mount *mp)
 			continue;
 		}
 		if (SLSVP(vp)->sn_status & SLOS_DIRTY) {
-			dirty = slsfs_sync_vp(vp);
+			dirty = slsfs_sync_vp(vp, closing);
 			if (dirty == -1) {
 				vput(vp);
 				return;
@@ -696,7 +696,7 @@ slsfs_checkpoint(struct mount *mp)
 	// Just a hack for now to get this thing working XXX Why is it a hack?
 	/* Sync the inode root itself. */
 	VOP_LOCK(slos.slsfs_inodes, LK_EXCLUSIVE);
-	error = slsfs_sync_vp(slos.slsfs_inodes);
+	error = slsfs_sync_vp(slos.slsfs_inodes, closing);
 	if (error) {
 		return;
 	}
@@ -719,7 +719,7 @@ slsfs_syncer(struct slos *slos)
 
 	/* Periodically sync until we unmount. */
 	while (!slos->slsfs_sync_exit) {
-		slsfs_checkpoint(slos->slsfs_mount);
+		slsfs_checkpoint(slos->slsfs_mount, 0);
 
 		/* Notify anyone waiting to synchronize. */
 		mtx_lock(&slos->slsfs_sync_lk);
@@ -737,7 +737,7 @@ slsfs_syncer(struct slos *slos)
 	DBUG("Syncer exiting\n");
 
 	/* One last checkpoint before we exit. */
-	slsfs_checkpoint(slos->slsfs_mount);
+	slsfs_checkpoint(slos->slsfs_mount, 1);
 
 	/* Notify anyone else waiting to flush one last time. */
 	mtx_lock(&slos->slsfs_sync_lk);

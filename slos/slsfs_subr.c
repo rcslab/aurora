@@ -101,8 +101,11 @@ slsfs_remove_node(struct vnode *dvp, struct vnode *vp, struct componentname *nam
 		return error;
 	}
 
-	/* Mark the node as dead. It will be cleaned up automatically. */
-	svp->sn_status = SLOS_VDEAD;
+	if (--SLSVP(vp)->sn_ino.ino_nlink == 0) {
+		/* Mark the node as dead. It will be cleaned up automatically. 
+		 * */
+		svp->sn_status = SLOS_VDEAD;
+	}
 
 	return (0);
 }
@@ -158,7 +161,7 @@ slsfs_truncate(struct vnode *vp, size_t size)
 
 /* Flush a vnode's data to the disk. */
 int
-slsfs_sync_vp(struct vnode *vp)
+slsfs_sync_vp(struct vnode *vp, int release)
 {
 	struct slos *slos = SLSVP(vp)->sn_slos;
 	struct bufobj *bo = &vp->v_bufobj;
@@ -180,7 +183,7 @@ slsfs_sync_vp(struct vnode *vp)
 	}
 	BO_UNLOCK(bo);
 
-	slsfs_sync_dev(fvp);
+	slsfs_sync_dev(fvp, release);
 	/*
 	 * Trying to update the time on the vnode holding the inodes
 	 * dirties it which means we have to sync it to disk again,
@@ -197,7 +200,7 @@ slsfs_sync_vp(struct vnode *vp)
  * Flush out the dirty buffers of the device backing the given SLOS.
  */
 int
-slsfs_sync_dev(struct vnode *vp)
+slsfs_sync_dev(struct vnode *vp, int release)
 {
 	struct buf *bp, *tbd;
 	struct bufobj *bo = &vp->v_bufobj;
@@ -207,6 +210,9 @@ slsfs_sync_dev(struct vnode *vp)
 			continue;
 		}
 		DBUG("Syncing device buffer %p\n", bp);
+		if (release) {
+			bp->b_flags &= ~(B_MANAGED);
+		}
 		slsfs_bundirty(bp);
 	}
 	return (0);
@@ -228,7 +234,7 @@ slsfs_bufsync(struct bufobj *bufobj, int waitfor)
 	 * XXX Do we assume we have the vnode lock? If so
 	 * we should add a KASSERT.
 	 */
-	return (slsfs_sync_vp(bo2vnode(bufobj)));
+	return (slsfs_sync_vp(bo2vnode(bufobj), 0));
 }
 
 /* Mark a buffer as a candidate to be flushed. */

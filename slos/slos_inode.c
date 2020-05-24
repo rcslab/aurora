@@ -371,7 +371,7 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 	ino.ino_ctime_nsec = tv.tv_nsec;
 	ino.ino_mtime = tv.tv_sec;
 	ino.ino_mtime_nsec = tv.tv_nsec;
-	ino.ino_nlink = 0;
+	ino.ino_nlink = 1;
 	ino.ino_flags = 0;
 	ino.ino_blk = -1;
 	ino.ino_magic = SLOS_IMAGIC;
@@ -526,6 +526,8 @@ slos_updatetime(struct slos_node *svp)
 	ino->ino_mtime = ts.tv_sec;
 	ino->ino_mtime_nsec = ts.tv_nsec;
 	mtx_unlock(&svp->sn_mtx);
+
+	slos_updateroot(svp);
 
 	return (0);
 }

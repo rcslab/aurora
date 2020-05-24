@@ -172,7 +172,7 @@ slsfs_readdir(struct vop_readdir_args *args)
 	struct dirent dir;
 	size_t blkno;
 	off_t blkoff;
-	size_t diroffset;
+	size_t diroffset, anyleft;
 	int error = 0;
 
 	struct vnode *vp = args->a_vp;
@@ -193,7 +193,8 @@ slsfs_readdir(struct vop_readdir_args *args)
 		diroffset = io->uio_offset;
 		blkno = io->uio_offset / blksize;
 		blkoff = io->uio_offset % blksize;
-		error = slsfs_bread(vp, blkno, blksize, curthread->td_ucred, &bp);
+		error = slsfs_bread(vp, blkno, blksize, curthread->td_ucred, 
+		    &bp);
 		if (error) {
 			brelse(bp);
 			DBUG("Problem reading from blk in readdir\n");
@@ -202,15 +203,15 @@ slsfs_readdir(struct vop_readdir_args *args)
 		/* Create the UIO for the disk. */
 		while (diroffset < filesize) {
 			DBUG("dir offet %lu\n", diroffset);
-			size_t anyleft = ((diroffset % blksize) + sizeof(struct dirent)) > blksize;
+			anyleft = ((diroffset % blksize) + sizeof(struct dirent)) > blksize;
 			if (anyleft) {
 				blkoff = 0;
 				blkno++;
 				diroffset = blkno * blksize;
 				brelse(bp);
-				error = slsfs_bread(vp, blkno, blksize, curthread->td_ucred, &bp);
+				error = slsfs_bread(vp, blkno, blksize, 
+				    curthread->td_ucred, &bp);
 				if (error) {
-					DBUG("Problem reading from blk in readdir in while\n");
 					brelse(bp);
 					return (error);
 				}
@@ -298,34 +299,31 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 		if (error == EINVAL) {
 			error = ENOENT;
 			/* 
-			 * Are we creating or renaming the directory, and is the last
-			 * name in the name component? If so change return 
+			 * Are we creating or renaming the directory
 			 */
-			if ((nameiop == CREATE || nameiop == RENAME) && islastcn) {
-				/* Normally should check access rights but won't for now */
-				DBUG("Regular name lookup - not found, but creating\n");
+			if ((nameiop == CREATE || nameiop == RENAME) && 
+			    islastcn) {
+				/* Normally should check access rights but 
+				 * won't for now */
+				DBUG("Regular name lookup - not found\n");
 				cnp->cn_flags |= SAVENAME;
 				error = EJUSTRETURN;
-			} else {
-				DBUG("File not found\n");
-			}
-			// XXX Instead of saving the name save the offset into the 
-			// directory so we can just grab it.
+			} 
 		} else if (error == 0) {
-			/* Cases for when name is found, others to be filled in later */
+			/* Cases for when name is found, others to be filled in 
+			 * later */
 			if ((nameiop == DELETE) && islastcn) {
 				DBUG("Delete of file %s\n", cnp->cn_nameptr);
-				error = SLS_VGET(dvp, dir.d_fileno, LK_EXCLUSIVE, &vp);
+				error = SLS_VGET(dvp, dir.d_fileno, 
+				    LK_EXCLUSIVE, &vp);
 				if (!error) {
 					cnp->cn_flags |= SAVENAME;
 					*vpp = vp;
 				}
-			} else if ((nameiop == RENAME) && islastcn) {
-				DBUG("Rename of file %s\n", cnp->cn_nameptr);
-				panic("Rename Not implemented\n");
 			} else {
 				DBUG("Lookup of file %s\n", cnp->cn_nameptr);
-				error = SLS_VGET(dvp, dir.d_fileno, LK_EXCLUSIVE, &vp);
+				error = SLS_VGET(dvp, dir.d_fileno, 
+				    LK_EXCLUSIVE, &vp);
 				if (!error) {
 					*vpp = vp;
 				}
@@ -405,6 +403,8 @@ slsfs_create(struct vop_create_args *args)
 		return (EIO);
 	}
 
+	SLSVP(dvp)->sn_ino.ino_nlink += 1;
+
 	*vpp = vp;
 	if ((name->cn_flags & MAKEENTRY) != 0) {
 		cache_enter(dvp, *vpp, name);
@@ -428,6 +428,7 @@ slsfs_remove(struct vop_remove_args *args)
 		return (error);
 	}
 
+	SLSVP(dvp)->sn_ino.ino_nlink -= 1;
 	cache_purge(dvp);
 
 	DBUG("Removing file\n");
@@ -504,16 +505,18 @@ slsfs_write(struct vop_write_args *args)
 		xfersize = omin(uio->uio_resid, bp->b_bcount - off);
 
 		KASSERT(xfersize != 0, ("No 0 uio moves slsfs write"));
-		KASSERT(xfersize <= uio->uio_resid, ("This should never occur"));
+		KASSERT(xfersize <= uio->uio_resid, ("This should neveroccur"));
 		uiomove((char *)bp->b_data + off, xfersize, uio);
-		/* One thing thats weird right now is our inodes and meta data is currently not
-		 * in the buf cache, so we don't really have to worry about dirtying those buffers,
+		/* One thing thats weird right now is our inodes and meta data 
+		 * is currently not
+		 * in the buf cache, so we don't really have to worry about 
+		 * dirtying those buffers,
 		 * but later we will have to dirty them.
 		 */
 		slsfs_bdirty(bp);
 		modified++;
 	}
-	
+
 	if (modified) {
 		svp->sn_status |= SLOS_DIRTY;
 	}
@@ -547,17 +550,6 @@ slsfs_read(struct vop_read_args *args)
 	if (uio->uio_resid == 0)
 		return (0);
 
-	switch(vp->v_type) {
-	case VREG:
-		break;
-	case VDIR:
-		return (EISDIR);
-	case VLNK:
-		break;
-	default:
-		panic("bad file type");
-	}
-
 	DBUG("Reading filesize %lu - %lu\n", SLSVP(vp)->sn_pid, filesize);
 	if (uio->uio_offset >= filesize) {
 		return (0);
@@ -566,7 +558,6 @@ slsfs_read(struct vop_read_args *args)
 	resid = omin(uio->uio_resid, (filesize - uio->uio_offset));
 	DBUG("READING global off %lu, global size %lu\n", uio->uio_offset, uio->uio_resid); 
 	while(resid) {
-
 		error = slsfs_retrieve_buf(vp, uio->uio_offset, uio->uio_resid, &bp);
 		if (error) {
 			DBUG("Problem getting buffer for write %d\n", error);
@@ -579,11 +570,14 @@ slsfs_read(struct vop_read_args *args)
 
 		/* One thing thats weird right now is our inodes and meta data 
 		 * is currently not
-		 * in the buf cache, so we don't really have to worry about dirtying those buffers,
+		 * in the buf cache, so we don't really have to worry about 
+		 * dirtying those buffers,
 		 * but later we will have to dirty them.
 		 */
-		DBUG("Reading: Read at bno %lu for vnode %p, read size %lu\n", bp->b_lblkno, vp, toread);
-		DBUG("Relative offset %lu, global off %lu, global size %lu\n", off, uio->uio_offset, uio->uio_resid); 
+		DBUG("Reading: Read at bno %lu for vnode %p, read size %lu\n", 
+		    bp->b_lblkno, vp, toread);
+		DBUG("Relative offset %lu, global off %lu, global size %lu\n", 
+		    off, uio->uio_offset, uio->uio_resid); 
 		KASSERT(toread != 0, ("Should not occur"));
 		error = uiomove((char *)bp->b_data + off, toread, uio);
 		if (error) {
@@ -615,18 +609,24 @@ slsfs_bmap(struct vop_bmap_args *args)
 		*args->a_runb = 0;
 
 	/*
-	 * We just want to allocate for now, since allocations are persistent and get written to disk
-	 * (this is obviously very slow), if we want to make this transactional we will need to to 
-	 * probably do the ZFS strategy of just having this sent the physical block to the logical one
-	 * and over write the buf_ops so that allocation occurs on the flush or the sync?  How would 
-	 * this interact with checkpointing.  I'm thinking we will probably have all the flushes occur
+	 * We just want to allocate for now, since allocations are persistent 
+	 * and get written to disk
+	 * (this is obviously very slow), if we want to make this transactional 
+	 * we will need to to probably do the ZFS strategy of just having this 
+	 * sent the physical block to the logical one
+	 * and over write the buf_ops so that allocation occurs on the flush or 
+	 * the sync?  How would this interact with checkpointing.  I'm thinking 
+	 * we will probably have all the flushes occur
 	 * on a checkpoint, or before.
 	 *
-	 * After discussion, we believe that optimistically flushing would be a good idea, as it would 
-	 * reduce the dump time for the checkpoint thus reducing latency on packets being help up 
-	 * waiting for the data to be dumped to disk. Another issue we face here is that if we allocate 
-	 * on each block we turn our extents and larger writes into blocks.  So I believe the best thing
-	 * to do is do allocation on flush. So we will make our bmap return the logical block
+	 * After discussion, we believe that optimistically flushing would be a 
+	 * good idea, as it would reduce the dump time for the checkpoint thus 
+	 * reducing latency on packets being help up waiting for the data to be 
+	 * dumped to disk. Another issue we face here is that if we allocate on 
+	 * each block we turn our extents and larger writes into blocks.  So I 
+	 * believe the best thing
+	 * to do is do allocation on flush. So we will make our bmap return the 
+	 * logical block
 	 */
 	return (0);
 }
@@ -681,6 +681,7 @@ slsfs_strategy(struct vop_strategy_args *args)
 	struct buf *bp = args->a_bp;
 	struct vnode *vp = args->a_vp;
 	struct fnode_iter iter;
+
 	//FOR BETTER BUF TRACKING
 	/*if (bp->b_iocmd == BIO_WRITE) {*/
 		/*printf("BIOWRITE : bp(%p), vp(%p:%lu) - %lu:%lu, %lu\n", bp, vp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno, bp->b_iooffset);*/
@@ -699,18 +700,20 @@ slsfs_strategy(struct vop_strategy_args *args)
 		}
 		error = fbtree_keymin_iter(&SLSVP(vp)->sn_tree, &bp->b_lblkno, &iter);
 		if (error != 0) {
-		    return (error);
+			return (error);
 		}
 
 		if (ITER_ISNULL(iter)) {
 			if (iter.it_node->fn_dnode->dn_parent) {
 				if (!iter.it_node->fn_parent) {
-					fnode_parent(iter.it_node, &iter.it_node->fn_parent);
+					fnode_parent(iter.it_node, 
+					    &iter.it_node->fn_parent);
 				}
 				fnode_print(iter.it_node->fn_parent);
 			}
 			fnode_print(iter.it_node);
-			panic("whats %p, %lu, %p", vp, bp->b_lblkno, iter.it_node);
+			panic("whats %p, %lu, %p", vp, bp->b_lblkno, 
+			    iter.it_node);
 		}
 
 		if (ITER_KEY_T(iter, uint64_t) != bp->b_lblkno) {
@@ -732,21 +735,25 @@ slsfs_strategy(struct vop_strategy_args *args)
 			if (ptr.offset == 0) {
 				panic("Uh oh\n");
 			}
-			fbtree_replace(&SLSVP(vp)->sn_tree, &bp->b_lblkno, &ptr);
+			error = fbtree_replace(&SLSVP(vp)->sn_tree, ITER_KEY(iter), &ptr);
+			if (error) {
+				panic("Issue replacing key %d\n", error);
+			}
 			adjust_ptr(bp->b_lblkno, ITER_KEY_T(iter, uint64_t), &ptr);
 			bp->b_blkno = ptr.offset;
 		} else {
 			bp->b_blkno = (daddr_t) (-1);
-			vfs_bio_clrbuf(bp); 
-			bufdone(bp);
+			vfs_bio_clrbuf(bp); bufdone(bp);
 			ITER_RELEASE(iter);
 			return (0);
 		}
 		ITER_RELEASE(iter);
 	} else {
 		bp->b_blkno = bp->b_lblkno;
-		int change =  bp->b_bufobj->bo_bsize / slos.slos_vp->v_bufobj.bo_bsize;
-		SDT_PROBE3(slos, , , slsfs_deviceblk, bp->b_blkno, bp->b_bufobj->bo_bsize, change);
+		int change =  bp->b_bufobj->bo_bsize / 
+		    slos.slos_vp->v_bufobj.bo_bsize;
+		SDT_PROBE3(slos, , , slsfs_deviceblk, bp->b_blkno, 
+		    bp->b_bufobj->bo_bsize, change);
 	}
 
 	KASSERT(bp->b_blkno != 0, ("Fucking die %p - %p", bp, vp));
@@ -767,6 +774,68 @@ slsfs_setattr(struct vop_setattr_args *args)
 	int error = 0;
 	if (vap->va_size != (u_quad_t)VNOVAL) {
 		error = slsfs_truncate(vp, vap->va_size);
+	}
+	return (error);
+}
+
+/* Check to make sure the target directory does not have the src directory 
+ * within it, this is used to stop cycles from occuring from hard links */
+static int
+slsfs_checkpath(struct vnode *src, struct vnode *target, struct ucred *cred)
+{
+	int error = 0;
+	struct dirent dir;
+	DBUG("Checking path\n");
+	if (SLSVP(target)->sn_pid == SLSVP(src)->sn_pid) {
+		error = EEXIST;
+		goto out;
+	}
+	if (SLSVP(target)->sn_pid == SLOS_ROOT_INODE) {
+		goto out;
+	}
+
+	for (;;) {
+		if (target->v_type != VDIR) {
+			error = ENOTDIR;
+			break;
+		}
+
+		error = vn_rdwr(UIO_READ, target, &dir, sizeof(struct dirent), 
+		    0, UIO_SYSSPACE,
+		    IO_NODELOCKED | IO_NOMACCHECK, cred, NOCRED, NULL, NULL);
+		if (error != 0) {
+			DBUG("Error reading a writing %d\n", error);
+			break;
+		}
+
+		if (dir.d_namlen != 2 || dir.d_name[0] != '.' || dir.d_name[1] 
+		    != '.') {
+			DBUG("Not a directory\n");
+			error = ENOTDIR;
+			break;
+		}
+
+		if (dir.d_fileno == SLSVP(src)->sn_pid) {
+			DBUG("Found within path\n");
+			error = EINVAL;
+			break;
+		}
+
+		if (dir.d_fileno == SLOS_ROOT_INODE) {
+			DBUG("Parent is root\n");
+			break;
+		}
+		vput(target);
+		if ((error = VFS_VGET(src->v_mount, dir.d_fileno, LK_EXCLUSIVE, 
+		    &target)) != 0) {
+			target = NULL;
+			break;
+		}
+	}
+out:
+	if (target != NULL) {
+		DBUG("Vputing target path\n");
+		vput(target);
 	}
 	return (error);
 }
@@ -792,9 +861,11 @@ slsfs_rename(struct vop_rename_args *args)
 
 	mode_t mode = svp->sn_ino.ino_mode;
 
-	DBUG("Rename from %s to %s\n", fname->cn_nameptr, tname->cn_nameptr);
+	DBUG("Rename or move from %s to %s\n", fname->cn_nameptr, 
+	    tname->cn_nameptr);
 	// Following nandfs example here -- cross device renaming
-	if ((fvp->v_mount != tdvp->v_mount) || (tvp && (fvp->v_mount != tvp->v_mount))) {
+	if ((fvp->v_mount != tdvp->v_mount) || (tvp && (fvp->v_mount != 
+	    tvp->v_mount))) {
 		error = EXDEV;
 abort:
 		if (tdvp == tvp) {
@@ -825,7 +896,8 @@ abort:
 	// Check if the source is a directory and whether we are renaming a 
 	// directory
 	if ((mode & S_IFMT) == S_IFDIR) {
-		int isdot = fname->cn_namelen == 1 && fname->cn_nameptr[0] =='.';
+		int isdot = fname->cn_namelen == 1 && fname->cn_nameptr[0] 
+		    =='.';
 		int isownparent = fdvp == fvp;
 		int isdotdot = (fname->cn_flags | tname->cn_flags) & ISDOTDOT;
 		if (isdot || isdotdot || isownparent) {
@@ -848,13 +920,26 @@ abort:
 	// Check parents
 	VOP_UNLOCK(fvp, 0);
 	if (oldparent != tdnode->sn_pid) {
-		DBUG("Hello");
 		newparent = tdnode->sn_pid;
 	}
 
 	if (isdir && newparent) {
-		DBUG("WHAT");
-		panic("not implemented");
+		DBUG("Checking if directory doens't exist within path\n");
+		error = slsfs_checkpath(fvp, tdvp, tname->cn_cred);
+		if (error) {
+			goto bad;
+		}
+		VREF(tdvp);
+		error = relookup(tdvp, &tvp, tname);
+		if (error) {
+			goto bad;
+		}
+		vrele(tdvp);
+		tdnode = SLSVP(tdvp);
+		tnode = NULL;
+		if (tvp) {
+			tnode = SLSVP(tvp);
+		}
 	}
 
 	if (tvp == NULL) {
@@ -862,7 +947,8 @@ abort:
 			//XXX LINK STUFF?
 		}
 
-		error = slsfs_add_dirent(tdvp, svp->sn_ino.ino_pid, tname->cn_nameptr,
+		error = slsfs_add_dirent(tdvp, svp->sn_ino.ino_pid, 
+		    tname->cn_nameptr,
 		    tname->cn_namelen, IFTODT(svp->sn_ino.ino_mode));
 		if (error) {
 			// XXX LINK STUFF
@@ -908,7 +994,6 @@ abort:
 
 	error = relookup(fdvp, &fvp, fname);
 	if (error) {
-		DBUG("relookup err");
 		vrele(fdvp);
 	}
 
@@ -955,6 +1040,7 @@ bad:
 	if (tnode) {
 		vput(tvp);
 	}
+
 	vput(tdvp);
 
 	if (isdir) {
@@ -1067,21 +1153,77 @@ slsfs_ioctl(struct vop_ioctl_args *ap)
 
 }
 
+static int
+slsfs_symlink(struct vop_symlink_args *ap)
+{
+	struct vnode **vpp = ap->a_vpp;
+	struct vnode *dvp = ap->a_dvp;
+	int len, error;
+	uint16_t mode = MAKEIMODE(ap->a_vap->va_type, ap->a_vap->va_mode);
+	struct componentname *cnp = ap->a_cnp;
+	struct vnode *vp;
+
+	SLS_VALLOC(dvp, mode | S_IFLNK, cnp->cn_cred, &vp);
+
+	error = slsfs_add_dirent(dvp, SLSVP(vp)->sn_pid, cnp->cn_nameptr, 
+	    cnp->cn_namelen, IFTODT(mode));
+	if (error) {
+		vput(vp);
+		return ENOTDIR;
+	}
+	len = strlen(ap->a_target);
+	error = vn_rdwr(UIO_WRITE, vp, ap->a_target, len, 0, UIO_SYSSPACE, 
+	    IO_NODELOCKED | IO_NOMACCHECK,
+	    cnp->cn_cred, NOCRED, NULL, NULL);
+	if (error) {
+		vput(vp);
+	}
+	*vpp = vp;
+
+	return (error);
+}
+
+static int
+slsfs_readlink(struct vop_readlink_args *ap)
+{
+	struct vnode *vp = ap->a_vp;
+
+	return (VOP_READ(vp, ap->a_uio, 0, ap->a_cred));
+}
+
+static int
+slsfs_link(struct vop_link_args *ap)
+{
+	int error = 0;
+
+	struct vnode *tdvp = ap->a_tdvp;
+	struct vnode *vp = ap->a_vp;
+	struct componentname *cnp = ap->a_cnp;
+
+	error = slsfs_add_dirent(tdvp, SLSVP(vp)->sn_pid, cnp->cn_nameptr,
+	    cnp->cn_namelen, IFTODT(SLSVP(vp)->sn_ino.ino_mode));
+
+	SLSVP(vp)->sn_ino.ino_nlink++;
+	slos_updateroot(SLSVP(vp));
+
+	return (error);
+}
+
 struct vop_vector sls_vnodeops = {
 	.vop_default =		&default_vnodeops,
 	.vop_fsync =		slsfs_fsync, 
-	.vop_read =		slsfs_read, // TODO
+	.vop_read =		slsfs_read, 
 	.vop_reallocblks =	VOP_PANIC, // TODO
-	.vop_write =		slsfs_write,		
+	.vop_write =		slsfs_write,
 	.vop_accessx =		slsfs_accessx,
-	.vop_bmap =		slsfs_bmap, // TODO
+	.vop_bmap =		slsfs_bmap,
 	.vop_cachedlookup =	slsfs_lookup, 
 	.vop_close =		slsfs_close, 
 	.vop_create =		slsfs_create, 
 	.vop_getattr =		slsfs_getattr,
 	.vop_inactive =		slsfs_inactive,
 	.vop_ioctl =		slsfs_ioctl,
-	.vop_link =		VOP_PANIC, // TODO
+	.vop_link =		slsfs_link, 
 	.vop_lookup =		vfs_cache_lookup, 
 	.vop_markatime =	VOP_PANIC,
 	.vop_mkdir =		slsfs_mkdir, 
@@ -1090,13 +1232,13 @@ struct vop_vector sls_vnodeops = {
 	.vop_poll =		vop_stdpoll,
 	.vop_print =		slsfs_print,
 	.vop_readdir =		slsfs_readdir,
-	.vop_readlink =		VOP_PANIC, // TODO
-	.vop_reclaim =		slsfs_reclaim, // TODO
-	.vop_remove =		slsfs_remove, // TODO
-	.vop_rename =		slsfs_rename, // TODO
-	.vop_rmdir =		slsfs_rmdir, // TODO
-	.vop_setattr =		slsfs_setattr, // TODO
-	.vop_strategy =		slsfs_strategy, // TODO
-	.vop_symlink =		VOP_PANIC, // TODO
+	.vop_readlink =		slsfs_readlink,
+	.vop_reclaim =		slsfs_reclaim,
+	.vop_remove =		slsfs_remove,
+	.vop_rename =		slsfs_rename,
+	.vop_rmdir =		slsfs_rmdir,
+	.vop_setattr =		slsfs_setattr,
+	.vop_strategy =		slsfs_strategy,
+	.vop_symlink =		slsfs_symlink,
 	.vop_whiteout =		VOP_PANIC, // TODO
 };
