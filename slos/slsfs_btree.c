@@ -23,7 +23,6 @@
 
 #define NODE_LOCK(node, flags) (BUF_LOCK((node)->fn_buf, flags, NULL))
 #define NODE_ISLOCKED(node) (BUF_ISLOCKED((node)->fn_buf))
-#define FBTREE_ERROR(error) ((error) != 0 && (error) != ROOTCHANGE)
 
 uma_zone_t fnode_zone;
 
@@ -398,11 +397,13 @@ fnode_keymin_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 {
 	int error;
 	void *keyt;
-	int mid, start, compare;
-	int end;
-	int index;
+	int start, mid, end;
 
 	struct fnode *node;
+
+#ifdef INVARIANTS
+	struct fnode_iter next;
+#endif
 
 	// Follow catches if this is an external node or not
 	KASSERT(root->fn_inited, ("Should be inited"));
@@ -411,35 +412,40 @@ fnode_keymin_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 		return (error);
 	}
 
-	/* If the tree is empty, there is no minimum. */
-	if (NODE_SIZE(node) == 0) {
-		iter->it_index = -1;
-		iter->it_node = node;
-		return (0);
-	}
-
 	KASSERT((NODE_FLAGS(node) & (BT_INTERNAL)) == 0, ("Should be on a external node now"));
+
+	// Binary search for the first element > key
 	start = 0;
-	end = NODE_SIZE(node) - 1;
-	index = -1;
-	while (start <= end) {
-		mid = (start + end) / 2;
+	end = NODE_SIZE(node);
+	while (start < end) {
+		mid = start + (end - start) / 2;
 		keyt = fnode_getkey(node, mid);
-		compare = NODE_COMPARE(node, keyt, key);
-		if (compare > 0) {
-			end = mid - 1;
-		} else if (compare < 0) {
-			index = mid;
+		if (NODE_COMPARE(node, keyt, key) <= 0) {
 			start = mid + 1;
 		} else {
-			index = mid;
-			break;
+			end = mid;
 		}
 	}
-	/* Traverse the node to find the infimum. */
 
+	// -1 to find the last element <= key, or null if no such element
+	iter->it_index = start - 1;
 	iter->it_node = node;
-	iter->it_index = index;
+
+#ifdef INVARIANTS
+	if (!ITER_ISNULL(*iter)) {
+		// Check that the returned node is <= the key
+		keyt = ITER_KEY(*iter);
+		KASSERT(NODE_COMPARE(node, keyt, key) <= 0, ("keymin too big"));
+
+		// Check that the next node is > the key
+		next = *iter;
+		ITER_NEXT(next);
+		if (!ITER_ISNULL(next)) {
+			keyt = ITER_KEY(next);
+			KASSERT(NODE_COMPARE(node, keyt, key) > 0, ("keymin too small"));
+		}
+	}
+#endif
 
 	return (0);
 }
@@ -490,12 +496,37 @@ fbtree_keymin_iter(struct fbtree *tree, void *key, struct fnode_iter *iter)
 }
 
 /*
+ * If at the end of a node, skip to the next non-empty node.
+ */
+static void
+fnode_iter_skip(struct fnode_iter *it)
+{
+	struct fnode *right;
+
+	KASSERT(it->it_index <= NODE_SIZE(it->it_node), ("Iterator was out of bounds"));
+
+	/* If we've exhausted the current node, switch, and skip empty siblings. */
+	while (it->it_index == NODE_SIZE(it->it_node)) {
+		fnode_right(it->it_node, &right);
+		if (right == NULL) {
+			/* Iteration done. */
+			it->it_index = -1;
+			break;
+		} else {
+			/* Otherwise switch nodes. */
+			it->it_node = right;
+			it->it_index = 0;
+		}
+	}
+}
+
+/*
  * Find the smallest key in the subtree that's larger than or equal to the key provided.
  */
 static int
 fnode_keymax_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 {
-	struct fnode *node, *right;
+	struct fnode *node;
 	int error;
 	void *val;
 	int diff;
@@ -505,12 +536,6 @@ fnode_keymax_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 	error = fnode_follow(root, key, &node);
 	if (error) {
 		return (error);
-	}
-        /* If the tree is empty, there is no maximum. */
-	if (NODE_SIZE(node) == 0) {
-	    iter->it_index = -1;
-	    iter->it_node = node;
-	    return (0);
 	}
 
 	/* Traverse the node to find the supremum. */
@@ -523,39 +548,35 @@ fnode_keymax_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 		}
 	}
 
+	iter->it_node = node;
+	iter->it_index = mid;
+
 	/*
 	 * Due to the way we follow the value down the tree, we need to make
 	 * sure we are actually the largest value in the tree, and there is no
 	 * key to the right.
 	 */
-	if (mid == NODE_SIZE(node)) {
-		error = fnode_right(node, &right);
-		if (error != 0)
-			return (error);
+	fnode_iter_skip(iter);
 
-		/* If there is no right node there is no such value. */
-		if (right == NULL) {
-			iter->it_node = node;
-			iter->it_index = -1;
-			return (0);
-		}
+#ifdef INVARIANTS
+	if (!ITER_ISNULL(*iter)) {
+		/* We should be in bounds at this point. */
+		KASSERT(iter->it_index < NODE_SIZE(iter->it_node),
+		    ("invalid index %d", iter->it_index));
 
 		/* Make sure the node actually has keys larger than key. */
-		val = fnode_getkey(right, 0);
-		KASSERT(NODE_COMPARE(right, val, key) > 0 ,
+		val = fnode_getkey(iter->it_node, iter->it_index);
+		KASSERT(NODE_COMPARE(iter->it_node, val, key) >= 0,
 		    ("leftmost key %lu smaller than key %lu",
 		    * (uint64_t *) val, * (uint64_t *) key));
 
-		/* Return the smallest key of the right node. */
-		node = right;
-		mid = 0;
+		/* Make sure this is the first one. */
+		if (iter->it_index > 0) {
+			val = fnode_getkey(iter->it_node, iter->it_index - 1);
+			KASSERT(NODE_COMPARE(iter->it_node, val, key) < 0, ("keymax too big"));
+		}
 	}
-
-	iter->it_node = node;
-	iter->it_index = mid;
-
-	/* We should be in bounds at this point. */
-	KASSERT(((mid >= 0) && (mid < NODE_SIZE(node))), ("invalid mid %d", mid));
+#endif
 
 	return (0);
 
@@ -643,35 +664,16 @@ fbtree_destroy(struct fbtree *tree)
 int
 fnode_iter_next(struct fnode_iter *it)
 {
-	struct dnode *dn = it->it_node->fn_dnode;
-
-	/* An invalid iterator is still invalid after iteration . */
+	/* An invalid iterator is still invalid after iteration. */
 	if (it->it_index == (-1)) {
 		return (0);
 	}
 
-	/* If we've exhausted the current node, switch. */
-	if (it->it_index == dn->dn_numkeys - 1) {
-		/* Iteration done. */
-		if (dn->dn_rightnode == 0) {
-			it->it_index = -1;
-			return (0);
-		}
+	KASSERT(NODE_SIZE(it->it_node) > 0, ("Started iterating from an empty node"));
+	KASSERT(it->it_index < NODE_SIZE(it->it_node), ("Iterator was out of bounds"));
 
-		/* Otherwise switch nodes. */
-		fnode_right(it->it_node, &it->it_node);
-		it->it_index = 0;
-		return (0);
-	}
-
-	/* Going out of bounds in the node would be catastrophic. */
-	if (it->it_index >= dn->dn_numkeys) {
-		fnode_print(it->it_node);
-		printf("%u\n", it->it_index);
-		panic("Should not occur");
-	}
-
-	it->it_index++;
+	++it->it_index;
+	fnode_iter_skip(it);
 	return (0);
 };
 
@@ -1057,6 +1059,7 @@ fnode_split(struct fnode *node)
 	right->fn_right = node->fn_right;
 
 	node->fn_dnode->dn_rightnode = right->fn_location;
+	node->fn_right = NULL;
 
 	KASSERT(right->fn_location != 0, ("Why did this get allocated here"));
 	KASSERT(node->fn_dnode->dn_parent != 0, ("Should have a parent now\n"));
@@ -1209,10 +1212,10 @@ fnode_insert(struct fnode *node, void *key, void *value)
 }
 
 /*
- *  Remove a key-value pair from a node.
+ * Remove a key-value pair from a node.
  */
 static int
-fnode_remove_at(struct fnode *node, void *key, void *value, int i)
+fnode_remove_at(struct fnode *node, void *value, int i)
 {
 	char *src = fnode_getkey(node, i);
 
@@ -1225,7 +1228,9 @@ fnode_remove_at(struct fnode *node, void *key, void *value, int i)
 		memmove(src, src + NODE_VS(node), (NODE_SIZE(node) - i) * NODE_VS(node));
 	} else {
 		src = fnode_getval(node, i);
-		memcpy(value, src, node->fn_tree->bt_valsize);
+		if (value) {
+			memcpy(value, src, node->fn_tree->bt_valsize);
+		}
 		memmove(src, src + NODE_VS(node), (NODE_SIZE(node) - i) * NODE_VS(node));
 	}
 	node->fn_dnode->dn_numkeys -= 1;
@@ -1281,7 +1286,7 @@ fnode_external_remove(struct fnode *node, void *key, void *value)
 	}
 
 	/* Actually remove the element. */
-	fnode_remove_at(node, key, value, i);
+	fnode_remove_at(node, value, i);
 
 	// We always allow the insert but if its max we will split
 	isroot = node->fn_location == node->fn_tree->bt_root;
@@ -1319,18 +1324,18 @@ fnode_remove(struct fnode *node, void *key, void *value)
 
 /*
  * Safely remove a key-value pair while iterating over it.
- *
- * XXX Implement properly
  */
 int
 fiter_remove(struct fnode_iter *it)
 {
-	int error;
-	struct fbtree *tree = it->it_node->fn_tree;
-	char check[tree->bt_valsize];
+	struct fnode *fnode = it->it_node;
 
-	error = fnode_remove(it->it_node, ITER_KEY(*it), check);
-	return (error);
+	KASSERT(it->it_index < NODE_SIZE(it->it_node),
+	        ("Removing an out-of-bounds iterator"));
+
+	fnode_remove_at(fnode, NULL, it->it_index);
+	fnode_iter_skip(it);
+	return (0);
 }
 
 /*
@@ -1551,6 +1556,7 @@ slsfs_fbtree_test(void)
 {
 
 	struct fbtree *btree;
+	struct fnode_iter iter;
 	int error, i, j;
 	uint64_t *keys;
 	int *is_there, *was_there;
@@ -1565,13 +1571,17 @@ slsfs_fbtree_test(void)
 
 	oid = FBTEST_ID;
 	error = slsfs_new_node(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
-	if (error != 0)
+	if (error != 0) {
+		printf("slsfs_new_node() failed with %d\n", error);
 		return (error);
+	}
 
 	/* We just create a random vnode and grab its data tree for the test. */
 	error = VFS_VGET(slos.slsfs_mount, oid, LK_EXCLUSIVE, &vp);
-	if (error != 0)
+	if (error != 0) {
+		printf("VFS_VGET() failed with %d\n", error);
 		return (error);
+	}
 
 	svp = SLSVP(vp);
 	btree = &svp->sn_tree;
@@ -1705,19 +1715,26 @@ slsfs_fbtree_test(void)
 				}
 			}
 
-			error = fnode_keymin(btree->bt_rootnode, &limkey, value);
-			if (error != 0 && minkey <= key) {
-				printf("ERROR: Lower bound %lu for key %lu not found\n", minkey, key);
-				error = EINVAL;
+			error = fbtree_keymin_iter(btree, &limkey, &iter);
+			if (error != 0) {
+				printf("ERROR: %d when finding lower bound for %lu\n", error, key);
 				goto out;
 			}
 
-			if (error == 0 && minkey != limkey) {
-				printf("ERROR: Lower bound for key %lu should be %lu, is %lu\n",
-				    key, minkey, limkey);
-				error = EINVAL;
-				goto out;
-
+			if (ITER_ISNULL(iter)) {
+				if (minkey <= key) {
+					printf("ERROR: Lower bound %lu for key %lu not found\n", minkey, key);
+					error = EINVAL;
+					goto out;
+				}
+			} else {
+				limkey = ITER_KEY_T(iter, uint64_t);
+				if (minkey != ITER_KEY_T(iter, uint64_t)) {
+					printf("ERROR: Lower bound for key %lu should be %lu, is %lu\n",
+					       key, minkey, limkey);
+					error = EINVAL;
+					goto out;
+				}
 			}
 
 			/*
@@ -1733,18 +1750,27 @@ slsfs_fbtree_test(void)
 				}
 			}
 
-			error = fnode_keymax(btree->bt_rootnode, &limkey, value);
-			if (error != 0 && maxkey >= key) {
-				printf("ERROR: Upper bound %lu for key %lu not found\n", maxkey, key);
-				error = EINVAL;
+			error = fbtree_keymax_iter(btree, &limkey, &iter);
+			if (error != 0) {
+				printf("ERROR: %d when finding upper bound for %lu\n", error, key);
 				goto out;
 			}
 
-			if (error == 0 && maxkey != limkey) {
-				printf("ERROR: Upper bound for key %lu should be %lu, is %lu\n",
-				    key, maxkey, limkey);
-				error = EINVAL;
-				goto out;
+			if (ITER_ISNULL(iter)) {
+				if (maxkey >= key) {
+					printf("ERROR: Upper bound %lu for key %lu not found\n", maxkey, key);
+					error = EINVAL;
+					goto out;
+				}
+			} else {
+				limkey = ITER_KEY_T(iter, uint64_t);
+				if (maxkey != limkey) {
+					printf("ERROR: Upper bound for key %lu should be %lu, is %lu\n",
+					       key, maxkey, limkey);
+					limkey = maxkey;
+					error = EINVAL;
+					goto out;
+				}
 
 			}
 

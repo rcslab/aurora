@@ -73,143 +73,174 @@ struct slsfs_taskctx {
 	uint64_t size;
 };
 
+struct extent {
+	uint64_t start;
+	uint64_t end;
+	uint64_t target;
+};
+
+static void
+extent_clip_head(struct extent *extent, uint64_t boundary)
+{
+	if (boundary < extent->start) {
+		extent->start = boundary;
+	}
+	if (boundary < extent->end) {
+		extent->end = boundary;
+	}
+}
+
+static void
+extent_clip_tail(struct extent *extent, uint64_t boundary)
+{
+	if (boundary > extent->start) {
+		if (extent->target != 0) {
+			extent->target += boundary - extent->start;
+		}
+		extent->start = boundary;
+	}
+	if (boundary > extent->end) {
+		extent->end = boundary;
+	}
+}
+
+static void
+set_extent(struct extent *extent, uint64_t lbn, uint64_t size, uint64_t target)
+{
+	KASSERT(size % PAGE_SIZE == 0, ("Size %lu is not a multiple of the page size", size));
+
+	extent->start = lbn;
+	extent->end = lbn + size / PAGE_SIZE;
+	extent->target = target;
+}
+
+static void
+diskptr_to_extent(struct extent *extent, uint64_t lbn, const diskptr_t *diskptr)
+{
+	set_extent(extent, lbn, diskptr->size, diskptr->offset);
+}
+
+static void
+extent_to_diskptr(const struct extent *extent, uint64_t *lbn, diskptr_t *diskptr)
+{
+	*lbn = extent->start;
+	diskptr->offset = extent->target;
+	diskptr->size = (extent->end - extent->start) * PAGE_SIZE;
+}
+
+/*
+ * Insert an extent starting an logical block number lbn of size bytes into the
+ * btree, potentially splitting existing extents to make room.
+ */
 static int
 slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 {
+	/*
+	 * We are inserting an extent which may overlap with many other extents
+	 * in the tree.  There are many possible scenarios:
+	 *
+	 *           [----)
+	 *     [-------)[-------)
+	 *
+	 *           [----)
+	 *     [----------------)
+	 *
+	 *           [----)
+	 *     [--)          [--)
+	 *
+	 * etc.  We want to end up with
+	 *
+	 *            main
+	 *     [----)[----)[----)
+	 *      head        tail
+	 *
+	 * (with head and/or tail possibly empty).
+	 *
+	 * To do this, we iterate over every extent (current) that may possibly
+	 * intersect the new one (main).  For each of these, we clip that extent
+	 * into a possible new_head and new_tail.  There will be at most one
+	 * head and one tail that are non-empty.  We remove all the overlapping
+	 * extents, then insert the new head, main, and tail extents.
+	 */
+
+	struct extent main;
+	struct extent head = {0}, tail = {0};
+	struct extent current;
+	struct extent new_head, new_tail;
 	struct fnode_iter iter;
-	vm_pindex_t key;
-	diskptr_t val, tmp;
-	uint64_t end;
-	uint64_t diff;
-	int error = 0;
+	int error;
+	uint64_t key;
+	diskptr_t value;
 
-	KASSERT(size % PAGE_SIZE == 0, ("Size should be multiple of page size, %lu", size));
-	// We must round up to the nearest bcachebuf size, this
+	set_extent(&main, lbn, size, 0);
 
-	uint64_t finalend = (lbn * PAGE_SIZE) + size;
-
-	error = fbtree_keymin_iter(tree, &lbn, &iter);
+	key = main.start;
+	error = fbtree_keymin_iter(tree, &key, &iter);
 	if (error) {
-		panic("Error in fbtree_range_insert");
+		panic("fbtree_keymin_iter() error %d in range insert", error);
+	}
+
+	if (ITER_ISNULL(iter)) {
+		// No extents are before the start, so start from the beginning
+		iter.it_index = 0;
 	}
 
 	while (!ITER_ISNULL(iter)) {
-		key = ITER_KEY_T(iter, vm_pindex_t);
-		val = ITER_VAL_T(iter, diskptr_t);
-		end = (key * PAGE_SIZE) + val.size;
+		key = ITER_KEY_T(iter, uint64_t);
+		value = ITER_VAL_T(iter, diskptr_t);
 
-		// Key is completely out of the range, we end now.
-		if ((key * PAGE_SIZE) >= finalend) {
+		diskptr_to_extent(&current, key, &value);
+		if (current.start >= main.end) {
 			break;
 		}
 
-		if ((key < lbn)) {
-			if (end > (lbn * PAGE_SIZE)) {
-				tmp = val;
-				tmp.size -= (end - (lbn * PAGE_SIZE));
-				error = fbtree_replace(tree,  &key, &tmp);
-				if (error) {
-					panic("Problem with replacing key < lbn\n");
-				}
-				// This means the key completely overlaps us so we need 
-				// to split it so we need to add a key
-				if (end > finalend) {
-					tmp = val;
-					error = fbtree_remove(tree, &key, &val);
-					if (error && (error != ROOTCHANGE)) {
-						panic("Problem  removing key for replacement\n");
-					}
-					// Get how much we took off
-					diff = finalend - (key * PAGE_SIZE);
-					// Bump our ondisk pointer up
-					if (tmp.offset) {
-						tmp.offset +=  diff / PAGE_SIZE;
-					}
-					key += diff / PAGE_SIZE;
-					// How much we have left
-					tmp.size = finalend - end;
-					error = fbtree_insert(tree, &key, &tmp);
-					if (error && (error != ROOTCHANGE)) {
-						panic("Problem inserting of key that is larger than ours");
-					}
-				}
-			}
-		// Key is our key
-		} else if (key == lbn) {
-			// Key is our key but larger so just replace it
-			if (end > finalend) {
-				tmp = val;
-				error = fbtree_remove(tree, &key, &val);
-				if (error && (error != ROOTCHANGE)) {
-					panic("Problem  removing key for replacement\n");
-				}
-				// Get how much we took off
-				diff = finalend - (key * PAGE_SIZE);
-				// Bump our ondisk pointer up
-				if (tmp.offset) {
-					tmp.offset +=  diff / PAGE_SIZE;
-				}
-				key += diff / PAGE_SIZE;
-				// How much we have left
-				tmp.size = finalend - end;
-				error = fbtree_insert(tree, &key, &tmp);
-				if (error && (error != ROOTCHANGE)) {
-					panic("Problem inserting of key that is larger than ours");
-				}
-			} else {
-				// Key is our key but smaller so we can just 
-				// remove it
-				error = fbtree_remove(tree, &key, &tmp);
-				if (error && (error != ROOTCHANGE)) {
-					panic("Problem replace of key that is larger than ours");
-				} 
-			}
-		// Key is larger then our key but not within our range or else 
-		// would be caught by the break above
-		} else {
-			/* Key is inside our range and so we need to replace 
-			 * the key and push the new key start into the tree.
-			 * This also means we are at our end so we can break
-			 */
-			if (end > finalend) {
-				tmp = val;
-				error = fbtree_remove(tree, &key, &val);
-				if (error && (error != ROOTCHANGE)) {
-					panic("Problem  removing key for replacement\n");
-				}
-				// Get how much we took off
-				diff = finalend - (key * PAGE_SIZE);
-				// Bump our ondisk pointer up
-				if (tmp.offset) {
-					tmp.offset +=  diff / PAGE_SIZE;
-				}
-				key += diff / PAGE_SIZE;
-				// How much we have left
-				tmp.size = finalend - end;
-				error = fbtree_insert(tree, &key, &tmp);
-				if (error && (error != ROOTCHANGE)) {
-					panic("Problem inserting of key that is larger than ours");
-				}
-				break;
-			} 
-			// This case is when we completely cover the range so 
-			// we just need to remove the entry
-			error = fbtree_remove(tree, &key, &val);
-			if (error) {
-				panic("Problem removing fbtree key");
-			}
+		new_head = current;
+		extent_clip_head(&new_head, main.start);
+		if (new_head.start != new_head.end) {
+			KASSERT(head.start == head.end,
+			        ("Found multiple heads [%lu, %lu) and [%lu, %lu)",
+			         head.start, head.end, new_head.start, new_head.end));
+			head = new_head;
 		}
-		ITER_NEXT(iter);
+
+		new_tail = current;
+		extent_clip_tail(&new_tail, main.end);
+		if (new_tail.start != new_head.end) {
+			KASSERT(tail.start == tail.end,
+			        ("Found multiple tails [%lu, %lu) and [%lu, %lu)",
+			         tail.start, tail.end, new_tail.start, new_tail.end));
+			tail = new_tail;
+		}
+
+		error = fiter_remove(&iter);
+		if (FBTREE_ERROR(error)) {
+			panic("Error %d removing current", error);
+		}
 	}
 
-	val.offset = 0;
-	val.size = size;
-	KASSERT(val.size < MAXBCACHEBUF, ("TOO LARGE %lu", val.size));
-	error = fbtree_insert(tree, &lbn, &val);
-	if (error && error != ROOTCHANGE) {
-		panic("Problem adding final keys");
+	if (head.start != head.end) {
+		extent_to_diskptr(&head, &key, &value);
+		error = fbtree_insert(tree, &key, &value);
+		if (FBTREE_ERROR(error)) {
+			panic("Error %d inserting head", error);
+		}
 	}
-	return (error);
+
+	extent_to_diskptr(&main, &key, &value);
+	error = fbtree_insert(tree, &key, &value);
+	if (FBTREE_ERROR(error)) {
+		panic("Error %d inserting main", error);
+	}
+
+	if (tail.start != tail.end) {
+		extent_to_diskptr(&tail, &key, &value);
+		error = fbtree_insert(tree, &key, &value);
+		if (FBTREE_ERROR(error)) {
+			panic("Error %d inserting tail", error);
+		}
+	}
+
+	return (0);
 }
 
 /*
@@ -273,6 +304,15 @@ slsfs_inodes_init(struct mount *mp, struct slos *slos)
 	return (0);
 }
 
+static void
+slsfs_bdone(struct buf *bp)
+{
+	/* Free the reference to the object taken at the beginning of the IO. */
+	vm_object_deallocate(bp->b_pages[0]->object);
+	bdone(bp);
+}
+
+/* Perform an IO without copying from the VM objects to the buffer. */
 static void
 slsfs_performio(void *ctx, int pending)
 {
@@ -347,13 +387,16 @@ slsfs_performio(void *ctx, int pending)
 	bp->b_wcred = crhold(curthread->td_ucred);
 	bp->b_bcount = bp->b_bufsize = bp->b_runningbufspace = bytecount;
 	atomic_add_long(&runningbufspace, bp->b_runningbufspace);
-	bp->b_iodone = bdone;
+	bp->b_iodone = slsfs_bdone;
 	bp->b_lblkno = task->startpage->pindex + 1;
+	bp->b_flags = B_MANAGED;
 
 	VOP_LOCK(task->vp, LK_SHARED);
 	bstrategy(bp);
 	VOP_UNLOCK(task->vp, LK_SHARED);
 	bwait(bp, PVM, "slsfs vm wait");
+
+	KASSERT(bp->b_npages > 0, ("no pages in the IO"));
 	for (int i = 0; i < bp->b_npages; i++) {
 		bp->b_pages[i] = NULL;
 	}
@@ -388,9 +431,15 @@ slsfs_io_async(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int i
 	struct slos *slos = SLSVP(vp)->sn_slos;
 	struct slsfs_taskctx *ctx;
 
+	/* Ignore IOs of size 0. */
+	if (len == 0)
+		return (0);
+
 	ctx = slsfs_createtask(vp, obj, m, len, iotype, cb);
 	TASK_INIT(&ctx->tk, 0, &slsfs_performio, ctx);
 	DBUG("Creating task for vnode %p: page index %lu, size %lu\n", vp, m->pindex, len);
+	//KASSERT(len != 0, ("IO of size 0"));
+	vm_object_reference(m->object);
 	taskqueue_enqueue(slos->slos_tq, &ctx->tk);
 
 	return (0);
@@ -401,7 +450,13 @@ slsfs_io(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int iotype)
 {
 	struct slsfs_taskctx *ctx;
 
+	/* Ignore IOs of size 0. */
+	if (len == 0)
+		return (0);
+
 	ctx = slsfs_createtask(vp, obj, m, len, iotype, NULL);
+	KASSERT(len != 0, ("IO of size 0"));
+	vm_object_reference(m->object);
 	slsfs_performio(ctx, 0);
 
 	return (0);

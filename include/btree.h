@@ -21,6 +21,8 @@ typedef uint32_t fb_valsize;
 #define ROOTCHANGE (256)
 #define FNODE_PTRSIZE (300)
 
+#define FBTREE_ERROR(error) ((error) != 0 && (error) != ROOTCHANGE)
+
 extern uma_zone_t fnodes_zone;
 
 #define NODE_FLAGS(node) ((node)->fn_dnode->dn_flags)
