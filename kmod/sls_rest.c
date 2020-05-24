@@ -897,7 +897,6 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 	if (error != 0)
 		goto out;
 
-
 	/* 
 	 * Iterate through the metadata; each entry represents either 
 	 * a process, complete with threads, FDs, and a VM map, a VM

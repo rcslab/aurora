@@ -75,8 +75,8 @@ SDT_PROBE_DEFINE(sls, , , dedup);
 SDT_PROBE_DEFINE(sls, , , sync);
 
 int sls_sync = 1;
-uint64_t ckpt_attempted;
-uint64_t ckpt_done;
+uint64_t sls_ckpt_attempted;
+uint64_t sls_ckpt_done;
 
 static void slsckpt_stop(slsset *procset);
 static int sls_checkpoint(slsset *procset, struct slspart *slsp);
@@ -501,7 +501,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 
 	if (atomic_cmpset_int(&slsp->slsp_status, SPROC_AVAILABLE,
 	    SPROC_CHECKPOINTING) == 0) {
-		ckpt_attempted += 1;
+		sls_ckpt_attempted += 1;
 		printf("Overlapping checkpoints\n");
 		SLS_DBG("Partition %ld in state %d\n", slsp->slsp_oid, slsp->slsp_status);
 		goto out;
@@ -510,12 +510,12 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	/* The set of processes we are going to checkpoint. */
 	error = slsset_create(&procset);
 	if (error != 0) {
-		ckpt_attempted += 1;
+		sls_ckpt_attempted += 1;
 		goto out;
 	}
 
 	for (;;) {
-		ckpt_attempted += 1;
+		sls_ckpt_attempted += 1;
 		/* Check if the partition got detached from the SLS. */
 		if (slsp->slsp_status != SPROC_CHECKPOINTING)
 			break;
@@ -551,7 +551,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		SDT_PROBE0(sls, , , stopped);
 
 		/* Checkpoint the process once. */
-		ckpt_done += 1;
+		sls_ckpt_done += 1;
 		sls_checkpoint(procset, slsp);
 		nanotime(&tend);
 

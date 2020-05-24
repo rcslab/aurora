@@ -241,11 +241,17 @@ sls_sysctl_init(void)
 	    CTLFLAG_RW, &sls_sync,
 	    0, "Sync to the device after finishing dumping");
 	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "ckpt_attempted",
-	    CTLFLAG_RW, &ckpt_attempted,
+	    CTLFLAG_RW, &sls_ckpt_attempted,
 	    0, "Checkpoints attempted");
 	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "ckpt_done",
-	    CTLFLAG_RW, &ckpt_done,
+	    CTLFLAG_RW, &sls_ckpt_done,
 	    0, "Checkpoints successfully done");
+	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "async_slos",
+	    CTLFLAG_RW, &sls_async_slos,
+	    0, "Asynchronous SLOS writes");
+	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "sync_slos",
+	    CTLFLAG_RW, &sls_sync_slos,
+	    0, "Synchronous writes go to the SLOS");
 
 	return (0);
 }

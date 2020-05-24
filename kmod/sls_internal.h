@@ -139,8 +139,8 @@ extern uint64_t sls_pages_grabbed;
 extern uint64_t sls_io_initiated;
 extern uint64_t sls_epoch;
 
-extern uint64_t ckpt_attempted;
-extern uint64_t ckpt_done;
+extern uint64_t sls_ckpt_attempted;
+extern uint64_t sls_ckpt_done;
 SDT_PROVIDER_DECLARE(sls);
 
 #define SLS_ERROR(func, error)				    \

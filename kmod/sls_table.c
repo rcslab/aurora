@@ -61,8 +61,8 @@ size_t sls_bytes_sent;
 size_t sls_bytes_received;
 uint64_t sls_pages_grabbed;
 uint64_t sls_io_initiated;
-/* XXX Turn into sysctl */
-int sls_async_slos = 0;
+unsigned int sls_async_slos = 0;
+unsigned int sls_sync_slos = 0;
 
 uma_zone_t slspagerun_zone = NULL;
 
@@ -197,7 +197,7 @@ sls_isdata(uint64_t type)
  * Get the size and type of a SLOS vnode.
  */
 static int
-sls_rstat(struct vnode *vp, struct slos_rstat *st)
+sls_get_rstat(struct vnode *vp, struct slos_rstat *st)
 {
 	struct thread *td = curthread;
 	int error;
@@ -216,18 +216,20 @@ static int
 sls_readrec_sbuf(char *buf, size_t len, struct sbuf **sbp)
 {
 	struct sbuf *sb;
-	int error;
 
+#if 0
+	int error;
 	/*
 	 * Make an sbuf out of the created and set it to be dynamic so that it
 	 * will be cleaned up with the sbuf.
 	 */
-	sb = sbuf_new(NULL, buf, len, SBUF_FIXEDLEN);
+	sb = sbuf_new(NULL, buf, len + 1, SBUF_FIXEDLEN);
 	if (sb == NULL) {
 		free(buf, M_SLSMM);
 		return (ENOMEM);
 	}
 	SBUF_SETFLAG(sb, SBUF_DYNAMIC);
+	SBUF_CLEARFLAG(sb, SBUF_INCLUDENUL);
 
 	/* Close up the buffer. */
 	error = sbuf_finish(sb);
@@ -236,7 +238,16 @@ sls_readrec_sbuf(char *buf, size_t len, struct sbuf **sbp)
 		return (error);
 	}
 
+	/* Adjust the length of the sbuf to include */
+	sb->s_len = len;
+
 	KASSERT((sb->s_flags & SBUF_FINISHED) == SBUF_FINISHED, ("buffer not finished?"));
+
+#endif
+	sb = sbuf_new_auto();
+	sbuf_bcat(sb, buf, len);
+	free(buf, M_SLSMM);
+	sbuf_finish(sb);
 
 	*sbp = sb;
 
@@ -311,7 +322,7 @@ sls_readrec_slos(struct vnode *vp, uint64_t slsid, struct sls_record **recp)
 	int error;
 
 	/* Get the record type. */
-	error = sls_rstat(vp, &st);
+	error = sls_get_rstat(vp, &st);
 	if (error != 0) {
 		SLS_DBG("getting record type failed with %d\n", error);
 		return (error);
@@ -452,6 +463,7 @@ sls_readdata_slos_pages(struct vnode *vp, vm_object_t obj, struct uio *auiop)
 		if (error != 0)
 			return (error);
 
+		m->valid = VM_PAGE_BITS_ALL;
 		vm_page_xunbusy(m);
 	}
 
@@ -472,12 +484,23 @@ sls_readdata_slos(struct vnode *vp, uint64_t slsid, struct slskv_table *rectable
 	struct iovec aiov;
 	struct uio auio;
 	vm_object_t obj;
+	struct sbuf *sb;
 	int error;
 
-	/* Read the object from the SLOS. */
-	error = sls_readrec_slos(vp, slsid, &rec);
+	/*
+	 * XXX Also fix up so we can read the data tests objects.
+	 */
+	size_t len = sizeof(struct slsvmobject);
+
+	/*
+	 * Read the object from the SLOS. Seeks for SLOS nodes are block-sized,
+	 * so just read the whole first block of the node.
+	 */
+	error = sls_readrec_buf(vp, len, &sb);
 	if (error != 0)
 		return (error);
+
+	rec = sls_getrecord(sb, slsid, SLOSREC_VMOBJ);
 
 	/* Store the record for later and possibly make a new object.  */
 	error = sls_readdata_slos_vmobj(rectable, slsid, rec, &obj);
@@ -489,8 +512,7 @@ sls_readdata_slos(struct vnode *vp, uint64_t slsid, struct slskv_table *rectable
 		return (0);
 
 	/* Start from the first page. */
-	/* XXX Change so we get a more dynamic start. */
-	offset = 4096;
+	offset = PAGE_SIZE;
 	VM_OBJECT_WLOCK(obj);
 	for (;;) {
 		/* Assign the offset to the UIO. We'll seek from there. */
@@ -569,7 +591,7 @@ sls_read_slos_manifest(uint64_t oid, uint64_t **ids, size_t *idlen)
 	}
 
 	/* Get the record length. */
-	error = sls_rstat(vp, &st);
+	error = sls_get_rstat(vp, &st);
 	if (error != 0) {
 		SLS_DBG("getting record type failed with %d\n", error);
 		vput(vp);
@@ -723,6 +745,13 @@ sls_contig_pages(vm_object_t obj, vm_page_t *page)
 	contig_len = pagesizes[prev->psind];
 	sls_pages_grabbed += (pagesizes[prev->psind] / PAGE_SIZE);
 
+	KASSERT(contig_len <= sls_contig_limit, ("page %lx is larger than sls_contig_limit %lx",
+	    contig_len, sls_contig_limit));
+	/*
+	KASSERT(contig_len != 0, ("page size for page %p is 0 (index %d, physical address %lx)", 
+	    prev, prev->psind, prev->phys_addr));
+	    */
+
 	TAILQ_FOREACH_FROM(cur, &obj->memq, listq) {
 		/* Pages need to be physically and logically contiguous. */
 		if (prev->phys_addr + pagesizes[prev->psind] != cur->phys_addr ||
@@ -734,7 +763,7 @@ sls_contig_pages(vm_object_t obj, vm_page_t *page)
 		 * no copies, and the IO layer surely has a way of coping with 
 		 * massive IOs.
 		 */
-		if (contig_len > sls_contig_limit)
+		if (contig_len + pagesizes[cur->psind] > sls_contig_limit)
 			break;
 
 		/* 
@@ -749,7 +778,7 @@ sls_contig_pages(vm_object_t obj, vm_page_t *page)
 	/* Pass the new index into the page list to the caller. */
 	*page = cur;
 
-	return contig_len;
+	return (contig_len);
 }
 
 /*
@@ -808,11 +837,22 @@ sls_writeobj_slos(struct vnode *vp, vm_object_t obj)
 		 */
 		startm = m;
 		contig_len = sls_contig_pages(obj, &m);
+		//KASSERT(contig_len != 0, ("IO length is 0"));
+		KASSERT(contig_len <= sls_contig_limit, ("writing %lx bytes, limit %lx", contig_len, sls_contig_limit));
 
-		if (sls_async_slos)
+		if (sls_async_slos) {
+			/* Spawn kernel tasks for each IO. */
 			error = slos.slsfs_io_async(vp, obj, startm, contig_len, BIO_WRITE, NULL);
-		else
+		} else if (sls_sync_slos) {
+			/* Synchronously do the SLOS IOs. */
+			VOP_UNLOCK(vp, 0);
+			error = slos.slsfs_io(vp, obj, startm, contig_len, BIO_WRITE);
+			VOP_LOCK(vp, LK_EXCLUSIVE);
+		} else {
+			/* Use generic vnode methods for the IOs. */
+			/* XXX This should be only for non-SLOS backends. */
 			error = sls_writeobj_slos_sync(vp, obj, startm, contig_len);
+		}
 		if (error != 0)
 			return (error);
 

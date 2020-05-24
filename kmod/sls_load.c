@@ -428,12 +428,6 @@ slsload_vmobject(struct slsvmobject *obj, char **bufp, size_t *bufsizep)
 		return (EINVAL);
 	}
 
-	if (obj->type == OBJT_VNODE) {
-		error = slsload_path(&obj->path, bufp, bufsizep);
-		if (error != 0)
-			return (error);
-	}
-
 	return (0);
 }
 

@@ -41,6 +41,9 @@ extern uma_zone_t slspagerun_zone;
 struct sls_record *sls_getrecord(struct sbuf *sb, uint64_t slsid, uint64_t type);
 void sls_record_destroy(struct sls_record *rec);
 
+extern unsigned int sls_async_slos;
+extern unsigned int sls_sync_slos;
+
 #ifdef SLS_TEST
 int slstable_test(void);
 #endif /* SLS_TEST */

@@ -566,8 +566,8 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 
 	case DTYPE_PIPE:
 
-		/* 
-		 * Pipes are a special case, because restoring one end 
+		/*
+		 * Pipes are a special case, because restoring one end
 		 * also brings back the other. For this reason, we look
 		 * for the pipe's SLS ID instead of the open file's.
 		 *

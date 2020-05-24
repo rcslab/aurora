@@ -86,12 +86,11 @@ struct slsvmobject {
 	uint64_t slsid;
 	vm_pindex_t size;
 	enum obj_type type;
-	struct sbuf *path; 
 	vm_object_t id;
 	/* Used for objects that are shadows of others */
 	uint64_t backer;
 	vm_ooffset_t backer_off;
-
+	char path[PATH_MAX];	/* Filesystem path for vnode VM objects. */
 	/* XXX Bookkeeping for swapped out pages? */
 };
 

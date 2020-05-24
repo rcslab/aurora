@@ -29,6 +29,34 @@
 #include "sls_path.h"
 
 /*
+ * Append the filename of a vnode to a given raw buffer.
+ */
+int
+sls_vn_to_path_raw(struct vnode *vp, char *buf)
+{
+	char *freepath = NULL;
+	char *fullpath = "";
+	struct sbuf *sb;
+	int error;
+
+	sb = sbuf_new_auto();
+
+	vref(vp);
+	error = vn_fullpath(curthread, vp, &fullpath, &freepath);
+	vrele(vp);
+	if (error != 0) {
+		free(freepath, M_TEMP);
+		return (error);
+	}
+
+	memcpy(buf, fullpath, PATH_MAX);
+	free(freepath, M_TEMP);
+
+	return (0);
+}
+
+
+/*
  * Appends the filename of the given vnode to the sbuf.
  */
 int
@@ -46,7 +74,7 @@ sls_vn_to_path(struct vnode *vp, struct sbuf **sbp)
 	error = vn_fullpath(curthread, vp, &fullpath, &freepath);
 	vrele(vp);
 	if (error != 0)
-		goto error; 
+		goto error;
 
 	len = strnlen(fullpath, PATH_MAX);
 	error = sbuf_bcpy(sb, fullpath, len);
@@ -114,18 +142,15 @@ sls_vn_to_path_append(struct vnode *vp, struct sbuf *sb)
 }
 
 /*
- * Returns the vnode associated with the filename in the sbuf.
+ * Returns the vnode associated with the filename in a raw buf.
  */
 int
-sls_path_to_vn(struct sbuf *sb, struct vnode **vpp)
+sls_path_to_vn_raw(char *buf, struct vnode **vpp)
 {
 	struct nameidata backing_file;
-	char *path;
 	int error;
 
-	path = sbuf_data(sb);
-
-	NDINIT(&backing_file, LOOKUP, FOLLOW, UIO_SYSSPACE, path, curthread);
+	NDINIT(&backing_file, LOOKUP, FOLLOW, UIO_SYSSPACE, buf, curthread);
 	error = namei(&backing_file);
 	if (error != 0)
 		return error;
@@ -135,7 +160,17 @@ sls_path_to_vn(struct sbuf *sb, struct vnode **vpp)
 	/* It's a no-op I think, since we don't pass SAVENAME */
 	NDFREE(&backing_file, NDF_ONLY_PNBUF);
 
-	return 0;
+	return (0);
+
+}
+
+/*
+ * Returns the vnode associated with the filename in the sbuf.
+ */
+int
+sls_path_to_vn(struct sbuf *sb, struct vnode **vpp)
+{
+	return (sls_path_to_vn_raw(sbuf_data(sb), vpp));
 }
 
 

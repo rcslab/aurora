@@ -42,6 +42,7 @@ slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_dat
 	struct sls_record *rec;
 	vm_object_t curobj, backer;
 	struct sbuf *sb;
+	char *buf;
 	int error;
 
 	/* Find if we have already checkpointed the object. */
@@ -77,28 +78,29 @@ slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_dat
 		cur_obj.backer = 0UL;
 		cur_obj.backer_off = 0;
 	}
-	cur_obj.path = NULL;
 	cur_obj.magic = SLSVMOBJECT_ID;
 	cur_obj.slsid = obj->objid;
-
-	error = sbuf_bcat(sb, (void *) &cur_obj, sizeof(cur_obj));
-	if (error != 0)
-		goto error;
-
 	/*
 	 * Used for mmap'd files - we are using the filename
 	 * to find out how to map.
 	 */
+
+	buf = cur_obj.path;
+	memset(buf, '\0', PATH_MAX);
 	if (obj->type == OBJT_VNODE) {
-		error = sls_vn_to_path_append((struct vnode *) obj->handle, sb);
+		error = sls_vn_to_path_raw((struct vnode *) obj->handle, buf);
 		if (error == ENOENT) {
-			printf("(BUG) Unlinked file found, ignoring for now\n");
+			SLS_DBG("(BUG) Unlinked file found, ignoring for now\n");
 			return (0);
 		}
 
 		if (error != 0)
 			goto error;
 	}
+
+	error = sbuf_bcat(sb, (void *) &cur_obj, sizeof(cur_obj));
+	if (error != 0)
+		goto error;
 
 	error = sbuf_finish(sb);
 	if (error != 0)
@@ -136,6 +138,8 @@ slsrest_vmobject(struct slsvmobject *info, struct slskv_table *objtable)
 		 */
 		/* FALLTHROUGH */
 	case OBJT_SWAP:
+		/* XXX Bandaid until we don't have anonymous vmobj records */
+		return (0);
 		panic("object of type %d should have already been restored", info->type);
 		break;
 
@@ -147,7 +151,7 @@ slsrest_vmobject(struct slsvmobject *info, struct slskv_table *objtable)
 		 * in vmentry_rest.
 		 */
 
-		error = sls_path_to_vn(info->path, &vp);
+		error = sls_path_to_vn_raw(info->path, &vp);
 		if (error != 0)  {
 			return error;
 		}
@@ -182,7 +186,7 @@ slsrest_vmobject(struct slsvmobject *info, struct slskv_table *objtable)
 		break;
 
 	default:
-		return EINVAL;
+		return (EINVAL);
 	}
 
 	/* Export the newly created/found object to the table. */
@@ -190,6 +194,6 @@ slsrest_vmobject(struct slsvmobject *info, struct slskv_table *objtable)
 	if (error != 0)
 		return error;
 
-	return 0;
+	return (0);
 }
 
