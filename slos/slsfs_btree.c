@@ -526,11 +526,11 @@ fnode_iter_skip(struct fnode_iter *it)
 static int
 fnode_keymax_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 {
-	struct fnode *node;
 	int error;
-	void *val;
-	int diff;
-	int mid;
+	void *keyt;
+	int start, mid, end;
+
+	struct fnode *node;
 
 	// Follow catches if this is an external node or not
 	error = fnode_follow(root, key, &node);
@@ -538,18 +538,23 @@ fnode_keymax_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 		return (error);
 	}
 
-	/* Traverse the node to find the supremum. */
 	KASSERT((NODE_FLAGS(node) & (BT_INTERNAL)) == 0, ("Should be on a external node now"));
-	for(mid = 0; mid < NODE_SIZE(node); mid++) {
-		val = fnode_getkey(node, mid);
-		diff = NODE_COMPARE(node, val, key);
-		if (diff >= 0) {
-			break;
+
+	// Binary search for the first element >= key
+	start = 0;
+	end = NODE_SIZE(node);
+	while (start < end) {
+		mid = start + (end - start) / 2;
+		keyt = fnode_getkey(node, mid);
+		if (NODE_COMPARE(node, keyt, key) < 0) {
+			start = mid + 1;
+		} else {
+			end = mid;
 		}
 	}
 
 	iter->it_node = node;
-	iter->it_index = mid;
+	iter->it_index = start;
 
 	/*
 	 * Due to the way we follow the value down the tree, we need to make
@@ -565,15 +570,15 @@ fnode_keymax_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 		    ("invalid index %d", iter->it_index));
 
 		/* Make sure the node actually has keys larger than key. */
-		val = fnode_getkey(iter->it_node, iter->it_index);
-		KASSERT(NODE_COMPARE(iter->it_node, val, key) >= 0,
+		keyt = fnode_getkey(iter->it_node, iter->it_index);
+		KASSERT(NODE_COMPARE(iter->it_node, keyt, key) >= 0,
 		    ("leftmost key %lu smaller than key %lu",
-		    * (uint64_t *) val, * (uint64_t *) key));
+		    * (uint64_t *) keyt, * (uint64_t *) key));
 
 		/* Make sure this is the first one. */
 		if (iter->it_index > 0) {
-			val = fnode_getkey(iter->it_node, iter->it_index - 1);
-			KASSERT(NODE_COMPARE(iter->it_node, val, key) < 0, ("keymax too big"));
+			keyt = fnode_getkey(iter->it_node, iter->it_index - 1);
+			KASSERT(NODE_COMPARE(iter->it_node, keyt, key) < 0, ("keymax too big"));
 		}
 	}
 #endif
