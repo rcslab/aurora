@@ -475,8 +475,8 @@ sls_readdata_slos_pages(struct vnode *vp, vm_object_t obj, struct uio *auiop)
  * and stores it as a linked list of page runs.
  */
 static int
-sls_readdata_slos(struct vnode *vp, uint64_t slsid, struct slskv_table *rectable,
-    struct slskv_table *objtable)
+sls_readdata_slos(struct vnode *vp, uint64_t slsid, uint64_t type,
+    struct slskv_table *rectable, struct slskv_table *objtable)
 {
 	struct thread *td = curthread;
 	struct sls_record *rec;
@@ -485,12 +485,27 @@ sls_readdata_slos(struct vnode *vp, uint64_t slsid, struct slskv_table *rectable
 	struct uio auio;
 	vm_object_t obj;
 	struct sbuf *sb;
+	size_t len;
 	int error;
 
+	switch (type) {
+	case SLOSREC_VMOBJ:
+		len = sizeof(struct slsvmobject);
+		break;
+
+#ifdef SLS_TEST
+	case SLOSREC_TESTDATA:
+		len = sizeof(struct data_info);
+		break;
+#endif
+
+	default:
+
+		return (EINVAL);
+	}
 	/*
 	 * XXX Also fix up so we can read the data tests objects.
 	 */
-	size_t len = sizeof(struct slsvmobject);
 
 	/*
 	 * Read the object from the SLOS. Seeks for SLOS nodes are block-sized,
@@ -500,7 +515,7 @@ sls_readdata_slos(struct vnode *vp, uint64_t slsid, struct slskv_table *rectable
 	if (error != 0)
 		return (error);
 
-	rec = sls_getrecord(sb, slsid, SLOSREC_VMOBJ);
+	rec = sls_getrecord(sb, slsid, type);
 
 	/* Store the record for later and possibly make a new object.  */
 	error = sls_readdata_slos_vmobj(rectable, slsid, rec, &obj);
@@ -654,7 +669,7 @@ sls_read_slos_record(uint64_t oid, struct slskv_table *rectable, struct slskv_ta
 	 * metadata. We will manually read the data later.
 	 */
 	if (sls_isdata(st.type)) {
-		ret = sls_readdata_slos(vp, oid, rectable, objtable);
+		ret = sls_readdata_slos(vp, oid, st.type, rectable, objtable);
 		if (ret != 0)
 			goto out;
 	} else {
@@ -892,8 +907,7 @@ sls_writemeta_slos(struct sls_record *rec, struct vnode **vpp, bool overwrite)
 
 	len = sbuf_len(sb);
 
-	/* Try to create the node, if not already there, and wrap it in a vnode. 
-	 * */
+	/* Try to create the node, if not already there, wrap it in a vnode. */
 	oid = rec->srec_id;
 	error = slsfs_new_node(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
 	if (error != 0)
@@ -923,6 +937,8 @@ sls_writemeta_slos(struct sls_record *rec, struct vnode **vpp, bool overwrite)
 
 	st.type = rec->srec_type;
 	st.len = len;
+
+	KASSERT(st.type != 0, ("invalid record type"));
 
 	VOP_UNLOCK(vp, 0);
 	error = VOP_IOCTL(vp, SLS_SET_RSTAT, &st, 0, NULL, td);
