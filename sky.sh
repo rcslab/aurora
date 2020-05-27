@@ -28,7 +28,11 @@ mount -rw -t slsfs $DRIVE /testmnt
 #umount /testmnt
 #kldunload slos
 
-#mount -rw -t slsfs /dev/vtbd1 /testmnt
+echo "hello" > /testmnt/hello.txt
+
+umount /testmnt
+
+mount -rw -t slsfs $DRIVE /testmnt
 
 
 #mkdir -p /testmnt/dingdong/hello/2/

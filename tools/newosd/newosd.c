@@ -134,7 +134,7 @@ create_inode(uint64_t pid)
 	root_inode.ino_blocks = 0;
 	root_inode.ino_btree = DISKPTR_BLOCK(ALLOC());
 
-	printf("Root NEW inode at %lu\n", root_inode.ino_blk);
+	printf("Root NEW inode at %lu bsize(%u) offset(%lu)\n", root_inode.ino_blk, bsize, root_inode.ino_blk * bsize);
 	status = pwrite(fd, &root_inode, bsize, root_inode.ino_blk * bsize);
 	if (status < 0)
 	    exit (-1);

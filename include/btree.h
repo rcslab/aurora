@@ -60,6 +60,7 @@ extern uma_zone_t fnodes_zone;
 
 #define BTREE_LOCK(tree, flags) (lockmgr(&(tree)->bt_lock, flags, 0))
 #define BTREE_UNLOCK(tree, flags) (lockmgr(&(tree)->bt_lock, LK_RELEASE | flags, 0))
+#define BTREE_LKSTATUS(tree) (lockstatus(&(tree)->bt_lock))
 
 #define FBT_TRACKBUF (0x1)
 

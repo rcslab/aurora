@@ -477,6 +477,7 @@ slsfs_create_slos(struct mount *mp, struct vnode *devvp)
 	error = g_vfs_open(devvp, &slos.slos_cp, "slsfs", 1);
 	if (error) {
 		printf("Error in opening GEOM vfs\n");
+		g_topology_unlock();
 		return error;
 	}
 	slos.slos_pp = g_dev_getprovider(devvp->v_rdev);

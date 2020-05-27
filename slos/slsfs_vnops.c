@@ -494,7 +494,7 @@ slsfs_write(struct vop_write_args *args)
 	while(uio->uio_resid) {
 		// Grab the key thats closest to offset, but not over it
 		// Mask out the lower order bits so we just have the block;
-		error = slsfs_retrieve_buf(vp, uio->uio_offset, uio->uio_resid, &bp);
+		error = slsfs_retrieve_buf(vp, uio->uio_offset, uio->uio_resid, uio->uio_rw, &bp);
 		if (error) {
 			DBUG("Problem getting buffer for write %d\n", error);
 			return (error);
@@ -506,7 +506,11 @@ slsfs_write(struct vop_write_args *args)
 
 		KASSERT(xfersize != 0, ("No 0 uio moves slsfs write"));
 		KASSERT(xfersize <= uio->uio_resid, ("This should neveroccur"));
-		uiomove((char *)bp->b_data + off, xfersize, uio);
+		if (buf_mapped(bp)) {
+			error = vn_io_fault_uiomove((char *)bp->b_data + off, xfersize, uio);
+		} else {
+			error = vn_io_fault_pgmove(bp->b_pages, off, xfersize, uio);
+		}
 		/* One thing thats weird right now is our inodes and meta data 
 		 * is currently not
 		 * in the buf cache, so we don't really have to worry about 
@@ -558,7 +562,7 @@ slsfs_read(struct vop_read_args *args)
 	resid = omin(uio->uio_resid, (filesize - uio->uio_offset));
 	DBUG("READING global off %lu, global size %lu\n", uio->uio_offset, uio->uio_resid); 
 	while(resid) {
-		error = slsfs_retrieve_buf(vp, uio->uio_offset, uio->uio_resid, &bp);
+		error = slsfs_retrieve_buf(vp, uio->uio_offset, uio->uio_resid, uio->uio_rw, &bp);
 		if (error) {
 			DBUG("Problem getting buffer for write %d\n", error);
 			return (error);
@@ -579,10 +583,10 @@ slsfs_read(struct vop_read_args *args)
 		DBUG("Relative offset %lu, global off %lu, global size %lu\n", 
 		    off, uio->uio_offset, uio->uio_resid); 
 		KASSERT(toread != 0, ("Should not occur"));
-		error = uiomove((char *)bp->b_data + off, toread, uio);
-		if (error) {
-			brelse(bp);
-			break;
+		if (buf_mapped(bp)) {
+			error = vn_io_fault_uiomove((char *)bp->b_data + off, toread, uio);
+		} else {
+			error = vn_io_fault_pgmove(bp->b_pages, off, toread, uio);
 		}
 		brelse(bp);
 		resid -= toread;
@@ -682,18 +686,12 @@ slsfs_strategy(struct vop_strategy_args *args)
 	struct vnode *vp = args->a_vp;
 	struct fnode_iter iter;
 
-	//FOR BETTER BUF TRACKING
-	/*if (bp->b_iocmd == BIO_WRITE) {*/
-		/*printf("BIOWRITE : bp(%p), vp(%p:%lu) - %lu:%lu, %lu\n", bp, vp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno, bp->b_iooffset);*/
-	/*} else {*/
-		/*printf("BIOREAD : bp(%p), vp(%p:%lu) - %lu:%lu, %lu\n", bp, vp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno, bp->b_iooffset);*/
-	/*}*/
-	
-        CTR2(KTR_SPARE5, "slsfs_strategy vp=%p blkno=%x\n", vp, bp->b_lblkno);
+	CTR2(KTR_SPARE5, "slsfs_strategy vp=%p blkno=%x\n", vp, bp->b_lblkno);
 	if (vp->v_type != VCHR) {
 		KASSERT(bp->b_lblkno != (-1), 
 			("No logical block number should be -1 - vnode effect %lu", 
 			 SLSVP(vp)->sn_pid));
+
 		error = BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_SHARED);
 		if (error) {
 			panic("Problem getting lock %d\n", error);
@@ -760,6 +758,12 @@ slsfs_strategy(struct vop_strategy_args *args)
 	int change =  bp->b_bufobj->bo_bsize / slos.slos_vp->v_bufobj.bo_bsize;
 	bp->b_blkno = bp->b_blkno * change;
 	bp->b_iooffset = dbtob(bp->b_blkno);
+	//FOR BETTER BUF TRACKING
+	/*if (bp->b_iocmd == BIO_WRITE) {*/
+		/*printf("BIOWRITE : bp(%p), vp(%p:%lu) - %lu:%lu, %lu\n", bp, vp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno, bp->b_iooffset);*/
+	/*} else {*/
+		/*printf("BIOREAD : bp(%p), vp(%p:%lu) - %lu:%lu, %lu\n", bp, vp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno, bp->b_iooffset);*/
+	/*}*/
 
 	g_vfs_strategy(&slos.slos_vp->v_bufobj, bp);
 
@@ -896,8 +900,7 @@ abort:
 	// Check if the source is a directory and whether we are renaming a 
 	// directory
 	if ((mode & S_IFMT) == S_IFDIR) {
-		int isdot = fname->cn_namelen == 1 && fname->cn_nameptr[0] 
-		    =='.';
+		int isdot = fname->cn_namelen == 1 && fname->cn_nameptr[0] =='.';
 		int isownparent = fdvp == fvp;
 		int isdotdot = (fname->cn_flags | tname->cn_flags) & ISDOTDOT;
 		if (isdot || isdotdot || isownparent) {

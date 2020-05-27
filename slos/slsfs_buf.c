@@ -11,7 +11,9 @@
 #include "slsfs_buf.h"
 #include "btree.h"
 
-
+SDT_PROVIDER_DEFINE(slsfsbuf);
+SDT_PROBE_DEFINE(slsfsbuf, , , start);
+SDT_PROBE_DEFINE(slsfsbuf, , , end);
 
 /*
  * This function assume that the tree at the iter does not exist or is no in 
@@ -21,7 +23,7 @@
  * the truee
  */
 static int
-slsfs_buf_nocollide(struct vnode *vp, struct fnode_iter *biter, uint64_t bno, uint64_t size, struct buf **bp)
+slsfs_buf_nocollide(struct vnode *vp, struct fnode_iter *biter, uint64_t bno, uint64_t size, enum uio_rw rw, struct buf **bp)
 {
 	uint64_t nextkey;
 	int error;
@@ -40,6 +42,10 @@ slsfs_buf_nocollide(struct vnode *vp, struct fnode_iter *biter, uint64_t bno, ui
 
 	ptr.offset = 0;
 	ptr.size = size;
+	error = BTREE_LOCK(tree, LK_UPGRADE);
+	if (error) {
+		panic("what");
+	}
 	error = fbtree_insert(tree, &bno, &ptr);
 	if (error == ROOTCHANGE) {
 		svp->sn_ino.ino_btree = (diskptr_t){ svp->sn_tree.bt_root, IOSIZE(svp) };
@@ -54,14 +60,17 @@ slsfs_buf_nocollide(struct vnode *vp, struct fnode_iter *biter, uint64_t bno, ui
 }
 
 int
-slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, struct buf **bp)
+slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw rw, struct buf **bp)
 {
 	struct fnode_iter biter;
 	diskptr_t ptr;
 	int error;
+	bool covered;
 
 	struct slos_node *svp = SLSVP(vp);
+	uint64_t originalsize = size;
 	size_t blksize = IOSIZE(svp);
+	bool isaligned = (offset % blksize) == 0;
 	uint64_t bno = offset / blksize;
 
 	DBUG("Attemping to retrieve buffer %lu bno\n", bno);
@@ -74,7 +83,7 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, struct buf 
 	DBUG("Size of possible retrieved buf %lu\n", size);
 	if (ITER_ISNULL(biter)) {
 		DBUG("No key smaller than %lu\n", bno);
-		error = slsfs_buf_nocollide(vp, &biter, bno, size, bp);
+		error = slsfs_buf_nocollide(vp, &biter, bno, size, rw, bp);
 		if (error) {
 			panic("Problem with no collide case");
 		}
@@ -84,24 +93,33 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, struct buf 
 		if (iter_key != bno) {
 			// We intersect so need to read off the block on disk
 			if (INTERSECT(biter, bno, blksize)) {
-				DBUG("ENPOINT : %lu\n", ENDPOINT(biter, blksize));
-				DBUG("BLKSIZE %lu\n", blksize);
 				size = ENDPOINT(biter, blksize) - (bno * blksize);
-				ITER_RELEASE(biter);
 				size = omin(size, MAXBCACHEBUF);
 				DBUG("Intersecting keys for bno %lu : %lu\n", bno, size);
-				error = slsfs_bread(vp, bno, size, NULL, bp);
-			// We do not intersect
+				covered  = size <= originalsize;
+				if (isaligned && covered && (rw == UIO_WRITE)) {
+					ITER_RELEASE(biter);
+					SDT_PROBE0(slsfsbuf, , , start);
+					*bp = getblk(vp, bno, size, 0, 0, GB_UNMAPPED);
+					SDT_PROBE0(slsfsbuf, , , end);
+				} else {
+					error = slsfs_bread(vp, bno, size, NULL, bp);
+				}
 			} else {
 				DBUG("Key exists but not colliding %lu\n", size);
-				error = slsfs_buf_nocollide(vp, &biter, bno, size, bp);
+				error = slsfs_buf_nocollide(vp, &biter, bno, size, rw, bp);
 			}
 		} else {
 			ptr = ITER_VAL_T(biter, diskptr_t);
-			ITER_RELEASE(biter);
 			DBUG("Key exists reading size %lu\n", ptr.size);
 			size = omin(ptr.size, MAXBCACHEBUF);
-			error = slsfs_bread(vp, bno, size, NULL, bp);
+			covered  = size <= originalsize;
+			ITER_RELEASE(biter);
+			if (isaligned && covered && (rw == UIO_WRITE)) {
+				*bp = getblk(vp, bno, size, 0, 0, 0);
+			} else {
+				error = slsfs_bread(vp, bno, size, NULL, bp);
+			}
 		}
 	}
 
@@ -125,7 +143,7 @@ slsfs_balloc(struct vnode *vp, uint64_t lbn, size_t size, struct buf **bp)
 	int error = 0;
 	KASSERT(size % IOSIZE(SLSVP(vp)) == 0, ("Multiple of iosize"));
 	/* Actually allocate the block in the buffer cache. */
-	tempbuf = getblk(vp, lbn, size, 0, 0, 0);
+	tempbuf = getblk(vp, lbn, size, 0, 0, GB_UNMAPPED);
 	if (tempbuf) {
 		DBUG("Cleaning block buf\n");
 		vfs_bio_clrbuf(tempbuf);
@@ -170,9 +188,7 @@ slsfs_bdirty(struct buf *buf)
 		return;
 	}
 
-	buf->b_flags |= B_CLUSTEROK;
-
-        /* Be aggressive and start the IO immediately. */
+	/* Be aggressive and start the IO immediately. */
 	bawrite(buf);
 	return;
 }
@@ -186,7 +202,9 @@ int
 slsfs_bundirty(struct buf *buf)
 {
 	buf->b_flags &= ~(B_INVAL | B_CACHE);
-	bremfree(buf);
+	if (!(buf->b_flags & B_MANAGED)) {
+		bremfree(buf);
+	}
 	return bwrite(buf);
 }
 
@@ -199,7 +217,7 @@ slsfs_lookupbln(struct slos_node *svp, uint64_t lbn,  struct fnode_iter *iter)
 {
 	int error;
 	uint64_t key = lbn;
-	BTREE_LOCK(&svp->sn_tree, LK_EXCLUSIVE);
+	BTREE_LOCK(&svp->sn_tree, LK_SHARED);
 	error = fbtree_keymin_iter(&svp->sn_tree, &key, iter);
 
 	return (error);

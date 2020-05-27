@@ -18,7 +18,7 @@
  */
 int slsfs_balloc(struct vnode *node, uint64_t lbn, size_t xfersize, struct buf **buf);
 
-int slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, struct buf **bp);
+int slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw rw, struct buf **bp);
 
 /*
  * Given some vnode will read in the buffer associated with the logical block 

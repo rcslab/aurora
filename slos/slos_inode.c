@@ -11,6 +11,7 @@
 
 #include <slos.h>
 #include <slos_inode.h>
+#include <slsfs_buf.h>
 #include <slsfs.h>
 
 #include "slos_btree.h"
@@ -130,6 +131,7 @@ slos_iread(struct slos *slos, uint64_t blkno, struct slos_inode **inop)
 	 * something that's not an inode. 
 	 */
 	if (ino->ino_magic != SLOS_IMAGIC) {
+		printf("%lu pid\n", ino->ino_pid);
 		free(ino, M_SLOS_INO);
 		return EINVAL;
 	}
@@ -246,20 +248,28 @@ struct slos_node *
 slos_vpimport(struct slos *slos, uint64_t inoblk)
 {
 	int error;
-	struct slos_inode *ino;
 	struct slos_node *vp = NULL;
+	struct slos_inode *ino;
+	struct buf *bp = NULL;
 
 	/* Read the inode from disk. */
-	error = slos_iread(slos, inoblk, &ino);
-	if (error != 0) {
-		DBUG("ERROR READING");
-		return (NULL);
-	}
 
 	vp = uma_zalloc(slos_node_zone, M_WAITOK);
+	ino = &vp->sn_ino;
+
+	error = slos_setupfakedev(slos, vp);
+	if (error) {
+		panic("Issue creating fake device");
+	}
+	DBUG("Importing Inode from  %lu\n", inoblk);
+	error = slsfs_bread(vp->sn_fdev, inoblk, BLKSIZE(slos), NULL, &bp);
+	MPASS(error == 0);
+	memcpy(ino, bp->b_data, sizeof(struct slos_inode));
+	MPASS(ino->ino_magic == SLOS_IMAGIC);
+	brelse(bp);
+	vinvalbuf(vp->sn_fdev, 0, 0 ,0);
 
 	/* Move each field separately, translating between the two. */
-	vp->sn_ino = *ino;
 	vp->sn_pid = ino->ino_pid;
 	vp->sn_uid = ino->ino_uid;
 	vp->sn_gid = ino->ino_gid;
@@ -274,16 +284,8 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 	vp->sn_status = SLOS_VALIVE;
 	/* The refcount will be incremented by the caller. */
 	vp->sn_refcnt = 0;
-
-	error = slos_setupfakedev(slos, vp);
-	if (error) {
-		panic("Issue creating fake device");
-	}
-
 	fbtree_init(vp->sn_fdev, ino->ino_btree.offset, sizeof(uint64_t),
 	    sizeof(diskptr_t), &compare_vnode_t, "VNode Tree", 0, &vp->sn_tree);
-
-	free(ino, M_SLOS_INO);
 
 	return (vp);
 }

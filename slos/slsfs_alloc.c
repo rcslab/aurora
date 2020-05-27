@@ -7,7 +7,7 @@
 #include "slsfs_alloc.h"
 
 #define NEWOSDSIZE (30)
-#define AMORTIZED_CHUNK (1000)
+#define AMORTIZED_CHUNK (10000)
 
 /*
  * Generic uint64_t comparison function.
@@ -148,10 +148,12 @@ slsfs_allocator_init(struct slos *slos)
 	diskptr_t ptr;
 	uint64_t off;
 	uint64_t total;
+	uint64_t offbl = slos->slos_sb->sb_allocoffset.offset;
+	uint64_t sizebl = slos->slos_sb->sb_allocsize.offset;
 
 	/* Create the in-memory vnodes from the on-disk state. */
-	offt = slos_vpimport(slos, slos->slos_sb->sb_allocoffset.offset);
-	sizet = slos_vpimport(slos, slos->slos_sb->sb_allocsize.offset);
+	offt = slos_vpimport(slos, offbl);
+	sizet = slos_vpimport(slos, sizebl);
 
 	slos->slsfs_alloc.a_offset = offt;
 	slos->slsfs_alloc.a_size = sizet;
@@ -160,6 +162,9 @@ slsfs_allocator_init(struct slos *slos)
 
 	// We just have to readjust the elements in the btree since we are not
 	// using them for the same purpose of keeping track of data
+	DBUG("Initing Allocator\n");
+	DBUG("%lu %lu\n", offbl, sizebl);
+	MPASS(offt && sizet);
 	fbtree_init(offt->sn_fdev, offt->sn_tree.bt_root, sizeof(uint64_t), sizeof(uint64_t),
 	    &uint64_t_comp, "Off Tree", 0, OTREE(slos));
 	fbtree_init(sizet->sn_fdev, sizet->sn_tree.bt_root, sizeof(uint64_t), sizeof(uint64_t),
@@ -173,6 +178,7 @@ slsfs_allocator_init(struct slos *slos)
 	 */
 	if (!fbtree_size(&offt->sn_tree)) {
 
+		printf("First time start up for allocator\n");
 		off = 0;
 		total = slos->slos_sb->sb_size;
 

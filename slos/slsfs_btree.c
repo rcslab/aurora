@@ -446,7 +446,6 @@ fnode_keymin_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 		}
 	}
 #endif
-
 	return (0);
 }
 
@@ -501,6 +500,7 @@ fbtree_keymin_iter(struct fbtree *tree, void *key, struct fnode_iter *iter)
 static void
 fnode_iter_skip(struct fnode_iter *it)
 {
+	struct dnode *dn = it->it_node->fn_dnode;
 	struct fnode *right;
 
 	KASSERT(it->it_index <= NODE_SIZE(it->it_node), ("Iterator was out of bounds"));
@@ -516,6 +516,7 @@ fnode_iter_skip(struct fnode_iter *it)
 			/* Otherwise switch nodes. */
 			it->it_node = right;
 			it->it_index = 0;
+			dn = it->it_node->fn_dnode;
 		}
 	}
 }
@@ -669,13 +670,15 @@ fbtree_destroy(struct fbtree *tree)
 int
 fnode_iter_next(struct fnode_iter *it)
 {
+	struct dnode __unused *dn = it->it_node->fn_dnode;
+
 	/* An invalid iterator is still invalid after iteration. */
 	if (it->it_index == (-1)) {
 		return (0);
 	}
 
-	KASSERT(NODE_SIZE(it->it_node) > 0, ("Started iterating from an empty node"));
-	KASSERT(it->it_index < NODE_SIZE(it->it_node), ("Iterator was out of bounds"));
+	KASSERT(dn->dn_numkeys > 0, ("Started iterating from an empty node"));
+	KASSERT(it->it_index < dn->dn_numkeys, ("Iterator was out of bounds"));
 
 	++it->it_index;
 	fnode_iter_skip(it);
