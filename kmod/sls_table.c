@@ -216,12 +216,13 @@ static int
 sls_readrec_sbuf(char *buf, size_t len, struct sbuf **sbp)
 {
 	struct sbuf *sb;
-
-#if 0
 	int error;
+
 	/*
 	 * Make an sbuf out of the created and set it to be dynamic so that it
-	 * will be cleaned up with the sbuf.
+	 * will be cleaned up with the sbuf. The total size needs to be less
+	 * than the length of valid data, so have the total length be just over
+	 * the length of the record.
 	 */
 	sb = sbuf_new(NULL, buf, len + 1, SBUF_FIXEDLEN);
 	if (sb == NULL) {
@@ -231,6 +232,9 @@ sls_readrec_sbuf(char *buf, size_t len, struct sbuf **sbp)
 	SBUF_SETFLAG(sb, SBUF_DYNAMIC);
 	SBUF_CLEARFLAG(sb, SBUF_INCLUDENUL);
 
+	/* Adjust the length of the sbuf to include */
+	sb->s_len = len;
+
 	/* Close up the buffer. */
 	error = sbuf_finish(sb);
 	if (error != 0) {
@@ -238,16 +242,9 @@ sls_readrec_sbuf(char *buf, size_t len, struct sbuf **sbp)
 		return (error);
 	}
 
-	/* Adjust the length of the sbuf to include */
-	sb->s_len = len;
-
 	KASSERT((sb->s_flags & SBUF_FINISHED) == SBUF_FINISHED, ("buffer not finished?"));
-
-#endif
-	sb = sbuf_new_auto();
-	sbuf_bcat(sb, buf, len);
-	free(buf, M_SLSMM);
-	sbuf_finish(sb);
+	KASSERT(sbuf_done(sb), ("sbuf is not done"));
+	KASSERT(sbuf_len(sb) == len, ("buffer returns wrong length"));
 
 	*sbp = sb;
 
@@ -305,6 +302,8 @@ sls_readrec_buf(struct vnode *vp, size_t len, struct sbuf **sbp)
 		return (error);
 	}
 
+	KASSERT(sbuf_done(sb), ("sbuf is unfinished"));
+	KASSERT(sbuf_data(sb) != NULL, ("sbuf has no associated buffer"));
 	*sbp = sb;
 
 	return (0);
@@ -503,9 +502,6 @@ sls_readdata_slos(struct vnode *vp, uint64_t slsid, uint64_t type,
 
 		return (EINVAL);
 	}
-	/*
-	 * XXX Also fix up so we can read the data tests objects.
-	 */
 
 	/*
 	 * Read the object from the SLOS. Seeks for SLOS nodes are block-sized,
@@ -1277,6 +1273,7 @@ slstable_testmeta(struct slskv_table *origtable, struct sls_record *rec)
 {
 	struct sls_record *origrec = NULL;
 	meta_info *origminfo, *minfo;
+	size_t origmlen, mlen;
 	int error = 0;
 
 	/* Find the sbuf that corresponds to the new element. */
@@ -1301,13 +1298,23 @@ slstable_testmeta(struct slskv_table *origtable, struct sls_record *rec)
 
 	/* Unpack the original record from the sbuf. */
 	minfo = (meta_info *) sbuf_data(rec->srec_sb);
+	mlen = sbuf_len(rec->srec_sb);
 	if (minfo == NULL) {
+		printf("No retrieved metadata buffer\n");
 		return (EINVAL);
 	}
 
 	/* Unpack the original record from the sbuf. */
 	origminfo = (meta_info *) sbuf_data(origrec->srec_sb);
+	origmlen = sbuf_len(origrec->srec_sb);
 	if (origminfo == NULL) {
+		printf("No original metadata buffer\n");
+		return (EINVAL);
+	}
+
+	if (origmlen != mlen) {
+		printf("ERROR: Original size is %ld, retrieved is %ld\n",
+		    origmlen, mlen);
 		return (EINVAL);
 	}
 

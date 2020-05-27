@@ -2,10 +2,10 @@
 
 set -euo
 
-TEST="llist"
+TEST="array"
 SLSCTL="tools/slsctl/slsctl"
 OID="5"
-BACKEND="memory"
+BACKEND="slos"
 SLEEP="3"
 
 "$SLSCTL" partadd -o "$OID" -b "$BACKEND" 

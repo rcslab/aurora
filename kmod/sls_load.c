@@ -424,7 +424,7 @@ slsload_vmobject(struct slsvmobject *obj, char **bufp, size_t *bufsizep)
 		return (error);
 
 	if (obj->magic != SLSVMOBJECT_ID) {
-		SLS_DBG("magic mismatch\n");
+		SLS_DBG("magic mismatch %lx vs %x\n", obj->magic, SLSVMOBJECT_ID);
 		return (EINVAL);
 	}
 
