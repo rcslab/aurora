@@ -26,5 +26,8 @@ int partdel_main(int argc, char *argv[]);
 void epoch_usage(void);
 int epoch_main(int argc, char *argv[]);
 
+void spawn_usage(void);
+int spawn_main(int argc, char *argv[]);
+
 #endif /* _SLSCTL_H_ */
 

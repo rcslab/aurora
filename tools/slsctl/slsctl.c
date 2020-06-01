@@ -26,6 +26,7 @@ struct command {
 	{ "checkpoint",	&checkpoint_usage,  &checkpoint_main },
 	{ "restore",	&restore_usage,	    &restore_main },
 	{ "epoch",	&epoch_usage,	    &epoch_main},
+	{ "spawn",	&spawn_usage,	    &spawn_main},
 	{ NULL,		NULL,		    NULL }
 };
 
