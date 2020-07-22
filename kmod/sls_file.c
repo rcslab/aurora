@@ -516,7 +516,7 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 	struct slspts *pts;
 	struct kqueue *kq;
 	struct vnode *vp;
-	struct file *fp;
+	struct file *fp, *fppeer;
 	uintptr_t peer;
 	uint64_t slsid;
 	void *kqdata;
@@ -579,7 +579,10 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 		 */
 		slspipe = (struct slspipe *) slsbacker;
 		slsid = slspipe->slsid;
-		if (slskv_find(restdata->filetable, slsid, (uintptr_t *) &pipepeer) == 0) {
+		if (slskv_find(restdata->filetable, slsid, (uintptr_t *) &fppeer) == 0) {
+			pipepeer = (struct pipe *) fppeer->f_data;
+
+
 			/* Restore the buffer's state. */
 			pipepeer->pipe_buffer.cnt = slspipe->pipebuf.cnt;
 			pipepeer->pipe_buffer.in = slspipe->pipebuf.in;
@@ -600,17 +603,15 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 		break;
 
 	case DTYPE_SOCKET:
-		printf("Restoring socket?\n");
 		/* Same as with pipes, check if we have already restored it. */
 		slsid = ((struct slssock *) slsbacker)->slsid;
 		if (slskv_find(restdata->filetable, slsid, &peer) == 0)
 			return (0);
 
 		error = slsrest_socket(restdata->filetable, restdata->mbuftable, slsbacker, info, &fd);
-		if (error != 0)
+		if (error != 0) 
 			return (error);
 
-		printf("Restored socket.\n");
 		break;
 
 	case DTYPE_PTS:
@@ -699,7 +700,7 @@ slsckpt_file_supported(struct file *fp)
 		so = (struct socket *) fp->f_data;
 
 		/* IPv4 and UNIX sockets are allowed. */
-		if ((so->so_proto->pr_domain->dom_family == AF_INET) || 
+		if ((so->so_proto->pr_domain->dom_family == AF_INET) ||
 		    (so->so_proto->pr_domain->dom_family == AF_UNIX))
 			return (1);
 
@@ -888,6 +889,7 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc info,
 			goto error;
 		}
 
+
 		/* 
 		 * XXX Keep the UF_EXCLOSE flag with the entry somehow, 
 		 * maybe using bit ops? Then again, O_CLOEXEC is most
@@ -896,6 +898,10 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc info,
 		 * files, which seem to be able to be both.
 		 */
 		_finstall(p->p_fd, fp, fd, O_CLOEXEC, NULL);
+
+		/* Fix up the kqueue to point to its new filetable. */
+		if (fp->f_type == DTYPE_KQUEUE)
+			slsrest_kqattach_locked(p, (struct kqueue *) fp->f_data);
 	}
 
 	FILEDESC_XUNLOCK(newfdp);

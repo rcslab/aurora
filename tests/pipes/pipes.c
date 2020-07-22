@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,27 +16,49 @@ void
 pipe_reader()
 {
 	int ret;
+	int remaining;
 
 	printf("%d\n", getpid());
 	close(parentpipe[0]);
 	close(childpipe[1]);
 
 	for (;;) {
-	    ret = read(childpipe[0], &pingpong, sizeof(pingpong));
-	    if (ret < 0) {
-		perror("read");
-		exit(0);
-	    }
 
-	    sleep(1);
+		remaining = sizeof(pingpong);
+		while (remaining > 0) {
+			ret = read(childpipe[0], &pingpong, remaining);
+			if (ret < 0) {
+				if (errno == EAGAIN)
+					continue;
 
-	    ret = write(parentpipe[1], &pingpong, sizeof(pingpong));
-	    if (ret < 0) {
-		perror("write");
-		exit(0);
-	    }
+				perror("read");
+				exit(0);
+			} else if (ret == 0) {
+				printf("EOF");
+				break;
+			}
+			remaining -= ret;
+		}
 
-	    printf("pong\n");
+		sleep(1);
+
+		remaining = sizeof(pingpong);
+		while (remaining > 0) {
+			ret = write(parentpipe[1], &pingpong, remaining);
+			if (ret < 0) {
+				if (errno == EAGAIN)
+					continue;
+
+				perror("write");
+				exit(0);
+			} else if (ret == 0) {
+				printf("EOF");
+				break;
+			}
+			remaining -= ret;
+		}
+
+		printf("pong\n");
 
 	}
 }
@@ -43,28 +66,49 @@ pipe_reader()
 void
 pipe_writer()
 {
-	int ret; 
+	int ret;
+	int remaining;
 
 	printf("%d\n", getpid());
 	close(childpipe[0]);
 	close(parentpipe[1]);
 
 	for (;;) {
-	    sleep(1);
+		sleep(1);
 
-	    ret = write(childpipe[1], &pingpong, sizeof(pingpong));
-	    if (ret < 0) {
-		perror("write");
-		exit(0);
-	    }
+		remaining = sizeof(pingpong);
+		while (remaining > 0) {
+			ret = write(childpipe[1], &pingpong, remaining);
+			if (ret < 0) {
+				if (errno == EAGAIN)
+					continue;
 
-	    printf("ping\n");
+				perror("write");
+				exit(0);
+			} else if (ret == 0) {
+				printf("EOF");
+				break;
+			}
+			remaining -= ret;
+		}
 
-	    ret = read(parentpipe[0], &pingpong, sizeof(pingpong));
-	    if (ret < 0) {
-		perror("read");
-		exit(0);
-	    }
+		printf("ping\n");
+
+		remaining = sizeof(pingpong);
+		while (remaining > 0) {
+			ret = read(parentpipe[0], &pingpong, remaining);
+			if (ret < 0) {
+				if (errno == EAGAIN)
+					continue;
+
+				perror("read");
+				exit(0);
+			} else if (ret == 0) {
+				printf("EOF");
+				break;
+			}
+			remaining -= ret;
+		}
 
 	}
 }
@@ -83,23 +127,23 @@ main(int argc, char **argv)
 
 	error = pipe(parentpipe);
 	if (error != 0) {
-	    perror("pipe");
-	    return 0;
+		perror("pipe");
+		return 0;
 	}
 
 	error = pipe(childpipe);
 	if (error != 0) {
-	    perror("childpipe");
-	    return 0;
+		perror("childpipe");
+		return 0;
 	}
 
 	pid = fork();
 	if (pid == 0)
-	    pipe_writer();
+		pipe_writer();
 	else if (pid > 0)
-	    pipe_reader();
+		pipe_reader();
 	else
-	    perror("pipe");
+		perror("pipe");
 
 	return 0;
 }

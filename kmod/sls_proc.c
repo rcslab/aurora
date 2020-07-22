@@ -247,6 +247,28 @@ extern struct sysentvec elf64_freebsd_sysvec;
  */
 
 /*
+ * Create a new process group and session, properly locking while doing it.
+ */
+static int
+sls_enterpgrp(struct proc *p, struct pgrp *pgrp, struct session *sess)
+{
+	int error;
+
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+	/* We are changing the process tree with this. */
+	PROC_UNLOCK(p);
+	sx_xlock(&proctree_lock);
+
+	/* Create session. */
+	error = enterpgrp(p, p->p_pid, pgrp, sess);
+	sx_xunlock(&proctree_lock);
+
+	PROC_LOCK(p);
+
+	return (error);
+}
+
+/*
  * Set the process state, including process tree relations and
  * like PIDs. This function takes and leaves the process locked.
  */
@@ -286,17 +308,16 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 	KASSERT(!SESS_LEADER(p), ("process is a session leader"));
 	/* Check if we were the original session leader. */
 	if (slsproc->pid == slsproc->sid) {
-		pgrp = malloc(sizeof(*pgrp), M_SESSION, M_WAITOK | M_ZERO);
-		sess = malloc(sizeof(*sess), M_PGRP, M_WAITOK | M_ZERO);
+		pgrp = malloc(sizeof(*pgrp), M_PGRP, M_ZERO);
+		if (pgrp == NULL)
+			goto alloc_error;
 
-		/* We are changing the process tree with this. */
-		PROC_UNLOCK(p);
-		sx_xlock(&proctree_lock);
+		sess = malloc(sizeof(*sess), M_SESSION, M_ZERO);
+		if (sess == NULL)
+			goto alloc_error;
 
-		/* Create session. */
-		error = enterpgrp(p, p->p_pid, pgrp, sess);
-		sx_xunlock(&proctree_lock);
-		PROC_LOCK(p);
+		/* Create the new session. */
+		error = sls_enterpgrp(p, pgrp, sess);
 		if (error != 0) {
 			free(pgrp, M_PGRP);
 			free(sess, M_SESSION);
@@ -329,15 +350,13 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 		if (daemon != 0) {
 
 			/* Otherwise we just create a new pgrp if we were the group leader. */
-			pgrp = malloc(sizeof(*pgrp), M_PGRP, M_WAITOK | M_ZERO);
+			pgrp = malloc(sizeof(*pgrp), M_PGRP, M_ZERO);
+			if (pgrp == NULL)
+				goto alloc_error;
+
 
 			/* Create just the pgrp. */
-			PROC_UNLOCK(p);
-			sx_xlock(&proctree_lock);
-			/* We are changing the process tree with this. */
-			error = enterpgrp(p, p->p_pid, pgrp, NULL);
-			sx_xunlock(&proctree_lock);
-			PROC_LOCK(p);
+			error = sls_enterpgrp(p, pgrp, NULL);
 			if (error != 0) {
 				free(pgrp, M_PGRP);
 				return (error);
@@ -355,30 +374,28 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 
 		mtx_lock(&restdata->procmtx);
 		error = slskv_add(restdata->pgidtable, slsproc->pgid, (uintptr_t) pgrp);
-		if (error != 0) {
-			mtx_unlock(&restdata->procmtx);
-			goto error;
-		}
-
-		/* Wake up any processes waiting to join the pgrp. */
 		mtx_unlock(&restdata->procmtx);
+		if (error != 0)
+			goto error;
+
 	}
 
+	/* Wake up any processes waiting to join the pgrp. */
 	cv_broadcast(&restdata->proccv);
 
 	/* Do the thing, but have it be mutually exclusive w/ pgrp creation.  */
 	mtx_lock(&restdata->procmtx);
 	for (;;) {
 		/* Check if the pgrp we need is available. */
-		if ((slsproc->pid != slsproc->pgid) && 
-		    (slsproc->pgrpwait != 0) && 
+		if ((slsproc->pid != slsproc->pgid) &&
+		    (slsproc->pgrpwait != 0) &&
 		    (slskv_find(restdata->pgidtable, slsproc->pgid, (uintptr_t *) &pgrp) != 0)) {
 			cv_wait(&restdata->proccv, &restdata->procmtx);
 			continue;
 		}
 
 		/* Check if the session we need is available. */
-		if ((slsproc->pid != slsproc->sid) && 
+		if ((slsproc->pid != slsproc->sid) &&
 		    (slsproc->sid != 0) &&
 		    (slskv_find(restdata->sesstable, slsproc->sid, (uintptr_t *) &sess) != 0)) {
 			cv_wait(&restdata->proccv, &restdata->procmtx);
@@ -398,17 +415,24 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 
 	/* XXX Leaderless pgroups are not being migrated to a new pgroup. */
 	/* If we need to enter a pgroup, look it up in the tables and do it here. */
-	if ((p->p_pid != p->p_pgid) && (slsproc->pgrpwait != 0)) {
+	if ((slsproc->pid != slsproc->pgid) && (slsproc->pgrpwait != 0)) {
 		error = slskv_find(restdata->pgidtable, slsproc->pgid, (uint64_t *) &pgrp);
 		KASSERT(error == 0, ("restored pgrp not found"));
-
-		sx_xlock(&proctree_lock);
-		error = enterthispgrp(p, pgrp);
-		sx_xunlock(&proctree_lock);
-		if (error != 0) {
-			/* Turn it back into null so we don't free it while error handling. */
-			pgrp = NULL;
-			goto error;
+		/*
+		 * We might already be in the right pgrp, if that is the group
+		 * of the parent process that called sls_restore().
+		 */
+		if (!(pgrp->pg_id == p->p_pgid)) {
+			sx_xlock(&proctree_lock);
+			PROC_UNLOCK(p);
+			error = enterthispgrp(p, pgrp);
+			PROC_LOCK(p);
+			sx_xunlock(&proctree_lock);
+			if (error != 0) {
+				/* Turn it back into null so we don't free it while error handling. */
+				pgrp = NULL;
+				goto error;
+			}
 		}
 
 	} else if (!SESS_LEADER(p) && (slsproc->sid != 0)) {
@@ -468,7 +492,9 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 	sigacts_free(oldsigacts);
 
 	/* Restore the original executable pointer. */
+	PROC_UNLOCK(p);
 	error = sls_path_to_vn(name, &textvp);
+	PROC_LOCK(p);
 	if (error != 0)
 		goto error;
 
@@ -492,5 +518,10 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 error:
 	sbuf_delete(name);
 	return (error);
+
+alloc_error:
+	free(pgrp, M_PGRP);
+	free(sess, M_SESSION);
+	return (ENOMEM);
 }
 

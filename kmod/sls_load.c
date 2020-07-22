@@ -512,7 +512,6 @@ slsload_sockbuf(struct mbuf **mp, uint64_t *sbid , char **bufp, size_t *bufsizep
 	m = headm = NULL;
 	lasthead = lastrec = NULL;
 	while (*bufsizep > 0) {
-		printf("IN HERE\n");
 		error = sls_info(&slsmbuf, sizeof(slsmbuf), bufp, bufsizep);
 		if (error != 0)
 			return (error);
@@ -595,7 +594,12 @@ slsload_path(struct sbuf **sbp, char **bufp, size_t *bufsizep)
 		return (error);
 
 	/* First copy the data into a temporary raw buffer */
-	path = malloc(sblen + 1, M_SLSMM, M_WAITOK);
+	path = malloc(sblen + 1, M_SLSMM, M_NOWAIT);
+	if (path == NULL) {
+		error = ENOMEM;
+		goto error;
+	}
+	
 	error = sls_info(path, sblen, bufp, bufsizep);
 	if (error != 0)
 		goto error;

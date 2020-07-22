@@ -4,6 +4,7 @@
 
 #include <machine/param.h>
 
+#include <sys/capsicum.h>
 #include <sys/domain.h>
 #include <sys/event.h>
 #include <sys/fcntl.h>
@@ -52,14 +53,55 @@
 
 #include "imported_sls.h"
 
+
+/*
+ * All kqueues belong to exactly one file table, and have a backpointer to it.
+ * Remove the kqueue from its file table and fix the backpointers.
+ */
+void
+slsrest_kqdetach(struct kqueue *kq)
+{
+	struct filedesc *fdp = kq->kq_fdp;
+
+	FILEDESC_XLOCK(fdp);
+	TAILQ_REMOVE(&fdp->fd_kqlist, kq, kq_list);
+	kq->kq_fdp = NULL;
+	FILEDESC_XUNLOCK(fdp);
+}
+
+
+void
+slsrest_kqattach_locked(struct proc *p, struct kqueue *kq)
+{
+	struct filedesc *fdp = p->p_fd;
+
+	FILEDESC_LOCK_ASSERT(fdp);
+
+	TAILQ_INSERT_HEAD(&fdp->fd_kqlist, kq, kq_list);
+	kq->kq_fdp = fdp;
+}
+
+/*
+ * All kqueues belong to exactly one file table, and have a backpointer to it.
+ * Fixup the references and backpointers of the process' file table and kqueue.
+ */
+void
+slsrest_kqattach(struct proc *p, struct kqueue *kq)
+{
+	struct filedesc *fdp = p->p_fd;
+
+	FILEDESC_XLOCK(fdp);
+	slsrest_kqattach_locked(p, kq);
+	FILEDESC_XUNLOCK(fdp);
+}
+
 static int
 slsckpt_knote(struct knote *kn, struct sbuf *sb)
 {
 	struct slsknote slskn;
 	int error;
 
-	/* ma*/
-	KASSERT(kn->kn_influx > 0, ("knote in flux while checkpointing"));
+	KASSERT(kn->kn_influx == 0, ("knote in flux while checkpointing"));
 	KASSERT((kn->kn_status & (KN_DETACHED | KN_MARKER | KN_SCAN)) == 0,
 		("illegal kqueue state %x", kn->kn_status));
 
@@ -70,6 +112,7 @@ slsckpt_knote(struct knote *kn, struct sbuf *sb)
 	KASSERT((kn->kn_kevent.filter != EVFILT_AIO), ("unhandled AIO filter detected"));
 
 	/* XXX Check the kevent's flags in case there is an illegal operation in progress. */
+	SLS_DBG("Checkpointing (%lx, %d)\n", kn->kn_kevent.ident, kn->kn_kevent.filter);
 
 	/* Write each kevent to the sbuf. */
 	/* Get all relevant fields, mostly the identifier a*/
@@ -158,15 +201,28 @@ slsckpt_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
 int
 slsrest_kqueue(struct slskqueue *slskq, int *fdp)
 {
+	struct proc *p = curproc;
+	struct kqueue *kq;
 	int error;
+	int fd;
 
 	/* Create a kqueue for the process. */
 	error = kern_kqueue(curthread, 0, NULL);
 	if (error != 0)
 		return (error);
 
+	fd = curthread->td_retval[0];
+	kq = FDTOFP(p, fd)->f_data;
+
+	/*
+	 * Right now we are creating the kqueue outside the file table in which 
+	 * it will ultimately end up. We need to remove it from its current one, 
+	 * we'll attach it to the currect table when that is created.
+	 */
+	slsrest_kqdetach(kq);
+
 	/* Grab the open file and pass it to the caller. */
-	*fdp = curthread->td_retval[0];
+	*fdp = fd;
 
 	return (0);
 }
@@ -215,6 +271,7 @@ slsrest_kqregister(int fd, struct kqueue *kq, slsset *slskns)
 
 	KVSET_FOREACH(slskns, iter, slskn) {
 		kev = slskn->kn_kevent;
+		SLS_DBG("Registering knote (%lx, %d)\n", kev.ident, kev.filter);
 		/*
 		 * We need to modify the action flags so that the call to
 		 * kqfd_register() does exactly what we want: We want the knote
@@ -225,7 +282,7 @@ slsrest_kqregister(int fd, struct kqueue *kq, slsset *slskns)
 		kev.flags = EV_ADD | EV_DISABLE;
 		error = kqueue_register(kq, &kev, curthread, M_WAITOK);
 		if (error != 0) {
-			SLS_DBG("(BUG) Error %d by restoring knote for fd %d", error, fd);
+			SLS_DBG("(BUG) Error %d by restoring knote for fd %d\n", error, fd);
 			SLS_DBG("(BUG) Ident %lx Filter %d\n", kev.ident, kev.filter);
 		}
 		/* XXX See if we can handle/return the error. */
@@ -244,8 +301,8 @@ slsrest_knotes(int fd, slsset *slskns)
 {
 	struct thread *td = curthread;
 	struct slsknote *slskn;
-	struct kqueue *kq;
 	struct kevent *kev;
+	struct kqueue *kq;
 	struct knote *kn;
 	struct file *fp;
 	int error;
@@ -253,7 +310,7 @@ slsrest_knotes(int fd, slsset *slskns)
 	/* Get the underlying kqueue, as in kqfd_register(). */
 
 	/* First get the file pointer out of the table. */
-	error = fget(td, fd, NULL, &fp);
+	error = fget(td, fd, &cap_no_rights, &fp);
 	if (error != 0)
 		return (error);
 
@@ -280,11 +337,21 @@ slsrest_knotes(int fd, slsset *slskns)
 		/* First try to find the knote in the fd-related array. */
 		kev = &slskn->kn_kevent;
 
-		/* Find the right knote. */
+		/*
+		 * Find the right knote. Some files like non-listening IP 
+		 * sockets and IPv6 sockets of all kinds do not get restored, so 
+		 * a knote might be missing.
+		 */
 		kn = slsrest_knfind(kq, kev->ident, kev->filter);
+		if (kn == NULL) {
+			SLS_DBG("Missing knote (%lx, %x)\n", kev->ident, kev->filter);
+			continue;
+		}
+
 		KASSERT(kn != NULL, ("Missing knote (fd, id, ident) = (%d, %lx ,%d))",
 		    fd, kev->ident, kev->filter));
 
+		SLS_DBG("Restoring (%lx, %d)\n", kev->ident, kev->filter);
 		/*
 		 * We are holding the kqueue lock here, so we do not need to
 		 * mark the knote as being in flux while modifying.
@@ -305,7 +372,6 @@ slsrest_knotes(int fd, slsset *slskns)
 		kn->kn_kevent = slskn->kn_kevent;
 		kn->kn_sfflags = slskn->kn_sfflags;
 		kn->kn_sdata = slskn->kn_sdata;
-
 	}
 	KQ_UNLOCK(kq);
 

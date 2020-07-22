@@ -408,7 +408,8 @@ int
 slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
     struct slssock *info, struct slsfile *finfo, int *fdp)
 {
-	struct sockaddr *addr;
+	struct sockaddr_un *unaddr;
+	struct sockaddr_in *inaddr;
 	struct socket *so, *sopeer;
 	struct file *fp, *peerfp;
 	struct unpcb *unpcb, *unpeerpcb;
@@ -440,7 +441,7 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 	 */
 	switch (info->family) {
 	case AF_INET:
-		addr = (struct sockaddr *) &info->in;
+		inaddr = (struct sockaddr_in *) &info->in;
 
 		/* Check if the socket is bound. */
 		if (info->bound == 0)
@@ -449,14 +450,14 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 		 * We use bind() instead of setting the address directly because
 		 * we need to let the kernel know we are reserving the address.
 		 */
-		error = kern_bindat(td, AT_FDCWD, fd, addr);
+		error = kern_bindat(td, AT_FDCWD, fd, (struct sockaddr *) inaddr);
 		if (error != 0)
 			goto error;
 
 		break;
 
 	case AF_LOCAL:
-		addr = (struct sockaddr *) &info->un;
+		unaddr = (struct sockaddr_un *) &info->un;
 		/* 
 		 * Check if the socket has a peer. If it does, then it is 
 		 * either a UNIX stream data socket, or it is a socket
@@ -516,7 +517,7 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 		 * The bind() function for UNIX sockets makes assumptions 
 		 * that do not hold here, so we use our own custom version.
 		 */
-		error = slsrest_uipc_bindat(so, addr);
+		error = slsrest_uipc_bindat(so, (struct sockaddr *) unaddr);
 		if (error != 0) {
 			kern_close(td, fd);
 			return (error);

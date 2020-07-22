@@ -4,6 +4,7 @@
 #include <sys/condvar.h>
 #include <sys/conf.h>
 #include <sys/fcntl.h>
+#include <sys/event.h>
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/kernel.h>
@@ -28,6 +29,8 @@
 #include <sys/tty.h>
 #include <sys/uio.h>
 #include <sys/unistd.h>
+
+#include <sys/eventvar.h>
 
 #include <machine/param.h>
 #include <machine/reg.h>
@@ -664,10 +667,11 @@ slsrest_dofiles(struct slskv_table *metatable, struct slsrest_data *restdata)
 static void 
 slsrest_fini(struct slsrest_data *restdata)
 {
-	uint64_t kq;
+	uint64_t slskn;
 	slsset *kevset;
-	void *slskev; 
+	void *slskev;
 	uint64_t slsid;
+	struct kqueue *kq;
 	struct file *fp;
 	struct mbuf *m, *headm;
 
@@ -699,15 +703,28 @@ slsrest_fini(struct slsrest_data *restdata)
 		slskv_destroy(restdata->proctable);
 
 	if (restdata->filetable != NULL) {
-		KV_FOREACH_POP(restdata->filetable, slsid, fp)
+		KV_FOREACH_POP(restdata->filetable, slsid, fp) {
+		    /*
+		     * Kqueues in the file table do not have an associated file
+		     * table, contrary to what kqueue_close() assumes.
+		     * Temporarily attach the kqueue to this process' file
+		     * table.
+		     */
+		    if (fp->f_type == DTYPE_KQUEUE) {
+			    kq = (struct kqueue *) fp->f_data;
+			    if (kq->kq_fdp == NULL)
+				slsrest_kqattach(curproc, kq);
+		    }
+
 		    fdrop(fp, curthread);
+		}
 
 		slskv_destroy(restdata->filetable);
 	}
 
 	/* Each value in the table is a set of kevents. */
 	if (restdata->kevtable != NULL) {
-		KV_FOREACH_POP(restdata->kevtable, kq, kevset) {
+		KV_FOREACH_POP(restdata->kevtable, slskn, kevset) {
 			KVSET_FOREACH_POP(kevset, slskev)
 			    free(slskev, M_SLSMM);
 

@@ -120,6 +120,10 @@ void sls_restored(struct sls_restored_args *args);
 int slsckpt_create(struct slsckpt_data **sckpt_datap);
 void slsckpt_destroy(struct slsckpt_data *sckpt_data);
 
+void slsrest_kqattach_locked(struct proc *p, struct kqueue *kq);
+void slsrest_kqattach(struct proc *p, struct kqueue *kq);
+void slsrest_kqdetach(struct kqueue *kq);
+
 /* The range in which OIDs can fall. */
 #define SLS_OIDRANGE	(64 * 1024)
 #define SLS_OIDMIN 	(1)
