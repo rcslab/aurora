@@ -281,9 +281,9 @@ slsrest_dosockbuf(char *buf, size_t bufsize, struct slskv_table *table)
 	return (0);
 }
 
-/* Restore the kevents to the already restored kqueues. */
+/* Restore the knotes to the already restored kqueues. */
 static int
-slsrest_dokevents(struct proc *p, struct slskv_table *kevtable)
+slsrest_doknotes(struct proc *p, struct slskv_table *kevtable)
 {
 	struct file *fp;
 	slsset *kevset;
@@ -304,7 +304,7 @@ slsrest_dokevents(struct proc *p, struct slskv_table *kevtable)
 		if (error != 0)
 			return (error);
 
-		error = slsrest_kevents(fd, kevset);
+		error = slsrest_knotes(fd, kevset);
 		if (error != 0)
 			return (error);
 	}
@@ -431,7 +431,7 @@ slsrest_metadata(void *args)
 	if (error != 0)
 		goto error; 
 
-	error = slsrest_dokevents(p, restdata->kevtable);
+	error = slsrest_doknotes(p, restdata->kevtable);
 	if (error != 0)
 		goto error; 
 

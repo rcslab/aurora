@@ -158,20 +158,16 @@ struct slspipe {
 struct slskqueue {
 	uint64_t    magic;
 	uint64_t    slsid;	/* Unique SLS ID */
-	uint64_t    numevents;
-	/* XXX In-flight knotes */
 };
 
-#define SLSKEVENT_ID  0x736c7115
-struct slskevent {
-	uint64_t    magic;
-	uint64_t    slsid;	/* Unique SLS ID */
-	int32_t	    status;
-	int64_t	    ident;
-	int16_t	    filter;
-	int32_t	    flags;
-	int32_t	    fflags;
-	int64_t	    data;
+#define SLSKNOTE_ID 0x736c7115
+struct slsknote {
+	uint64_t	magic;	/* Magic value */
+	uint64_t	slsid;	/* Unique SLS ID */
+	int		kn_status;
+	struct kevent	kn_kevent;
+	int		kn_sfflags;
+	int64_t		kn_sdata;
 };
 
 #define SLSSOCKET_ID  0x736c7268

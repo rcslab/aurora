@@ -52,57 +52,94 @@
 
 #include "imported_sls.h"
 
-/* Checkpoint a kqueue and all of its pending knotes. */
-int
-slsckpt_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
+static int
+slsckpt_knote(struct knote *kn, struct sbuf *sb)
 {
-	struct slskqueue kqinfo;
-	struct slskevent kevinfo;
-	struct knote *kn;
-	int error, i;
+	struct slsknote slskn;
+	int error;
 
-	/* Create the structure for the kqueue itself. */
-	kqinfo.magic = SLSKQUEUE_ID;
-	kqinfo.slsid = (uint64_t) kq;
+	/* ma*/
+	KASSERT(kn->kn_influx > 0, ("knote in flux while checkpointing"));
+	KASSERT((kn->kn_status & (KN_DETACHED | KN_MARKER | KN_SCAN)) == 0,
+		("illegal kqueue state %x", kn->kn_status));
 
-	/* Write the kqueue itself to the sbuf. */
-	error = sbuf_bcat(sb, (void *) &kqinfo, sizeof(kqinfo));
+	/*
+	 * The AIO subsystem stores kernel pointers in knotes' private data, which we 
+	 * obviously can't do anything about. Fail when we come across this situation.
+	 */
+	KASSERT((kn->kn_kevent.filter != EVFILT_AIO), ("unhandled AIO filter detected"));
+
+	/* XXX Check the kevent's flags in case there is an illegal operation in progress. */
+
+	/* Write each kevent to the sbuf. */
+	/* Get all relevant fields, mostly the identifier a*/
+	slskn.magic = SLSKNOTE_ID;
+	slskn.slsid = (uint64_t) kn;
+	slskn.kn_status = kn->kn_status;
+	slskn.kn_kevent = kn->kn_kevent;
+	slskn.kn_sfflags = kn->kn_sfflags;
+	slskn.kn_sdata = kn->kn_sdata;
+
+	error = sbuf_bcat(sb, (void *) &slskn, sizeof(slskn));
 	if (error != 0)
 		return (error);
 
+	return (0);
+}
 
-	/* Traverse all lists of knotes in the kqueue. */
+/*
+ * Checkpoint a kqueue and all of its associated knotes.
+ */
+int
+slsckpt_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
+{
+	struct slskqueue slskq;
+	struct knote *kn;
+	int error, i;
+
+	/*
+	 * The kqueue structure is empty, we are only using it as a header to
+	 * the array of knotes that succeed it.
+	 */
+	slskq.magic = SLSKQUEUE_ID;
+	slskq.slsid = (uint64_t) kq;
+
+	/* Write the kqueue itself to the sbuf. */
+	error = sbuf_bcat(sb, (void *) &slskq, sizeof(slskq));
+	if (error != 0)
+		return (error);
+
+	/*
+	 * For the SLS, all kqueue states are either irrelevant or illegal.
+	 * Check for the illegal ones.
+	 */
+	KASSERT((kq->kq_state & (KQ_SEL | KQ_FLUXWAIT | KQ_ASYNC)) == 0,
+	    ("illegal kqueue state %x", kq->kq_state));
+
+	/* Get all knotes in the dynamic array. */
 	for (i = 0; i < kq->kq_knlistsize; i++) {
-		/* Get all knotes from each list. */
 		SLIST_FOREACH(kn, &kq->kq_knlist[i], kn_link) {
-			/* 
-			 * XXX Check whether any knotes are in flux. 
-			 * This is erring on the side of caution, since
-			 * I'm not sure what being in flux would do for us.
-			 */
-			if (kn != NULL && (kn->kn_influx > 0))
-				panic("knote in flux while checkpointing");
-
-			/* 
-			 * 
-			 * Get all relevant fields. Most of them are 
-			 * from the kevent struct the knote points to.
-			 */
-			kevinfo.status = kn->kn_status;
-			kevinfo.ident = kn->kn_kevent.ident;
-			kevinfo.filter = kn->kn_kevent.filter;
-			kevinfo.flags = kn->kn_kevent.flags;
-			kevinfo.fflags = kn->kn_kevent.fflags;
-			kevinfo.data = kn->kn_kevent.data;
-			kevinfo.slsid= (uint64_t) kn;
-			kevinfo.magic = SLSKEVENT_ID;
-
-			/* Write each kevent to the sbuf. */
-			error = sbuf_bcat(sb, (void *) &kevinfo, sizeof(kevinfo));
+			error = slsckpt_knote(kn, sb);
 			if (error != 0)
 				return (error);
 		}
 	}
+
+	/* Do the exact same thing for the hashtable. */
+	for (i = 0; i < kq->kq_knhashmask; i++) {
+		SLIST_FOREACH(kn, &kq->kq_knhash[i], kn_link) {
+			error = slsckpt_knote(kn, sb);
+			if (error != 0)
+				return (error);
+		}
+	}
+
+	/*
+	 * We don't care about the pending knotes queue because we can deduce
+	 * which knotes are active from their state. All knotes are accessible
+	 * from the list and the hashtable, because we don't remove them from
+	 * there to attach them to the pending list.
+	 */
 
 	return (0);
 }
@@ -119,7 +156,7 @@ slsckpt_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
  * we fully populate the kqueues with their data.
  */
 int
-slsrest_kqueue(struct slskqueue *kqinfo, int *fdp)
+slsrest_kqueue(struct slskqueue *slskq, int *fdp)
 {
 	int error;
 
@@ -136,46 +173,146 @@ slsrest_kqueue(struct slskqueue *kqinfo, int *fdp)
 
 
 /*
+ * Find a given knote specified by (kqueue, ident, filter).
+ */
+static struct knote *
+slsrest_knfind(struct kqueue *kq, __uintptr_t ident, short filter)
+{
+	struct klist *list;
+	struct knote *kn;
+
+	/* Traversal same as in kqueue_register(). */
+	if (ident < kq->kq_knlistsize) {
+		SLIST_FOREACH(kn, &kq->kq_knlist[ident], kn_link) {
+			if (filter == kn->kn_filter)
+				return (kn);
+		}
+	}
+
+	if (kq->kq_knhashmask != 0) {
+		list = &kq->kq_knhash[KN_HASH((u_long)ident, kq->kq_knhashmask)];
+		SLIST_FOREACH(kn, list, kn_link) {
+			if (ident == kn->kn_id &&
+			    filter == kn->kn_filter)
+				return (kn);
+		}
+	}
+
+
+	return (NULL);
+}
+
+/*
+ * Register a list of kevents into the kqueue.
+ */
+static int
+slsrest_kqregister(int fd, struct kqueue *kq, slsset *slskns)
+{
+	struct slskv_iter iter;
+	struct slsknote *slskn;
+	struct kevent kev;
+	int error;
+
+	KVSET_FOREACH(slskns, iter, slskn) {
+		kev = slskn->kn_kevent;
+		/*
+		 * We need to modify the action flags so that the call to
+		 * kqfd_register() does exactly what we want: We want the knote
+		 * to be inserted, but not triggered (we enqueue it manually if
+		 * needed). The way to do this is by adding the kevent in a
+		 * disabled state. We'll restore the right action flags later.
+		 */
+		kev.flags = EV_ADD | EV_DISABLE;
+		error = kqueue_register(kq, &kev, curthread, M_WAITOK);
+		if (error != 0) {
+			SLS_DBG("(BUG) Error %d by restoring knote for fd %d", error, fd);
+			SLS_DBG("(BUG) Ident %lx Filter %d\n", kev.ident, kev.filter);
+		}
+		/* XXX See if we can handle/return the error. */
+	}
+
+	return (0);
+}
+
+/*
  * Restore the kevents of a kqueue. This is done after all files
  * have been restored, since we need the fds to be backed before
  * we attach the relevant kevent to the kqueue.
  */
 int
-slsrest_kevents(int fd, slsset *slskevs)
+slsrest_knotes(int fd, slsset *slskns)
 {
-	struct slskevent *slskev;
+	struct thread *td = curthread;
+	struct slsknote *slskn;
+	struct kqueue *kq;
 	struct kevent *kev;
+	struct knote *kn;
+	struct file *fp;
 	int error;
 
-	/* For each kqinfo, create a kevent and register it. */
-	KVSET_FOREACH_POP(slskevs, slskev) {
-		kev = malloc(sizeof(*kev), M_SLSMM, M_WAITOK);
+	/* Get the underlying kqueue, as in kqfd_register(). */
 
-		kev->ident = slskev->ident;
-		/* XXX Right now we only need EVFILT_READ, which we 
-		 * aren't getting at checkpoint time. Find out why.
+	/* First get the file pointer out of the table. */
+	error = fget(td, fd, NULL, &fp);
+	if (error != 0)
+		return (error);
+
+	/* Then unpack the kqueue out of the descriptor. */
+	error = kqueue_acquire(fp, &kq);
+	if (error != 0)
+		goto noacquire;
+
+	/* For each slskq, create a kevent and register it. */
+	error = slsrest_kqregister(fd, kq, slskns);
+	if (error != 0)
+		goto noacquire;
+
+	/*
+	 * We assume that knotes won't be messed with by external entities until
+	 * fully initialized below, thanks to the EV_DISABLE flag. We also
+	 * assume the kqueue won't be modified externally, since the process is
+	 * not running.
+	 */
+
+	KQ_LOCK(kq);
+	/* Traverse the kqueue, fixing up each knote as we go. */
+	KVSET_FOREACH_POP(slskns, slskn) {
+		/* First try to find the knote in the fd-related array. */
+		kev = &slskn->kn_kevent;
+
+		/* Find the right knote. */
+		kn = slsrest_knfind(kq, kev->ident, kev->filter);
+		KASSERT(kn != NULL, ("Missing knote (fd, id, ident) = (%d, %lx ,%d))",
+		    fd, kev->ident, kev->filter));
+
+		/*
+		 * We are holding the kqueue lock here, so we do not need to
+		 * mark the knote as being in flux while modifying.
 		 */
-		kev->filter = slskev->filter; 
-		kev->flags = slskev->flags;
-		kev->fflags = slskev->fflags;
-		kev->data = slskev->data;
-		/* Add the kevent to the kqueue */
-		kev->flags = EV_ADD;
 
-		/* If any of the events were disabled , keep them that way. */
-		if ((slskev->status & KN_DISABLED) != 0)
-			kev->flags |= EV_DISABLE;
 
-		printf("Registering kevent for fd %d\n", fd);
-		error = kqfd_register(fd, kev, curthread, 1);
-		if (error != 0) {
-			/* 
-			 * We don't handle restoring certain types of
-			 * fds like IPv6 sockets yet.
-			 */
-			SLS_DBG("(BUG) fd for kevent %ld not restored\n", kev->ident);
-		}
+		/*
+		 * If the knote is supposed to be active, put it in the active
+		 * list. Avoid kqueue_enqueue() to avoid waking up the kqueue.
+		 * Any pending wakeups to at checkpoint time are lost, but we
+		 * restart all syscalls, so it doesn't matter.
+		 */
+		if ((slskn->kn_status & KN_QUEUED) != 0)
+			TAILQ_INSERT_TAIL(&kq->kq_head, kn, kn_tqe);
+
+		kn->kn_status = slskn->kn_status;
+		/* This restores the action flags , among other fields. */
+		kn->kn_kevent = slskn->kn_kevent;
+		kn->kn_sfflags = slskn->kn_sfflags;
+		kn->kn_sdata = slskn->kn_sdata;
+
 	}
+	KQ_UNLOCK(kq);
+
+
+	kqueue_release(kq, 0);
+noacquire:
+	fdrop(fp, td);
 
 	return (0);
 }

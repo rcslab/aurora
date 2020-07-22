@@ -99,11 +99,11 @@ slsload_proc(struct slsproc *slsproc, struct sbuf **namep, char **bufp, size_t *
 }
 
 static int
-slsload_kqueue(slsset **kevsetp, char **bufp, size_t *bufsizep)
+slsload_kqueue(slsset **slsknsp, char **bufp, size_t *bufsizep)
 {
 	struct slskqueue *kqinfo = NULL;
-	struct slskevent *kevinfo;
-	slsset *kevset = NULL;
+	struct slsknote *slsknote;
+	slsset *slskns = NULL;
 	int error; 
 
 	kqinfo = malloc(sizeof(*kqinfo), M_SLSMM, M_WAITOK);
@@ -120,43 +120,43 @@ slsload_kqueue(slsset **kevsetp, char **bufp, size_t *bufsizep)
 	}
 
 	/* The rest of the buffer is the list of kevents. */
-	error = slsset_create(&kevset);
+	error = slsset_create(&slskns);
 	if (error != 0) {
 		error = EINVAL;
 		goto error;
 	}
 
 	/* Save the metadata in the set's private data field. */
-	kevset->data = kqinfo;
+	slskns->data = kqinfo;
 
 	/* Go throught the record, splitting it into elements. */
 	while (*bufsizep > 0) {
-		kevinfo = malloc(sizeof(*kevinfo), M_SLSMM, M_WAITOK);
+		slsknote = malloc(sizeof(*slsknote), M_SLSMM, M_WAITOK);
 
-		error = sls_info(kevinfo, sizeof(*kevinfo), bufp, bufsizep);
+		error = sls_info(slsknote, sizeof(*slsknote), bufp, bufsizep);
 		if (error != 0)
 			goto error;
 
-		error = slsset_add(kevset, (uint64_t) kevinfo);
+		error = slsset_add(slskns, (uint64_t) slsknote);
 		if (error != 0)
 			goto error;
 	}
 
 	/* Associate the kqueue metadata with the set of kevents. */
-	kevset->data = kqinfo;
+	slskns->data = kqinfo;
 
 	/* Export to the caller. */
-	*kevsetp = kevset;
+	*slsknsp = slskns;
 
 	return (0);
 
 error:
 	/* Free each kevent entry separately. */
-	if (kevset != NULL) {
-		KVSET_FOREACH_POP(kevset, kevinfo) 
-		    free(kevinfo, M_SLSMM);
+	if (slskns != NULL) {
+		KVSET_FOREACH_POP(slskns, slsknote)
+		    free(slsknote, M_SLSMM);
 
-		slsset_destroy(kevset);
+		slsset_destroy(slskns);
 	}
 
 	free(kqinfo, M_SLSMM);

@@ -45,6 +45,6 @@ int slsrest_filedesc(struct proc *p, struct slsfiledesc info,
 	struct slskv_table *fdtable, struct slskv_table *filetable);
 
 int slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdata);
-int slsrest_kevents(int fd, slsset *slskevs);
+int slsrest_knotes(int fd, slsset *slskns);
 
 #endif /* _SLS_FD_H_ */
