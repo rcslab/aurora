@@ -20,14 +20,13 @@
 #include <slsfs.h>
 #include <slos.h>
 #include <slos_inode.h>
-#include <slos_record.h>
-#include <slos_btree.h>
 #include <slos_io.h>
 #include <slos_record.h>
 
 #include "slsfs_dir.h"
 #include "slsfs_subr.h"
 #include "slsfs_buf.h"
+#include "btree.h"
 
 SDT_PROVIDER_DEFINE(slos);
 SDT_PROBE_DEFINE3(slos, , , slsfs_deviceblk, "uint64_t", "uint64_t", "int");
@@ -57,8 +56,7 @@ slsfs_getattr(struct vop_getattr_args *args)
 	struct vnode *vp = args->a_vp;
 	struct vattr *vap = args->a_vap;
 	struct slos_node *slsvp = SLSVP(vp);
-	struct slsfsmount *smp = TOSMP(vp->v_mount);
-	DBUG("GET Attr on Vnode %lu\n", slsvp->sn_pid);
+	DEBUG1("getattr on vnode %lu", slsvp->sn_pid);
 
 	VATTR_NULL(vap);
 	vap->va_type = IFTOVT(slsvp->sn_ino.ino_mode);
@@ -68,7 +66,7 @@ slsfs_getattr(struct vop_getattr_args *args)
 	vap->va_gid = 0;
 	vap->va_fsid = VNOVAL;
 	vap->va_fileid = slsvp->sn_pid;
-	vap->va_blocksize = smp->sp_sdev->devblocksize;
+	vap->va_blocksize = BLKSIZE(&slos);
 	vap->va_size = slsvp->sn_ino.ino_size;
 
 	vap->va_atime.tv_sec = slsvp->sn_ino.ino_mtime;
@@ -87,7 +85,6 @@ slsfs_getattr(struct vop_getattr_args *args)
 	vap->va_bytes = slsvp->sn_ino.ino_asize;
 	vap->va_filerev = 0;
 	vap->va_vaflags = 0;
-	DBUG("Done GET Attr on Vnode %lu\n", slsvp->sn_pid);
 
 	return (0);
 }
@@ -99,21 +96,26 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 	struct vnode *vp = args->a_vp;
 	struct slos_node *svp = SLSVP(vp);
 
-	DBUG("Reclaiming vnode %p\n", vp);
+	DEBUG2("Reclaiming vnode %p - %lu", vp, svp->sn_pid);
 
 	if (vp == slos.slsfs_inodes) {
-		DBUG("Special vnode trying to be reclaimed\n");
+		DEBUG("Special vnode trying to be reclaimed");
 	}
 
-	slos_vpfree(svp->sn_slos, svp);
-
+	VI_LOCK(vp);
 	vp->v_data = NULL;
-	cache_purge(vp);
+	VI_UNLOCK(vp);
+
+	vinvalbuf(vp, 0, 0, 0);
+	
 	vnode_destroy_vobject(vp);
-	if (vp->v_vflag & VV_SYSTEM) {
+	if (vp->v_type != VCHR) {
+		cache_purge(vp);
 		vfs_hash_remove(vp);
+		slos_vpfree(svp->sn_slos, svp);
 	}
-	DBUG("Done reclaiming vnode %p\n", vp);
+
+	DEBUG1("Done reclaiming vnode %p", vp);
 
 	return (0);
 }
@@ -137,10 +139,10 @@ slsfs_mkdir(struct vop_mkdir_args *args)
 		return (error);
 	} 
 
-	DBUG("Initing Directory named %s\n", name->cn_nameptr);
+	DEBUG1("Initing Directory named %s", name->cn_nameptr);
 	error = slsfs_init_dir(dvp, vp, name);
 	if (error) {
-		DBUG("Issue init directory\n");
+		DEBUG("Issue init directory");
 		*vpp = NULL;
 		return (error);
 	}
@@ -186,38 +188,36 @@ slsfs_readdir(struct vop_readdir_args *args)
 		return (ENOTDIR);
 	}
 
-	DBUG("READING DIRECTORY %lu\n", filesize);
+	DEBUG1("READING DIRECTORY %lu", filesize);
 	if ((io->uio_offset < filesize) &&
 	    (io->uio_resid >= sizeof(struct dirent)))
 	{
 		diroffset = io->uio_offset;
 		blkno = io->uio_offset / blksize;
 		blkoff = io->uio_offset % blksize;
-		error = slsfs_bread(vp, blkno, blksize, curthread->td_ucred, 
-		    &bp);
+		error = slsfs_bread(vp, blkno, blksize, curthread->td_ucred, 0, &bp);
 		if (error) {
 			brelse(bp);
-			DBUG("Problem reading from blk in readdir\n");
+			DEBUG("Problem reading from blk in readdir");
 			return (error);
 		}
 		/* Create the UIO for the disk. */
 		while (diroffset < filesize) {
-			DBUG("dir offet %lu\n", diroffset);
+			DEBUG1("dir offet %lu", diroffset);
 			anyleft = ((diroffset % blksize) + sizeof(struct dirent)) > blksize;
 			if (anyleft) {
 				blkoff = 0;
 				blkno++;
 				diroffset = blkno * blksize;
 				brelse(bp);
-				error = slsfs_bread(vp, blkno, blksize, 
-				    curthread->td_ucred, &bp);
+				error = slsfs_bread(vp, blkno, blksize, curthread->td_ucred, 0, &bp);
 				if (error) {
 					brelse(bp);
 					return (error);
 				}
 			}
 			if (buf_mapped(bp)) {
-				KASSERT(bp->b_bcount > blkoff, ("Blkoff out of range of buffer\n"));
+				KASSERT(bp->b_bcount > blkoff, ("Blkoff out of range of buffer"));
 				dir = *((struct dirent *)(bp->b_data + blkoff));
 				if (dir.d_reclen == 0) {
 					break;
@@ -227,10 +227,10 @@ slsfs_readdir(struct vop_readdir_args *args)
 				if (io->uio_resid < GENERIC_DIRSIZ(&dir)) {
 					break;
 				}
-				DBUG("%s\n", dir.d_name);
+				DEBUG1("%s", dir.d_name);
 				error = uiomove(&dir, dir.d_reclen, io);
 				if (error) {
-					DBUG("Problem moving buffer\n");
+					DEBUG("Problem moving buffer");
 					return (error);
 				}
 			} else {
@@ -294,7 +294,7 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 			*vpp = vp;
 		}
 	} else {
-		DBUG("Looking up file %s\n", cnp->cn_nameptr);
+		DEBUG1("Looking up file %s", cnp->cn_nameptr);
 		error = slsfs_lookup_name(dvp, cnp, &dir);
 		if (error == EINVAL) {
 			error = ENOENT;
@@ -305,7 +305,7 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 			    islastcn) {
 				/* Normally should check access rights but 
 				 * won't for now */
-				DBUG("Regular name lookup - not found\n");
+				DEBUG("Regular name lookup - not found");
 				cnp->cn_flags |= SAVENAME;
 				error = EJUSTRETURN;
 			} 
@@ -313,7 +313,7 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 			/* Cases for when name is found, others to be filled in 
 			 * later */
 			if ((nameiop == DELETE) && islastcn) {
-				DBUG("Delete of file %s\n", cnp->cn_nameptr);
+				DEBUG1("Delete of file %s", cnp->cn_nameptr);
 				error = SLS_VGET(dvp, dir.d_fileno, 
 				    LK_EXCLUSIVE, &vp);
 				if (!error) {
@@ -321,7 +321,7 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 					*vpp = vp;
 				}
 			} else {
-				DBUG("Lookup of file %s\n", cnp->cn_nameptr);
+				DEBUG1("Lookup of file %s", cnp->cn_nameptr);
 				error = SLS_VGET(dvp, dir.d_fileno, 
 				    LK_EXCLUSIVE, &vp);
 				if (!error) {
@@ -329,7 +329,7 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 				}
 			}
 		} else {
-			DBUG("ERROR IN LOOKUP %d\n", error);
+			DEBUG1("ERROR IN LOOKUP %d", error);
 			return (error);
 		}
 	}
@@ -345,7 +345,7 @@ out:
 static int
 slsfs_rmdir(struct vop_rmdir_args *args)
 {
-	DBUG("Removing directory\n");
+	DEBUG("Removing directory");
 	struct vnode *vp = args->a_vp;
 	struct vnode *dvp = args->a_dvp;
 	struct componentname *cnp = args->a_cnp;
@@ -371,7 +371,7 @@ slsfs_rmdir(struct vop_rmdir_args *args)
 
 	cache_purge(dvp);
 	cache_purge(vp);
-	DBUG("Removing directory done\n");
+	DEBUG("Removing directory done");
 
 	return (0);
 
@@ -380,7 +380,7 @@ slsfs_rmdir(struct vop_rmdir_args *args)
 static int
 slsfs_create(struct vop_create_args *args)
 {
-	DBUG("Creating file\n");
+	DEBUG("Creating file");
 	struct vnode *dvp = args->a_dvp;
 	struct vnode **vpp = args->a_vpp;
 	struct componentname *name = args->a_cnp;
@@ -421,7 +421,7 @@ slsfs_remove(struct vop_remove_args *args)
 	struct componentname *cnp = args->a_cnp;
 	int error;
 
-	DBUG("Removing file %s\n", cnp->cn_nameptr);
+	DEBUG1("Removing file %s", cnp->cn_nameptr);
 
 	error = slsfs_remove_node(dvp, vp, cnp);
 	if (error) {
@@ -431,7 +431,7 @@ slsfs_remove(struct vop_remove_args *args)
 	SLSVP(dvp)->sn_ino.ino_nlink -= 1;
 	cache_purge(dvp);
 
-	DBUG("Removing file\n");
+	DEBUG("Removing file");
 
 	return (0);
 }
@@ -443,6 +443,7 @@ slsfs_write(struct vop_write_args *args)
 	size_t xfersize, filesize;
 	uint64_t off;
 	int error = 0;
+	int gbflag = 0;
 
 	struct vnode *vp = args->a_vp;
 	struct slos_node *svp = SLSVP(vp);
@@ -454,11 +455,11 @@ slsfs_write(struct vop_write_args *args)
 
 	// Check if full
 	if (uio->uio_offset < 0) {
-		DBUG("Offset write at %lx\n", uio->uio_offset);
+		DEBUG1("Offset write at %lx", uio->uio_offset);
 		return (EINVAL);
 	}
 	if (uio->uio_resid == 0) {
-		DBUG("Write of no buff\n");
+		DEBUG("Write of no buff");
 		return (0);
 	}
 	switch(vp->v_type) {
@@ -484,19 +485,23 @@ slsfs_write(struct vop_write_args *args)
 	int modified = 0;
 
 	if (ioflag & IO_DIRECT) {
-		DBUG("direct\n");
+		DEBUG("direct");
 	}
 
 	if (ioflag & IO_SYNC) {
-		DBUG("sync\n");
+		DEBUG("sync");
 	}
 
 	while(uio->uio_resid) {
 		// Grab the key thats closest to offset, but not over it
 		// Mask out the lower order bits so we just have the block;
-		error = slsfs_retrieve_buf(vp, uio->uio_offset, uio->uio_resid, uio->uio_rw, &bp);
+		if (!checksum_enabled) {
+			gbflag |= GB_UNMAPPED;
+		}
+
+		error = slsfs_retrieve_buf(vp, uio->uio_offset, uio->uio_resid, uio->uio_rw, gbflag, &bp);
 		if (error) {
-			DBUG("Problem getting buffer for write %d\n", error);
+			DEBUG("Problem getting buffer for write %d", error);
 			return (error);
 		}
 
@@ -537,6 +542,7 @@ slsfs_read(struct vop_read_args *args)
 	uint64_t off;
 	size_t resid;
 	size_t toread;
+	int gbflag = 0;
 	int error = 0;
 
 	struct vnode *vp = args->a_vp;
@@ -554,23 +560,27 @@ slsfs_read(struct vop_read_args *args)
 	if (uio->uio_resid == 0)
 		return (0);
 
-	DBUG("Reading filesize %lu - %lu\n", SLSVP(vp)->sn_pid, filesize);
+	DEBUG2("Reading filesize %lu - %lu", SLSVP(vp)->sn_pid, filesize);
 	if (uio->uio_offset >= filesize) {
 		return (0);
 	}
 
 	resid = omin(uio->uio_resid, (filesize - uio->uio_offset));
-	DBUG("READING global off %lu, global size %lu\n", uio->uio_offset, uio->uio_resid); 
+	DEBUG2("READING global off %lu, global size %lu", uio->uio_offset, uio->uio_resid); 
 	while(resid) {
-		error = slsfs_retrieve_buf(vp, uio->uio_offset, uio->uio_resid, uio->uio_rw, &bp);
-		if (error) {
-			DBUG("Problem getting buffer for write %d\n", error);
-			return (error);
+		if (!checksum_enabled) {
+			gbflag |= GB_UNMAPPED;
 		}
 
+		error = slsfs_retrieve_buf(vp, uio->uio_offset, uio->uio_resid, uio->uio_rw, gbflag, &bp);
+		if (error) {
+			DEBUG1("Problem getting buffer for write %d", error);
+			return (error);
+		}
+	
 		off = uio->uio_offset - (bp->b_lblkno * blksize);
 		toread = omin(resid, bp->b_bcount - off);
-		DBUG("%lu --- %lu, %lu, %p\n", resid, bp->b_bcount, off, vp);
+		DEBUG4("%lu --- %lu, %lu, %p", resid, bp->b_bcount, off, vp);
 
 		/* One thing thats weird right now is our inodes and meta data 
 		 * is currently not
@@ -578,9 +588,9 @@ slsfs_read(struct vop_read_args *args)
 		 * dirtying those buffers,
 		 * but later we will have to dirty them.
 		 */
-		DBUG("Reading: Read at bno %lu for vnode %p, read size %lu\n", 
+		DEBUG3("Reading: Read at bno %lu for vnode %p, read size %lu", 
 		    bp->b_lblkno, vp, toread);
-		DBUG("Relative offset %lu, global off %lu, global size %lu\n", 
+		DEBUG3("Relative offset %lu, global off %lu, global size %lu", 
 		    off, uio->uio_offset, uio->uio_resid); 
 		KASSERT(toread != 0, ("Should not occur"));
 		if (buf_mapped(bp)) {
@@ -648,17 +658,17 @@ slsfs_print(struct vop_print_args *args)
 	struct slos_node *slsvp = SLSVP(vp);
 
 	if (slsvp == NULL) {
-		printf("\t(null)\n");
+		printf("\t(null)");
 	} else if ((void *)slsvp == (void *)&slos) {
-		printf("\tslos\n");
+		printf("\tslos");
 	} else {
-		printf("\tslos inode\n");
-		printf("\tsn_pid = %ld\n", slsvp->sn_pid);
-		printf("\tsn_uid = %ld\n", slsvp->sn_uid);
-		printf("\tsn_gid = %ld\n", slsvp->sn_gid);
-		printf("\tsn_blk = %ld\n", slsvp->sn_blk);
-		printf("\tsn_status = %lx\n", slsvp->sn_status);
-		printf("\tsn_refcnt = %ld\n", slsvp->sn_refcnt);
+		printf("\tslos inode");
+		printf("\tsn_pid = %ld", slsvp->sn_pid);
+		printf("\tsn_uid = %ld", slsvp->sn_uid);
+		printf("\tsn_gid = %ld", slsvp->sn_gid);
+		printf("\tsn_blk = %ld", slsvp->sn_blk);
+		printf("\tsn_status = %lx", slsvp->sn_status);
+		printf("\tsn_refcnt = %ld", slsvp->sn_refcnt);
 	}
 
 	return (0);
@@ -677,6 +687,98 @@ adjust_ptr(uint64_t lbln, uint64_t bln, diskptr_t *ptr)
 }
 
 static int
+slsfs_check_cksum(struct buf *bp)
+{
+	size_t cksize;
+	uint32_t cksum, check;
+	int error;
+
+	struct fbtree *tree = &slos.slos_cktree->sn_tree;
+	uint64_t blk = bp->b_blkno;
+	size_t size = 0;
+	MPASS((bp->b_bcount % BLKSIZE(&slos)) == 0);
+	while (size < bp->b_bcount) {
+		cksize = min(PAGE_SIZE, bp->b_bcount - size);
+		cksum = calculate_crc32c(~0, bp->b_data + size, cksize);
+		size += cksize;
+		blk++;
+		error = fbtree_get(tree, &blk, &check);
+		if (error == EINVAL) {
+			return 0;
+		} else if (error) {
+			panic("Problem with read cksum %d", error);
+		}
+
+		if (check != cksum) {
+			printf("%lu, %lu, %lu", blk, cksize, bp->b_bcount);
+			panic("What");
+			return EINVAL;
+		}
+	}
+	return (0);
+}
+
+static int
+slsfs_update_cksum(struct buf *bp)
+{
+	size_t cksize;
+	uint32_t cksum;
+	struct fnode_iter iter;
+	int error = 0;
+
+	struct fbtree *tree = &slos.slos_cktree->sn_tree;
+	uint64_t blk = bp->b_blkno;
+	size_t size = 0;
+	while (size < bp->b_bcount) {
+		cksize = min(PAGE_SIZE, bp->b_bcount - size);
+		cksum = calculate_crc32c(~0, bp->b_data + size, cksize);
+		size += cksize;
+		error = fbtree_keymin_iter(tree, &blk, &iter);
+		if (ITER_ISNULL(iter) || ITER_KEY_T(iter, uint64_t) != blk) {
+			error = fnode_insert(iter.it_node, &blk, &cksum);
+		} else {
+			fiter_replace(&iter, &cksum);
+		}
+		if (error) {
+			panic("Issue with updating checksum tree %d", error);
+		}
+		blk++;
+	}
+	return (0);
+}
+
+int
+slsfs_cksum(struct buf *bp)
+{
+	int error;
+	struct fbtree *tree = &slos.slos_cktree->sn_tree;
+
+	if (bp->b_data == unmapped_buf || (bp->b_vp == slos.slos_cktree->sn_fdev) 
+		|| slos.slos_sb->sb_epoch == (-1)) {
+		return 0;
+	}
+
+	switch (bp->b_iocmd) {
+		case BIO_READ:
+			BTREE_LOCK(tree, LK_SHARED);
+			error = slsfs_check_cksum(bp);
+			BTREE_UNLOCK(tree, 0);
+
+			return (error);
+		case BIO_WRITE:
+			BTREE_LOCK(tree, LK_EXCLUSIVE);
+			error = slsfs_update_cksum(bp);
+			BTREE_UNLOCK(tree, 0);
+
+			return (error);
+		default:
+			DEBUG("Unknown command");
+	};
+
+	return (-1);
+}
+
+static int
 slsfs_strategy(struct vop_strategy_args *args)
 {
 	int error;
@@ -686,15 +788,15 @@ slsfs_strategy(struct vop_strategy_args *args)
 	struct vnode *vp = args->a_vp;
 	struct fnode_iter iter;
 
-	CTR2(KTR_SPARE5, "slsfs_strategy vp=%p blkno=%x\n", vp, bp->b_lblkno);
+	DEBUG2("slsfs_strategy vp=%p blkno=%x", vp, bp->b_lblkno);
 	if (vp->v_type != VCHR) {
-		KASSERT(bp->b_lblkno != (-1), 
+		KASSERT(bp->b_lblkno != EPOCH_INVAL, 
 			("No logical block number should be -1 - vnode effect %lu", 
 			 SLSVP(vp)->sn_pid));
 
 		error = BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_SHARED);
 		if (error) {
-			panic("Problem getting lock %d\n", error);
+			panic("Problem getting lock %d", error);
 		}
 		error = fbtree_keymin_iter(&SLSVP(vp)->sn_tree, &bp->b_lblkno, &iter);
 		if (error != 0) {
@@ -702,48 +804,59 @@ slsfs_strategy(struct vop_strategy_args *args)
 		}
 
 		if (ITER_ISNULL(iter)) {
-			if (iter.it_node->fn_dnode->dn_parent) {
-				if (!iter.it_node->fn_parent) {
-					fnode_parent(iter.it_node, 
-					    &iter.it_node->fn_parent);
-				}
-				fnode_print(iter.it_node->fn_parent);
-			}
+			struct fnode *parent;
 			fnode_print(iter.it_node);
-			panic("whats %p, %lu, %p", vp, bp->b_lblkno, 
-			    iter.it_node);
+			fnode_parent(iter.it_node, &parent);
+			fnode_print(parent);
+			fnode_right(iter.it_node, &parent);
+			fnode_print(parent);
+			fnode_print(iter.it_node);
+			panic("Issue finding block vp(%p), lbn(%lu), fnode(%p) bp(%p)", vp, bp->b_lblkno, 
+			    iter.it_node, bp);
 		}
-
+		ptr = ITER_VAL_T(iter, diskptr_t);
 		if (ITER_KEY_T(iter, uint64_t) != bp->b_lblkno) {
 			if (!INTERSECT(iter, bp->b_lblkno, IOSIZE(SLSVP(vp)))) {
-				panic("Key not found");
+				struct fnode *parent;
+				fnode_print(iter.it_node);
+				fnode_parent(iter.it_node, &parent);
+				fnode_print(parent);
+				fnode_right(iter.it_node, &parent);
+				fnode_print(parent);
+				panic("Key not found %lu %lu %lu %lu", ITER_KEY_T(iter, uint64_t), ptr.offset, ptr.size, bp->b_lblkno);
 			}
 		}
 
-		ptr = ITER_VAL_T(iter, diskptr_t);
-		if (ptr.offset != (0))  {
-			adjust_ptr(bp->b_lblkno, ITER_KEY_T(iter, uint64_t), &ptr);
-			bp->b_blkno = ptr.offset;
-		} else if (bp->b_iocmd == BIO_WRITE) {
-			error = ALLOCATEBLK(SLSVP(vp)->sn_slos, ptr.size, &ptr);
-			if (error) {
-				panic("UH OH");
-			}
+		if (bp->b_iocmd == BIO_WRITE) {
+			if (ptr.epoch == slos.slos_sb->sb_epoch && ptr.offset != 0) {
+				adjust_ptr(bp->b_lblkno, ITER_KEY_T(iter, uint64_t), &ptr);
+			} else {
+				error = BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_UPGRADE);
+				if (error) {
+					panic("Problem getting lock %d", error);
+				}
+				
+				error = slsfs_fbtree_rangeinsert(&SLSVP(vp)->sn_tree, 
+					bp->b_lblkno, bp->b_bcount);
+				MPASS(error == 0);
 
-			if (ptr.offset == 0) {
-				panic("Uh oh\n");
+				error = ALLOCATEPTR(SLSVP(vp)->sn_slos, bp->b_bcount, &ptr);
+				MPASS(error == 0);
+
+				error = fbtree_replace(&SLSVP(vp)->sn_tree, &bp->b_lblkno, &ptr);
+				MPASS(error == 0);
 			}
-			error = fbtree_replace(&SLSVP(vp)->sn_tree, ITER_KEY(iter), &ptr);
-			if (error) {
-				panic("Issue replacing key %d\n", error);
-			}
-			adjust_ptr(bp->b_lblkno, ITER_KEY_T(iter, uint64_t), &ptr);
 			bp->b_blkno = ptr.offset;
-		} else {
-			bp->b_blkno = (daddr_t) (-1);
-			vfs_bio_clrbuf(bp); bufdone(bp);
-			ITER_RELEASE(iter);
-			return (0);
+		} else if (bp->b_iocmd == BIO_READ) {
+			if (ptr.offset != (0))  {
+				adjust_ptr(bp->b_lblkno, ITER_KEY_T(iter, uint64_t), &ptr);
+				bp->b_blkno = ptr.offset;
+			} else {
+				ITER_RELEASE(iter);
+				bp->b_blkno = (daddr_t) (-1);
+				vfs_bio_clrbuf(bp); bufdone(bp);
+				return (0);
+			}
 		}
 		ITER_RELEASE(iter);
 	} else {
@@ -754,18 +867,28 @@ slsfs_strategy(struct vop_strategy_args *args)
 		    bp->b_bufobj->bo_bsize, change);
 	}
 
-	KASSERT(bp->b_blkno != 0, ("Fucking die %p - %p", bp, vp));
+	KASSERT(bp->b_blkno != 0, ("Cannot be 0 %p - %p", bp, vp));
 	int change =  bp->b_bufobj->bo_bsize / slos.slos_vp->v_bufobj.bo_bsize;
 	bp->b_blkno = bp->b_blkno * change;
 	bp->b_iooffset = dbtob(bp->b_blkno);
-	//FOR BETTER BUF TRACKING
-	/*if (bp->b_iocmd == BIO_WRITE) {*/
-		/*printf("BIOWRITE : bp(%p), vp(%p:%lu) - %lu:%lu, %lu\n", bp, vp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno, bp->b_iooffset);*/
-	/*} else {*/
-		/*printf("BIOREAD : bp(%p), vp(%p:%lu) - %lu:%lu, %lu\n", bp, vp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno, bp->b_iooffset);*/
-	/*}*/
+	if (bp->b_fsprivate2 == NULL) {
+		DEBUG("bp_type(data)");
+	} else {
+		DEBUG("bp_type(fnode)");
+	}
+	if (bp->b_iocmd == BIO_WRITE) {
+		DEBUG5("bio_write: bp(%p), vp(%lu) - %lu:%lu, %lu", bp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno, bp->b_iooffset);
+	} else {
+		DEBUG5("bio_read: bp(%p), vp(%lu) - %lu:%lu, %lu", bp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno, bp->b_iooffset);
+	}
 
 	g_vfs_strategy(&slos.slos_vp->v_bufobj, bp);
+	if (checksum_enabled) {
+		error = slsfs_cksum(bp);
+		if (error) {
+			panic("Problem with checksum");
+		}
+	}
 
 	return (0);
 }
@@ -789,7 +912,7 @@ slsfs_checkpath(struct vnode *src, struct vnode *target, struct ucred *cred)
 {
 	int error = 0;
 	struct dirent dir;
-	DBUG("Checking path\n");
+	DEBUG("Checking path");
 	if (SLSVP(target)->sn_pid == SLSVP(src)->sn_pid) {
 		error = EEXIST;
 		goto out;
@@ -808,25 +931,25 @@ slsfs_checkpath(struct vnode *src, struct vnode *target, struct ucred *cred)
 		    0, UIO_SYSSPACE,
 		    IO_NODELOCKED | IO_NOMACCHECK, cred, NOCRED, NULL, NULL);
 		if (error != 0) {
-			DBUG("Error reading a writing %d\n", error);
+			DEBUG1("Error reading a writing %d", error);
 			break;
 		}
 
 		if (dir.d_namlen != 2 || dir.d_name[0] != '.' || dir.d_name[1] 
 		    != '.') {
-			DBUG("Not a directory\n");
+			DEBUG("Not a directory");
 			error = ENOTDIR;
 			break;
 		}
 
 		if (dir.d_fileno == SLSVP(src)->sn_pid) {
-			DBUG("Found within path\n");
+			DEBUG("Found within path");
 			error = EINVAL;
 			break;
 		}
 
 		if (dir.d_fileno == SLOS_ROOT_INODE) {
-			DBUG("Parent is root\n");
+			DEBUG("Parent is root");
 			break;
 		}
 		vput(target);
@@ -838,7 +961,7 @@ slsfs_checkpath(struct vnode *src, struct vnode *target, struct ucred *cred)
 	}
 out:
 	if (target != NULL) {
-		DBUG("Vputing target path\n");
+		DEBUG("Vputing target path");
 		vput(target);
 	}
 	return (error);
@@ -865,7 +988,7 @@ slsfs_rename(struct vop_rename_args *args)
 
 	mode_t mode = svp->sn_ino.ino_mode;
 
-	DBUG("Rename or move from %s to %s\n", fname->cn_nameptr, 
+	DEBUG2("Rename or move from %s to %s", fname->cn_nameptr, 
 	    tname->cn_nameptr);
 	// Following nandfs example here -- cross device renaming
 	if ((fvp->v_mount != tdvp->v_mount) || (tvp && (fvp->v_mount != 
@@ -927,7 +1050,7 @@ abort:
 	}
 
 	if (isdir && newparent) {
-		DBUG("Checking if directory doens't exist within path\n");
+		DEBUG("Checking if directory doens't exist within path");
 		error = slsfs_checkpath(fvp, tdvp, tname->cn_cred);
 		if (error) {
 			goto bad;
@@ -1001,29 +1124,29 @@ abort:
 	}
 
 	if (fvp != NULL) {
-		DBUG("fvp != null");
+		DEBUG("fvp != null");
 		fnode1 = SLSVP(fvp);
 		sdvp = SLSVP(fdvp);
 	} else {
 		if (isdir) {
 			panic("lost dir");
 		}
-		DBUG("fvp == NULL");
+		DEBUG("fvp == NULL");
 		vrele(args->a_fvp);
 		return (0);
 	}
 
 	if (fnode1 != svp) {
-		DBUG("fnode1 != svp");
+		DEBUG("fnode1 != svp");
 		if (isdir) {
 			panic("lost dir");
 		}
 	} else {
-		DBUG("fnode1 == svp\n");
+		DEBUG("fnode1 == svp");
 		if (isdir && newparent) {
-			DBUG("isdir && newparent\n");
+			DEBUG("isdir && newparent");
 		}
-		DBUG("Removing dirent\n");
+		DEBUG("Removing dirent");
 		error = slsfs_unlink_dir(fdvp, fvp, fname);
 		svp->sn_status &= ~SLOS_RENAME;
 	}
@@ -1124,13 +1247,24 @@ slsfs_getrstat(struct slos_node *svp, struct slos_rstat *st)
 }
 
 static int
+slsfs_mountsnapshot(int index)
+{
+	struct mount *mp = slos.slsfs_mount;
+	struct slsfsmount *smp = mp->mnt_data;
+
+	smp->sp_index = index;
+	return VFS_MOUNT(mp);
+}
+
+static int
 slsfs_ioctl(struct vop_ioctl_args *ap)
 {
 	struct vnode *vp = ap->a_vp;
 	u_long com = ap->a_command;
 	struct slos_node *svp = SLSVP(vp);
-	struct slos_rstat *st;
-	struct uio *uio;
+	struct slos_rstat *st = NULL;
+	struct uio *uio = NULL;
+	struct slsfs_getsnapinfo *info = NULL;
 
 	switch(com) {
 	case SLS_SEEK_EXTENT:
@@ -1145,9 +1279,17 @@ slsfs_ioctl(struct vop_ioctl_args *ap)
 		st = (struct slos_rstat *) ap->a_data;
 		return (slsfs_getrstat(svp, st));
 
+	case SLSFS_GET_SNAP:
+		info = (struct slsfs_getsnapinfo *) ap->a_data;
+		return (slos_sbat(&slos, info->index, &info->snap_sb));
+
+	case SLSFS_MOUNT_SNAP:
+		DEBUG("Remounting on snap");
+		info = (struct slsfs_getsnapinfo *) ap->a_data;
+		return (slsfs_mountsnapshot(info->index));
 	case FIOSEEKDATA: // Fallthrough
 	case FIOSEEKHOLE:
-		printf("UNSUPPORTED SLSFS IOCTL FIOSEEKDATA/HOLE\n");
+		printf("UNSUPPORTED SLSFS IOCTL FIOSEEKDATA/HOLE");
 		return (ENOSYS);
 
 	default:

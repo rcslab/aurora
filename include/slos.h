@@ -8,21 +8,48 @@
 #include <sys/mutex.h>
 #include <sys/proc.h>
 #include <sys/uuid.h>
+#include <sys/ktr.h>
+#include <sys/limits.h>
 
 #include <vm/vm.h>
 #include <vm/vm_object.h>
 #include <vm/uma.h>
 
 #ifdef WITH_DEBUG
-#define DBUG(fmt, ...) do {			    \
-    printf("(%s: Line %d) ", __FILE__, __LINE__);   \
-    printf(fmt, ##__VA_ARGS__);			    \
+#define DEBUG(fmt, ...) do {			    \
+    CTR0(KTR_SPARE5, fmt);			    \
+    } while (0) 
+
+#define DEBUG1(fmt, ...) do {			    \
+    CTR1(KTR_SPARE5, fmt, ##__VA_ARGS__);	    \
+    } while (0) 
+
+#define DEBUG2(fmt, ...) do {			    \
+    CTR2(KTR_SPARE5, fmt, ##__VA_ARGS__);			    \
+    } while (0) 
+
+#define DEBUG3(fmt, ...) do {			    \
+    CTR3(KTR_SPARE5, fmt, ##__VA_ARGS__);			    \
+    } while (0) 
+
+#define DEBUG4(fmt, ...) do {			    \
+    CTR4(KTR_SPARE5, fmt, ##__VA_ARGS__);			    \
+    } while (0) 
+
+#define DEBUG5(fmt, ...) do {			    \
+    CTR5(KTR_SPARE5, fmt, ##__VA_ARGS__);			    \
     } while (0) 
 #else
-#define DBUG(fmt, ...) ((void)(0));
+#define DEBUG(fmt, ...) ((void)(0));
+#define DEBUG1(fmt, ...) ((void)(0));
+#define DEBUG2(fmt, ...) ((void)(0));
+#define DEBUG3(fmt, ...) ((void)(0));
+#define DEBUG4(fmt, ...) ((void)(0));
+#define DEBUG5(fmt, ...) ((void)(0));
 #endif // WITH_DEBUG
 
-#define ALLOCATEBLK(slos, bytes, ptr) ((slos)->slsfs_blkalloc(slos, bytes, ptr))
+#define ALLOCATEPTR(slos, bytes, ptr) ((slos)->slsfs_blkalloc(slos, bytes, ptr))
+#define NUMSBS (100)
 
 typedef uint64_t bnode_ptr;
 typedef uint64_t vnode_off_key_t[2];
@@ -30,13 +57,13 @@ typedef struct slos_diskptr diskptr_t;
 
 extern uma_zone_t fnodes_zone;
 
-
 /*
  * SLOS Pointer
  */
 struct slos_diskptr {
 	uint64_t    offset;	/* The block offset of the first block of the region. */
 	uint64_t    size;	/* The size of the region in blocks. */
+	uint64_t    epoch;
 };
 
 struct slsfs_blkalloc {
@@ -90,6 +117,7 @@ struct slos {
 
 	struct slos_sb		*slos_sb;	/* The superblock of the filesystem */
 	struct slsfs_blkalloc	slsfs_alloc;
+	struct slos_node	*slos_cktree;
 
 	struct g_consumer	*slos_cp;	/* The geom consumer used to talk to disk */
 	struct g_provider	*slos_pp;	/* The geom producer */ 
@@ -122,12 +150,8 @@ struct slos_sb {
 	uint16_t		sb_majver;	/* major version */
 	uint16_t		sb_minver;	/* minor version */
 	uint32_t		sb_flags;	/* feature flags */
-
-	struct slos_diskptr	sb_broot;	/* root of the allocator offset btree */
-	struct slos_diskptr	sb_szroot;	/* root of the allocator size btree */
-	struct slos_diskptr	sb_inodes;	/* pointer to the inode btree */
-	struct slos_diskptr	sb_data;	/* data region */
-	struct slos_diskptr	sb_bootalloc;	/* bootstrap allocator region */
+	uint64_t		sb_epoch;	/* epoch number */
+	uint32_t		sb_index;	/* Index superblock is in the array of size NUMSBS */
 
 	/* Identification information */
 	struct uuid		sb_uuid;	/* object store uuid */
@@ -140,15 +164,15 @@ struct slos_sb {
 	uint64_t		sb_size;	/* fs size in blocks */
 
 	/* Summary Information */
-	uint64_t		sb_numboot;	/* number of boot allocator blocks */
 	uint64_t		sb_numblks;	/* number of blocks */
-	uint8_t			sb_clean;	/* osd clean */
 	uint64_t		sb_mtime;	/* last mounted */
-	diskptr_t		sb_root;
-	diskptr_t		sb_allocoffset;
-	diskptr_t		sb_allocsize;
 
+	diskptr_t		sb_root;	/* Root inode for all inodes */
+	diskptr_t		sb_allocoffset; /* Allocator Offset key tree */
+	diskptr_t		sb_allocsize;	/* Allocator Size key tree */
+	diskptr_t		sb_cksumtree;	/* Checksum key tree */
 };
+
 
 extern struct slos slos;
 

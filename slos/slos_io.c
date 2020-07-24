@@ -36,6 +36,7 @@
 #include "slos_io.h"
 #include "slosmm.h"
 
+
 /* 
  * Initialize a UIO for operation rwflag at offset off,
  * and asssign an IO vector to the given UIO. 
@@ -366,6 +367,23 @@ slos_writeblk(struct slos *slos, uint64_t blkno, void *buf)
 	return slos_opblk(slos, blkno, buf, 1);
 }
 
+int
+slos_sbat(struct slos *slos, int index, struct slos_sb *sb)
+{
+	struct buf *bp;
+	int error;
+	error = bread(slos->slos_vp, index, slos->slos_sb->sb_bsize, curthread->td_proc->p_ucred, &bp);
+	if (error != 0) {
+		free(sb, M_SLOS);
+		printf("bread failed with %d", error);
+
+		return error;
+	}
+	memcpy(sb, bp->b_data, sizeof(struct slos_sb));
+	brelse(bp);
+
+	return (0);
+}
 /* 
  * Read the superblock of the SLOS into the in-memory struct.  
  * Device lock is held previous to call
@@ -374,11 +392,13 @@ int
 slos_sbread(struct slos * slos)
 {
 	struct slos_sb *sb;
-	struct buf *bp;
 	struct stat st;
 	struct iovec aiov;
 	struct uio auio;
 	int error;
+	
+	uint64_t largestepoch_i = 0;
+	uint64_t largestepoch = EPOCH_INVAL;
 
 	/* If we're backed by a file, just call VOP_READ. */
 	if (slos->slos_vp->v_type == VREG) {
@@ -407,36 +427,44 @@ slos_sbread(struct slos * slos)
 	 */
 	error = vn_stat(slos->slos_vp, &st, NULL, NULL, curthread);
 	if (error != 0) {
-		printf("vn_stat failed with %d\n", error);
+		printf("vn_stat failed with %d", error);
 		return error;
 	}
 
 	sb = malloc(st.st_blksize, M_SLOS_SB, M_WAITOK | M_ZERO);
+	slos->slos_sb = sb;
+	sb->sb_bsize = st.st_blksize;
 
-	/* 
-	 * Since our read routines use the superblock's data to find
-	 * the block size, we can't use them. We do a bread instead.
-	 * Get the blocks from the buffer cache. 
-	 * */
-	error = bread(slos->slos_vp, 0, st.st_blksize, curthread->td_proc->p_ucred, &bp);
-	if (error != 0) {
-		free(sb, M_SLOS);
-		printf("bread failed with %d\n", error);
-		return error;
+
+	/* Find the largest epoch superblock in the NUMSBS array.
+	 * This is starts at 0  offset of every device
+	 */
+	for (int i = 0; i < NUMSBS; i++) {
+		error = slos_sbat(slos, i, sb);
+		MPASS(error == 0);
+		if (sb->sb_epoch == EPOCH_INVAL && i != 0) {
+			break;
+		}
+
+		if (sb->sb_epoch > largestepoch) {
+			largestepoch = sb->sb_epoch;
+			largestepoch_i = i;
+		}
 	}
 
-	memcpy(sb, bp->b_data, st.st_blksize);
-	brelse(bp);
+	error = slos_sbat(slos, largestepoch_i, sb);
+	MPASS(error == 0);
 
 	if (sb->sb_magic != SLOS_MAGIC) {
-		printf("ERROR: Magic for SLOS is %lx, should be %llx\n",
+		printf("ERROR: Magic for SLOS is %lx, should be %llx",
 		    sb->sb_magic, SLOS_MAGIC);
 		free(sb, M_SLOS);
 		return EINVAL;
 	} 
 
+	DEBUG1("Largest superblock at %lu", largestepoch_i);
 	/* Make the superblock visible to the struct. */
-	slos->slos_sb = sb;
+	MPASS(sb->sb_index == largestepoch_i);
 	return 0;
 }
 
@@ -509,7 +537,7 @@ slos_testio_random(void)
 			/* Do the actual write. */
 			error = slos_write(slos->slos_vp, &extents[i], &auio);
 			if (error != 0) {
-				printf("ERROR: Error %d for slos_write\n", error);
+				printf("ERROR: Error %d for slos_write", error);
 				error = EINVAL;
 				goto out;
 
@@ -533,7 +561,7 @@ slos_testio_random(void)
 			/* Do the actual read. */
 			error = slos_read(slos->slos_vp, &extents[i], &auio);
 			if (error != 0) {
-				printf("ERROR: Error %d for slos_read\n", error);
+				printf("ERROR: Error %d for slos_read", error);
 				error = EINVAL;
 				goto out;
 			}
@@ -541,7 +569,7 @@ slos_testio_random(void)
 			/* Make sure the data has been written properly by reading it back. */
 			for (j = 0; j < buflen; j++) {
 				if (buf[j] != vals[i]) {
-					printf("ERROR: Value %c (0x%x) read at offset %d, should be %c\n", 
+					printf("ERROR: Value %c (0x%x) read at offset %d, should be %c", 
 					    buf[j], buf[j], j, vals[i]);
 					error = EINVAL;
 					break;
@@ -552,18 +580,18 @@ slos_testio_random(void)
 
 out:
 	if (error != 0) {
-		printf("Block size: %lu\n", slos->slos_sb->sb_bsize);
-		printf("Buffer values:\n");
+		printf("Block size: %lu", slos->slos_sb->sb_bsize);
+		printf("Buffer values:");
 		for (i = 0; i < EXTENTS; i++)
-			printf("%d: %c\n", i, vals[i]);
-		printf("\n");
+			printf("%d: %c", i, vals[i]);
+		printf("");
 
-		printf("Extents:\n");
+		printf("Extents:");
 		for (i = 0; i < EXTENTS; i++)
-			printf("(%d) (%lu, %lu)\n", i, extents[i].offset, extents[i].size);
+			printf("(%d) (%lu, %lu)", i, extents[i].offset, extents[i].size);
 	} 
 
-	printf("Random IO test %s.\n", (error == 0) ? "successful" : "failed");
+	printf("Random IO test %s.", (error == 0) ? "successful" : "failed");
 
 	free(buf, M_SLOS);
 	free(vals, M_SLOS);
@@ -623,7 +651,7 @@ slos_testio_intraseg(void)
 		/* Do the actual write. */
 		error = slos_write(slos->slos_vp, &extent, &auio);
 		if (error != 0) {
-			printf("ERROR: Error %d for slos_write\n", error);
+			printf("ERROR: Error %d for slos_write", error);
 			error = EINVAL;
 			goto out;
 		}
@@ -643,7 +671,7 @@ slos_testio_intraseg(void)
 		/* Do the actual read. */
 		error = slos_read(slos->slos_vp, &extent, &auio);
 		if (error != 0) {
-			printf("ERROR: Error %d for slos_read\n", error);
+			printf("ERROR: Error %d for slos_read", error);
 			error = EINVAL;
 			goto out;
 		}
@@ -651,7 +679,7 @@ slos_testio_intraseg(void)
 		/* Make sure the data has been written properly by reading it back. */
 		for (i = 0; i < buflen; i++) {
 			if (buf[i] != vals[i]) {
-				printf("ERROR: Value %c (0x%x) read at offset %d, should be %c\n", 
+				printf("ERROR: Value %c (0x%x) read at offset %d, should be %c", 
 				    buf[i], buf[i], i, vals[i]);
 				error = EINVAL;
 				break;
@@ -663,24 +691,24 @@ slos_testio_intraseg(void)
 
 out:
 	if (error != 0) {
-		printf("Block size: %lu\n", slos->slos_sb->sb_bsize);
-		printf("Buffer values:\n");
+		printf("Block size: %lu", slos->slos_sb->sb_bsize);
+		printf("Buffer values:");
 		for (i = 0; i < buflen; i++) {
 			printf("%c", buf[i]);
 			if (i != 0 && i % LINELEN == 0)
-				printf("\n");
+				printf("");
 		}
-		printf("\n");
+		printf("");
 
 		for (i = 0; i < buflen; i++) {
 			printf("%c", vals[i]);
 			if (i != 0 && i % LINELEN == 0)
-				printf("\n");
+				printf("");
 		}
-		printf("\n");
+		printf("");
 	}
 
-	printf("Extent IO test %s.\n", (error == 0) ? "successful" : "failed");
+	printf("Extent IO test %s.", (error == 0) ? "successful" : "failed");
 
 	free(buf, M_SLOS);
 	free(vals, M_SLOS);

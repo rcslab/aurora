@@ -23,7 +23,8 @@ SDT_PROBE_DEFINE(slsfsbuf, , , end);
  * the truee
  */
 static int
-slsfs_buf_nocollide(struct vnode *vp, struct fnode_iter *biter, uint64_t bno, uint64_t size, enum uio_rw rw, struct buf **bp)
+slsfs_buf_nocollide(struct vnode *vp, struct fnode_iter *biter, uint64_t bno, uint64_t size, 
+	enum uio_rw rw, int gbflag, struct buf **bp)
 {
 	uint64_t nextkey;
 	int error;
@@ -37,30 +38,39 @@ slsfs_buf_nocollide(struct vnode *vp, struct fnode_iter *biter, uint64_t bno, ui
 	if (!ITER_ISNULL(*biter)) {
 		// Fill the whole upto the key or the full size
 		nextkey = ITER_KEY_T(*biter, uint64_t);
-		size = omin((nextkey * blksize) - (bno * blksize), size);
+		size = omin((nextkey - bno) * blksize, size);
 	}
 
 	ptr.offset = 0;
 	ptr.size = size;
+	ptr.epoch = 0;
 	error = BTREE_LOCK(tree, LK_UPGRADE);
 	if (error) {
-		panic("what");
+		panic("Could not acquire lock upgrade on Btree %d", error);
 	}
 	error = fbtree_insert(tree, &bno, &ptr);
-	if (error == ROOTCHANGE) {
-		svp->sn_ino.ino_btree = (diskptr_t){ svp->sn_tree.bt_root, IOSIZE(svp) };
-	} else if (error) {
-		DBUG("Problem with fbtree insert\n");
+	if (error) {
+		panic("Problem inserting into tree");
 		return (error);
 	}
-	size = omin(size, MAXBCACHEBUF);
-	error = slsfs_balloc(vp, bno, size, bp);
+	/*
+	 * We must release the BTree here, as any getblk allocation could 
+	 * trigguer a buf domain flush would cause dirty buffers to flush
+	 * and bstrategies to be done which are done by the current thread,
+	 * so we end up getting an issue where since we are holding this lock 
+	 * in exclusive, we get a panic as we try to acquire the lock in shared 
+	 * when doing the lookup within slsfs_strategy
+	 */
 	ITER_RELEASE(*biter)
+	size = omin(size, MAXBCACHEBUF);
+	MPASS(MAXBCACHEBUF == 65536);
+	MPASS(size <= MAXBCACHEBUF);
+	error = slsfs_balloc(vp, bno, size, gbflag, bp);
 	return (error);
 }
 
 int
-slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw rw, struct buf **bp)
+slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw rw, int gbflag, struct buf **bp)
 {
 	struct fnode_iter biter;
 	diskptr_t ptr;
@@ -73,17 +83,17 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw
 	bool isaligned = (offset % blksize) == 0;
 	uint64_t bno = offset / blksize;
 
-	DBUG("Attemping to retrieve buffer %lu bno\n", bno);
+	DEBUG1("Attemping to retrieve buffer %lu bno\n", bno);
 	error = slsfs_lookupbln(svp, bno, &biter);
 	if (error) {
-		DBUG("%d\n", error);
+		DEBUG("%d\n", error);
 		return (error);
 	}
 	size = roundup(size, IOSIZE(svp));
-	DBUG("Size of possible retrieved buf %lu\n", size);
+	DEBUG1("Size of possible retrieved buf %lu\n", size);
 	if (ITER_ISNULL(biter)) {
-		DBUG("No key smaller than %lu\n", bno);
-		error = slsfs_buf_nocollide(vp, &biter, bno, size, rw, bp);
+		DEBUG1("No key smaller than %lu\n", bno);
+		error = slsfs_buf_nocollide(vp, &biter, bno, size, rw, gbflag, bp);
 		if (error) {
 			panic("Problem with no collide case");
 		}
@@ -95,30 +105,30 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw
 			if (INTERSECT(biter, bno, blksize)) {
 				size = ENDPOINT(biter, blksize) - (bno * blksize);
 				size = omin(size, MAXBCACHEBUF);
-				DBUG("Intersecting keys for bno %lu : %lu\n", bno, size);
+				DEBUG2("Intersecting keys for bno %lu : %lu\n", bno, size);
 				covered  = size <= originalsize;
+				ITER_RELEASE(biter);
 				if (isaligned && covered && (rw == UIO_WRITE)) {
-					ITER_RELEASE(biter);
 					SDT_PROBE0(slsfsbuf, , , start);
-					*bp = getblk(vp, bno, size, 0, 0, GB_UNMAPPED);
+					*bp = getblk(vp, bno, size, 0, 0, gbflag);
 					SDT_PROBE0(slsfsbuf, , , end);
 				} else {
-					error = slsfs_bread(vp, bno, size, NULL, bp);
+					error = slsfs_bread(vp, bno, size, NULL, gbflag, bp);
 				}
 			} else {
-				DBUG("Key exists but not colliding %lu\n", size);
-				error = slsfs_buf_nocollide(vp, &biter, bno, size, rw, bp);
+				DEBUG1("Key exists but not colliding %lu\n", size);
+				error = slsfs_buf_nocollide(vp, &biter, bno, size, rw, gbflag, bp);
 			}
 		} else {
 			ptr = ITER_VAL_T(biter, diskptr_t);
-			DBUG("Key exists reading size %lu\n", ptr.size);
+			DEBUG1("Key exists reading size %lu\n", ptr.size);
 			size = omin(ptr.size, MAXBCACHEBUF);
 			covered  = size <= originalsize;
 			ITER_RELEASE(biter);
 			if (isaligned && covered && (rw == UIO_WRITE)) {
-				*bp = getblk(vp, bno, size, 0, 0, 0);
+				*bp = getblk(vp, bno, size, 0, 0, gbflag);
 			} else {
-				error = slsfs_bread(vp, bno, size, NULL, bp);
+				error = slsfs_bread(vp, bno, size, NULL, gbflag, bp);
 			}
 		}
 	}
@@ -133,23 +143,58 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw
  * Since we put off allocation till sync time (checkpoint time) we just need to
  * keep track of logical blocks and sizes.
  *
+ * NOTES:
+ *
+ * getblk uses a function called allocbuf to retrieve pages for the underlying 
+ * data that is required for it.  These pages can be mapped in or unmapped in 
+ * (GB_UNMAPPED), mapping in these pages to the address space is incredbly 
+ * expensive so should only be used if the caller requires the data from the 
+ * read/write in the kernel itself.
+ *
+ * Pages that are attached to the b_pages buffer when unmanaged have the 
+ * VPO_UNMANAGED flag.
+ *
+ * An issue occurs though on subsequent calls to the same lbn of a vp,
+ * if you call a size smaller then the orginal when GB_UNMAPPED was orginally 
+ * called.  allocbuf is called and if the call is truncating the data, it will
+ * release underlying pages, but these pages are unmanaged so this will panic 
+ * the kernel.  Block based file systems don't really need to worry about this 
+ * as they always just get a block, so pages are not released.
+ *
+ *
  * XXX:  Currently we only create blocks of blksize (this is just for
  * simplicity right now)
  */
 int
-slsfs_balloc(struct vnode *vp, uint64_t lbn, size_t size, struct buf **bp)
+slsfs_balloc(struct vnode *vp, uint64_t lbn, size_t size, int gbflag, struct buf **bp)
 {
 	struct buf *tempbuf = NULL;
 	int error = 0;
 	KASSERT(size % IOSIZE(SLSVP(vp)) == 0, ("Multiple of iosize"));
 	/* Actually allocate the block in the buffer cache. */
-	tempbuf = getblk(vp, lbn, size, 0, 0, GB_UNMAPPED);
+	if (vp->v_object == NULL) {
+		MPASS((gbflag & GB_UNMAPPED) == 0);
+	}
+
+	/* Currently a hack (maybe not)  since this is the only inode we use 
+	 * VOP_WRITES for that is also a system node, we need to make sure that 
+	 * is only reads in its actual blocksize, if our first read is 64kb and 
+	 * our subsequent calls to getblk are 4kb then it will try to truncate 
+	 * our pages resulting in the attempted release of unmanaged pages
+	 */
+	if (vp != slos.slsfs_inodes) {
+		size = gbflag & GB_UNMAPPED ? MAXBCACHEBUF : size;
+	} else {
+		if (BLKSIZE(&slos) != size) {
+			printf("%lu %lu\n", size, UINT64_MAX);
+			panic("what");
+		}
+	}
+	tempbuf = getblk(vp, lbn, size, 0, 0, gbflag);
 	if (tempbuf) {
-		DBUG("Cleaning block buf\n");
 		vfs_bio_clrbuf(tempbuf);
 		tempbuf->b_blkno = (daddr_t)(-1);
 	} else {
-		DBUG("ERROR\n");
 		error = EIO;
 	}
 
@@ -163,12 +208,13 @@ slsfs_balloc(struct vnode *vp, uint64_t lbn, size_t size, struct buf **bp)
  */
 /* I love bread  - Me, 2020 */
 int
-slsfs_bread(struct vnode *vp, uint64_t lbn, size_t size, struct ucred *cred, struct buf **buf)
+slsfs_bread(struct vnode *vp, uint64_t lbn, size_t size, struct ucred *cred, int flags, struct buf **buf)
 {
 	int error;
 
-	DBUG("Reading block at %lx of size %lu for node %p\n", lbn, size, vp);
-	error = bread(vp, lbn, size, curthread->td_ucred, buf);
+	DEBUG3("Reading block at %lx of size %lu for node %p\n", lbn, size, vp);
+	error = breadn_flags(vp, lbn, size, NULL, NULL, 0, curthread->td_ucred, flags,
+		NULL, buf);
 	if (error != 0)
 		return (error);
 
@@ -189,7 +235,9 @@ slsfs_bdirty(struct buf *buf)
 	}
 
 	/* Be aggressive and start the IO immediately. */
+	buf->b_flags |= B_CLUSTEROK;
 	bawrite(buf);
+
 	return;
 }
 
@@ -201,10 +249,10 @@ slsfs_bdirty(struct buf *buf)
 int
 slsfs_bundirty(struct buf *buf)
 {
-	buf->b_flags &= ~(B_INVAL | B_CACHE);
 	if (!(buf->b_flags & B_MANAGED)) {
 		bremfree(buf);
 	}
+	buf->b_flags &= ~(B_MANAGED);
 	return bwrite(buf);
 }
 

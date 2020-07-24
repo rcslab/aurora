@@ -11,6 +11,8 @@ int slsfs_remove_node(struct vnode *dvp, struct vnode *vp, struct componentname 
 int slsfs_destroy_node(struct slos_node *vp);
 
 int slsfs_truncate(struct vnode *vp, size_t size);
+int slsfs_setupfakedev(struct slos *slos, struct slos_node *vp);
+void slsfs_generic_rc(void *ctx, bnode_ptr p);
 
 int slsfs_bufwrite(struct buf *buf);
 int slsfs_bufsync(struct bufobj *bufobj, int waitfor);
@@ -18,7 +20,6 @@ void slsfs_bufbdflush(struct bufobj *bufobj, struct buf *buf);
 void slsfs_bufstrategy(struct bufobj *bo, struct buf *bp);
 
 int slsfs_sync_vp(struct vnode *vp, int release);
-int slsfs_sync_dev(struct vnode *vp, int release);
 
 #define EOF (-1)
 

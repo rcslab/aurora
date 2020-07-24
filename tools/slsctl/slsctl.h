@@ -23,8 +23,14 @@ int partadd_main(int argc, char *argv[]);
 void partdel_usage(void);
 int partdel_main(int argc, char *argv[]);
 
-void epoch_usage(void);
-int epoch_main(int argc, char *argv[]);
+void listsnaps_usage(void);
+int listsnaps_main(int argc, char *argv[]);
+
+void mountsnap_usage(void);
+int mountsnap_main(int argc, char *argv[]);
+
+
+
 
 void spawn_usage(void);
 int spawn_main(int argc, char *argv[]);

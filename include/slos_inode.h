@@ -106,6 +106,7 @@ struct slos_node *slos_vpimport(struct slos *slos, uint64_t inoblk);
 int slos_vpexport(struct slos *slos, struct slos_node *vp);
 void slos_vpfree(struct slos *slos, struct slos_node *vp);
 int slos_test_inode(void);
+void slsfs_root_rc(void *ctx, bnode_ptr p);
 
 int slos_newnode(struct slos *slos, uint64_t pid, struct slos_node **vp);
 #endif /* _SLOS_INODE_H_ */

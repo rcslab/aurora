@@ -16,15 +16,15 @@
  * block number (lbn), of size xfersize and allocate it and attach it to the 
  * given pointer at buf.
  */
-int slsfs_balloc(struct vnode *node, uint64_t lbn, size_t xfersize, struct buf **buf);
+int slsfs_balloc(struct vnode *node, uint64_t lbn, size_t xfersize, int gbflag, struct buf **buf);
 
-int slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw rw, struct buf **bp);
+int slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw rw, int gbflag, struct buf **bp);
 
 /*
  * Given some vnode will read in the buffer associated with the logical block 
  * number (lbn), and attach it to the pointer at buf.
  */
-int slsfs_bread(struct vnode *node, uint64_t lbn, size_t size, struct ucred *cred, struct buf **buf);
+int slsfs_bread(struct vnode *node, uint64_t lbn, size_t size, struct ucred *cred, int flags, struct buf **buf);
 
 void slsfs_bdirty(struct buf *buf);
 int slsfs_bundirty(struct buf *buf);

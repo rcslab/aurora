@@ -41,6 +41,14 @@ struct buf_ops bufops_slsfs = {
 	.bop_bdflush	=   slsfs_bufbdflush,
 };
 
+void
+slsfs_generic_rc(void *ctx, bnode_ptr p)
+{
+	struct slos_node *svp = (struct slos_node *)ctx;
+	svp->sn_ino.ino_btree.offset = p;
+	slos_updateroot(svp);
+}
+
 /*
  * Allocate a new SLOS inode.
  */
@@ -85,6 +93,29 @@ slsfs_new_node(struct slos *slos, mode_t mode, uint64_t *slsidp)
 
 	return (0);
 }
+
+int
+slsfs_setupfakedev(struct slos *slos, struct slos_node *vp)
+{
+	struct vnode *devvp;
+	int error;
+
+	error = getnewvnode("SLSFS Fake VNode", slos->slsfs_mount, &sls_vnodeops, &vp->sn_fdev);
+	if (error) {
+		panic("Problem getting fake vnode for device\n");
+	}
+
+	devvp = vp->sn_fdev;
+	/* Set up the necessary backend state to be able to do IOs to the device. */
+	devvp->v_bufobj.bo_ops = &bufops_slsfs;
+	devvp->v_bufobj.bo_bsize = slos->slos_sb->sb_bsize;
+	devvp->v_type = VCHR;
+	devvp->v_data = vp;
+	devvp->v_vflag |= VV_SYSTEM;
+
+	return (0);
+}
+
 
 /*
  * Unlink an inode of a SLOS file from the directory tree.
@@ -163,58 +194,17 @@ slsfs_truncate(struct vnode *vp, size_t size)
 int
 slsfs_sync_vp(struct vnode *vp, int release)
 {
-	struct slos *slos = SLSVP(vp)->sn_slos;
-	struct bufobj *bo = &vp->v_bufobj;
-	struct buf *bp, *tbd;
-	struct vnode *fvp = SLSVP(vp)->sn_fdev;
+	struct fbtree *tree  = &SLSVP(vp)->sn_tree;
+	vn_fsync_buf(vp, MNT_WAIT);
+	fbtree_sync(tree);
 
-	/*
-	 * XXX Do we assume we have the vnode lock? If so
-	 * we should add a KASSERT.
-	 */
-	/* Synchronously write all the buffers out. */
-	BO_LOCK(bo);
-	TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
-		if (BUF_LOCK(bp, LK_EXCLUSIVE | LK_INTERLOCK | LK_SLEEPFAIL, BO_LOCKPTR(bo)) == ENOLCK) {
-			continue;
-		}
-		slsfs_bundirty(bp);
-		BO_LOCK(bo);
-	}
-	BO_UNLOCK(bo);
-
-	slsfs_sync_dev(fvp, release);
 	/*
 	 * Trying to update the time on the vnode holding the inodes
 	 * dirties it which means we have to sync it to disk again,
 	 * which means we need to update the time again. Avoid this
 	 * infinite loop by breaking out.
 	 */
-	if (vp == slos->slsfs_inodes)
-		return (0);
-
-	return (0);
-}
-
-/*
- * Flush out the dirty buffers of the device backing the given SLOS.
- */
-int
-slsfs_sync_dev(struct vnode *vp, int release)
-{
-	struct buf *bp, *tbd;
-	struct bufobj *bo = &vp->v_bufobj;
-
-	TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
-		if (BUF_LOCK(bp, LK_EXCLUSIVE | LK_SLEEPFAIL, NULL)) {
-			continue;
-		}
-		DBUG("Syncing device buffer %p\n", bp);
-		if (release) {
-			bp->b_flags &= ~(B_MANAGED);
-		}
-		slsfs_bundirty(bp);
-	}
+	SLSVP(vp)->sn_status &= ~(SLOS_DIRTY);
 	return (0);
 }
 
@@ -230,10 +220,6 @@ int
 slsfs_bufsync(struct bufobj *bufobj, int waitfor)
 {
 	/* Add a check of whether it's dirty. */
-	/*
-	 * XXX Do we assume we have the vnode lock? If so
-	 * we should add a KASSERT.
-	 */
 	return (slsfs_sync_vp(bo2vnode(bufobj), 0));
 }
 

@@ -1,5 +1,5 @@
-PROG= newosd
-SRCS= newosd.c
+PROG= newfs
+SRCS= newfs.c
 MAN=
 
 

@@ -28,7 +28,7 @@ slsfs_add_dirent(struct vnode *vp, uint64_t ino, char *nameptr, long namelen, ui
 	size_t blks = SLSINO(svp).ino_blocks;
 
 	if (blks) {
-		error = slsfs_bread(vp, blks - 1, blksize, curthread->td_ucred, &bp);
+		error = slsfs_bread(vp, blks - 1, blksize, curthread->td_ucred, 0, &bp);
 		if (error) {
 			return (error);
 		}
@@ -49,9 +49,9 @@ slsfs_add_dirent(struct vnode *vp, uint64_t ino, char *nameptr, long namelen, ui
 	} 
 
 	if (!bp) {
-		error = slsfs_retrieve_buf(vp, blks * blksize, blksize, UIO_WRITE, &bp);
+		error = slsfs_retrieve_buf(vp, blks * blksize, blksize, UIO_WRITE, 0, &bp);
 		if (error) {
-			DBUG("Problem creating buffer at %lu\n", blks);
+			DEBUG1("Problem creating buffer at %lu\n", blks);
 			return (error);
 		}
 		blks += 1;
@@ -69,7 +69,6 @@ slsfs_add_dirent(struct vnode *vp, uint64_t ino, char *nameptr, long namelen, ui
 	dir->d_type = type;
 	dir->d_reclen = sizeof(struct dirent);
 	dir->d_namlen = namelen;
-	DBUG("Placing directory %s at offset %lu\n",  dir->d_name, dir->d_off);
 
 	slsfs_bdirty(bp);
 	svp->sn_ino.ino_size = dir->d_off + sizeof(struct dirent);
@@ -81,7 +80,7 @@ slsfs_add_dirent(struct vnode *vp, uint64_t ino, char *nameptr, long namelen, ui
 	// dirty those buffers)
 	error = slos_updatetime(svp);
 	if (error) {
-		DBUG("Problem syncing inode update");
+		DEBUG("Problem syncing inode update");
 	}
 
 	return (error);
@@ -98,19 +97,19 @@ slsfs_init_dir(struct vnode *dvp, struct vnode *vp, struct componentname *name)
 
 	error = slsfs_add_dirent(vp, ino, "..", 2, DT_DIR);
 	if (error) {
-		DBUG("Problem adding ..\n");
+		DEBUG("Problem adding ..\n");
 		return (error);
 	}
 
 	error = slsfs_add_dirent(vp, ino, ".", 1, DT_DIR);
 	if (error) {
-		DBUG("Problem adding .\n");
+		DEBUG("Problem adding .\n");
 		return (error);
 	}
 
 	// Catch the edge case of the root directory
 	if (name != NULL) {
-		DBUG("Adding %s\n", name->cn_nameptr);
+		DEBUG1("Adding %s\n", name->cn_nameptr);
 		error = slsfs_add_dirent(dvp, 
 		    SVINUM(svp), name->cn_nameptr, name->cn_namelen, DT_DIR);
 	}
@@ -148,7 +147,7 @@ slsfs_unlink_dir(struct vnode *dvp, struct vnode *vp, struct componentname *name
 	last_bno = SLSINO(sdvp).ino_blocks - 1; 
 	last_off = (size % blksize);
 
-	error = slsfs_bread(dvp, last_bno, blksize, curthread->td_ucred, &last_bp);
+	error = slsfs_bread(dvp, last_bno, blksize, curthread->td_ucred, 0, &last_bp);
 	if (error) {
 		brelse(last_bp);
 		return (error); 
@@ -162,7 +161,7 @@ slsfs_unlink_dir(struct vnode *dvp, struct vnode *vp, struct componentname *name
 	if (last_bno == del_bno) {
 		del_bp = last_bp;
 	} else {
-		error = slsfs_bread(dvp, del_bno, blksize, curthread->td_ucred, &del_bp);
+		error = slsfs_bread(dvp, del_bno, blksize, curthread->td_ucred, 0, &del_bp);
 		if (error) {
 			brelse(del_bp);
 			brelse(last_bp);
@@ -193,7 +192,7 @@ slsfs_unlink_dir(struct vnode *dvp, struct vnode *vp, struct componentname *name
 	if (last_off == 0) {
 		// Remove the offset in the file
 		SLSINO(sdvp).ino_blocks--;
-		DBUG("Last of the block, removing block from tree - %lu blocks left\n", SLSINO(sdvp).ino_blocks);
+		DEBUG1("Last of the block, removing block from tree - %lu blocks left\n", SLSINO(sdvp).ino_blocks);
 		bundirty(last_bp);
 		brelse(last_bp);
 
@@ -229,7 +228,7 @@ slsfs_lookup_name(struct vnode *vp, struct componentname *name, struct dirent *d
 
 	KASSERT(name->cn_nameptr != NULL, ("We require the name right now to lookup dirs"));
 	for (int i = 0; i < blks; i++){
-		error = slsfs_bread(vp, i, BLKSIZE(svp->sn_slos), curthread->td_ucred, &bp);
+		error = slsfs_bread(vp, i, BLKSIZE(svp->sn_slos), curthread->td_ucred, 0, &bp);
 		if (error) {
 			return (error);
 		}
@@ -240,10 +239,9 @@ slsfs_lookup_name(struct vnode *vp, struct componentname *name, struct dirent *d
 				dir = NULL;
 				break;
 			}
-			DBUG("Directory lookup %s\n", dir->d_name);
+
 			if ((name->cn_namelen == dir->d_namlen) &&
 				strncmp(name->cn_nameptr, dir->d_name, name->cn_namelen) == 0) {
-				DBUG("Directory found\n");
 				*dir_p = *dir;
 				brelse(bp);
 				return (0);

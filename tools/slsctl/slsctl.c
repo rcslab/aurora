@@ -12,7 +12,7 @@ void
 usage(void)
 {
 	printf("Usage: slsctl <command> [command args]\n");
-	printf("Commands: partadd partdel attach checkpoint restore\n");
+	printf("Commands: partadd partdel attach checkpoint restore listsnaps mountsnap\n");
 }
 
 struct command {
@@ -25,8 +25,10 @@ struct command {
 	{ "attach",	&attach_usage,	    &attach_main},
 	{ "checkpoint",	&checkpoint_usage,  &checkpoint_main },
 	{ "restore",	&restore_usage,	    &restore_main },
-	{ "epoch",	&epoch_usage,	    &epoch_main},
-	{ "spawn",	&spawn_usage,	    &spawn_main},
+	{ "listsnaps",	&listsnaps_usage,   &listsnaps_main },
+	{ "mountsnap",	&mountsnap_usage,   &mountsnap_main },
+	/*{ "epoch",	&epoch_usage,	    &epoch_main},*/
+	/*{ "spawn",	&spawn_usage,	    &spawn_main},*/
 	{ NULL,		NULL,		    NULL }
 };
 

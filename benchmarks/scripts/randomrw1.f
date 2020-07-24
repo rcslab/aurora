@@ -1,10 +1,10 @@
 set $dir=/testmnt
-set $filesize=2g
+set $filesize=10m
 set $iosize=1m
 set $nthreads=1
 set $workingset=0
 set $directio=0
-set $runtime=30
+set $runtime=10
 
 define file name=largefile1,path=$dir,size=$filesize,prealloc,reuse,paralloc
 
