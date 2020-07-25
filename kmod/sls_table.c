@@ -154,7 +154,7 @@ out:
 
 	sls_io_initiated += 1;
 	if (error != 0)
-		printf("ERROR %d\n", error);
+		SLS_ERROR(sls_doio, error);
 
 	return (error);
 }
@@ -285,7 +285,7 @@ sls_readrec_buf(struct vnode *vp, size_t len, struct sbuf **sbp)
 	 * Allocate the receiving buffer and associate it with the record.  Use
 	 * the sbuf allocator so we can wrap it around an sbuf later.
 	 */
-	buf = SBMALLOC(len);
+	buf = SBMALLOC(len + 1);
 	if (buf == NULL)
 		return (ENOMEM);
 
@@ -435,7 +435,7 @@ sls_readdata_slos_pages(struct vnode *vp, vm_object_t obj, struct uio *auiop)
 	KASSERT(auiop->uio_resid % PAGE_SIZE == 0, ("invalid length %lx", auiop->uio_resid));
 	KASSERT(auiop->uio_offset % PAGE_SIZE == 0, ("invalid offset %lx", auiop->uio_offset));
 	KASSERT(OFF_TO_IDX(auiop->uio_offset) != 0, ("getting offset %lx for data", auiop->uio_offset));
-	VM_OBJECT_ASSERT_WLOCKED(obj);
+	KASSERT(obj->ref_count == 1, ("object under reconstruction is in use"));
 
 	/* Find indices and number of the pages needed to read in the data. */
 	pindex = OFF_TO_IDX(auiop->uio_offset) - 1;
@@ -444,7 +444,9 @@ sls_readdata_slos_pages(struct vnode *vp, vm_object_t obj, struct uio *auiop)
 	/* Read the pages one at a time. */
 	for (i = 0; i < count; i++) {
 		/* Get a page in the object to read in the data.  */
+		VM_OBJECT_WLOCK(obj);
 		m = vm_page_grab(obj, pindex + i, VM_ALLOC_NORMAL);
+		VM_OBJECT_WUNLOCK(obj);
 		if (m == NULL)
 			return (ENOMEM);
 
@@ -524,7 +526,6 @@ sls_readdata_slos(struct vnode *vp, uint64_t slsid, uint64_t type,
 
 	/* Start from the first page. */
 	offset = PAGE_SIZE;
-	VM_OBJECT_WLOCK(obj);
 	for (;;) {
 		/* Assign the offset to the UIO. We'll seek from there. */
 		slos_uioinit(&auio, offset, UIO_READ, &aiov, 1);
@@ -556,8 +557,6 @@ sls_readdata_slos(struct vnode *vp, uint64_t slsid, uint64_t type,
 	error = slskv_add(objtable, slsid, (uintptr_t) obj);
 	if (error != 0)
 		goto error;
-
-	VM_OBJECT_WUNLOCK(obj);
 
 	return (0);
 
