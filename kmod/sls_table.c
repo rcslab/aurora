@@ -77,6 +77,21 @@ static uint64_t sls_datastructs[] =  {
 #endif
 };
 
+static void
+sls_writedata_crc32(vm_object_t obj, uint64_t objid)
+{
+	vm_page_t m;
+
+
+	CTR0(KTR_SLS, "==============");
+	CTR1(KTR_SLS, "0x%lx", objid);
+	TAILQ_FOREACH(m, &obj->memq, listq) {
+		CTR2(KTR_SLS, "0x%lx, 0x%x", m->pindex, \
+		    crc32((void *) PHYS_TO_DMAP(m->phys_addr), pagesizes[m->psind]));
+	}
+	CTR0(KTR_SLS, "--------------");
+}
+
 static int
 sls_doio_null(struct uio *auio)
 {
@@ -553,6 +568,8 @@ sls_readdata_slos(struct vnode *vp, uint64_t slsid, uint64_t type,
 			goto error;
 	}
 
+	sls_writedata_crc32(obj, slsid);
+
 	/* Add the object to the table. */
 	error = slskv_add(objtable, slsid, (uintptr_t) obj);
 	if (error != 0)
@@ -1021,6 +1038,8 @@ sls_writedata_slos(struct sls_record *rec, struct slskv_table *objtable)
 		vminfo = (struct slsvmobject *) sbuf_data(sb);
 		/* The .id field is not the slsid, it's the memory pointer. */
 		obj = (vm_object_t) vminfo->id;
+
+		sls_writedata_crc32(obj, rec->srec_id);
 	}
 #ifdef SLS_TEST
 	else if (rec->srec_type == SLOSREC_TESTDATA) {

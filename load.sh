@@ -2,7 +2,7 @@
 
 DRIVE=/dev/vtbd1
 
-./tools/newosd/newosd $DRIVE
+./tools/newfs/newfs $DRIVE
 
 kldload slos/slos.ko
 

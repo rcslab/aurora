@@ -88,7 +88,7 @@ sls_module_exiting(void)
     (OFF_TO_IDX(vaddr - entry_start + entry_offset))
 
 /* Macros for debugging messages */
-#ifdef WITH_DEBUG
+#ifdef SLS_MSG_
 #define SLS_DBG(fmt, ...) do {			    \
     printf("(%s: Line %d) ", __FILE__, __LINE__);   \
     printf(fmt, ##__VA_ARGS__);			    \
@@ -97,7 +97,7 @@ sls_module_exiting(void)
 #else
 #define SLS_DBG(fmt, ...) 
 #define sls_tmp(fmt, ...) panic("debug printf not removed")
-#endif /* WITH_DEBUG */
+#endif /* SLS_MSG */
 
 struct sls_checkpointd_args {
     struct slspart *slsp;
@@ -146,6 +146,8 @@ extern uint64_t sls_epoch;
 extern uint64_t sls_ckpt_attempted;
 extern uint64_t sls_ckpt_done;
 SDT_PROVIDER_DECLARE(sls);
+
+#define KTR_SLS KTR_SPARE4
 
 #define SLS_ERROR(func, error)				    \
     do {						    \

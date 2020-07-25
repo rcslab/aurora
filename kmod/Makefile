@@ -7,24 +7,25 @@ SRCS	= sls_ioctl.c sls_vmspace.c sls_vmobject.c sls_proc.c sls_load.c \
 	    sls_partition.c sls_table.c sls_kv.c sls_sysv.c \
 	    sls_pts.c sls_vnode.c sls_posixshm.c \
 	    imported_sls.c sls_vm.c vnode_if.h
-
 CFLAGS	+= -DKDTRACE_HOOKS -DSMP -DKLD_TIED -I../include -g
+CLEANFILES = .depend*
+WITH_CTF = 1
 
-.ifdef WITH_DFLAGS
-DEBUG_FLAGS += -g3 -O0 -DINVARIANTS -DINVARIANT_SUPPORT -DDEBUG_LOCKS
+.ifdef SLS_MSG
+DEBUG_FLAGS += -DSLS_MSG
+.endif
+
+.ifdef SLS_TEST
+DEBUG_FLAGS += -DSLS_TEST
+.endif
+
+.ifdef FASTDBG
+DEBUG_FLAGS += -g3 -O0 -DINVARIANTS -DINVARIANT_SUPPORT -DDEBUG_LOCKS -DKTR
 WITH_CTF = 1
 .endif
 
-.ifdef WITH_DEBUG
-DEBUG_FLAGS += -DWITH_DEBUG
-.endif
-
-.ifdef WITNESS
-DEBUG_FLAGS += -DWITNESS
-.endif
-
-.ifdef TEST
-DEBUG_FLAGS += -DSLS_TEST
+.ifdef SLOWDBG
+DEBUG_FLAGS += -g3 -O0 -DINVARIANTS -DINVARIANT_SUPPORT -DDEBUG_LOCKS -DKTR -DWITNESS
 .endif
 
 .include <bsd.kmod.mk>
