@@ -74,7 +74,7 @@ SDT_PROBE_DEFINE(sls, , , dump);
 SDT_PROBE_DEFINE(sls, , , dedup);
 SDT_PROBE_DEFINE(sls, , , sync);
 
-int sls_sync = 1;
+int sls_sync = 0;
 uint64_t sls_ckpt_attempted;
 uint64_t sls_ckpt_done;
 
@@ -193,6 +193,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 {
 	struct slsckpt_data *sckpt_data, *sckpt_old;
 	struct slskv_iter iter;
+	struct thread *td;
 	int is_fullckpt;
 	struct proc *p;
 	int error = 0;
@@ -239,6 +240,12 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 			slsckpt_cont(procset);
 			goto error;
 		}
+	}
+
+	KVSET_FOREACH(procset, iter, p) {
+		KASSERT(P_SHOULDSTOP(p), ("process not stopped"));
+		FOREACH_THREAD_IN_PROC(p, td)
+			KASSERT(TD_IS_INHIBITED(td), ("thread is not inhibited"));
 	}
 
 	/* Shadow the objects to be dumped. */

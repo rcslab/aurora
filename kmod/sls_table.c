@@ -77,21 +77,6 @@ static uint64_t sls_datastructs[] =  {
 #endif
 };
 
-static void
-sls_writedata_crc32(vm_object_t obj, uint64_t objid)
-{
-	vm_page_t m;
-
-
-	CTR0(KTR_SLS, "==============");
-	CTR1(KTR_SLS, "0x%lx", objid);
-	TAILQ_FOREACH(m, &obj->memq, listq) {
-		CTR2(KTR_SLS, "0x%lx, 0x%x", m->pindex, \
-		    crc32((void *) PHYS_TO_DMAP(m->phys_addr), pagesizes[m->psind]));
-	}
-	CTR0(KTR_SLS, "--------------");
-}
-
 static int
 sls_doio_null(struct uio *auio)
 {
@@ -468,6 +453,8 @@ sls_readdata_slos_pages(struct vnode *vp, vm_object_t obj, struct uio *auiop)
 		KASSERT(pagesizes[m->psind] == PAGE_SIZE,
 			("got page with size %lu", pagesizes[m->psind]));
 
+		CTR2(KTR_SLS, "(%p) READ offset %lx", obj, IDX_TO_OFF(m->pindex));
+
 		/* Create the UIO for the disk. */
 		aiovp = &auiop->uio_iov[0];
 		aiovp->iov_base = (void *) PHYS_TO_DMAP(m->phys_addr);
@@ -568,7 +555,6 @@ sls_readdata_slos(struct vnode *vp, uint64_t slsid, uint64_t type,
 			goto error;
 	}
 
-	sls_writedata_crc32(obj, slsid);
 
 	/* Add the object to the table. */
 	error = slskv_add(objtable, slsid, (uintptr_t) obj);
@@ -761,23 +747,21 @@ static size_t
 sls_contig_pages(vm_object_t obj, vm_page_t *page)
 {
 	vm_page_t prev, cur;
-	size_t contig_len; 
+	size_t contig_len;
+	size_t page_len;
 
-	/* 
-	 * At each step we have a pair of pages whose indices 
-	 * the objexct and physical addresses are checked. 
+	/*
+	 * At each step we have a pair of pages whose indices
+	 * the object and physical addresses are checked.
 	 */
 	prev = *page;
 	cur = TAILQ_NEXT(prev, listq);
-	contig_len = pagesizes[prev->psind];
-	sls_pages_grabbed += (pagesizes[prev->psind] / PAGE_SIZE);
+
+	/* See below why pagesizes[prev->psind] might be 0. */
+	contig_len = max(PAGE_SIZE, pagesizes[prev->psind]);
 
 	KASSERT(contig_len <= sls_contig_limit, ("page %lx is larger than sls_contig_limit %lx",
 	    contig_len, sls_contig_limit));
-	/*
-	KASSERT(contig_len != 0, ("page size for page %p is 0 (index %d, physical address %lx)", 
-	    prev, prev->psind, prev->phys_addr));
-	    */
 
 	TAILQ_FOREACH_FROM(cur, &obj->memq, listq) {
 		/* Pages need to be physically and logically contiguous. */
@@ -785,25 +769,39 @@ sls_contig_pages(vm_object_t obj, vm_page_t *page)
 		    prev->pindex + OFF_TO_IDX(pagesizes[prev->psind]) != cur->pindex)
 			break;
 
-		/* 
+		/*
+		 * (XXX THIS COMMENT AND THE ASSOCIATED CODE ASSUMES NO
+		 * SUPERPAGES)
+		 * The kernel sometimes plays fast and loose with its usage of
+		 * the psind field of pages, leading to pages with index one
+		 * more than the maximum valid index. In this case, there might
+		 * be pages whose length according to the pagesizes array is 0.  
+		 * In that case we manually change the length of the area to be
+		 * sent to disk.
+		 */
+		page_len = max(PAGE_SIZE, pagesizes[cur->psind]);
+
+		/*
 		 * XXX Not sure we need this. Even if the run is gigantic, we do
-		 * no copies, and the IO layer surely has a way of coping with 
+		 * no copies, and the IO layer surely has a way of coping with
 		 * massive IOs.
 		 */
-		if (contig_len + pagesizes[cur->psind] > sls_contig_limit)
+		if (contig_len + page_len > sls_contig_limit)
 			break;
 
-		/* 
-		 * Add the size of the "right" page to 
-		 * the total, since it's contiguous.
+		/*
+		 * Add the size of the "right" page to the total, since it's
+		 * contiguous.
 		 */
-		contig_len += pagesizes[cur->psind];
+		contig_len += page_len ;
 		prev = cur;
-		sls_pages_grabbed += (pagesizes[cur->psind] / PAGE_SIZE);
 	}
 
 	/* Pass the new index into the page list to the caller. */
 	*page = cur;
+
+	/* Update stats. */
+	sls_pages_grabbed += contig_len;
 
 	return (contig_len);
 }
@@ -864,8 +862,9 @@ sls_writeobj_slos(struct vnode *vp, vm_object_t obj)
 		 */
 		startm = m;
 		contig_len = sls_contig_pages(obj, &m);
-		//KASSERT(contig_len != 0, ("IO length is 0"));
 		KASSERT(contig_len <= sls_contig_limit, ("writing %lx bytes, limit %lx", contig_len, sls_contig_limit));
+
+		CTR2(KTR_SLS, "(%p) WRITE offset %lx", obj, IDX_TO_OFF(startm->pindex));
 
 		if (sls_async_slos) {
 			/* Spawn kernel tasks for each IO. */
@@ -873,6 +872,7 @@ sls_writeobj_slos(struct vnode *vp, vm_object_t obj)
 		} else if (sls_sync_slos) {
 			/* Synchronously do the SLOS IOs. */
 			VOP_UNLOCK(vp, 0);
+
 			error = slos.slsfs_io(vp, obj, startm, contig_len, BIO_WRITE);
 			VOP_LOCK(vp, LK_EXCLUSIVE);
 		} else {
@@ -1038,8 +1038,6 @@ sls_writedata_slos(struct sls_record *rec, struct slskv_table *objtable)
 		vminfo = (struct slsvmobject *) sbuf_data(sb);
 		/* The .id field is not the slsid, it's the memory pointer. */
 		obj = (vm_object_t) vminfo->id;
-
-		sls_writedata_crc32(obj, rec->srec_id);
 	}
 #ifdef SLS_TEST
 	else if (rec->srec_type == SLOSREC_TESTDATA) {

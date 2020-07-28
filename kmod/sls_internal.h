@@ -142,6 +142,7 @@ extern int sls_drop_io;
 extern uint64_t sls_pages_grabbed;
 extern uint64_t sls_io_initiated;
 extern uint64_t sls_epoch;
+extern char *sls_basedir;
 
 extern uint64_t sls_ckpt_attempted;
 extern uint64_t sls_ckpt_done;

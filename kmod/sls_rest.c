@@ -61,10 +61,12 @@
 #include "sls_proc.h"
 #include "sls_sysv.h"
 #include "sls_table.h"
+#include "sls_vm.h"
 #include "sls_vmobject.h"
 #include "sls_vmspace.h"
 
 #include "imported_sls.h"
+
 
 static int
 slsrest_dothread(struct proc *p, char **bufp, size_t *buflenp)
@@ -465,12 +467,12 @@ slsrest_metadata(void *args)
 	error = slsrest_ttyfixup(p);
 	if (error != 0)
 		SLS_DBG("tty_fixup failed with %d\n", error);
+
 	kern_psignal(p, SIGCONT);
 
 	PROC_UNLOCK(p);
 
 	kthread_exit();
-
 
 	panic("Having the kthread exit failed");
 
@@ -634,7 +636,7 @@ slsrest_dovmobjects(struct slskv_table *metatable, struct slskv_table *objtable)
 			continue;
 		}
 
-		SLS_DBG("Shadowing (%p, %p)\n", parent, object);
+		CTR2(KTR_SLS, "Shadowing (%p, %p)\n", parent, object);
 		slsrest_shadow(object, parent, slsvmobjectp->backer_off);
 	}
 	SLS_DBG("Restoration of VM Objects\n");

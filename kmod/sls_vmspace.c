@@ -167,11 +167,8 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 
 	/* Get the entry from the map. */
 	contained = vm_map_lookup_entry(map, info->start, &entry);
-	if (contained == FALSE) {
-		error = EINVAL;
-		goto out;
-	}
-
+	KASSERT(contained == TRUE, ("lost inserted vm_map_entry"));
+	printf("Entry %lx for %lx\n", entry->start, info->start);
 
 	entry->eflags = info->eflags;
 	entry->inheritance = info->inheritance;
@@ -200,9 +197,6 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 	/* Set the entry as text if it is backed by a vnode or an object shadowing a vnode. */
 	if (entry->eflags & MAP_ENTRY_VN_EXEC)
 		vm_map_entry_set_vnode_text(entry, true);
-
-	/* XXX restore cred if needed */
-	entry->cred = NULL;
 
 out:
 	vm_map_unlock(map);

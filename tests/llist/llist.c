@@ -5,16 +5,21 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <sys/mman.h>
+
 #define ROW_SIZE 16
 #define ITERATIONS 1000000
 
 #define PAGE_SIZE 4096
-#define PAGE_MIDDLE(pages, i) (pages + (PAGE_SIZE * i) + (PAGE_SIZE / 2))
 
 struct llist {
     long cnt;
     struct llist *next;
 };
+
+#define PAGE_START(pages, i) (pages + (PAGE_SIZE * i))
+#define PAGE_MIDDLE(pages, i) (pages + (PAGE_SIZE * i) + (PAGE_SIZE / 2))
+#define PAGE_END(pages, i) (pages + (PAGE_SIZE * (i + 1)) - sizeof(struct llist))
 
 const long BILLION = 1000L * 1000 * 1000;
 
@@ -48,7 +53,8 @@ main(int argc, char *argv[]) {
 	page_number = megabytes * (1024 * 1024 / 4096);
 	
 
-	pages = malloc(1024 * 1024 * megabytes);
+	pages = mmap(NULL, 1024 * 1024 * megabytes, PROT_READ | PROT_WRITE,
+			MAP_ANON, -1, 0);
 	if (pages == NULL) {
 	    printf("array malloc failed\n");
 	    return 0;
@@ -84,7 +90,7 @@ main(int argc, char *argv[]) {
 	    }
 	    cur->cnt++;
 	    if (cur->cnt != cnt) {
-		printf("Memory corruption! Expected %ld, got %ld\n", cnt, cur->cnt);
+		printf("Memory corruption in %p! Expected %ld, got %ld\n", cur, cnt, cur->cnt);
 		printf("Previous: %ld\t Next: %ld\n", previous, cur->next->cnt);
 		/*
 		bool first_time = true;

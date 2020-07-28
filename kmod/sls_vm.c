@@ -320,3 +320,58 @@ slsvm_print_chain(vm_object_t shadow)
 		printf("(%p, %lx) <-- ", obj, obj->objid);
 	printf("\n");
 }
+
+/*
+ * Write out the start of every page accessible from an address space, and a
+ * CRC32 hash of all its contests.
+ */
+void
+slsvm_print_crc32_vmspace(struct vmspace *vm)
+{
+	vm_map_t map = &vm->vm_map;
+	vm_map_entry_t entry;
+	vm_object_t obj;
+	vm_page_t m;
+	vm_offset_t addr;
+
+	for (entry = map->header.next; entry != &map->header; entry = entry->next) {
+		KASSERT((entry->eflags & MAP_ENTRY_IS_SUB_MAP) == 0, ("entry is submap"));
+		obj = entry->object.vm_object;
+		CTR4(KTR_SLS, "entry: 0x%lx\tpresent: %s obj %p pages %ld", entry->start, \
+		    (obj != NULL) ? "yes" : "no", obj, (obj != NULL) ? obj->resident_page_count : 0);
+		if (obj == NULL)
+			continue;
+		if (obj->type != OBJT_DEFAULT)
+			continue;
+		TAILQ_FOREACH(m, &obj->memq, listq) {
+			addr = IDX_TO_OFF(m->pindex) - entry->offset + entry->start;
+			CTR3(KTR_SLS, "0x%lx, 0x%x 0x%x",  addr,
+			    * (uint64_t *) PHYS_TO_DMAP(m->phys_addr),
+			    * ((uint64_t *) PHYS_TO_DMAP(m->phys_addr) + 1));
+		}
+	}
+
+}
+
+
+/*
+ * Write out the start of every page accessible from an address space, and a
+ * CRC32 hash of all its contests.
+ */
+void
+slsvm_print_crc32_object(vm_object_t obj)
+{
+	vm_page_t m;
+
+	if (obj == NULL)
+		return;
+
+	if (obj->type != OBJT_DEFAULT)
+		return;
+
+	TAILQ_FOREACH(m, &obj->memq, listq) {
+		CTR4(KTR_SLS, "(%p) 0x%lx, 0x%x 0x%x", obj, IDX_TO_OFF(m->pindex),
+			* (uint64_t *) PHYS_TO_DMAP(m->phys_addr),
+			* ((uint64_t *) PHYS_TO_DMAP(m->phys_addr) + 1));
+	}
+}

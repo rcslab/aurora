@@ -32,5 +32,8 @@ void slsvm_object_reftransfer(vm_object_t src, vm_object_t dst);
 void slsvm_object_shadowexact(vm_object_t *objp);
 void slsvm_object_copy(struct proc *p, struct vm_map_entry *entry, vm_object_t obj);
 void slsvm_print_chain(vm_object_t shadow);
+void slsvm_print_crc32_vmspace(struct vmspace *vm);
+void slsvm_print_crc32_object(vm_object_t obj);
 
 #endif /* _SLSVM_H_ */
+
