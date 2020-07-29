@@ -83,16 +83,16 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw
 	bool isaligned = (offset % blksize) == 0;
 	uint64_t bno = offset / blksize;
 
-	DEBUG1("Attemping to retrieve buffer %lu bno\n", bno);
+	DEBUG1("Attemping to retrieve buffer %lu bno", bno);
 	error = slsfs_lookupbln(svp, bno, &biter);
 	if (error) {
 		DEBUG("%d\n", error);
 		return (error);
 	}
 	size = roundup(size, IOSIZE(svp));
-	DEBUG1("Size of possible retrieved buf %lu\n", size);
+	DEBUG1("Size of possible retrieved buf %lu", size);
 	if (ITER_ISNULL(biter)) {
-		DEBUG1("No key smaller than %lu\n", bno);
+		DEBUG1("No key smaller than %lu", bno);
 		error = slsfs_buf_nocollide(vp, &biter, bno, size, rw, gbflag, bp);
 		if (error) {
 			panic("Problem with no collide case");
@@ -105,7 +105,7 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw
 			if (INTERSECT(biter, bno, blksize)) {
 				size = ENDPOINT(biter, blksize) - (bno * blksize);
 				size = omin(size, MAXBCACHEBUF);
-				DEBUG2("Intersecting keys for bno %lu : %lu\n", bno, size);
+				DEBUG2("Intersecting keys for bno %lu : %lu", bno, size);
 				covered  = size <= originalsize;
 				ITER_RELEASE(biter);
 				if (isaligned && covered && (rw == UIO_WRITE)) {
@@ -212,7 +212,7 @@ slsfs_bread(struct vnode *vp, uint64_t lbn, size_t size, struct ucred *cred, int
 {
 	int error;
 
-	DEBUG3("Reading block at %lx of size %lu for node %p\n", lbn, size, vp);
+	DEBUG3("Reading block at %lx of size %lu for node %p", lbn, size, vp);
 	error = breadn_flags(vp, lbn, size, NULL, NULL, 0, curthread->td_ucred, flags,
 		NULL, buf);
 	if (error != 0)

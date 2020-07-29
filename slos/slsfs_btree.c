@@ -25,7 +25,7 @@
 #define NODE_LOCK(node, flags) (BUF_LOCK((node)->fn_buf, flags, NULL))
 #define NODE_ISLOCKED(node) (BUF_ISLOCKED((node)->fn_buf))
 #define NODE_ALLOC(flags) ((struct fnode *)uma_zalloc(fnode_zone, flags))
-#define NODE_FREE(node) (uma_zfree(fnode_zone, (node)))
+#define NODE_FREE(node) (((struct fnode *)(node))->fn_status |= FN_DEAD)
 #define BP_ISCOWED(bp) (((bp)->b_fsprivate3) != 0)
 #define BP_UNCOWED(bp) (((bp)->b_fsprivate3) = 0)
 #define BP_SETCOWED(bp) (((bp)->b_fsprivate3) = (void *)1)
@@ -77,9 +77,8 @@ int
 fnode_construct(void *mem, int size, void *arg, int flags)
 {
 	struct fnode *node = (struct fnode *)mem;
-	node->fn_status = 0;
-	node->fn_dnode = NULL;
-	bzero(node->fn_pointers, sizeof(void *) * FNODE_PTRSIZE);
+	bzero(node, sizeof(struct fnode));
+
 	return (0);
 }
 
@@ -148,8 +147,8 @@ fnode_print(struct fnode *node)
 		return;
 	}
 
-	printf("%s - NODE(%p): %lu", node->fn_tree->bt_name, node, node->fn_location);
-	printf("(%u)size (%u)type", NODE_SIZE(node), NODE_TYPE(node));
+	printf("%s - NODE(%p): %lu\n", node->fn_tree->bt_name, node, node->fn_location);
+	printf("(%u)size (%u)type\n", NODE_SIZE(node), NODE_TYPE(node));
 	if (NODE_TYPE(node) == BT_INTERNAL) {
 		bnode_ptr *p = fnode_getval(node, 0);
 		printf("| C %lu |", *p);
@@ -158,7 +157,7 @@ fnode_print(struct fnode *node)
 			uint64_t __unused *t = fnode_getkey(node, i);
 			printf("| K %lu|| C %lu |", *t, *p);
 		}
-		printf("Child memory");
+		printf("Child memory\n");
 		for (int i = 0; i <= NODE_SIZE(node); i++) {
 			if (node->fn_pointers[i] != NULL) {
 				struct fnode *n = (struct fnode *)node->fn_pointers[i];
@@ -179,7 +178,7 @@ fnode_print(struct fnode *node)
 			}
 		}
 	}
-	printf("");
+	printf("\n");
 }
 
 /* Print a whole level of the btree, starting from the */
@@ -438,14 +437,15 @@ fnode_cow(struct buf *bp)
 		for (i = 0; i < NODE_SIZE(parent) + 1; i++) {
 			bnode_ptr p = *(bnode_ptr *)fnode_getval(parent, i);
 			if (old == p) {
-				if (!((parent->fn_pointers[i] == cur) || (parent->fn_pointers[i] == NULL))) {
+				if (parent->fn_pointers[i] == NULL) {
+					parent->fn_pointers[i] = cur;
+				} 
+
+				if (parent->fn_pointers[i] != cur) {
 					fnode_print(parent->fn_pointers[i]);
 					fnode_print(cur);
 					panic("Problem with fixup");
 				}
-				// Once found replace the in memory version of 
-				// the current node
-				parent->fn_pointers[i] = cur;
 				break;
 			}
 		}
@@ -588,14 +588,13 @@ fbtree_sync(struct fbtree *tree)
 	BTREE_LOCK(tree, LK_EXCLUSIVE);
 	VOP_LOCK(tree->bt_backend, LK_EXCLUSIVE);
 
-tryagain:
 	BO_LOCK(bo);
+tryagain:
 	if (bo->bo_dirty.bv_cnt) {
 		TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
 			fnode_cow(bp);
 		}
 
-		BO_UNLOCK(bo);
 		tree->bt_root = tree->bt_rootnode->fn_location;
 
 		TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
@@ -617,14 +616,16 @@ tryagain:
 			BUF_UNLOCK(bp);
 		}
 
-		BO_LOCK(bo);
 		TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
 			BUF_LOCK(bp, LK_EXCLUSIVE | LK_INTERLOCK, BO_LOCKPTR(bo));
 			node = BP_TOFNODE(bp);
 			if (!BP_ISCOWED(bp)) {
 				panic("Reassigning of bufs causing issues");
 			}
+			MPASS(node->fn_buf == bp);
+			MPASS((node->fn_status & FN_DEAD) == 0);
 			bp->b_fsprivate2 = NULL;
+			DEBUG4("Freeing node %p, %p, %p, %p", bp, tree->bt_backend, node, tree->bt_backend->v_data);
 			NODE_FREE(node);
 			bp->b_flags &= ~B_MANAGED;
 			bwrite(bp);
@@ -980,7 +981,7 @@ fbtree_destroy(struct fbtree *tree)
 		}
 
 		if (bp->b_fsprivate2) {
-			uma_zfree(fnode_zone, bp->b_fsprivate2);
+			NODE_FREE(bp->b_fsprivate2);
 			bp->b_fsprivate2 = NULL;
 		}
 		brelse(bp);
@@ -1152,7 +1153,7 @@ fbtree_allocnode(struct fbtree *tree, struct fnode **created, uint8_t type)
 
 	error = fnode_create(tree, ptr.offset, tmp, type);
 	if (error != 0) {
-		uma_zfree(fnode_zone, tmp);
+		NODE_FREE(tmp);
 		return (error);
 	}
 

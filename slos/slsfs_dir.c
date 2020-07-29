@@ -78,7 +78,7 @@ slsfs_add_dirent(struct vnode *vp, uint64_t ino, char *nameptr, long namelen, ui
 	// probably cleans itself up when we make the changes to inodes though 
 	// on disk. (Root Inode, its buffers will the inode itself so we will 
 	// dirty those buffers)
-	error = slos_updatetime(svp);
+	error = slos_updatetime(&svp->sn_ino);
 	if (error) {
 		DEBUG("Problem syncing inode update");
 	}
@@ -114,7 +114,7 @@ slsfs_init_dir(struct vnode *dvp, struct vnode *vp, struct componentname *name)
 		    SVINUM(svp), name->cn_nameptr, name->cn_namelen, DT_DIR);
 	}
 	SLSVP(vp)->sn_ino.ino_nlink = 2;
-	slos_updateroot(SLSVP(vp));
+	slos_update(SLSVP(vp));
 
 	return (error);
 }
@@ -208,12 +208,16 @@ slsfs_unlink_dir(struct vnode *dvp, struct vnode *vp, struct componentname *name
 	}
 	
 	SLSVP(dvp)->sn_status |= SLOS_DIRTY;
-	// Update inode size to disk
-	slos_updatetime(sdvp);
 
 	return (0);
 }
 
+/*
+ * Lookup name within a directory.  Name can be left NULL and this will act as 
+ * a way to find any directory entry (An entry that is not "." or ".."), which 
+ * can be used to see if the directory is empty or not. When used in this way
+ * 0 represents a non-empty directory, and 1 represents an empty directory
+ */
 int
 slsfs_lookup_name(struct vnode *vp, struct componentname *name, struct dirent *dir_p) 
 {
@@ -226,7 +230,6 @@ slsfs_lookup_name(struct vnode *vp, struct componentname *name, struct dirent *d
 	size_t blksize = IOSIZE(svp);
 	size_t blks = SLSINO(svp).ino_blocks;
 
-	KASSERT(name->cn_nameptr != NULL, ("We require the name right now to lookup dirs"));
 	for (int i = 0; i < blks; i++){
 		error = slsfs_bread(vp, i, BLKSIZE(svp->sn_slos), curthread->td_ucred, 0, &bp);
 		if (error) {
@@ -240,11 +243,22 @@ slsfs_lookup_name(struct vnode *vp, struct componentname *name, struct dirent *d
 				break;
 			}
 
-			if ((name->cn_namelen == dir->d_namlen) &&
-				strncmp(name->cn_nameptr, dir->d_name, name->cn_namelen) == 0) {
-				*dir_p = *dir;
-				brelse(bp);
-				return (0);
+			if (name != NULL) {
+				if ((name->cn_namelen == dir->d_namlen) &&
+					strncmp(name->cn_nameptr, dir->d_name, name->cn_namelen) == 0) {
+					*dir_p = *dir;
+					brelse(bp);
+					return (0);
+				}
+			} else {
+				if (!(((dir->d_namlen == 2) && (strncmp(dir->d_name, "..", 2) == 0)) ||
+				    ((dir->d_namlen == 1) && (strncmp(dir->d_name, ".", 1)) == 0))) {
+
+					// Found an entry thats not . or .. so 
+					// return 0
+					brelse(bp);
+					return 0;
+				}
 			}
 
 			off += sizeof(struct dirent);
@@ -252,10 +266,55 @@ slsfs_lookup_name(struct vnode *vp, struct componentname *name, struct dirent *d
 		brelse(bp);
 	} 
 
+	if (name == NULL) {
+		// Went through directory and found no entry so we are empty
+		return 1;
+	}
+
 	return (EINVAL);
 }
 
-int slsfs_update_dirent(struct vnode *tdvp, struct vnode *fvp, struct vnode *tvp)
+int slsfs_update_dirent(struct vnode *dvp, 
+    struct vnode *fvp, struct vnode *tvp)
 {
+	struct dirent *dir;
+	struct buf *bp = NULL;
+	int error;
+	size_t off;
+
+	struct slos_node *svp = SLSVP(dvp);
+	size_t blksize = IOSIZE(svp);
+	size_t blks = SLSINO(svp).ino_blocks;
+
+	for (int i = 0; i < blks; i++){
+		error = slsfs_bread(dvp, i, BLKSIZE(svp->sn_slos), curthread->td_ucred, 0, &bp);
+		if (error) {
+			return (error);
+		}
+		off = 0;
+		while ((off + sizeof(struct dirent)) < blksize) {
+			dir = (struct dirent *)(bp->b_data + off);
+			if (dir->d_reclen == 0) {
+				dir = NULL;
+				break;
+			}
+
+			if (dir->d_fileno == SLSVP(tvp)->sn_ino.ino_pid) {
+				dir->d_fileno = SLSVP(fvp)->sn_ino.ino_pid;
+				slsfs_bdirty(bp);
+				DEBUG("Updating directory");
+				return (0);
+			}
+			off += sizeof(struct dirent);
+		}
+		brelse(bp);
+	} 
+
 	return (0);
+}
+
+int 
+slsfs_dirempty(struct vnode *dvp)
+{
+	return slsfs_lookup_name(dvp, NULL, NULL);
 }

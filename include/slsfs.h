@@ -85,4 +85,5 @@ int slsfs_cksum(struct buf *bp);
 extern int checksum_enabled;
 
 extern struct vop_vector sls_vnodeops;
+extern struct vop_vector sls_fifoops;
 #endif // _SLSFS_H_

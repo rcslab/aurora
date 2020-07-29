@@ -16,8 +16,21 @@ struct btree;
 
 #define SLOS_VALIVE	(0x1)
 #define SLOS_VDEAD	(0x10)
-#define SLOS_RENAME	(0x100)
 #define SLOS_DIRTY	(0x1000)
+
+#define IN_ACCESS	(0x2)
+#define IN_UPDATE	(0x4)
+#define IN_CHANGE	(0x8)
+#define IN_MODIFIED	(0x20)
+#define IN_CREATE	(0x40)
+#define IN_RENAME	(0x80)
+
+#define IEXEC	    0000100
+#define IWRITE	    0000200
+#define	IREAD	    0000400
+#define ISVTX	    0001000
+#define	ISGID	    0002000
+#define	ISUID	    0004000
 
 #define SVPBLK(svp) (svp->sn_slos->slos_sb->sb_bsize);
 #define INUM(node) (node->sn_ino->ino_pid);
@@ -33,12 +46,17 @@ struct slos_inode {
 	int64_t			ino_pid;		/* process id */
 	int64_t			ino_uid;		/* user id */
 	int64_t			ino_gid;		/* group id */
+	dev_t			ino_special;
 	u_char			ino_procname[64];	/* process name */
 
-	uint64_t		ino_ctime;		/* creation time */
+	uint64_t		ino_ctime;		/* inode change time */
 	uint64_t		ino_ctime_nsec;
 	uint64_t		ino_mtime;		/* last modification time */
 	uint64_t		ino_mtime_nsec;
+	uint64_t		ino_atime;		/* last accessed time */
+	uint64_t		ino_atime_nsec;
+	uint64_t		ino_birthtime;		/* Creation time */
+	uint64_t		ino_birthtime_nsec;		
 
 	uint64_t		ino_blk;		/* on-disk position */
 	struct slos_diskptr	ino_records;		/* btree of records */
@@ -47,7 +65,7 @@ struct slos_inode {
 	uint64_t		ino_flags;		/* inode flags */
 	uint64_t		ino_magic;		/* magic for finding errors */
 
-	uint16_t		ino_mode;		/* mode */
+	mode_t			ino_mode;		/* mode */
 	uint64_t		ino_nlink;		/* hard links */
 	uint64_t		ino_asize;		/* Actual size of file on disk */
 	uint64_t		ino_size;		/* Size of file */
@@ -61,12 +79,7 @@ struct slos_node {
 	int64_t			sn_uid;			/* user id */
 	int64_t			sn_gid;			/* group id */
 	u_char			sn_procname[64];	/* process name */
-
-	uint64_t		sn_ctime;		/* creation time */
-	uint64_t		sn_mtime;		/* last modification time */
-
 	uint64_t		sn_blk;			/* on-disk position */
-
 	uint64_t		sn_status;		/* status of vnode */
 	uint64_t		sn_refcnt;		/* reference count */
 	LIST_ENTRY(slos_node)	sn_entries;		/* link for in-memory vnodes */
@@ -95,8 +108,8 @@ int slos_uninit(void);
 int slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode);
 int slos_iremove(struct slos *slos, uint64_t pid);
 
-int slos_updatetime(struct slos_node *svp);
-int slos_updateroot(struct slos_node *svp);
+int slos_updatetime(struct slos_inode *ino);
+int slos_update(struct slos_node *svp);
 
 struct slos_node *slos_iopen(struct slos *slos, uint64_t pid);
 

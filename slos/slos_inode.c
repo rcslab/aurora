@@ -198,8 +198,6 @@ slos_newnode(struct slos *slos, uint64_t pid, struct slos_node **vpp)
 	vp->sn_gid = vp->sn_ino.ino_gid;
 	memcpy(vp->sn_procname, vp->sn_ino.ino_procname, SLOS_NAMELEN);
 
-	vp->sn_ctime = vp->sn_ino.ino_ctime;
-	vp->sn_mtime = vp->sn_ino.ino_mtime;
 	vp->sn_blk = vp->sn_ino.ino_blk;
 	vp->sn_slos = slos;
 	vp->sn_status = SLOS_VALIVE;
@@ -242,6 +240,7 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 
 	/* Read the inode from disk. */
 
+	DEBUG("Creating slos_node in memory\n");
 	vp = uma_zalloc(slos_node_zone, M_WAITOK);
 	ino = &vp->sn_ino;
 
@@ -249,7 +248,7 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 	if (error) {
 		panic("Issue creating fake device");
 	}
-	DEBUG1("Importing Inode from  %lu\n", inoblk);
+	DEBUG1("Importing Inode from  %lu", inoblk);
 	int change =  vp->sn_fdev->v_bufobj.bo_bsize / slos->slos_vp->v_bufobj.bo_bsize;
 	error = bread(slos->slos_vp, inoblk * change, BLKSIZE(slos), curthread->td_ucred, &bp);
 	MPASS(error == 0);
@@ -262,9 +261,6 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 	vp->sn_uid = ino->ino_uid;
 	vp->sn_gid = ino->ino_gid;
 	memcpy(vp->sn_procname, ino->ino_procname, SLOS_NAMELEN);
-
-	vp->sn_ctime = ino->ino_ctime;
-	vp->sn_mtime = ino->ino_mtime;
 
 	vp->sn_blk = ino->ino_blk;
 	vp->sn_slos = slos;
@@ -298,10 +294,6 @@ slos_vpexport(struct slos *slos, struct slos_node *vp)
 	if (error != 0)
 		return error;
 
-	/* Update the inode's mutable elements. */
-	ino->ino_ctime = vp->sn_ctime;
-	ino->ino_mtime = vp->sn_mtime;
-
 	memcpy(ino->ino_procname, vp->sn_procname, SLOS_NAMELEN);
 
 	/* Write the inode back to the disk. */
@@ -328,10 +320,9 @@ slos_vpfree(struct slos *slos, struct slos_node *vp)
 
 /* Create an inode for the process with the given PID. */
 int
-slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
+slos_icreate(struct slos *slos, uint64_t pid, mode_t mode)
 {
 	int error;
-	struct timespec tv;
 	struct fnode_iter iter;
 	struct slos_inode ino;
 	diskptr_t ptr;
@@ -362,13 +353,11 @@ slos_icreate(struct slos *slos, uint64_t pid, uint16_t mode)
 	iov.iov_len = sizeof(ino);
 	slos_uioinit(&io, pid * blksize, UIO_WRITE, &iov, 1);
 
-	getnanotime(&tv);
+	ino.ino_flags = IN_UPDATE | IN_ACCESS | IN_CHANGE | IN_CREATE;
+
+	slos_updatetime(&ino);
 
 	ino.ino_pid = pid;
-	ino.ino_ctime = tv.tv_sec;
-	ino.ino_ctime_nsec = tv.tv_nsec;
-	ino.ino_mtime = tv.tv_sec;
-	ino.ino_mtime_nsec = tv.tv_nsec;
 	ino.ino_nlink = 1;
 	ino.ino_flags = 0;
 	ino.ino_blk = EPOCH_INVAL;
@@ -505,34 +494,49 @@ slos_iopen(struct slos *slos, uint64_t pid)
 // We assume that svp is under the VOP_LOCK, we currently just check if the svp 
 // being updated is the root itself
 int 
-slos_updatetime(struct slos_node *svp)
+slos_updatetime(struct slos_inode *ino)
 {
 	struct timespec ts;
-	struct slos_inode *ino;
 
-	mtx_lock(&svp->sn_mtx);
 
-	ino = &svp->sn_ino;
+	if ((ino->ino_flags & (IN_ACCESS | IN_CHANGE | IN_UPDATE)) == 0) {
+	    return (0);
+	}
 
 	vfs_timestamp(&ts);
-	svp->sn_ctime = ts.tv_sec;
-	svp->sn_mtime = ts.tv_sec;
-	ino->ino_ctime = ts.tv_sec;
-	ino->ino_ctime_nsec = ts.tv_nsec;
-	ino->ino_mtime = ts.tv_sec;
-	ino->ino_mtime_nsec = ts.tv_nsec;
-	mtx_unlock(&svp->sn_mtx);
 
-	slos_updateroot(svp);
+	if (ino->ino_flags & IN_ACCESS) {
+		ino->ino_atime = ts.tv_sec;
+		ino->ino_atime_nsec = ts.tv_nsec;
+	}
+
+	if (ino->ino_flags & IN_UPDATE) {
+		ino->ino_mtime = ts.tv_sec;
+		ino->ino_mtime_nsec = ts.tv_nsec;
+	}
+
+	if (ino->ino_flags & IN_CHANGE) {
+		ino->ino_ctime = ts.tv_sec;
+		ino->ino_ctime_nsec = ts.tv_nsec;
+	}
+
+	if (ino->ino_flags & IN_CREATE) {
+		ino->ino_birthtime = ts.tv_sec;
+		ino->ino_birthtime_nsec = ts.tv_nsec;
+	}
+
+	ino->ino_flags &= ~(IN_ACCESS | IN_CHANGE | IN_UPDATE | IN_CREATE);
 
 	return (0);
 }
 
 int 
-slos_updateroot(struct slos_node *svp)
+slos_update(struct slos_node *svp)
 {
 	int error;
 	struct buf *bp;
+
+	slos_updatetime(&svp->sn_ino);
 
 	vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
 

@@ -135,7 +135,8 @@ struct dnode {
 
 /* fnode fn_status flags
  */
-#define FN_ALLOWDUPLICATE (0x1)
+#define FN_ALLOWDUPLICATE	(0x1)
+#define FN_DEAD			(0x2)
 
 /*
  * In Memory File Btree Node

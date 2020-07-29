@@ -314,9 +314,13 @@ bootstrap_inode(struct slos *slos, uint64_t pid, diskptr_t *p)
 	error = ALLOCATEPTR(slos, BLKSIZE(slos), p);
 	MPASS(error == 0);
 
+	slos_updatetime(&ino);
+
 	ino.ino_blk = p->offset;
 	ino.ino_magic = SLOS_IMAGIC;
 	ino.ino_pid = pid;
+	ino.ino_gid = 0;
+	ino.ino_uid = 0;
 	
 	bp = getblk(fdev, ino.ino_blk, BLKSIZE(slos), 0, 0, 0);
 	MPASS(bp);
@@ -540,6 +544,7 @@ slsfs_checksumtree_init(struct slos *slos)
 	size_t offset = ((NUMSBS * slos->slos_sb->sb_ssize) / slos->slos_sb->sb_bsize) + 1;
 	if (slos->slos_sb->sb_epoch == EPOCH_INVAL) {
 		MPASS(error == 0);
+		DEBUG("Bootstrapping checksum tree\n");
 		error = bootstrap_tree(slos, offset, &ptr);
 		MPASS(error == 0);
 	} else {
@@ -713,6 +718,7 @@ slsfs_valloc(struct vnode *dvp, mode_t mode, struct ucred *creds, struct vnode *
 {
 	int error;
 	uint64_t pid = 0;
+	struct vnode *vp;
 
 	/* Create the new inode in the filesystem. */
 	error = slsfs_new_node(VPSLOS(dvp), mode, &pid);
@@ -721,10 +727,17 @@ slsfs_valloc(struct vnode *dvp, mode_t mode, struct ucred *creds, struct vnode *
 	}
 
 	/* Get a vnode for the newly created inode. */
-	error = slsfs_vget(dvp->v_mount, pid, LK_EXCLUSIVE, vpp);
+	error = slsfs_vget(dvp->v_mount, pid, LK_EXCLUSIVE, &vp);
 	if (error) {
 		return (error);
 	}
+
+	/* Inherit group id from parent directory */
+	SLSVP(vp)->sn_ino.ino_gid = SLSVP(dvp)->sn_ino.ino_gid;
+	SLSVP(vp)->sn_ino.ino_uid = creds->cr_uid;
+	DEBUG2("Creating file with gid(%lu) uid(%lu)", SLSVP(vp)->sn_ino.ino_gid, SLSVP(vp)->sn_ino.ino_uid);
+
+	*vpp = vp;
 
 	return (0);
 }
@@ -901,7 +914,7 @@ slsfs_checkpoint(struct mount *mp, int closing)
 
 			/* Sync of data and btree complete - unmark them and 
 			 * update the root and dirty the root*/
-			error = slos_updateroot(SLSVP(vp));
+			error = slos_update(SLSVP(vp));
 			if (error) {
 				vput(vp);
 				return;
@@ -965,6 +978,9 @@ slsfs_checkpoint(struct mount *mp, int closing)
 		bp = getblk(slos.slos_vp, slos.slos_sb->sb_index, slos.slos_sb->sb_bsize, 0, 0, 0);
 		MPASS(bp);
 		memcpy(bp->b_data, slos.slos_sb, sizeof(struct slos_sb));
+
+		fbtree_sync(&slos.slos_cktree->sn_tree);
+
 		bbarrierwrite(bp);
 	}
 }
@@ -1373,11 +1389,17 @@ slsfs_init_vnode(struct vnode *vp, uint64_t ino)
 	if (ino == SLOS_ROOT_INODE) {
 		vp->v_vflag |= VV_ROOT;
 		vp->v_type = VDIR;
+		SLSVP(vp)->sn_ino.ino_gid = 0;
+		SLSVP(vp)->sn_ino.ino_uid = 0;
 	} else if (ino == SLOS_INODES_ROOT) {
 		vp->v_type = VREG;
 		vp->v_vflag |= VV_SYSTEM;
 	} else {
 		vp->v_type = IFTOVT(mp->sn_ino.ino_mode);
+	}
+
+	if (vp->v_type == VFIFO) {
+		vp->v_op = &sls_fifoops;
 	}
 
 	vnode_create_vobject(vp, 0, curthread);

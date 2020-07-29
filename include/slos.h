@@ -15,7 +15,7 @@
 #include <vm/vm_object.h>
 #include <vm/uma.h>
 
-#ifdef WITH_DEBUG
+#ifdef KTR
 #define DEBUG(fmt, ...) do {			    \
     CTR0(KTR_SPARE5, fmt);			    \
     } while (0) 
@@ -46,7 +46,7 @@
 #define DEBUG3(fmt, ...) ((void)(0));
 #define DEBUG4(fmt, ...) ((void)(0));
 #define DEBUG5(fmt, ...) ((void)(0));
-#endif // WITH_DEBUG
+#endif // KTR
 
 #define ALLOCATEPTR(slos, bytes, ptr) ((slos)->slsfs_blkalloc(slos, bytes, ptr))
 #define NUMSBS (100)
@@ -174,6 +174,7 @@ struct slos_sb {
 	diskptr_t		sb_cksumtree;	/* Checksum key tree */
 };
 
+_Static_assert(sizeof(struct slos_sb) < DEV_BSIZE, "Block size wrong");
 
 extern struct slos slos;
 

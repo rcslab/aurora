@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <sys/vnode.h>
 #include <sys/dirent.h>
+#include <sys/priv.h>
 #include <sys/namei.h>
 #include <sys/bio.h>
 #include <geom/geom_vfs.h>
@@ -56,29 +57,32 @@ slsfs_getattr(struct vop_getattr_args *args)
 	struct vnode *vp = args->a_vp;
 	struct vattr *vap = args->a_vap;
 	struct slos_node *slsvp = SLSVP(vp);
-	DEBUG1("getattr on vnode %lu", slsvp->sn_pid);
+	DEBUG2("getattr on vnode %lu %d", slsvp->sn_pid, slsvp->sn_ino.ino_mode);
 
 	VATTR_NULL(vap);
 	vap->va_type = IFTOVT(slsvp->sn_ino.ino_mode);
 	vap->va_mode = slsvp->sn_ino.ino_mode & ~S_IFMT;
 	vap->va_nlink = slsvp->sn_ino.ino_nlink;
-	vap->va_uid = 0;
-	vap->va_gid = 0;
+	vap->va_uid = slsvp->sn_ino.ino_uid;
+	vap->va_gid = slsvp->sn_ino.ino_gid;
 	vap->va_fsid = VNOVAL;
 	vap->va_fileid = slsvp->sn_pid;
 	vap->va_blocksize = BLKSIZE(&slos);
 	vap->va_size = slsvp->sn_ino.ino_size;
+	vap->va_mode = slsvp->sn_ino.ino_mode & ~S_IFMT;
 
-	vap->va_atime.tv_sec = slsvp->sn_ino.ino_mtime;
-	vap->va_atime.tv_nsec = slsvp->sn_ino.ino_mtime_nsec;
+	vap->va_atime.tv_sec = slsvp->sn_ino.ino_atime;
+	vap->va_atime.tv_nsec = slsvp->sn_ino.ino_atime_nsec;
 
 	vap->va_mtime.tv_sec = slsvp->sn_ino.ino_mtime;
 	vap->va_mtime.tv_nsec = slsvp->sn_ino.ino_mtime_nsec;
+	vap->va_nlink = slsvp->sn_ino.ino_nlink;
 
 	vap->va_ctime.tv_sec = slsvp->sn_ino.ino_ctime;
 	vap->va_ctime.tv_nsec = slsvp->sn_ino.ino_ctime_nsec;
 
-	vap->va_birthtime.tv_sec = 0;
+	vap->va_birthtime.tv_sec = slsvp->sn_ino.ino_birthtime;
+	vap->va_birthtime.tv_nsec = slsvp->sn_ino.ino_birthtime_nsec;
 	vap->va_gen = 0;
 	vap->va_flags = slsvp->sn_ino.ino_flags;
 	vap->va_rdev = NODEV;
@@ -128,33 +132,61 @@ slsfs_mkdir(struct vop_mkdir_args *args)
 	struct componentname *name = args->a_cnp;
 	struct vattr *vap = args->a_vap;
 
-	struct ucred creds;
 	struct vnode *vp;
 	int error;
 
-	int mode = MAKEIMODE(vap->va_type, vap->va_mode);
-	error = SLS_VALLOC(dvp, mode, &creds, &vp);
+	if (name->cn_namelen > SLSFS_NAME_LEN) {
+		return (ENAMETOOLONG);
+	}
+	mode_t mode = MAKEIMODE(vap->va_type, vap->va_mode);
+	error = SLS_VALLOC(dvp, mode, name->cn_cred, &vp);
 	if (error) {
 		*vpp = NULL;
 		return (error);
 	} 
 
-	DEBUG1("Initing Directory named %s", name->cn_nameptr);
+
+	SLSVP(vp)->sn_ino.ino_gid = SLSVP(dvp)->sn_ino.ino_gid;
+	SLSVP(vp)->sn_ino.ino_uid = name->cn_cred->cr_uid;
+
+
 	error = slsfs_init_dir(dvp, vp, name);
 	if (error) {
 		DEBUG("Issue init directory");
 		*vpp = NULL;
 		return (error);
 	}
+
+	SLSVP(dvp)->sn_ino.ino_nlink++;
+	SLSVP(dvp)->sn_ino.ino_flags |= IN_CHANGE;
+	SLSVP(dvp)->sn_status |= SLOS_DIRTY;
+
+	DEBUG2("Initing Directory named %s - %lu", name->cn_nameptr, SLSVP(vp)->sn_ino.ino_nlink);
 	*vpp = vp;
 
 	return (0);
 }
 
 static int
-slsfs_accessx(struct vop_accessx_args *args)
+slsfs_access(struct vop_access_args *args)
 {
-	return (0);
+	struct vnode *vp = args->a_vp;
+	accmode_t accmode = args->a_accmode;
+	struct ucred *cred = args->a_cred;
+	struct vattr vap;
+	int error;
+
+
+	error = VOP_GETATTR(vp, &vap, cred);
+	if (error) {
+		return (error);
+	}
+
+	error = vaccess(vp->v_type, vap.va_mode, vap.va_uid, 
+		vap.va_gid, accmode, cred, NULL);
+	DEBUG2("Checking access rights for %p %d", vp, error);
+
+	return (error);
 }
 
 static int
@@ -188,7 +220,6 @@ slsfs_readdir(struct vop_readdir_args *args)
 		return (ENOTDIR);
 	}
 
-	DEBUG1("READING DIRECTORY %lu", filesize);
 	if ((io->uio_offset < filesize) &&
 	    (io->uio_resid >= sizeof(struct dirent)))
 	{
@@ -203,7 +234,6 @@ slsfs_readdir(struct vop_readdir_args *args)
 		}
 		/* Create the UIO for the disk. */
 		while (diroffset < filesize) {
-			DEBUG1("dir offet %lu", diroffset);
 			anyleft = ((diroffset % blksize) + sizeof(struct dirent)) > blksize;
 			if (anyleft) {
 				blkoff = 0;
@@ -294,7 +324,7 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 			*vpp = vp;
 		}
 	} else {
-		DEBUG1("Looking up file %s", cnp->cn_nameptr);
+		DEBUG("Looking up file");
 		error = slsfs_lookup_name(dvp, cnp, &dir);
 		if (error == EINVAL) {
 			error = ENOENT;
@@ -352,15 +382,23 @@ slsfs_rmdir(struct vop_rmdir_args *args)
 	int error;
 
 	struct slos_node *svp = SLSVP(vp);
-	struct slos_inode *ivp = &SLSINO(svp);
 
-	/* Check if directory is empty */
-	/* Are we mounted here*/
-	if (ivp->ino_nlink > 2) {
+
+	if (svp->sn_ino.ino_nlink < 2) {
+		return (EINVAL);
+	}
+	
+	if (!slsfs_dirempty(vp)) {
 		return (ENOTEMPTY);
 	}
 
-	if (vp->v_vflag & VV_ROOT) {
+	if ((svp->sn_ino.ino_flags & (IMMUTABLE | APPEND | NOUNLINK)) ||
+		(SLSVP(dvp)->sn_ino.ino_flags & APPEND)) {
+		
+		return (EPERM);
+	}
+
+	if (vp->v_mountedhere != NULL) {
 		return (EPERM);
 	}
 
@@ -369,7 +407,19 @@ slsfs_rmdir(struct vop_rmdir_args *args)
 		return (error);
 	}
 
+	SLSVP(dvp)->sn_ino.ino_nlink -= 1;
+	SLSVP(dvp)->sn_ino.ino_flags |= IN_CHANGE;
+	slos_update(SLSVP(dvp));
 	cache_purge(dvp);
+
+	error = slsfs_truncate(vp, 0);
+	if (error) {
+		return (error);
+	}
+
+	svp->sn_ino.ino_nlink -= 1;
+	KASSERT(svp->sn_ino.ino_nlink == 0, ("Problem with ino links - %lu", svp->sn_ino.ino_nlink));
+	svp->sn_ino.ino_flags |= IN_CHANGE;
 	cache_purge(vp);
 	DEBUG("Removing directory done");
 
@@ -386,12 +436,15 @@ slsfs_create(struct vop_create_args *args)
 	struct componentname *name = args->a_cnp;
 	struct vattr *vap = args->a_vap;
 
-	struct ucred creds;
 	struct vnode *vp;
 	int error;
 
-	int mode = MAKEIMODE(vap->va_type, vap->va_mode);
-	error = SLS_VALLOC(dvp, mode, &creds, &vp);
+	if (name->cn_namelen > SLSFS_NAME_LEN) {
+		return (ENAMETOOLONG);
+
+	}
+	mode_t mode = MAKEIMODE(vap->va_type, vap->va_mode);
+	error = SLS_VALLOC(dvp, mode, name->cn_cred, &vp);
 	if (error) {
 		*vpp = NULL;
 		return (error);
@@ -402,8 +455,6 @@ slsfs_create(struct vop_create_args *args)
 	if (error == -1) {
 		return (EIO);
 	}
-
-	SLSVP(dvp)->sn_ino.ino_nlink += 1;
 
 	*vpp = vp;
 	if ((name->cn_flags & MAKEENTRY) != 0) {
@@ -421,17 +472,27 @@ slsfs_remove(struct vop_remove_args *args)
 	struct componentname *cnp = args->a_cnp;
 	int error;
 
-	DEBUG1("Removing file %s", cnp->cn_nameptr);
 
+	if (vp->v_type == VDIR) {
+
+		return (EISDIR);
+	}
+
+
+	if ((SLSVP(vp)->sn_ino.ino_flags & (IMMUTABLE | APPEND | NOUNLINK)) ||
+		(SLSVP(dvp)->sn_ino.ino_flags & APPEND)) {
+		
+		return (EPERM);
+	}
+
+	DEBUG1("Removing file %s", cnp->cn_nameptr);
 	error = slsfs_remove_node(dvp, vp, cnp);
 	if (error) {
 		return (error);
 	}
 
-	SLSVP(dvp)->sn_ino.ino_nlink -= 1;
-	cache_purge(dvp);
-
-	DEBUG("Removing file");
+	SLSVP(vp)->sn_ino.ino_nlink -= 1;
+	SLSVP(vp)->sn_ino.ino_flags |= IN_CHANGE;
 
 	return (0);
 }
@@ -894,14 +955,229 @@ slsfs_strategy(struct vop_strategy_args *args)
 }
 
 static int
+slsfs_chmod(struct vnode *vp, int mode, struct ucred *cred, struct thread *td)
+{
+	struct slos_node *node = SLSVP(vp);
+	int error;
+
+	if ((error = VOP_ACCESSX(vp, VWRITE_ACL, cred, td))) {
+		return (error);
+	}
+
+
+	if (vp->v_type != VDIR && (mode & S_ISTXT)) {
+		if (priv_check_cred(cred, PRIV_VFS_STICKYFILE, 0)) {
+			return (EFTYPE);
+		}
+	}
+
+	if (!groupmember(node->sn_ino.ino_gid, cred) && (mode & ISGID)) {
+		error = priv_check_cred(cred, PRIV_VFS_SETGID, 0);
+		if (error) {
+			return (error);
+		}
+	}
+
+	if ((mode & ISUID) && node->sn_ino.ino_uid != cred->cr_uid) {
+		error = priv_check_cred(cred, PRIV_VFS_ADMIN, 0);
+		if (error) {
+			return (error);
+		}
+	}
+
+	node->sn_ino.ino_mode &= ~ALLPERMS;
+	node->sn_ino.ino_mode |= (mode & ALLPERMS);
+	node->sn_ino.ino_flags |= IN_CHANGE;
+	if (error == 0 && (node->sn_ino.ino_flags & IN_CHANGE) != 0) {
+		error = slos_update(node);
+	}
+
+	return (error);
+}
+
+static int
+slsfs_chown(struct vnode *vp, uid_t uid, gid_t gid, struct ucred *cred, struct thread *td)
+{
+	uid_t ouid;
+	gid_t ogid;
+	int error = 0;
+
+	struct slos_node *svp = SLSVP(vp);
+
+	if (uid == (uid_t)VNOVAL)
+		uid = svp->sn_ino.ino_uid;
+
+	if (gid == (uid_t)VNOVAL)
+		gid = svp->sn_ino.ino_gid;
+
+	if ((error = VOP_ACCESSX(vp, VWRITE_OWNER, cred, td))) {
+		return (error);
+	}
+
+	if (((uid != svp->sn_ino.ino_uid && uid != cred->cr_uid) ||
+	    (gid != svp->sn_ino.ino_gid && !groupmember(gid, cred))) &&
+		(error = priv_check_cred(cred, PRIV_VFS_CHOWN, 0))) {
+
+		return (error);
+	}
+
+	ouid = svp->sn_ino.ino_uid;
+	ogid = svp->sn_ino.ino_gid;
+	
+	svp->sn_ino.ino_uid = uid;
+	svp->sn_ino.ino_gid = gid;
+
+	svp->sn_status |= IN_CHANGE;
+	if ((svp->sn_ino.ino_mode & (ISUID | ISGID)) &&
+		(ouid != uid || ogid != gid)) {
+		if (priv_check_cred(cred, PRIV_VFS_RETAINSUGID, 0)) {
+			svp->sn_ino.ino_mode &= ~(ISUID | ISGID);
+		}
+	}
+	return (0);
+}
+
+static int
 slsfs_setattr(struct vop_setattr_args *args)
 {
 	struct vnode *vp = args->a_vp;
 	struct vattr *vap = args->a_vap;
+	struct ucred *cred = args->a_cred;
+	struct thread *td = curthread;
+	struct slos_node *node = SLSVP(vp);
 	int error = 0;
-	if (vap->va_size != (u_quad_t)VNOVAL) {
-		error = slsfs_truncate(vp, vap->va_size);
+
+	if ((vap->va_type != VNON) || (vap->va_nlink != VNOVAL) ||
+	    (vap->va_fsid != VNOVAL) || (vap->va_fileid != VNOVAL) ||
+	    (vap->va_blocksize != VNOVAL) || (vap->va_rdev != VNOVAL) ||
+	    (vap->va_bytes != VNOVAL) || (vap->va_gen != VNOVAL)) {
+
+		return (EINVAL);
 	}
+	if (vap->va_flags != VNOVAL) {
+
+	    /*
+	     * Currently just copying the flags seen from UFS and will smudge 
+	     * it in as I go.
+	     */
+	    if ((vap->va_flags & ~(SF_APPEND | SF_ARCHIVED | SF_IMMUTABLE |
+		SF_NOUNLINK | SF_SNAPSHOT | UF_APPEND | UF_ARCHIVE | UF_HIDDEN |
+		UF_IMMUTABLE | UF_NODUMP | UF_NOUNLINK |UF_OFFLINE | UF_OPAQUE |
+		UF_READONLY | UF_REPARSE | UF_SPARSE | UF_SYSTEM)) != 0) {
+			return (EOPNOTSUPP);
+	    }
+	    if (vp->v_mount->mnt_flag & MNT_RDONLY) {
+		    return (EROFS);
+	    }
+
+	    if ((error = VOP_ACCESS(vp, VADMIN, cred, td))) {
+		return (error);
+	    }
+
+	    if (!priv_check_cred(cred, PRIV_VFS_SYSFLAGS, 0)) {
+		if (node->sn_ino.ino_flags & (SF_NOUNLINK | SF_IMMUTABLE
+			    | SF_APPEND)) {
+			error = securelevel_gt(cred, 0);
+			if (error) {
+				return (error);
+			}
+
+			if ((vap->va_flags ^ node->sn_ino.ino_flags) & SF_SNAPSHOT)
+				return (EPERM);
+		}
+	    } else {
+		if (node->sn_ino.ino_flags & (SF_NOUNLINK | SF_IMMUTABLE | SF_APPEND) ||
+			((vap->va_flags^ node->sn_ino.ino_flags) & SF_SETTABLE)) {
+				return (EPERM);
+		}
+	    }
+
+	    node->sn_ino.ino_flags = vap->va_flags | IN_CHANGE;
+	    error = slos_update(node);
+	    if (node->sn_ino.ino_flags & (IMMUTABLE | APPEND)) {
+			return (error);
+	    }
+	}
+
+	if  (node->sn_ino.ino_flags & (IMMUTABLE | APPEND)) {
+		return (EPERM);
+	}
+
+	if (vap->va_size != (u_quad_t)VNOVAL) {
+		switch (vp->v_type) {
+		case VDIR:
+			return (EISDIR);
+		case VLNK:
+		case VREG:
+			if (vp->v_mount->mnt_flag & MNT_RDONLY) {
+				return (EROFS);
+			}
+			if ((node->sn_ino.ino_flags & SF_SNAPSHOT) != 0) {
+				return (EPERM);
+			}
+			break;
+		default:
+			return (0);
+		}
+		error = slsfs_truncate(vp, vap->va_size);
+		if (error) {
+			return (error);
+		}
+	}
+
+	if (vap->va_uid != (uid_t)VNOVAL || vap->va_gid !=(gid_t)VNOVAL) {
+		if (vp->v_mount->mnt_flag & MNT_RDONLY) {
+				return (EROFS);
+		}
+
+		error = slsfs_chown(vp, vap->va_uid, vap->va_gid, cred, td);
+		if (error) {
+			return (error);
+		}
+	}
+
+	if (vap->va_atime.tv_sec != VNOVAL || vap->va_mtime.tv_sec != VNOVAL 
+		|| vap->va_birthtime.tv_sec != VNOVAL) {
+		
+		if ((node->sn_ino.ino_flags & SF_SNAPSHOT) != 0) {
+				return (EPERM);
+		}
+		error = vn_utimes_perm(vp, vap, cred, td);
+		if (error) {
+			return (error);
+		}
+
+		node->sn_ino.ino_flags |= IN_CHANGE | IN_MODIFIED;
+		if (vap->va_atime.tv_sec != VNOVAL) {
+			node->sn_ino.ino_flags &= ~IN_ACCESS;
+			node->sn_ino.ino_atime = vap->va_atime.tv_sec;
+			node->sn_ino.ino_atime_nsec = vap->va_atime.tv_nsec;
+		}
+
+		if (vap->va_mtime.tv_sec != VNOVAL) {
+			node->sn_ino.ino_flags &= ~IN_UPDATE;
+			node->sn_ino.ino_mtime = vap->va_mtime.tv_sec;
+			node->sn_ino.ino_mtime_nsec = vap->va_mtime.tv_nsec;
+		}
+
+		error = slos_update(node);
+
+		if (error) {
+			return (error);
+		}
+	}
+    
+	error = 0;
+	if (vap->va_mode != (mode_t)VNOVAL) {
+		if (vp->v_mount->mnt_flag & MNT_RDONLY) {
+			return (EROFS);
+		}
+		if ((node->sn_ino.ino_flags & SF_SNAPSHOT) != 0) {
+			return (EPERM);
+		}
+		error = slsfs_chmod(vp, (int)vap->va_mode, cred, td);
+	}
+
 	return (error);
 }
 
@@ -1032,7 +1308,7 @@ abort:
 			goto abort;
 		}
 		isdir = 1;
-		svp->sn_status = SLOS_RENAME;
+		svp->sn_ino.ino_flags |= IN_RENAME;
 		oldparent = sdvp->sn_pid;
 	}
 
@@ -1070,22 +1346,36 @@ abort:
 
 	if (tvp == NULL) {
 		if (isdir && fdvp != tdvp) {
-			//XXX LINK STUFF?
+			tdnode->sn_ino.ino_nlink++;
 		}
 
 		error = slsfs_add_dirent(tdvp, svp->sn_ino.ino_pid, 
 		    tname->cn_nameptr,
 		    tname->cn_namelen, IFTODT(svp->sn_ino.ino_mode));
 		if (error) {
-			// XXX LINK STUFF
+			if (isdir && fdvp != tdvp) {
+				tdnode->sn_ino.ino_nlink--;
+			}
 			goto bad;
 		}
 
+		slos_update(tdnode);
+
 		vput(tdvp);
 	} else {
+		if ((tdnode->sn_ino.ino_mode & S_ISTXT) &&
+			tname->cn_cred->cr_uid != 0 &&
+			tname->cn_cred->cr_uid != tdnode->sn_ino.ino_uid &&
+			tnode->sn_ino.ino_uid != tname->cn_cred->cr_uid) {
+			error = EPERM;
+
+			goto bad;
+		}
+		    
+
 		mode = tnode->sn_ino.ino_mode;
 		if ((mode & S_IFMT) == S_IFDIR) {
-			if (tnode->sn_ino.ino_nlink > 2) {
+			if (!slsfs_dirempty(tvp)) {
 				error = ENOTEMPTY;
 				goto bad;
 			}
@@ -1107,11 +1397,13 @@ abort:
 		}
 
 		if (isdir && !newparent) {
-			// Update links??
+			tdnode->sn_ino.ino_nlink--;
 		}
 
 		vput(tdvp);
+		tnode->sn_ino.ino_nlink--;
 		vput(tvp);
+		tnode = NULL;
 	} 
 
 	fname->cn_flags &= ~MODMASK;
@@ -1148,7 +1440,7 @@ abort:
 		}
 		DEBUG("Removing dirent");
 		error = slsfs_unlink_dir(fdvp, fvp, fname);
-		svp->sn_status &= ~SLOS_RENAME;
+		svp->sn_ino.ino_flags &= ~IN_RENAME;
 	}
 
 	if (sdvp) {
@@ -1170,9 +1462,12 @@ bad:
 	vput(tdvp);
 
 	if (isdir) {
-		svp->sn_status &= ~SLOS_RENAME;
+		svp->sn_status &= ~IN_RENAME;
 	}
 	if (vn_lock(fvp, LK_EXCLUSIVE) == 0) {
+		svp->sn_ino.ino_nlink--;
+		svp->sn_ino.ino_flags |= IN_CHANGE;
+		svp->sn_ino.ino_flags &= ~IN_RENAME;
 		vput(fvp);
 	} else {
 		vrele(fvp);
@@ -1349,10 +1644,121 @@ slsfs_link(struct vop_link_args *ap)
 	    cnp->cn_namelen, IFTODT(SLSVP(vp)->sn_ino.ino_mode));
 
 	SLSVP(vp)->sn_ino.ino_nlink++;
-	slos_updateroot(SLSVP(vp));
+	slos_update(SLSVP(vp));
 
 	return (error);
 }
+
+static int
+slsfs_markatime(struct vop_markatime_args *args)
+{
+	struct vnode *vp = args->a_vp;
+	struct slos_node *svp = SLSVP(vp);
+
+	VI_LOCK(vp);
+	svp->sn_ino.ino_flags = IN_ACCESS;
+	VI_UNLOCK(vp);
+
+	slos_update(svp);
+
+	return (0);
+}
+
+/*
+ * Although the syscall mknod is deprecated, the syscall mkfifo still requires 
+ * VOP_MKNOD.
+ */
+static int
+slsfs_mknod(struct vop_mknod_args *args)
+{
+
+	struct vnode *vp;
+	int error;
+
+	struct vnode *dvp = args->a_dvp;
+	struct vnode **vpp = args->a_vpp;
+	struct componentname *name = args->a_cnp;
+	struct vattr *vap = args->a_vap;
+
+	mode_t mode = MAKEIMODE(vap->va_type, vap->va_mode);
+	error = SLS_VALLOC(dvp, mode, name->cn_cred, &vp);
+	if (error) {
+		*vpp = NULL;
+		return (error);
+	} 
+
+	error = slsfs_add_dirent(dvp, VINUM(vp), name->cn_nameptr,
+	    name->cn_namelen, DT_REG);
+	if (error == -1) {
+		return (EIO);
+	}
+
+	SLSVP(vp)->sn_ino.ino_gid = SLSVP(dvp)->sn_ino.ino_gid;
+	SLSVP(vp)->sn_ino.ino_uid = name->cn_cred->cr_uid;
+
+	if (vap->va_rdev != VNOVAL) {
+		SLSVP(vp)->sn_ino.ino_special = vap->va_rdev;
+	}
+
+	SLSVP(vp)->sn_status |= IN_ACCESS | IN_CHANGE | IN_UPDATE;
+	
+	*vpp = vp;
+
+	return (0);
+}
+
+static int
+slsfs_pathconf(struct vop_pathconf_args *args)
+{
+	int error = 0;
+	struct vnode *vp = args->a_vp;
+
+	switch(args->a_name) {
+	case _PC_PIPE_BUF:
+		if (vp->v_type == VDIR || vp->v_type == VFIFO) {
+			*args->a_retval = PIPE_BUF;
+		} else {
+			error = EINVAL;
+		}
+		break;
+	case _PC_NAME_MAX:
+		*args->a_retval = SLSFS_NAME_LEN;
+		break;
+	case _PC_ALLOC_SIZE_MIN:
+		*args->a_retval = BLKSIZE(&slos);
+		break;
+	case _PC_ACL_EXTENDED:
+		*args->a_retval = 0;
+		break;
+	case _PC_FILESIZEBITS:
+		*args->a_retval = 64;
+		break;
+	case _PC_REC_MIN_XFER_SIZE:
+		*args->a_retval = IOSIZE(SLSVP(vp));
+		break;
+	case _PC_REC_MAX_XFER_SIZE:
+		*args->a_retval = -1;
+		break;
+	default:
+		error = vop_stdpathconf(args);
+		break;
+	} 
+
+	return (error);
+}
+
+struct vop_vector sls_fifoops = {
+	.vop_default  =		&fifo_specops,
+	.vop_fsync    =		VOP_PANIC,
+	.vop_access   =		slsfs_access, 
+	.vop_inactive =		slsfs_inactive,
+	.vop_pathconf =		slsfs_pathconf,
+	.vop_read     =		VOP_PANIC,
+	.vop_reclaim  =		slsfs_reclaim,
+	.vop_setattr  =		slsfs_setattr,
+	.vop_getattr  =		slsfs_getattr,
+	.vop_write    =		VOP_PANIC,
+};
 
 struct vop_vector sls_vnodeops = {
 	.vop_default =		&default_vnodeops,
@@ -1360,7 +1766,7 @@ struct vop_vector sls_vnodeops = {
 	.vop_read =		slsfs_read, 
 	.vop_reallocblks =	VOP_PANIC, // TODO
 	.vop_write =		slsfs_write,
-	.vop_accessx =		slsfs_accessx,
+	.vop_access =		slsfs_access,
 	.vop_bmap =		slsfs_bmap,
 	.vop_cachedlookup =	slsfs_lookup, 
 	.vop_close =		slsfs_close, 
@@ -1370,9 +1776,10 @@ struct vop_vector sls_vnodeops = {
 	.vop_ioctl =		slsfs_ioctl,
 	.vop_link =		slsfs_link, 
 	.vop_lookup =		vfs_cache_lookup, 
-	.vop_markatime =	VOP_PANIC,
+	.vop_pathconf =		slsfs_pathconf,
+	.vop_markatime =	slsfs_markatime,
 	.vop_mkdir =		slsfs_mkdir, 
-	.vop_mknod =		VOP_PANIC, // TODO
+	.vop_mknod =		slsfs_mknod,
 	.vop_open =		slsfs_open, 
 	.vop_poll =		vop_stdpoll,
 	.vop_print =		slsfs_print,

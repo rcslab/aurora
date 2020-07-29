@@ -190,7 +190,7 @@ slsfs_allocator_init(struct slos *slos)
 	// Checksum tree is allocated first.
 	offset += 2;
 	if (slos->slos_sb->sb_epoch == EPOCH_INVAL) {
-		DEBUG1("Bootstrapping Allocator for first time startup starting at offset %lu\n", offset);
+		DEBUG1("Bootstrapping Allocator for first time startup starting at offset %lu", offset);
 		/* 
 		 * When initing the allocator, we have to start out by just 
 		 * bump allocating the initial setup of the trees,  we bump 
@@ -249,18 +249,19 @@ slsfs_allocator_init(struct slos *slos)
 		off = offset * BLKSIZE(slos);
 		total = slos->slos_sb->sb_size - (offset * BLKSIZE(slos));
 
-		BTREE_LOCK(OTREE(slos), LK_EXCLUSIVE);
-		BTREE_LOCK(STREE(slos), LK_EXCLUSIVE);
-
-		printf("%lu %lu\n", OTREE(slos)->bt_root, STREE(slos)->bt_root);
+		printf("%lu %lu", OTREE(slos)->bt_root, STREE(slos)->bt_root);
 		KASSERT(fbtree_size(OTREE(slos)) == 0, ("Bad size\n"));
 		KASSERT(fbtree_size(STREE(slos)) == 0, ("Bad size\n"));
+
+		BTREE_LOCK(OTREE(slos), LK_EXCLUSIVE);
+		BTREE_LOCK(STREE(slos), LK_EXCLUSIVE);
 
 		fbtree_insert(OTREE(slos), &off, &total);
 		fbtree_insert(STREE(slos), &total, &off);
 
 		BTREE_UNLOCK(STREE(slos), 0);
 		BTREE_UNLOCK(OTREE(slos), 0);
+
 		/*
 		 * Carve of a region from the beginning of the device.
 		 * We have statically allocated some of these blocks using
@@ -318,7 +319,7 @@ slsfs_allocator_sync(struct slos *slos, struct slos_sb *newsb)
 	int total_allocations = (FBTREE_DIRTYCNT(OTREE(slos)) * 5) + 
 	    (FBTREE_DIRTYCNT(STREE(slos)) * 5) + 2;
 
-	DEBUG("Syncing Allocator\n");
+	DEBUG("Syncing Allocator");
 	// Allocate and sync the btree's
 	error = ALLOCATEPTR(slos, total_allocations * BLKSIZE(slos), &ptr);
 	MPASS(error == 0);

@@ -46,7 +46,7 @@ slsfs_generic_rc(void *ctx, bnode_ptr p)
 {
 	struct slos_node *svp = (struct slos_node *)ctx;
 	svp->sn_ino.ino_btree.offset = p;
-	slos_updateroot(svp);
+	slos_update(svp);
 }
 
 /*
@@ -112,6 +112,7 @@ slsfs_setupfakedev(struct slos *slos, struct slos_node *vp)
 	devvp->v_type = VCHR;
 	devvp->v_data = vp;
 	devvp->v_vflag |= VV_SYSTEM;
+	DEBUG("Setup fake device");
 
 	return (0);
 }
