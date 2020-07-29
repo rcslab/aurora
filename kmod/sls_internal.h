@@ -88,7 +88,7 @@ sls_module_exiting(void)
     (OFF_TO_IDX(vaddr - entry_start + entry_offset))
 
 /* Macros for debugging messages */
-#ifdef SLS_MSG_
+#ifdef SLS_MSG
 #define SLS_DBG(fmt, ...) do {			    \
     printf("(%s: Line %d) ", __FILE__, __LINE__);   \
     printf(fmt, ##__VA_ARGS__);			    \
