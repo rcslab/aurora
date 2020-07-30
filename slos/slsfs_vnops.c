@@ -451,7 +451,7 @@ slsfs_create(struct vop_create_args *args)
 	} 
 
 	error = slsfs_add_dirent(dvp, VINUM(vp), name->cn_nameptr,
-	    name->cn_namelen, DT_REG);
+	    name->cn_namelen, IFTODT(mode));
 	if (error == -1) {
 		return (EIO);
 	}
@@ -1688,7 +1688,7 @@ slsfs_mknod(struct vop_mknod_args *args)
 	} 
 
 	error = slsfs_add_dirent(dvp, VINUM(vp), name->cn_nameptr,
-	    name->cn_namelen, DT_REG);
+	    name->cn_namelen, IFTODT(mode));
 	if (error == -1) {
 		return (EIO);
 	}
