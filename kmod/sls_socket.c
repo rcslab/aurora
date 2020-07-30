@@ -451,8 +451,14 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 		 * we need to let the kernel know we are reserving the address.
 		 */
 		error = kern_bindat(td, AT_FDCWD, fd, (struct sockaddr *) inaddr);
-		if (error != 0)
-			goto error;
+		if (error != 0) {
+			/* 
+			 * XXX Get the ability to fix connected sockets. We currently use
+			 * an uninitialized socket for restores, so that userspace recovers
+			 * from the incomplete restore when it comes across it.
+			 */
+			return (0);
+		}
 
 		break;
 
