@@ -71,7 +71,7 @@ int checksum_enabled = 1;
 struct slsfs_taskctx {
 	struct task tk;
 	struct vnode *vp;
-	struct vm_object *vmobj;
+	vm_object_t obj;
 	slsfs_callback cb;
 	vm_page_t startpage;
 	int iotype;
@@ -378,12 +378,46 @@ slsfs_inodes_init(struct mount *mp, struct slos *slos)
 	return (0);
 }
 
+static struct slsfs_taskctx *
+slsfs_createtask(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int iotype, slsfs_callback cb)
+{
+	struct slsfs_taskctx *ctx;
+
+	ctx = malloc(sizeof(*ctx), M_SLOS, M_WAITOK | M_ZERO);
+	*ctx = (struct slsfs_taskctx) {
+		.vp = vp,
+		.obj = obj,
+		.startpage = m,
+		.size = len,
+		.iotype = iotype,
+		.cb = cb,
+	};
+
+	return (ctx);
+}
+
+static void
+slsfs_obj_deallocate(void *ctx, int performio)
+{
+	vm_object_deallocate(((struct slsfs_taskctx *) ctx)->obj);
+	free(ctx, M_SLOS);
+}
+
 static void
 slsfs_bdone(struct buf *bp)
 {
+	struct slsfs_taskctx *ctx;
+
 	/* Free the reference to the object taken at the beginning of the IO. */
-	vm_object_deallocate(bp->b_pages[0]->object);
 	bdone(bp);
+
+	/*
+	 * We cannot call vm_object_deallocate() from an interrupt context, so
+	 * we create a task for that.
+	 */
+	ctx = slsfs_createtask(NULL, bp->b_pages[0]->object, NULL, 0, 0, 0);
+	TASK_INIT(&ctx->tk, 0, &slsfs_obj_deallocate, ctx);
+	taskqueue_enqueue(slos.slos_tq, &ctx->tk);
 }
 
 /* Perform an IO without copying from the VM objects to the buffer. */
@@ -425,7 +459,7 @@ slsfs_performio(void *ctx, int pending)
 	start = task->startpage;
 
 	i = 0;
-	TAILQ_FOREACH_FROM(start, &task->vmobj->memq, listq) {
+	TAILQ_FOREACH_FROM(start, &task->obj->memq, listq) {
 		// We are done grabbing pages;
 		bp->b_pages[i] = start;
 		size += pagesizes[start->psind];
@@ -479,24 +513,6 @@ slsfs_performio(void *ctx, int pending)
 	bp->b_bufobj = NULL;
 	free(task, M_SLOS);
 	free(bp, M_SLOS);
-}
-
-static struct slsfs_taskctx *
-slsfs_createtask(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int iotype, slsfs_callback cb)
-{
-	struct slsfs_taskctx *ctx;
-
-	ctx = malloc(sizeof(*ctx), M_SLOS, M_WAITOK | M_ZERO);
-	*ctx = (struct slsfs_taskctx) {
-		.vp = vp,
-		.vmobj = obj,
-		.startpage = m,
-		.size = len,
-		.iotype = iotype,
-		.cb = cb,
-	};
-
-	return (ctx);
 }
 
 static int
