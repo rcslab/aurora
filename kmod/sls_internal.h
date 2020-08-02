@@ -107,6 +107,7 @@ struct sls_checkpointd_args {
 struct sls_restored_args {
     uint64_t oid;
     uint64_t daemon;
+    uint64_t rest_stopped;
     int target;
 };
 

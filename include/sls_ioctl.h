@@ -17,8 +17,9 @@ struct sls_checkpoint_args {
 };
 
 struct sls_restore_args {
-	uint64_t	    oid;    /* OID of the partition being restored */
-	uint64_t	    daemon; /* Restore the partition as a daemon */
+	uint64_t	    oid;	    /* OID of the partition being restored */
+	uint64_t	    daemon;	    /* Restore the partition as a daemon */
+	uint64_t	    rest_stopped;   /* Restored the partition in a stopped state */
 };
 
 struct sls_epoch_args {

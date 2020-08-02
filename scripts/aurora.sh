@@ -8,6 +8,7 @@ OID="1000"
 BACKEND="slos"
 CKPTFREQ="5000"
 DELTA="no"
+RESTSTOP="yes"
 
 # Output files
 OUTDIR="./output/"
@@ -86,12 +87,19 @@ function slsckpt {
     #dtrace -s "$DTRACE" > "$DTRACEFILE" &
 
     # Start checkpointing.
-    "$SLSCTL" partadd -o "$OID" -b "$BACKEND" -t "$CKPTFREQ"
+    "$SLSCTL" partadd -o "$OID" -b "$BACKEND" -t "$CKPTFREQ" "$DELTACONF"
     "$SLSCTL" attach -o "$OID" -p "$1"
     "$SLSCTL" checkpoint -o "$OID"
 }
 
 function slsrest {
-    "$SLSCTL" restore -o "$OID"
+    if [ "$RESTSTOP" == "yes" ]
+    then
+	RESTSTOPCONF="-s"
+    else
+	RESTSTOPCONF=""
+    fi
+
+    "$SLSCTL" restore -o "$OID" "$RESTSTOPCONF"
 }
 

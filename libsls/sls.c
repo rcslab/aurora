@@ -41,12 +41,13 @@ sls_checkpoint(uint64_t oid, bool recurse)
 
 /* Restore a process stored in sls_backend on top of the process with PID pid. */
 int
-sls_restore(uint64_t oid, bool daemon)
+sls_restore(uint64_t oid, bool daemon, bool rest_stopped)
 {
 	struct sls_restore_args args;
 
 	args.oid = oid;
 	args.daemon = daemon ? 1 : 0;
+	args.rest_stopped = rest_stopped ? 1 : 0;
 
 	if (sls_ioctl(SLS_RESTORE, &args) < 0) {
 	    perror("sls_restore");

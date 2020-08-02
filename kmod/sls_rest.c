@@ -387,6 +387,7 @@ struct slsrest_metadata_args {
 	char *buf;
 	size_t buflen;
 	uint64_t daemon;
+	uint64_t rest_stopped;
 	struct slsrest_data *restdata;
 };
 
@@ -398,6 +399,7 @@ slsrest_metadata(void *args)
 {
 	struct slsrest_data *restdata;
 	uint64_t daemon;
+	uint64_t rest_stopped;
 	struct proc *p;
 	size_t buflen;
 	int error;
@@ -411,6 +413,7 @@ slsrest_metadata(void *args)
 	buf = ((struct slsrest_metadata_args *) args)->buf;
 	buflen = ((struct slsrest_metadata_args *) args)->buflen;
 	daemon = ((struct slsrest_metadata_args *) args)->daemon;
+	rest_stopped = ((struct slsrest_metadata_args *) args)->rest_stopped;
 	restdata = ((struct slsrest_metadata_args *) args)->restdata;
 
 	free(args, M_SLSMM);
@@ -469,7 +472,9 @@ slsrest_metadata(void *args)
 	if (error != 0)
 		SLS_DBG("tty_fixup failed with %d\n", error);
 
-	kern_psignal(p, SIGCONT);
+	/* Allow the process to continue if we want it to. */
+	if (rest_stopped == 0)
+		kern_psignal(p, SIGCONT);
 
 	PROC_UNLOCK(p);
 
@@ -494,7 +499,7 @@ error:
 }
 
 static int
-slsrest_fork(uint64_t daemon, char *buf, size_t buflen, 
+slsrest_fork(uint64_t daemon, uint64_t rest_stopped, char *buf, size_t buflen,
     struct slsrest_data *restdata)
 {
 	struct fork_req fr;
@@ -521,6 +526,7 @@ slsrest_fork(uint64_t daemon, char *buf, size_t buflen,
 	args = malloc(sizeof(*args), M_SLSMM, M_WAITOK);
 	args->buf = buf;
 	args->daemon = daemon;
+	args->rest_stopped = rest_stopped;
 	args->buflen = buflen;
 	args->restdata = restdata;
 
@@ -821,7 +827,7 @@ slsrest_rectable_to_metatable(struct slskv_table *rectable, struct slskv_table *
 }
 
 static int
-sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
+sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 {
 	struct slskv_table *metatable = NULL;
 	struct slskv_table *rectable = NULL;
@@ -976,7 +982,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon)
 		buf = (char *) record;
 		buflen = st->len;
 
-		error = slsrest_fork(daemon, buf, buflen, restdata);
+		error = slsrest_fork(daemon, rest_stopped, buf, buflen, restdata);
 		if (error != 0) {
 			KV_ABORT(iter);
 			goto out;
@@ -1043,7 +1049,7 @@ sls_restored(struct sls_restored_args *args)
 
 	slsm.slsm_restoring = 0;
 	/* Restore the old process. */
-	error = sls_rest(curproc, args->oid, args->daemon);
+	error = sls_rest(curproc, args->oid, args->daemon, args->rest_stopped);
 	if (error != 0)
 		printf("Error: sls_rest failed with %d\n", error);
 

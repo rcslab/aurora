@@ -96,6 +96,7 @@ sls_restore(struct sls_restore_args *args)
 	restd_args = malloc(sizeof(*restd_args), M_SLSMM, M_WAITOK);
 	restd_args->oid = args->oid;
 	restd_args->daemon = args->daemon;
+	restd_args->rest_stopped = args->rest_stopped;
 
 	/* 
 	 * The sls_restored function can alternatively

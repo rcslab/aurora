@@ -10,7 +10,7 @@
 
 /* Low-level APIs */
 int sls_checkpoint(uint64_t oid, bool recurse);
-int sls_restore(uint64_t oid, bool daemon);
+int sls_restore(uint64_t oid, bool daemon, bool rest_stopped);
 
 int sls_attach(uint64_t oid, uint64_t pid);
 int sls_partadd(uint64_t oid, const struct sls_attr attr);
