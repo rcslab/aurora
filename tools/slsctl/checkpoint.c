@@ -33,26 +33,26 @@ checkpoint_main(int argc, char* argv[])
 	int opt;
 
 	while ((opt = getopt_long(argc, argv, "o:r", checkpoint_longopts, NULL)) != -1) {
-	    switch (opt) {
-	    case 'o':
-		oid = strtol(optarg, NULL, 10);
-		break;
-	    case 'r':
-		recurse = true;
-		break;
-	    default:
-		checkpoint_usage();
-		return 0;
-	    }
+		switch (opt) {
+		case 'o':
+			oid = strtol(optarg, NULL, 10);
+			break;
+		case 'r':
+			recurse = true;
+			break;
+		default:
+			checkpoint_usage();
+			return 0;
+		}
 	}
 
 	if (optind != argc || oid == -1) {
-	    checkpoint_usage();
-	    return 0;
+		checkpoint_usage();
+		return 0;
 	}
 
 	if (sls_checkpoint(oid, recurse) < 0)
-	    return 1;
+		return 1;
 
 	return 0;
 }

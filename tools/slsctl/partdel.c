@@ -31,23 +31,23 @@ partdel_main(int argc, char* argv[])
 	int opt;
 
 	while ((opt = getopt_long(argc, argv, "o:", partdel_longopts, NULL)) != -1) {
-	    switch (opt) {
-	    case 'o':
-		oid = strtol(optarg, NULL, 10);
-		break;
-	    default:
-		partdel_usage();
-		return 0;
-	    }
+		switch (opt) {
+		case 'o':
+			oid = strtol(optarg, NULL, 10);
+			break;
+		default:
+			partdel_usage();
+			return 0;
+		}
 	}
 
 	if (optind != argc || oid == -1) {
-	    partdel_usage();
-	    return 0;
+		partdel_usage();
+		return 0;
 	}
 
 	if (sls_partdel(oid) < 0)
-	    return 1;
+		return 1;
 
 	return 0;
 }

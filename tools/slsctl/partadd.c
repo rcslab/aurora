@@ -24,7 +24,7 @@ static struct option partadd_longopts[] = {
 void
 partadd_usage(void)
 {
-    printf("Usage: slsctl partadd -o <id>  [-b <memory|slos>] [-t ms] [-d]\n");
+	printf("Usage: slsctl partadd -o <id>  [-b <memory|slos>] [-t ms] [-d]\n");
 }
 
 int
@@ -38,55 +38,55 @@ partadd_main(int argc, char* argv[]) {
 
 	attr = (struct sls_attr) { 
 		.attr_target = SLS_OSD,
-		.attr_mode = SLS_FULL,
-		.attr_period = 0,
+		    .attr_mode = SLS_FULL,
+		    .attr_period = 0,
 	};
 	oid_set = 0;
 
 	while ((opt = getopt_long(argc, argv, "b:do:p:t:", partadd_longopts, NULL)) != -1) {
-	    switch (opt) {
-	    case 'd':
-		attr.attr_mode = SLS_DELTA;
-		break;
+		switch (opt) {
+		case 'd':
+			attr.attr_mode = SLS_DELTA;
+			break;
 
-	    case 'm':
-		attr.attr_target = SLS_MEM;
-		break;
+		case 'm':
+			attr.attr_target = SLS_MEM;
+			break;
 
-	    case 'o':
-		oid = strtol(optarg, NULL, 10);
-		oid_set = 1;
-		break;
+		case 'o':
+			oid = strtol(optarg, NULL, 10);
+			oid_set = 1;
+			break;
 
-	    case 't':
-		attr.attr_period = strtol(optarg, NULL, 10);
-		break;
+		case 't':
+			attr.attr_period = strtol(optarg, NULL, 10);
+			break;
 
-	    case 'b':
+		case 'b':
 
-		/* The input is only valid if we matched a string. */
-		if (strncmp(optarg, "memory", sizeof("memory")) == 0)
-		    attr.attr_target = SLS_MEM;
-		else if (strncmp(optarg, "slos", sizeof("slos")) == 0)
-		    attr.attr_target = SLS_OSD;
-		else
-		    partadd_usage();
+			/* The input is only valid if we matched a string. */
+			if (strncmp(optarg, "memory", sizeof("memory")) == 0)
+				attr.attr_target = SLS_MEM;
+			else if (strncmp(optarg, "slos", sizeof("slos")) == 0)
+				attr.attr_target = SLS_OSD;
+			else
+				partadd_usage();
 
-		break;
+			break;
 
-	    default:
-		partadd_usage();
-		return 0;
-	    }
+		default:
+			partadd_usage();
+			return 0;
+		}
 	}
 
 	if (oid_set == 0 || optind != argc) {
-	    partadd_usage();
-	    return 0;
+		partadd_usage();
+		return 0;
 	}
 
 	if (sls_partadd(oid, attr) < 0)
-	    return 1;
+		return 1;
 
 	return 0;
 

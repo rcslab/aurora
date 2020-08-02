@@ -23,7 +23,7 @@ static struct option attach_longopts[] = {
 void
 attach_usage(void)
 {
-    printf("Usage: slsctl attach -p <pid> -o <id>\n");
+	printf("Usage: slsctl attach -p <pid> -o <id>\n");
 }
 
 int
@@ -40,40 +40,40 @@ attach_main(int argc, char* argv[]) {
 	oid_set = 0;
 
 	while ((opt = getopt_long(argc, argv, "o:p:", attach_longopts, NULL)) != -1) {
-	    switch (opt) {
-	    case 'o':
-		if (oid_set == 1) {
-		    attach_usage();
-		    return 0;
+		switch (opt) {
+		case 'o':
+			if (oid_set == 1) {
+				attach_usage();
+				return 0;
+			}
+
+			oid = strtol(optarg, NULL, 10);
+			oid_set = 1;
+			break;
+
+		case 'p':
+			if (pid_set == 1) {
+				attach_usage();
+				return 0;
+			}
+
+			pid = strtol(optarg, NULL, 10);
+			pid_set = 1;
+			break;
+
+		default:
+			attach_usage();
+			return 0;
 		}
-
-		oid = strtol(optarg, NULL, 10);
-		oid_set = 1;
-		break;
-
-	    case 'p':
-		if (pid_set == 1) {
-		    attach_usage();
-		    return 0;
-		}
-
-		pid = strtol(optarg, NULL, 10);
-		pid_set = 1;
-		break;
-
-	    default:
-		attach_usage();
-		return 0;
-	    }
 	}
 
 	if (oid_set == 0 || pid_set == 0 || optind != argc) {
-	    attach_usage();
-	    return 0;
+		attach_usage();
+		return 0;
 	}
 
 	if (sls_attach(oid, pid) < 0)
-	    return 1;
+		return 1;
 
 	return 0;
 
