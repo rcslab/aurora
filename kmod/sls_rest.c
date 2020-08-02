@@ -266,6 +266,7 @@ slsrest_dosockbuf(char *buf, size_t bufsize, struct slskv_table *table)
 	uint64_t sbid;
 	int error;
 
+	panic("slsrest_dosockbuf called\n");
 	error = slsload_sockbuf(&m, &sbid, &buf, &bufsize);
 	if (error != 0)
 		return (error);

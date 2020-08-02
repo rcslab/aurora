@@ -6,7 +6,7 @@ SLSFS="$SLSDIR/tools/newfs/newfs"
 # SLS parameters
 OID="1000"
 BACKEND="slos"
-CKPTFREQ="2000"
+CKPTFREQ="5000"
 DELTA="no"
 
 # Output files

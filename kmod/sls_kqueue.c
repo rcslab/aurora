@@ -8,6 +8,7 @@
 #include <sys/domain.h>
 #include <sys/event.h>
 #include <sys/fcntl.h>
+#include <sys/ktr.h>
 #include <sys/limits.h>
 #include <sys/mman.h>
 #include <sys/mutex.h>
@@ -292,6 +293,57 @@ slsrest_kqregister(int fd, struct kqueue *kq, slsset *slskns)
 }
 
 /*
+ * XXX Temporary hack for connnected sockets. We can't restore such sockets, so
+ * any thread doing kevent() on them should see an EOF event. Manually traverse
+ * the file descriptor table and set the knotes as EOF.
+ */
+static void
+slsrest_kq_sockhack(struct proc *p, struct kqueue *kq)
+{
+	struct filedesc *fdp = p->p_fd;
+	struct socket *so;
+	struct knote *kn;
+	struct file *fp;
+	int fd;
+
+	/* Scan the filetable for active files. */
+	for (fd = 0; fd <= fdp->fd_lastfile; fd++) {
+		if (!fdisused(fdp, fd))
+			continue;
+
+		/* Filter out everything but connected inet sockets. */
+		fp = FDTOFP(p, fd);
+		if (fp->f_type != DTYPE_SOCKET)
+			continue;
+
+		so = (struct socket *) fp->f_data;
+		if (so->so_proto->pr_domain->dom_family != AF_INET)
+			continue;
+
+		if ((so->so_options & SO_ACCEPTCONN) != 0)
+			continue;
+
+		/*
+		 * Find all knotes for the identifier, set them as EOF.
+		 * The knote identifier is the fd of the file.
+		 */
+		SLIST_FOREACH(kn, &kq->kq_knlist[fd], kn_link) {
+			if ((kn->kn_status & KN_QUEUED) == 0) {
+				kn->kn_status |= (KN_ACTIVE | KN_QUEUED);
+				TAILQ_INSERT_TAIL(&kq->kq_head, kn, kn_tqe);
+				kq->kq_count += 1;
+			}
+			kn->kn_flags |= EV_ERROR;
+			kn->kn_data = ECONNRESET;
+			CTR6(KTR_SLS, "%s:%d: Restoring knote ident = %d, filter = %d"
+				"flags = 0x%x status = 0x%x",
+				__FILE__, __LINE__, kn->kn_id, kn->kn_filter,
+				kn->kn_flags, kn->kn_status);
+		}
+	}
+}
+
+/*
  * Restore the kevents of a kqueue. This is done after all files
  * have been restored, since we need the fds to be backed before
  * we attach the relevant kevent to the kqueue.
@@ -364,19 +416,29 @@ slsrest_knotes(int fd, slsset *slskns)
 		 * Any pending wakeups to at checkpoint time are lost, but we
 		 * restart all syscalls, so it doesn't matter.
 		 */
-		if ((slskn->kn_status & KN_QUEUED) != 0)
+		if ((slskn->kn_status & KN_QUEUED) != 0) {
 			TAILQ_INSERT_TAIL(&kq->kq_head, kn, kn_tqe);
+			kq->kq_count += 1;
+		}
 
 		kn->kn_status = slskn->kn_status;
-		/* This restores the action flags , among other fields. */
+		/* This restores the action flags, among other fields. */
 		kn->kn_kevent = slskn->kn_kevent;
 		kn->kn_sfflags = slskn->kn_sfflags;
 		kn->kn_sdata = slskn->kn_sdata;
+		CTR6(KTR_SLS, "%s:%d: Restoring knote ident = %d, filter = %d"
+			"flags = 0x%x status = 0x%x",
+			__FILE__, __LINE__, kn->kn_id, kn->kn_filter,
+			kn->kn_flags, kn->kn_status);
 	}
+
+	/* XXX Temporary hack. Send an EOF event to any non-restored sockets. */
+	slsrest_kq_sockhack(curproc, kq);
+
 	KQ_UNLOCK(kq);
 
-
 	kqueue_release(kq, 0);
+
 noacquire:
 	fdrop(fp, td);
 

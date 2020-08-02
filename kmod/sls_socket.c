@@ -64,6 +64,7 @@
  * in progress from SLSFS, and restarting them together with the checkpoint.
  */
 
+#if 0
 static int
 slsckpt_sockbuf(struct sockbuf *sockbuf, struct slsckpt_data *sckpt_data)
 {
@@ -170,6 +171,7 @@ slsckpt_sockbuf(struct sockbuf *sockbuf, struct slsckpt_data *sckpt_data)
 
 	return (0);
 }
+#endif
 
 /* Get the address of a unix socket. */
 static int
@@ -276,10 +278,18 @@ slsckpt_socket(struct proc *p, struct socket *so,
 		panic("%s: Unknown protocol type %d\n", __func__, info.type);
 	}
 
+	/*
+	 * If this isn't a listening socket, mark it as invalid, because we
+	 * can't restore it yet.
+	 */
+	if (!SOLISTENING(so))
+		info.family = AF_UNSPEC;
+
 	/* Write it out to the SLS record. */
 	error = sbuf_bcat(sb, (void *) &info, sizeof(info));
 	if (error != 0)
 		return (error);
+#if 0
 
 	/* Get the rcv and snd buffers if not empty,  add their IDs to the socket. */
 
@@ -300,6 +310,7 @@ slsckpt_socket(struct proc *p, struct socket *so,
 	} else {
 		info.sndid = 0;
 	}
+#endif
 
 	return (0);
 }
@@ -415,12 +426,16 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 	struct unpcb *unpcb, *unpeerpcb;
 	int fd, peerfd = -1;
 	struct thread *td;
+	int family;
 	int error;
 
 	td = curthread;
 
+	/* We create an inet dummy sockets if we can't properly restore. */
+	family = (info->family == AF_UNSPEC)? AF_INET : info->family;
+
 	/* Create the new socket. */
-	error = kern_socket(td, info->family, info->type, info->proto);
+	error = kern_socket(td, family, info->type, info->proto);
 	if (error != 0)
 		return (error);
 
@@ -435,30 +450,29 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 		kern_fcntl_freebsd(td, fd, F_SETFL, O_ASYNC);
 	if ((info->state & SS_NBIO) != 0)
 		kern_fcntl_freebsd(td, fd, F_SETFL, O_NONBLOCK);
+	so->so_options = info->options & (~SO_ACCEPTCONN);
 
 	/*
 	 * XXX Set any other options we can.
 	 */
 	switch (info->family) {
+	/* A socket we can't restore. Mark it as closed. */
+	case AF_UNSPEC:
+		break;
+
 	case AF_INET:
 		inaddr = (struct sockaddr_in *) &info->in;
 
 		/* Check if the socket is bound. */
 		if (info->bound == 0)
 			break;
-		/* 
+		/*
 		 * We use bind() instead of setting the address directly because
 		 * we need to let the kernel know we are reserving the address.
 		 */
 		error = kern_bindat(td, AT_FDCWD, fd, (struct sockaddr *) inaddr);
-		if (error != 0) {
-			/* 
-			 * XXX Get the ability to fix connected sockets. We currently use
-			 * an uninitialized socket for restores, so that userspace recovers
-			 * from the incomplete restore when it comes across it.
-			 */
-			return (0);
-		}
+		if (error != 0)
+			goto error;
 
 		break;
 
@@ -471,7 +485,6 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 		 * so we create it alongside it.
 		 */
 		if (info->unpeer != 0) {
-
 			/* Create the socket peer. */
 			error = kern_socket(td, info->family, info->type, info->proto);
 			if (error != 0)
@@ -481,20 +494,14 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 			peerfp = FDTOFP(td->td_proc, peerfd);
 			sopeer = (struct socket *) peerfp->f_data;
 
-			/* Restore the peer's 's nonblocking/async state. */
-			if ((info->state & SS_ASYNC) != 0)
-				kern_fcntl_freebsd(td, peerfd, F_SETFL, O_ASYNC);
-			if ((info->state & SS_NBIO) != 0)
-				kern_fcntl_freebsd(td, fd, F_SETFL, O_NONBLOCK);
-
 			/* Connect the two sockets. See kern_socketpair(). */
 			error = soconnect2(so, sopeer);
 			if (error != 0)
 				goto error;
 
 			if (info->type == SOCK_DGRAM) {
-				/* 
-				 * Datagram connections are asymetric, so 
+				/*
+				 * Datagram connections are asymetric, so
 				 * repeat the process to the other direction.
 				 */
 				error = soconnect2(sopeer, so);
@@ -508,7 +515,7 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 			}
 
 			break;
-		} 
+		}
 
 		/* 
 		 * We assume it is either a listening socket, or a 
@@ -559,6 +566,7 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 
 	*fdp = fd;
 
+#if 0
 	/* Restore the data into the socket buffers. */
 	error = slsrest_sockbuf(sockbuftable, info->rcvid, &so->so_rcv);
 	if (error != 0)
@@ -578,6 +586,7 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 		if (error != 0)
 			goto error;
 	}
+#endif
 
 	return (0);
 
