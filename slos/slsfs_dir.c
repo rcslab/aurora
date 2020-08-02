@@ -109,7 +109,6 @@ slsfs_init_dir(struct vnode *dvp, struct vnode *vp, struct componentname *name)
 
 	// Catch the edge case of the root directory
 	if (name != NULL) {
-		DEBUG1("Adding %s\n", name->cn_nameptr);
 		error = slsfs_add_dirent(dvp, 
 		    SVINUM(svp), name->cn_nameptr, name->cn_namelen, DT_DIR);
 	}

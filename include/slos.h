@@ -17,28 +17,25 @@
 
 #ifdef KTR
 #define DEBUG(fmt, ...) do {			    \
-    CTR0(KTR_SPARE5, fmt);			    \
+    CTR1(KTR_SPARE5, "%s: " fmt, __func__);			    \
     } while (0) 
 
 #define DEBUG1(fmt, ...) do {			    \
-    CTR1(KTR_SPARE5, fmt, ##__VA_ARGS__);	    \
+    CTR2(KTR_SPARE5, "%s: " fmt, __func__, ##__VA_ARGS__);	    \
     } while (0) 
 
 #define DEBUG2(fmt, ...) do {			    \
-    CTR2(KTR_SPARE5, fmt, ##__VA_ARGS__);			    \
+    CTR3(KTR_SPARE5, "%s: " fmt, __func__, ##__VA_ARGS__);	     \
     } while (0) 
 
 #define DEBUG3(fmt, ...) do {			    \
-    CTR3(KTR_SPARE5, fmt, ##__VA_ARGS__);			    \
+    CTR4(KTR_SPARE5, "%s: " fmt, __func__, ##__VA_ARGS__);	    \
     } while (0) 
 
 #define DEBUG4(fmt, ...) do {			    \
-    CTR4(KTR_SPARE5, fmt, ##__VA_ARGS__);			    \
+    CTR5(KTR_SPARE5, "%s: " fmt, __func__, ##__VA_ARGS__);	    \
     } while (0) 
 
-#define DEBUG5(fmt, ...) do {			    \
-    CTR5(KTR_SPARE5, fmt, ##__VA_ARGS__);			    \
-    } while (0) 
 #else
 #define DEBUG(fmt, ...) ((void)(0));
 #define DEBUG1(fmt, ...) ((void)(0));
@@ -171,7 +168,7 @@ struct slos_sb {
 	diskptr_t		sb_root;	/* Root inode for all inodes */
 	diskptr_t		sb_allocoffset; /* Allocator Offset key tree */
 	diskptr_t		sb_allocsize;	/* Allocator Size key tree */
-	diskptr_t		sb_cksumtree;	/* Checksum key tree */
+	diskptr_t		sb_cksumtree;	/* Checksum inode */
 };
 
 _Static_assert(sizeof(struct slos_sb) < DEV_BSIZE, "Block size wrong");

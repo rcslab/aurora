@@ -206,7 +206,7 @@ slsfs_allocator_init(struct slos *slos)
 	uint64_t offbl = slos->slos_sb->sb_allocoffset.offset;
 	uint64_t sizebl = slos->slos_sb->sb_allocsize.offset;
 
-	DEBUG("Initing Allocator\n");
+	DEBUG("Initing Allocator");
 	/* Create the in-memory vnodes from the on-disk state. */
 	offt = slos_vpimport(slos, offbl);
 	sizet = slos_vpimport(slos, sizebl);
@@ -245,7 +245,7 @@ slsfs_allocator_init(struct slos *slos)
 	 * TODO Error handling for fbtree_insert().
 	 */
 	if (slos->slos_sb->sb_epoch == EPOCH_INVAL) {
-		DEBUG("First time start up for allocator\n");
+		DEBUG("First time start up for allocator");
 		off = offset * BLKSIZE(slos);
 		total = slos->slos_sb->sb_size - (offset * BLKSIZE(slos));
 
@@ -271,7 +271,7 @@ slsfs_allocator_init(struct slos *slos)
 		 * done?
 		 */
 		slsfs_blkalloc(slos, NEWOSDSIZE * BLKSIZE(slos), &ptr);
-		DEBUG("First time start up for allocator done\n");
+		DEBUG("First time start up for allocator done");
 	}
 
 	/* Bind the allocator function to the SLOS. */

@@ -66,7 +66,7 @@ struct unrhdr *slsid_unr;
 
 // sysctl variables
 static struct sysctl_ctx_list slsfs_list;
-int checksum_enabled = 1;
+int checksum_enabled = 0;
 
 struct slsfs_taskctx {
 	struct task tk;
@@ -359,7 +359,7 @@ slsfs_inodes_init(struct mount *mp, struct slos *slos)
 		MPASS(error == 0);
 	}
 	/* Create the vnode for the inode root. */
-	DEBUG("Initing the root inode");
+	DEBUG1("Initing the root inode %lu", slos->slos_sb->sb_root.offset);
 	error = slsfs_vget(mp, SLOS_INODES_ROOT, 0, &slos->slsfs_inodes);
 	if (error) {
 		panic("Issue trying to find root node on init");	
@@ -560,8 +560,8 @@ slsfs_checksumtree_init(struct slos *slos)
 	size_t offset = ((NUMSBS * slos->slos_sb->sb_ssize) / slos->slos_sb->sb_bsize) + 1;
 	if (slos->slos_sb->sb_epoch == EPOCH_INVAL) {
 		MPASS(error == 0);
-		DEBUG("Bootstrapping checksum tree\n");
 		error = bootstrap_tree(slos, offset, &ptr);
+		DEBUG1("Bootstrapping checksum tree %lu", ptr.offset);
 		MPASS(error == 0);
 	} else {
 		ptr = slos->slos_sb->sb_cksumtree;
@@ -572,7 +572,7 @@ slsfs_checksumtree_init(struct slos *slos)
 		slos_vpfree(slos, slos->slos_cktree);
 	}
 
-	DEBUG("Loading Checksum tree");
+	DEBUG1("Loading Checksum tree %lu", ptr.offset);
 	slos->slos_cktree = slos_vpimport(slos, ptr.offset);
 	fbtree_init(slos->slos_cktree->sn_fdev, slos->slos_cktree->sn_tree.bt_root, sizeof(uint64_t),
 		sizeof(uint32_t), &uint64_t_comp, "Checksum tree", 0, &slos->slos_cktree->sn_tree);
@@ -605,7 +605,6 @@ slsfs_startupfs(struct mount *mp)
 			}
 			return (-1);
 		}
-		
 	} else {
 		if (slos.slos_sb == NULL)
 			slos.slos_sb = malloc(sizeof(struct slos_sb), M_SLOS, M_WAITOK);
@@ -963,9 +962,11 @@ slsfs_checkpoint(struct mount *mp, int closing)
 		 * Allocate a new blk for the root inode write it and give it 
 		 * to the superblock
 		 */
-		
 		// Write out the root inode
 		ino->ino_blk = ptr.offset;
+
+		slos.slos_sb->sb_root.offset = ino->ino_blk;
+
 		bp = getblk(svp->sn_fdev, ptr.offset, BLKSIZE(&slos), 0, 0, 0);
 		MPASS(bp);
 		memcpy(bp->b_data, ino, sizeof(struct slos_inode));
@@ -973,7 +974,12 @@ slsfs_checkpoint(struct mount *mp, int closing)
 
 		// Write out the checksum tree;
 		error = ALLOCATEPTR(&slos, BLKSIZE(&slos), &ptr);
+		if (error) {
+			panic("Problem with allocation");
+		}
+
 		ino = &slos.slos_cktree->sn_ino;
+		MPASS(slos.slos_cktree != SLSVP(slos.slsfs_inodes));
 		ino->ino_blk = ptr.offset;
 		fbtree_sync(&slos.slos_cktree->sn_tree);
 		bp = getblk(svp->sn_fdev, ptr.offset, BLKSIZE(&slos), 0, 0, 0);
@@ -981,7 +987,14 @@ slsfs_checkpoint(struct mount *mp, int closing)
 		memcpy(bp->b_data, ino, sizeof(struct slos_inode));
 		bwrite(bp);
 
-		slos.slos_sb->sb_root.offset = ino->ino_blk;
+		slos.slos_sb->sb_cksumtree = ptr;
+
+		DEBUG1("Checksum tree at %lu", ptr.offset);
+		DEBUG1("Root Dir at %lu", SLSVP(slos.slsfs_inodes)->sn_ino.ino_blk);
+		DEBUG1("Inodes File at %lu", slos.slos_sb->sb_root.offset);
+
+		MPASS(ptr.offset != slos.slos_sb->sb_root.offset);
+
 		slos.slos_sb->sb_epoch += 1;
 		slos.slos_sb->sb_index = (slos.slos_sb->sb_epoch) % 100;
 

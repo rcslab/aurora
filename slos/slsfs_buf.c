@@ -86,13 +86,11 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw
 	DEBUG1("Attemping to retrieve buffer %lu bno", bno);
 	error = slsfs_lookupbln(svp, bno, &biter);
 	if (error) {
-		DEBUG("%d\n", error);
+		DEBUG("%d", error);
 		return (error);
 	}
 	size = roundup(size, IOSIZE(svp));
-	DEBUG1("Size of possible retrieved buf %lu", size);
 	if (ITER_ISNULL(biter)) {
-		DEBUG1("No key smaller than %lu", bno);
 		error = slsfs_buf_nocollide(vp, &biter, bno, size, rw, gbflag, bp);
 		if (error) {
 			panic("Problem with no collide case");
@@ -105,7 +103,6 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw
 			if (INTERSECT(biter, bno, blksize)) {
 				size = ENDPOINT(biter, blksize) - (bno * blksize);
 				size = omin(size, MAXBCACHEBUF);
-				DEBUG2("Intersecting keys for bno %lu : %lu", bno, size);
 				covered  = size <= originalsize;
 				ITER_RELEASE(biter);
 				if (isaligned && covered && (rw == UIO_WRITE)) {
@@ -116,12 +113,10 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw
 					error = slsfs_bread(vp, bno, size, NULL, gbflag, bp);
 				}
 			} else {
-				DEBUG1("Key exists but not colliding %lu\n", size);
 				error = slsfs_buf_nocollide(vp, &biter, bno, size, rw, gbflag, bp);
 			}
 		} else {
 			ptr = ITER_VAL_T(biter, diskptr_t);
-			DEBUG1("Key exists reading size %lu\n", ptr.size);
 			size = omin(ptr.size, MAXBCACHEBUF);
 			covered  = size <= originalsize;
 			ITER_RELEASE(biter);
@@ -171,11 +166,6 @@ slsfs_balloc(struct vnode *vp, uint64_t lbn, size_t size, int gbflag, struct buf
 	struct buf *tempbuf = NULL;
 	int error = 0;
 	KASSERT(size % IOSIZE(SLSVP(vp)) == 0, ("Multiple of iosize"));
-	/* Actually allocate the block in the buffer cache. */
-	if (vp->v_object == NULL) {
-		MPASS((gbflag & GB_UNMAPPED) == 0);
-	}
-
 	/* Currently a hack (maybe not)  since this is the only inode we use 
 	 * VOP_WRITES for that is also a system node, we need to make sure that 
 	 * is only reads in its actual blocksize, if our first read is 64kb and 
@@ -212,7 +202,9 @@ slsfs_bread(struct vnode *vp, uint64_t lbn, size_t size, struct ucred *cred, int
 {
 	int error;
 
+#ifdef VERBOSE
 	DEBUG3("Reading block at %lx of size %lu for node %p", lbn, size, vp);
+#endif
 	error = breadn_flags(vp, lbn, size, NULL, NULL, 0, curthread->td_ucred, flags,
 		NULL, buf);
 	if (error != 0)

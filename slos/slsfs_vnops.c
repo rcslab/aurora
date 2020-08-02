@@ -57,7 +57,7 @@ slsfs_getattr(struct vop_getattr_args *args)
 	struct vnode *vp = args->a_vp;
 	struct vattr *vap = args->a_vap;
 	struct slos_node *slsvp = SLSVP(vp);
-	DEBUG2("getattr on vnode %lu %d", slsvp->sn_pid, slsvp->sn_ino.ino_mode);
+	DEBUG1("getattr on vnode %lu", slsvp->sn_pid);
 
 	VATTR_NULL(vap);
 	vap->va_type = IFTOVT(slsvp->sn_ino.ino_mode);
@@ -160,8 +160,8 @@ slsfs_mkdir(struct vop_mkdir_args *args)
 	SLSVP(dvp)->sn_ino.ino_nlink++;
 	SLSVP(dvp)->sn_ino.ino_flags |= IN_CHANGE;
 	SLSVP(dvp)->sn_status |= SLOS_DIRTY;
-
 	DEBUG2("Initing Directory named %s - %lu", name->cn_nameptr, SLSVP(vp)->sn_ino.ino_nlink);
+
 	*vpp = vp;
 
 	return (0);
@@ -306,9 +306,10 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 	islastcn = cnp->cn_flags & ISLASTCN;
 
 	/* Self directory - Must just increase reference count of dir */
+	DEBUG1("SLSFS Lookup called %x", cnp->cn_flags);
 	if((namelen == 1) && (name[0] == '.')) {
-		VREF(dvp);
 		*vpp = dvp;
+		VREF(dvp);
 		/* Check another case of the ".." directory */
 	} else if (cnp->cn_flags & ISDOTDOT){
 		struct componentname tmp;
@@ -324,7 +325,6 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 			*vpp = vp;
 		}
 	} else {
-		DEBUG("Looking up file");
 		error = slsfs_lookup_name(dvp, cnp, &dir);
 		if (error == EINVAL) {
 			error = ENOENT;
@@ -343,7 +343,7 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 			/* Cases for when name is found, others to be filled in 
 			 * later */
 			if ((nameiop == DELETE) && islastcn) {
-				DEBUG1("Delete of file %s", cnp->cn_nameptr);
+				DEBUG("Delete of file");
 				error = SLS_VGET(dvp, dir.d_fileno, 
 				    LK_EXCLUSIVE, &vp);
 				if (!error) {
@@ -351,7 +351,7 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 					*vpp = vp;
 				}
 			} else {
-				DEBUG1("Lookup of file %s", cnp->cn_nameptr);
+				DEBUG1("Lookup of file dvp_usecount(%lu)", dvp->v_usecount);
 				error = SLS_VGET(dvp, dir.d_fileno, 
 				    LK_EXCLUSIVE, &vp);
 				if (!error) {
@@ -420,11 +420,9 @@ slsfs_rmdir(struct vop_rmdir_args *args)
 	svp->sn_ino.ino_nlink -= 1;
 	KASSERT(svp->sn_ino.ino_nlink == 0, ("Problem with ino links - %lu", svp->sn_ino.ino_nlink));
 	svp->sn_ino.ino_flags |= IN_CHANGE;
-	cache_purge(vp);
 	DEBUG("Removing directory done");
 
 	return (0);
-
 }
 
 static int
@@ -848,8 +846,9 @@ slsfs_strategy(struct vop_strategy_args *args)
 	struct buf *bp = args->a_bp;
 	struct vnode *vp = args->a_vp;
 	struct fnode_iter iter;
-
-	DEBUG2("slsfs_strategy vp=%p blkno=%x", vp, bp->b_lblkno);
+#ifdef VERBOSE
+	DEBUG2("vp=%p blkno=%x", vp, bp->b_lblkno);
+#endif
 	if (vp->v_type != VCHR) {
 		KASSERT(bp->b_lblkno != EPOCH_INVAL, 
 			("No logical block number should be -1 - vnode effect %lu", 
@@ -932,16 +931,14 @@ slsfs_strategy(struct vop_strategy_args *args)
 	int change =  bp->b_bufobj->bo_bsize / slos.slos_vp->v_bufobj.bo_bsize;
 	bp->b_blkno = bp->b_blkno * change;
 	bp->b_iooffset = dbtob(bp->b_blkno);
-	if (bp->b_fsprivate2 == NULL) {
-		DEBUG("bp_type(data)");
-	} else {
-		DEBUG("bp_type(fnode)");
-	}
+
+#ifdef VERBOSE
 	if (bp->b_iocmd == BIO_WRITE) {
-		DEBUG5("bio_write: bp(%p), vp(%lu) - %lu:%lu, %lu", bp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno, bp->b_iooffset);
+		DEBUG4("bio_write: bp(%p), vp(%lu) - %lu:%lu", bp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno);
 	} else {
-		DEBUG5("bio_read: bp(%p), vp(%lu) - %lu:%lu, %lu", bp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno, bp->b_iooffset);
+		DEBUG4("bio_read: bp(%p), vp(%lu) - %lu:%lu", bp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno);
 	}
+#endif
 
 	g_vfs_strategy(&slos.slos_vp->v_bufobj, bp);
 	if (checksum_enabled) {
@@ -1237,7 +1234,6 @@ slsfs_checkpath(struct vnode *src, struct vnode *target, struct ucred *cred)
 	}
 out:
 	if (target != NULL) {
-		DEBUG("Vputing target path");
 		vput(target);
 	}
 	return (error);
@@ -1264,8 +1260,7 @@ slsfs_rename(struct vop_rename_args *args)
 
 	mode_t mode = svp->sn_ino.ino_mode;
 
-	DEBUG2("Rename or move from %s to %s", fname->cn_nameptr, 
-	    tname->cn_nameptr);
+	DEBUG("Rename or move");
 	// Following nandfs example here -- cross device renaming
 	if ((fvp->v_mount != tdvp->v_mount) || (tvp && (fvp->v_mount != 
 	    tvp->v_mount))) {
@@ -1345,6 +1340,7 @@ abort:
 	}
 
 	if (tvp == NULL) {
+		DEBUG("tvp is null, directory doens't exist");
 		if (isdir && fdvp != tdvp) {
 			tdnode->sn_ino.ino_nlink++;
 		}
@@ -1360,9 +1356,9 @@ abort:
 		}
 
 		slos_update(tdnode);
-
 		vput(tdvp);
 	} else {
+		DEBUG("!null tdvp");
 		if ((tdnode->sn_ino.ino_mode & S_ISTXT) &&
 			tname->cn_cred->cr_uid != 0 &&
 			tname->cn_cred->cr_uid != tdnode->sn_ino.ino_uid &&
@@ -1409,9 +1405,9 @@ abort:
 	fname->cn_flags &= ~MODMASK;
 	fname->cn_flags |= LOCKPARENT | LOCKLEAF;
 	VREF(fdvp);
-
 	error = relookup(fdvp, &fvp, fname);
-	if (error) {
+	DEBUG2("fdvp usecount++ %p %lu", fdvp, fdvp->v_usecount);
+	if (error == 0) {
 		vrele(fdvp);
 	}
 
@@ -1425,6 +1421,7 @@ abort:
 		}
 		DEBUG("fvp == NULL");
 		vrele(args->a_fvp);
+		vrele(fdvp);
 		return (0);
 	}
 
@@ -1434,12 +1431,17 @@ abort:
 			panic("lost dir");
 		}
 	} else {
-		DEBUG("fnode1 == svp");
 		if (isdir && newparent) {
 			DEBUG("isdir && newparent");
 		}
 		DEBUG("Removing dirent");
 		error = slsfs_unlink_dir(fdvp, fvp, fname);
+		if (error) {
+			panic("Problem unlinking directory");
+		} else {
+			sdvp->sn_ino.ino_nlink--;
+			sdvp->sn_ino.ino_flags |= IN_CHANGE;
+		}
 		svp->sn_ino.ino_flags &= ~IN_RENAME;
 	}
 
@@ -1451,6 +1453,7 @@ abort:
 		vput(fvp);
 	}
 
+	DEBUG("usecount-- fvp");
 	vrele(args->a_fvp);
 
 	return (error);
@@ -1603,7 +1606,10 @@ slsfs_symlink(struct vop_symlink_args *ap)
 	struct componentname *cnp = ap->a_cnp;
 	struct vnode *vp;
 
-	SLS_VALLOC(dvp, mode | S_IFLNK, cnp->cn_cred, &vp);
+	error = SLS_VALLOC(dvp, mode | S_IFLNK, cnp->cn_cred, &vp);
+	if (error) {
+		return (error);
+	}
 
 	error = slsfs_add_dirent(dvp, SLSVP(vp)->sn_pid, cnp->cn_nameptr, 
 	    cnp->cn_namelen, IFTODT(mode));

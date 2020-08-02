@@ -132,7 +132,7 @@ slos_iread(struct slos *slos, uint64_t blkno, struct slos_inode **inop)
 	 * something that's not an inode. 
 	 */
 	if (ino->ino_magic != SLOS_IMAGIC) {
-		printf("%lu pid\n", ino->ino_pid);
+		DEBUG1("%lu pid", ino->ino_pid);
 		free(ino, M_SLOS_INO);
 		return EINVAL;
 	}
@@ -240,7 +240,7 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 
 	/* Read the inode from disk. */
 
-	DEBUG("Creating slos_node in memory\n");
+	DEBUG("Creating slos_node in memory");
 	vp = uma_zalloc(slos_node_zone, M_WAITOK);
 	ino = &vp->sn_ino;
 
@@ -345,7 +345,7 @@ slos_icreate(struct slos *slos, uint64_t pid, mode_t mode)
 		ITER_RELEASE(iter);
 	} else {
 		ITER_RELEASE(iter);
-		DEBUG1("Failed to create inode %lx\n", pid);
+		DEBUG1("Failed to create inode %lu", pid);
 		return EINVAL;
 	}
 
@@ -379,7 +379,7 @@ slos_icreate(struct slos *slos, uint64_t pid, mode_t mode)
 
 	// We will use this private pointer as a way to change this ino with 
 	// the proper ino blk number when it syncs
-        DEBUG1("Created inode %lx\n", pid);
+        DEBUG1("Created inode %lu", pid);
 
 	return (0);
 }
@@ -452,7 +452,7 @@ slos_iopen(struct slos *slos, uint64_t pid)
 	struct slos_node *vp = NULL;
 	struct buf *bp;
 
-	DEBUG1("Opening Inode %lx\n", pid);
+	DEBUG1("Opening Inode %lu", pid);
 
 	/*
 	 * We should not hold this essentially global lock in this object. We 
@@ -486,7 +486,7 @@ slos_iopen(struct slos *slos, uint64_t pid)
 		vp->sn_ino.ino_blk = 0;
 	}
 
-	DEBUG1("Opened Inode %lx\n", pid);
+	DEBUG1("Opened Inode %lx", pid);
 
 	return (vp); 
 }

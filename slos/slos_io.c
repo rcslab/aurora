@@ -398,7 +398,7 @@ slos_sbread(struct slos * slos)
 	int error;
 	
 	uint64_t largestepoch_i = 0;
-	uint64_t largestepoch = EPOCH_INVAL;
+	uint64_t largestepoch = 0;
 
 	/* If we're backed by a file, just call VOP_READ. */
 	if (slos->slos_vp->v_type == VREG) {
@@ -446,6 +446,7 @@ slos_sbread(struct slos * slos)
 			break;
 		}
 
+		DEBUG2("Superblock at %lu is epoch %d", i, sb->sb_epoch);
 		if (sb->sb_epoch > largestepoch) {
 			largestepoch = sb->sb_epoch;
 			largestepoch_i = i;
@@ -463,6 +464,9 @@ slos_sbread(struct slos * slos)
 	} 
 
 	DEBUG1("Largest superblock at %lu", largestepoch_i);
+	DEBUG1("Checksum tree at %lu", sb->sb_cksumtree.offset);
+	DEBUG1("Inodes File at %lu", sb->sb_root.offset);
+
 	/* Make the superblock visible to the struct. */
 	MPASS(sb->sb_index == largestepoch_i);
 	return 0;

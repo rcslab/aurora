@@ -240,7 +240,6 @@ fnode_getbufptr(struct fbtree *tree, bnode_ptr ptr, struct buf **bp)
 
 	struct slos *slos =((struct slos_node*)tree->bt_backend->v_data)->sn_slos;
 
-	DEBUG2("fnode_getbufptr vp=%p ptr=%d", tree->bt_backend, ptr);
 	KASSERT(ptr != 0, ("Should never be 0"));
 	error = bread(tree->bt_backend, ptr, BLKSIZE(slos), curthread->td_ucred, &buf);
 	if (error) {
@@ -1993,7 +1992,9 @@ fnode_init(struct fbtree *tree, bnode_ptr ptr, struct fnode **fn)
 		node = *fn;
 	}
 
-	CTR2(KTR_SPARE5, "fnode_init vp=%p ptr=%lu", tree->bt_backend, ptr);
+#ifdef VERBOSE
+	DEBUG2("fnode_init vp=%p ptr=%lu", tree->bt_backend, ptr);
+#endif
 	/* Read the data from the disk into the buffer cache. */
 	error = fnode_getbufptr(tree, ptr, &node->fn_buf);
 	if (error) {
