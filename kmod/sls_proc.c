@@ -106,6 +106,27 @@ sls_thread_create(struct thread *td, void *thunk)
 
 	td->td_frame->tf_err = slsthread->tf_err;
 
+	CTR3(KTR_SLS, "%s:%d: Restoring thread %d", __FILE__, __LINE__, td->td_tid);
+	CTR4(KTR_SLS, "rax 0x%lx rbx 0x%lx rcx 0x%lx rdx 0x%lx",
+	    td->td_frame->tf_rax, td->td_frame->tf_rbx,
+	    td->td_frame->tf_rcx, td->td_frame->tf_rdx);
+	CTR4(KTR_SLS, "rdi 0x%lx rsi 0x%lx rip 0x%lx rflags 0x%lx",
+	    td->td_frame->tf_rdi, td->td_frame->tf_rsi,
+	    td->td_frame->tf_rip, td->td_frame->tf_rflags);
+	CTR4(KTR_SLS, "r8 0x%lx r9 0x%lx r10 0x%lx r11 0x%lx",
+	    td->td_frame->tf_r8, td->td_frame->tf_r9,
+	    td->td_frame->tf_r10, td->td_frame->tf_r11);
+	CTR4(KTR_SLS, "r12 0x%lx r13 0x%lx r14 0x%lx r15 0x%lx",
+	    td->td_frame->tf_r12, td->td_frame->tf_r13,
+	    td->td_frame->tf_r14, td->td_frame->tf_r15);
+	CTR4(KTR_SLS, "cs 0x%x ds 0x%x es 0x%x ss 0x%x",
+	    td->td_frame->tf_cs, td->td_frame->tf_ds,
+	    td->td_frame->tf_es, td->td_frame->tf_ss);
+	CTR6(KTR_SLS, "rsp 0x%lx err 0x%lx addr 0x%lx trapno 0x%x flags 0x%x fs 0x%x",
+	    td->td_frame->tf_rsp, td->td_frame->tf_err,
+	    td->td_frame->tf_addr, td->td_frame->tf_trapno,
+	    td->td_frame->tf_flags, td->td_frame->tf_fs);
+
 done:
 
 	PROC_UNLOCK(td->td_proc);
@@ -119,7 +140,7 @@ slsrest_thread(struct proc *p, struct slsthread *slsthread)
 	int error;
 
 	PROC_UNLOCK(p);
-	error = thread_create(curthread, NULL, sls_thread_create, 
+	error = thread_create(curthread, slsthread->tid, NULL, sls_thread_create,
 	    (void *) slsthread);
 	PROC_LOCK(p);
 

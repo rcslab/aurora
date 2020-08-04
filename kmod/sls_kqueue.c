@@ -335,7 +335,7 @@ slsrest_kq_sockhack(struct proc *p, struct kqueue *kq)
 			}
 			kn->kn_flags |= EV_ERROR;
 			kn->kn_data = ECONNRESET;
-			CTR6(KTR_SLS, "%s:%d: Restoring knote ident = %d, filter = %d"
+			CTR6(KTR_SLS, "%s:%d: Restoring knote ident = %d, filter = %d "
 				"flags = 0x%x status = 0x%x",
 				__FILE__, __LINE__, kn->kn_id, kn->kn_filter,
 				kn->kn_flags, kn->kn_status);
