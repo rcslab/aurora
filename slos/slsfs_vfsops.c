@@ -66,7 +66,7 @@ struct unrhdr *slsid_unr;
 
 // sysctl variables
 static struct sysctl_ctx_list slsfs_list;
-int checksum_enabled = 0;
+int checksum_enabled = 1;
 
 struct slsfs_taskctx {
 	struct task tk;
@@ -1104,6 +1104,7 @@ slsfs_init_fs(struct mount *mp)
 		slsfs_init_dir(vp, vp, NULL);
 		struct vnode *svp;
 		error = VOP_MKDIR(vp, &svp, &name, &attr);
+		MPASS(SLSVP(svp)->sn_ino.ino_nlink == 2);
 		MPASS(error == 0);
 		MPASS(svp != NULL);
 		VOP_RMDIR(vp, svp, &name);

@@ -39,7 +39,9 @@ tools/newosd/newosd
 tools/newfs/newfs
 tools/slsctl/slsctl
 tools/slsdb/slsdb
+tools/fsdb/fsdb
 
+test.sh
 load.sh
 unload.sh
 sls.sh

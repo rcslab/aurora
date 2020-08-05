@@ -125,18 +125,11 @@ int
 slsfs_remove_node(struct vnode *dvp, struct vnode *vp, struct componentname *name)
 {
 	int error;
-	struct slos_node *svp = SLSVP(vp);
 
 	/* If the vnode is reachable from the root mount, unlink it. */
 	error = slsfs_unlink_dir(dvp, vp, name);
 	if (error != 0) {
 		return error;
-	}
-
-	if (--SLSVP(vp)->sn_ino.ino_nlink == 0) {
-		/* Mark the node as dead. It will be cleaned up automatically. 
-		 * */
-		svp->sn_status = SLOS_VDEAD;
 	}
 
 	return (0);
@@ -185,6 +178,8 @@ slsfs_truncate(struct vnode *vp, size_t size)
 		svp->sn_ino.ino_size = size;
 		vnode_pager_setsize(vp, svp->sn_ino.ino_size);
 	} else {
+		// Maybe we should jsut set the size anyway for now?
+		// svp->sn_ino.ino_size = size;
 		return ENOSYS;
 	}
 

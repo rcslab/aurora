@@ -186,6 +186,7 @@ slsfs_allocator_init(struct slos *slos)
 	 * we used on disk (just the superblock array) we just take that offset 
 	 * and bump it to allocate.
 	 */
+	
 	size_t offset = ((NUMSBS * slos->slos_sb->sb_ssize) / slos->slos_sb->sb_bsize) + 1;
 	// Checksum tree is allocated first.
 	offset += 2;

@@ -113,6 +113,7 @@ slsfs_init_dir(struct vnode *dvp, struct vnode *vp, struct componentname *name)
 		    SVINUM(svp), name->cn_nameptr, name->cn_namelen, DT_DIR);
 	}
 	SLSVP(vp)->sn_ino.ino_nlink = 2;
+	SLSVP(vp)->sn_ino.ino_flags |= IN_CHANGE;
 	slos_update(SLSVP(vp));
 
 	return (error);
@@ -316,4 +317,17 @@ int
 slsfs_dirempty(struct vnode *dvp)
 {
 	return slsfs_lookup_name(dvp, NULL, NULL);
+}
+
+
+void inline
+slsfs_declink(struct vnode *vp) 
+{
+	DEBUG1("Declink on %p", vp);
+	MPASS(SLSVP(vp)->sn_ino.ino_nlink != 0);
+	SLSVP(vp)->sn_ino.ino_nlink--;
+	SLSVP(vp)->sn_ino.ino_flags |= IN_CHANGE;
+	if ((SLSVP(vp)->sn_ino.ino_nlink) == 0) {
+		SLSVP(vp)->sn_status |= SLOS_DIRTY | SLOS_VDEAD;
+	}
 }

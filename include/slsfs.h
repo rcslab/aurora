@@ -20,7 +20,7 @@ struct fbtree;
 
 #define TOSMP(mp) ((struct slsfsmount *)(mp->mnt_data))
 #define MPTOSLOS(mp) ((TOSMP(mp)->sp_slos))
-#define SLSVP(vp) ((struct slos_node *)(vp->v_data))
+#define SLSVP(vp) ((struct slos_node *)((vp)->v_data))
 #define SLSVPSIZ(vp) (SLSINO(vp).ino_size)
 #define SLSINO(svp) ((svp)->sn_ino)
 #define	VPSLOS(vp) (SLSVP(vp)->sn_slos)

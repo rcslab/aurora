@@ -162,6 +162,9 @@ slsfs_mkdir(struct vop_mkdir_args *args)
 	SLSVP(dvp)->sn_status |= SLOS_DIRTY;
 	DEBUG2("Initing Directory named %s - %lu", name->cn_nameptr, SLSVP(vp)->sn_ino.ino_nlink);
 
+	MPASS(SLSVP(dvp)->sn_ino.ino_nlink >= 3);
+	MPASS(SLSVP(vp)->sn_ino.ino_nlink == 2);
+
 	*vpp = vp;
 
 	return (0);
@@ -383,6 +386,7 @@ slsfs_rmdir(struct vop_rmdir_args *args)
 
 	struct slos_node *svp = SLSVP(vp);
 
+	MPASS(svp->sn_ino.ino_nlink == 2);
 
 	if (svp->sn_ino.ino_nlink < 2) {
 		return (EINVAL);
@@ -407,9 +411,9 @@ slsfs_rmdir(struct vop_rmdir_args *args)
 		return (error);
 	}
 
-	SLSVP(dvp)->sn_ino.ino_nlink -= 1;
-	SLSVP(dvp)->sn_ino.ino_flags |= IN_CHANGE;
-	slos_update(SLSVP(dvp));
+	MPASS(SLSVP(dvp)->sn_ino.ino_nlink >= 3);
+	slsfs_declink(dvp);
+	SLSVP(dvp)->sn_status |= SLOS_DIRTY;
 	cache_purge(dvp);
 
 	error = slsfs_truncate(vp, 0);
@@ -417,9 +421,10 @@ slsfs_rmdir(struct vop_rmdir_args *args)
 		return (error);
 	}
 
-	svp->sn_ino.ino_nlink -= 1;
-	KASSERT(svp->sn_ino.ino_nlink == 0, ("Problem with ino links - %lu", svp->sn_ino.ino_nlink));
+	svp->sn_ino.ino_nlink -= 2; 
 	svp->sn_ino.ino_flags |= IN_CHANGE;
+	svp->sn_status |= SLOS_DIRTY | SLOS_VDEAD;
+	KASSERT(svp->sn_ino.ino_nlink == 0, ("Problem with ino links - %lu", svp->sn_ino.ino_nlink));
 	DEBUG("Removing directory done");
 
 	return (0);
@@ -428,7 +433,6 @@ slsfs_rmdir(struct vop_rmdir_args *args)
 static int
 slsfs_create(struct vop_create_args *args)
 {
-	DEBUG("Creating file");
 	struct vnode *dvp = args->a_dvp;
 	struct vnode **vpp = args->a_vpp;
 	struct componentname *name = args->a_cnp;
@@ -442,6 +446,7 @@ slsfs_create(struct vop_create_args *args)
 
 	}
 	mode_t mode = MAKEIMODE(vap->va_type, vap->va_mode);
+	DEBUG1("Creating file %u", mode);
 	error = SLS_VALLOC(dvp, mode, name->cn_cred, &vp);
 	if (error) {
 		*vpp = NULL;
@@ -489,8 +494,9 @@ slsfs_remove(struct vop_remove_args *args)
 		return (error);
 	}
 
-	SLSVP(vp)->sn_ino.ino_nlink -= 1;
-	SLSVP(vp)->sn_ino.ino_flags |= IN_CHANGE;
+	slsfs_declink(vp);
+	SLSVP(dvp)->sn_status |= SLOS_DIRTY;
+	SLSVP(vp)->sn_status |= SLOS_DIRTY;
 
 	return (0);
 }
@@ -770,7 +776,6 @@ slsfs_check_cksum(struct buf *bp)
 
 		if (check != cksum) {
 			printf("%lu, %lu, %lu", blk, cksize, bp->b_bcount);
-			panic("What");
 			return EINVAL;
 		}
 	}
@@ -1281,13 +1286,27 @@ abort:
 		return (error);
 	}
 
+	if (tvp && ((SLSVP(tvp)->sn_ino.ino_flags & (NOUNLINK | IMMUTABLE | APPEND)) ||
+		(SLSVP(tdvp)->sn_ino.ino_flags & APPEND))) {
+		error = EPERM;
+		goto abort;
+	}
+
 	if (fvp == tvp) {
 		error = 0;
+		DEBUG("Cannot rename a file to itself");
 		goto abort;
 		vput(tvp);
 	}
 
 	if ((error = vn_lock(fvp, LK_EXCLUSIVE)) != 0) {
+		goto abort;
+	}
+
+	if ((SLSVP(fvp)->sn_ino.ino_flags & (NOUNLINK | IMMUTABLE | APPEND)) ||
+	    (SLSVP(fdvp)->sn_ino.ino_flags & APPEND)) {
+		VOP_UNLOCK(fvp, 0);
+		error = EPERM;
 		goto abort;
 	}
 
@@ -1314,7 +1333,9 @@ abort:
 		tnode = SLSVP(tvp);
 	}
 
-	// Check parents
+	SLSVP(fvp)->sn_ino.ino_nlink++;
+
+	error = VOP_ACCESS(fvp, VWRITE, tname->cn_cred, tname->cn_thread);
 	VOP_UNLOCK(fvp, 0);
 	if (oldparent != tdnode->sn_pid) {
 		newparent = tdnode->sn_pid;
@@ -1322,10 +1343,14 @@ abort:
 
 	if (isdir && newparent) {
 		DEBUG("Checking if directory doens't exist within path");
+		if (error) {
+			goto bad;
+		}
 		error = slsfs_checkpath(fvp, tdvp, tname->cn_cred);
 		if (error) {
 			goto bad;
 		}
+
 		VREF(tdvp);
 		error = relookup(tdvp, &tvp, tname);
 		if (error) {
@@ -1350,7 +1375,7 @@ abort:
 		    tname->cn_namelen, IFTODT(svp->sn_ino.ino_mode));
 		if (error) {
 			if (isdir && fdvp != tdvp) {
-				tdnode->sn_ino.ino_nlink--;
+				slsfs_declink(tdvp);
 			}
 			goto bad;
 		}
@@ -1393,11 +1418,12 @@ abort:
 		}
 
 		if (isdir && !newparent) {
-			tdnode->sn_ino.ino_nlink--;
+			MPASS(tdnode->sn_ino.ino_nlink != 0);
+			slsfs_declink(tdvp);
 		}
 
 		vput(tdvp);
-		tnode->sn_ino.ino_nlink--;
+		slsfs_declink(tvp);
 		vput(tvp);
 		tnode = NULL;
 	} 
@@ -1405,8 +1431,8 @@ abort:
 	fname->cn_flags &= ~MODMASK;
 	fname->cn_flags |= LOCKPARENT | LOCKLEAF;
 	VREF(fdvp);
+	KASSERT(SLSVP(fdvp)->sn_ino.ino_nlink >= 2, ("Problem with link number %p", fdvp));
 	error = relookup(fdvp, &fvp, fname);
-	DEBUG2("fdvp usecount++ %p %lu", fdvp, fdvp->v_usecount);
 	if (error == 0) {
 		vrele(fdvp);
 	}
@@ -1433,14 +1459,14 @@ abort:
 	} else {
 		if (isdir && newparent) {
 			DEBUG("isdir && newparent");
+			slsfs_declink(fdvp);
 		}
 		DEBUG("Removing dirent");
 		error = slsfs_unlink_dir(fdvp, fvp, fname);
 		if (error) {
 			panic("Problem unlinking directory");
 		} else {
-			sdvp->sn_ino.ino_nlink--;
-			sdvp->sn_ino.ino_flags |= IN_CHANGE;
+			slsfs_declink(fvp);
 		}
 		svp->sn_ino.ino_flags &= ~IN_RENAME;
 	}
@@ -1456,6 +1482,8 @@ abort:
 	DEBUG("usecount-- fvp");
 	vrele(args->a_fvp);
 
+	KASSERT(SLSVP(fdvp)->sn_ino.ino_nlink >= 2, ("Problem with link number after %p", fdvp));
+
 	return (error);
 bad:
 	if (tnode) {
@@ -1468,13 +1496,15 @@ bad:
 		svp->sn_status &= ~IN_RENAME;
 	}
 	if (vn_lock(fvp, LK_EXCLUSIVE) == 0) {
-		svp->sn_ino.ino_nlink--;
-		svp->sn_ino.ino_flags |= IN_CHANGE;
+		MPASS(svp->sn_ino.ino_nlink != 0);
+		slsfs_declink(fvp);
 		svp->sn_ino.ino_flags &= ~IN_RENAME;
 		vput(fvp);
 	} else {
 		vrele(fvp);
 	}
+
+	KASSERT(SLSVP(fdvp)->sn_ino.ino_nlink >= 2, ("Problem with link number after bad %p", fdvp));
 
 	return (error);
 }
@@ -1646,10 +1676,15 @@ slsfs_link(struct vop_link_args *ap)
 	struct vnode *vp = ap->a_vp;
 	struct componentname *cnp = ap->a_cnp;
 
+	DEBUG1("Linking file %p", vp);
+
 	error = slsfs_add_dirent(tdvp, SLSVP(vp)->sn_pid, cnp->cn_nameptr,
 	    cnp->cn_namelen, IFTODT(SLSVP(vp)->sn_ino.ino_mode));
-
+	if (error) {
+		panic("Problem linking");
+	}
 	SLSVP(vp)->sn_ino.ino_nlink++;
+	SLSVP(vp)->sn_ino.ino_flags |= IN_CHANGE;
 	slos_update(SLSVP(vp));
 
 	return (error);

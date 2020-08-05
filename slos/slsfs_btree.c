@@ -36,19 +36,6 @@
 
 uma_zone_t fnode_zone;
 
-__always_inline int 
-NODE_MAX(struct fnode *node) 
-{
-	if (NODE_TYPE(node) == BT_INTERNAL) {
-		return MAX_NUM_INTERNAL(node);
-	} else if (NODE_TYPE(node) == BT_BUCKET) {
-		// Last value is the next pointer
-		return MAX_NUM_BUCKET(node) - 1;
-	} else {
-		return MAX_NUM_EXTERNAL(node);
-	}
-}
-
 static void
 fbtree_execrc(struct fbtree *tree)
 {

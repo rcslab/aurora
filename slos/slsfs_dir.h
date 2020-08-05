@@ -17,3 +17,5 @@ int slsfs_dirempty(struct vnode *vp);
 int slsfs_update_dirent(struct vnode *tdvp, 
     struct vnode *fvp, struct vnode *tvp);
 
+void slsfs_declink(struct vnode *vp);
+
