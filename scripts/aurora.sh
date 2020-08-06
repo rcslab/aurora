@@ -77,7 +77,7 @@ function slsckpt {
     then
 	DELTACONF="-d"
     else
-	DELTACONF=""
+	DELTACONF=" "
     fi
 
     echo "BACKEND,$BACKEND" >> "$CONFFILE"

@@ -51,6 +51,7 @@ struct slsthread {
 	sigset_t oldsigmask;
 	uint64_t fs_base;
 	uint64_t tf_err;
+	uint64_t tf_trapno;
 };
 
 /* State of the vmspace, but also of its vm_map */

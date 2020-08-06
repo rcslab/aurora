@@ -409,13 +409,21 @@ slsfs_bdone(struct buf *bp)
 	struct slsfs_taskctx *ctx;
 
 	/* Free the reference to the object taken at the beginning of the IO. */
+	MPASS(bp != NULL);
+	DEBUG4("%s:%d: buf 0x%p has %d pages\n", __FILE__, __LINE__,  bp, bp->b_npages);
+	KASSERT(bp->b_npages > 0, ("no pages in buffer 0x%p before bdone", bp));
 	bdone(bp);
 
 	/*
 	 * We cannot call vm_object_deallocate() from an interrupt context, so
 	 * we create a task for that.
 	 */
+	KASSERT(bp->b_npages > 0, ("no pages in buffer 0x%p after bdone", bp));
+	KASSERT(bp->b_pages[0] != 0, ("invalid page address 0x%p", bp->b_pages[0]));
+	DEBUG3("%s:%d: Adding a task for buf 0x%p", __FILE__, __LINE__, bp);
+	DEBUG3("%s:%d: Getting an object from page 0x%p\n", __FILE__, __LINE__, bp->b_pages[0]);
 	ctx = slsfs_createtask(NULL, bp->b_pages[0]->object, NULL, 0, 0, 0);
+	free(bp, M_SLOS);
 	TASK_INIT(&ctx->tk, 0, &slsfs_obj_deallocate, ctx);
 	taskqueue_enqueue(slos.slos_tq, &ctx->tk);
 }
@@ -432,11 +440,41 @@ slsfs_performio(void *ctx, int pending)
 	struct slos_inode *sivp = &SLSINO(svp);
 	struct fbtree *tree = &svp->sn_tree;
 	int iotype = task->iotype;
+	vm_object_t obj = task->obj;
 	vm_pindex_t size; 
 	size_t offset;
 	int i;
 
 	KASSERT(iotype == BIO_READ || iotype == BIO_WRITE, ("invalid IO type %d", iotype));
+
+	bp = malloc(sizeof(*bp), M_SLOS, M_WAITOK);
+	size = 0;
+	start = task->startpage;
+
+	KASSERT((task->size / PAGE_SIZE) < btoc(MAXPHYS), ("IO too large"));
+	i = 0;
+	TAILQ_FOREACH_FROM(start, &obj->memq, listq) {
+		/*  We are done grabbing pages. */
+		KASSERT(i < btoc(MAXPHYS), ("overran b_pages[] array"));
+		bp->b_pages[i++] = start;
+		size += pagesizes[start->psind];
+		if (size == task->size) {
+			break;
+		}
+	}
+
+	/* If the IO would be empty, this function is a no-op.*/
+	if (i == 0) {
+		free(bp, M_SLOS);
+		return;
+	}
+
+
+	KASSERT(i > 0, ("object %p is has no pages to dump", obj));
+
+	/* Get a reference to the object, freed when the buffer is done.  */
+	vm_object_reference(obj);
+
 	/* 
 	 * We can do the merging of keys and all the functionality here.  I'm 
 	 * sure this code could be cleaned up but for readability separating all 
@@ -454,31 +492,14 @@ slsfs_performio(void *ctx, int pending)
 
 	}
 
-	bp = malloc(sizeof(struct buf), M_SLOS, M_WAITOK);
-	size = 0;
-	start = task->startpage;
-
-	i = 0;
-	TAILQ_FOREACH_FROM(start, &task->obj->memq, listq) {
-		// We are done grabbing pages;
-		bp->b_pages[i] = start;
-		size += pagesizes[start->psind];
-		if (size == task->size) {
-			break;
-		}
-		i++;
-	}
-
-	/* Now that the btree is edited we must create the buffer to perform the 
-	 * write
-	 */
-
-	bp->b_npages = i + 1;
+	/* Now that the btree is edited we create the buffer for the write. */
+	bp->b_npages = i;
 	bp->b_pgbefore = 0;
 	bp->b_pgafter = 0;
 	bp->b_offset = 0;
 	bp->b_data = unmapped_buf;
 	bp->b_offset = 0;
+	DEBUG4( "%s:%d: buf %p has %d pages", __FILE__, __LINE__, bp, bp->b_npages);
 
 	bytecount = bp->b_npages << PAGE_SHIFT;
 	offset = IDX_TO_OFF(task->startpage->pindex + 1);
@@ -499,20 +520,13 @@ slsfs_performio(void *ctx, int pending)
 	bp->b_lblkno = task->startpage->pindex + 1;
 	bp->b_flags |= B_MANAGED;
 
+	KASSERT(bp->b_npages > 0, ("no pages in the IO"));
+
 	VOP_LOCK(task->vp, LK_SHARED);
 	bstrategy(bp);
 	VOP_UNLOCK(task->vp, LK_SHARED);
-	bwait(bp, PVM, "slsfs vm wait");
 
-	KASSERT(bp->b_npages > 0, ("no pages in the IO"));
-	for (int i = 0; i < bp->b_npages; i++) {
-		bp->b_pages[i] = NULL;
-	}
-
-	bp->b_vp = NULL;
-	bp->b_bufobj = NULL;
 	free(task, M_SLOS);
-	free(bp, M_SLOS);
 }
 
 static int
@@ -528,7 +542,6 @@ slsfs_io_async(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int i
 	ctx = slsfs_createtask(vp, obj, m, len, iotype, cb);
 	TASK_INIT(&ctx->tk, 0, &slsfs_performio, ctx);
 	DEBUG3("Creating task for vnode %p: page index %lu, size %lu", vp, m->pindex, len);
-	vm_object_reference(m->object);
 	taskqueue_enqueue(slos->slos_tq, &ctx->tk);
 
 	return (0);
@@ -545,7 +558,6 @@ slsfs_io(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int iotype)
 
 	ctx = slsfs_createtask(vp, obj, m, len, iotype, NULL);
 	KASSERT(len != 0, ("IO of size 0"));
-	vm_object_reference(m->object);
 	slsfs_performio(ctx, 0);
 
 	return (0);
