@@ -52,7 +52,7 @@ class BtreeNode {
 		BtreeIter<K, V> parent();
 		void print();
 
-		BtreeIter<K, V> keymin(K key);
+		BtreeIter<K, V> keymax(K key);
 
 		Btree<K, V> *btree;
 		struct fbtree tree;
@@ -71,7 +71,7 @@ class Btree {
 		Btree<K, V>(Snapshot *sb, long blknum) :
 		    snap(sb), blknum(blknum) {};
 
-		BtreeIter<K, V> keymin(K key);
+		BtreeIter<K, V> keymax(K key);
 		BtreeNode<K, V> getRoot();
 
 		Snapshot *snap;

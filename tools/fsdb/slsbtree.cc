@@ -277,31 +277,19 @@ BtreeNode<K,V>::BtreeNode(BtreeNode<K, V> *node)
 }
 
 template<typename K, typename V>
-BtreeIter<K, V> BtreeNode<K, V>::keymin(K key)
+BtreeIter<K, V> BtreeNode<K, V>::keymax(K key)
 {
 	K keyt;
-	int start, mid, end;
-	int index;
-	start = 0;
-	end = NODE_SIZE(&node);
-	while (start < end) {
-		mid = start + (end - start) / 2;
-		keyt = *(K *)fnode_getkey(&node, mid);
-		if (keyt <= key) {
-			start = mid + 1;
-		} else {
-			end = mid;
+	int i = 0;
+	for (i = 0; i < NODE_SIZE(&node); i++) {
+		keyt = *(K *)fnode_getkey(&node, i);
+		if (keyt >= key) {
+			break;
 		}
 	}
 
-	// -1 to find the last element <= key, or null if no such element
-	index = start - 1;
-	if (index == (-1)) {
-		return BtreeIter<K, V>();
-	}
-
 	auto node = new BtreeNode<K, V>(this);
-	return BtreeIter<K, V>(node, index);
+	return BtreeIter<K, V>(node, i);
 }
 
 
@@ -360,7 +348,7 @@ BtreeNode<K, V> Btree<K, V>::getRoot()
 
 
 template<typename K, typename V>
-BtreeIter<K, V> Btree<K, V>::keymin(K key)
+BtreeIter<K, V> Btree<K, V>::keymax(K key)
 {
 	auto root = getRoot();
 	if (root.failed()) {
@@ -373,7 +361,7 @@ BtreeIter<K, V> Btree<K, V>::keymin(K key)
 		return BtreeIter<K, V> {};
 	}
 
-	auto iter = node.keymin(key);
+	auto iter = node.keymax(key);
 
 	return iter;
 }

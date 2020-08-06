@@ -109,7 +109,7 @@ SDir::SDir(Snapshot *sb, slos_inode &i) : SFile(sb, i, SType::SDIR)
 std::ostream&
 SDir::out(std::ostream &where)
 {
-	auto iter = tree.keymin(0);
+	auto iter = tree.keymax(0);
 	size_t file_off = iter.key() * snap->super.sb_bsize;
 	size_t past_off = file_off;
 	char zeroes[512] =  {};
@@ -174,7 +174,7 @@ InodeFile::out(std::ostream &where)
 std::ostream&
 SReg::out(std::ostream &where)
 {
-	auto iter = tree.keymin(0);
+	auto iter = tree.keymax(0);
 	size_t file_off = iter.key() * snap->super.sb_bsize;
 	size_t past_off = file_off;
 	char zeroes[512] =  {};
@@ -248,7 +248,7 @@ InodeFile::availableInodes()
 {
 	std::vector<std::pair<uint64_t, diskptr_t>> arr;
 	auto root = tree.getRoot();
-	auto iter = tree.keymin(1);
+	auto iter = tree.keymax(0);
 	while (iter.valid()) {
 		arr.push_back(std::make_pair(iter.key(), iter.val()));
 		iter = iter.next();
