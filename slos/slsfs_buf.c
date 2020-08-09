@@ -86,7 +86,7 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw
 	DEBUG1("Attemping to retrieve buffer %lu bno", bno);
 	error = slsfs_lookupbln(svp, bno, &biter);
 	if (error) {
-		DEBUG("%d", error);
+		DEBUG1("%d", error);
 		return (error);
 	}
 	size = roundup(size, IOSIZE(svp));

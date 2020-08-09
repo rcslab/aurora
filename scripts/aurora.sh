@@ -6,7 +6,7 @@ SLSFS="$SLSDIR/tools/newfs/newfs"
 # SLS parameters
 OID="1000"
 BACKEND="slos"
-CKPTFREQ="5000"
+CKPTFREQ="1000"
 DELTA="no"
 RESTSTOP="yes"
 
@@ -87,7 +87,7 @@ function slsckpt {
     #dtrace -s "$DTRACE" > "$DTRACEFILE" &
 
     # Start checkpointing.
-    "$SLSCTL" partadd -o "$OID" -b "$BACKEND" -t "$CKPTFREQ" "$DELTACONF"
+    "$SLSCTL" partadd -o "$OID" -b "$BACKEND" -t "$CKPTFREQ" 
     "$SLSCTL" attach -o "$OID" -p "$1"
     "$SLSCTL" checkpoint -o "$OID"
 }

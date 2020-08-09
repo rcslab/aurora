@@ -13,8 +13,8 @@
 struct fbtree;
 
 #define SLOS_INODES_ROOT (0)
-#define SLOS_ROOT_INODE (10000)
-#define SLOS_SYSTEM_MAX (10001)
+#define SLOS_ROOT_INODE (1)
+#define SLOS_SYSTEM_MAX (2)
 
 #define EPOCH_INVAL (UINT64_MAX)
 
@@ -76,6 +76,8 @@ struct slsfs_device {
 int slsfs_new_node(struct slos *slos, mode_t mode, uint64_t *oidp);
 int slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size);
 int vmobjecttest(struct slos *slos);
+
+struct buf;
 int slsfs_cksum(struct buf *bp);
 
 #define SLS_SEEK_EXTENT _IOWR('s', 1, struct uio *)

@@ -240,7 +240,8 @@ std::map<string, std::pair<cmd_t, string>> cmds = {
 static char *
 fsdb_prompt(EditLine *el)
 {
-	return ("fsdb> ");
+	static char prompt[] = "fsdb> ";
+	return (prompt);
 }
 
 HistEvent ev;

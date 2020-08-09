@@ -176,8 +176,8 @@ int fiter_remove(struct fnode_iter *it);
 void fiter_replace(struct fnode_iter *it, void *val);
 
 /* Helpers for the btree algorithm */
-__always_inline static int 
-NODE_MAX(struct fnode *node) 
+__always_inline static inline int
+NODE_MAX(struct fnode *node)
 {
 	if (NODE_TYPE(node) == BT_INTERNAL) {
 		return MAX_NUM_INTERNAL(node);
@@ -225,6 +225,10 @@ int fbtree_test(struct fbtree *tree);
 void fnode_print(struct fnode *node);
 void fnode_print_internal(struct fnode *node);
 void fnode_print_level(struct fnode *node);
+void fnode_print_left_neighbor(struct fnode *node);
+void fnode_print_neighbors(struct fnode *node);
 int slsfs_fbtree_test(void);
+
+extern int slsfs_btree_trace;
 
 #endif /* _FB_BTREE_H_ */

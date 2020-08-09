@@ -24,6 +24,7 @@
 #include <sys/stat.h>
 #include <sys/systm.h>
 #include <sys/syscallsubr.h>
+#include <sys/taskqueue.h>
 #include <sys/time.h>
 #include <sys/uio.h>
 
@@ -198,7 +199,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	struct proc *p;
 	int error = 0;
 
-	SLS_DBG("Process stopped\n");
+	SLS_KTR("Process stopped\n");
 
 	/* 
 	 * Check if there are objects from a previous iteration. 
@@ -293,6 +294,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	/* Advance the current epoch. */
 	slsp_epoch_advance(slsp);
 
+
 	/* Possibly wait until the checkpoint is done. */
 	if (sls_sync)
 		VFS_SYNC(slos.slsfs_mount, MNT_WAIT);
@@ -374,10 +376,18 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 		panic("invalid mode %d\n", slsp->slsp_attr.attr_mode);
 	}
 
+	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
+	taskqueue_drain_all(slos.slos_tq);
+
+	/*
+	 * XXX Advance the epoch of the SLOS, and associate the SLS epoch with
+	 * that of the SLOS.
+	 */
+
 	SDT_PROBE0(sls, , , dedup);
 
 	slsp->slsp_epoch += 1;
-	SLS_DBG("Checkpointed partition once\n");
+	DEBUG("Checkpointed partition once\n");
 
 	return (0);
 
@@ -503,7 +513,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 
 	(void) fhold(sls_blackholefp);
 
-	SLS_DBG("Process active\n");
+	SLS_KTR("Process active\n");
 	/* Check if the partition is available for checkpointing. */
 
 	if (atomic_cmpset_int(&slsp->slsp_status, SPROC_AVAILABLE,
@@ -576,7 +586,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		if (msec_left > 0)
 			pause_sbt("slscpt", SBT_1MS * msec_left, 0, C_HARDCLOCK | C_CATCH);
 
-		SLS_DBG("Woke up\n");
+		SLS_KTR("Woke up\n");
 	}
 
 	/*
@@ -585,7 +595,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	 */
 	atomic_cmpset_int(&slsp->slsp_status, SPROC_CHECKPOINTING, SPROC_AVAILABLE);
 
-	SLS_DBG("Stopped checkpointing\n");
+	SLS_KTR("Stopped checkpointing\n");
 
 out:
 

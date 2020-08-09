@@ -16,7 +16,7 @@
 #include <vm/uma.h>
 
 #ifdef KTR
-#define DEBUG(fmt, ...) do {			    \
+#define DEBUG(fmt) do {				    \
     CTR1(KTR_SPARE5, "%s: " fmt, __func__);			    \
     } while (0) 
 
@@ -34,6 +34,10 @@
 
 #define DEBUG4(fmt, ...) do {			    \
     CTR5(KTR_SPARE5, "%s: " fmt, __func__, ##__VA_ARGS__);	    \
+    } while (0) 
+
+#define DEBUG5(fmt, ...) do {			    \
+    CTR6(KTR_SPARE5, "%s: " fmt, __func__, ##__VA_ARGS__);	    \
     } while (0) 
 
 #else

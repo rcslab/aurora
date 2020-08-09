@@ -446,11 +446,13 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 	so = (struct socket *) fp->f_data;
 
 	/* Restore the socket's nonblocking/async state. */
-	if ((info->state & SS_ASYNC) != 0)
-		kern_fcntl_freebsd(td, fd, F_SETFL, O_ASYNC);
-	if ((info->state & SS_NBIO) != 0)
-		kern_fcntl_freebsd(td, fd, F_SETFL, O_NONBLOCK);
-	so->so_options = info->options & (~SO_ACCEPTCONN);
+	if (info->family != AF_UNSPEC) {
+		if ((info->state & SS_ASYNC) != 0)
+			kern_fcntl_freebsd(td, fd, F_SETFL, O_ASYNC);
+		if ((info->state & SS_NBIO) != 0)
+			kern_fcntl_freebsd(td, fd, F_SETFL, O_NONBLOCK);
+		so->so_options = info->options & (~SO_ACCEPTCONN);
+	}
 
 	/*
 	 * XXX Set any other options we can.

@@ -113,7 +113,7 @@ slsckpt_knote(struct knote *kn, struct sbuf *sb)
 	KASSERT((kn->kn_kevent.filter != EVFILT_AIO), ("unhandled AIO filter detected"));
 
 	/* XXX Check the kevent's flags in case there is an illegal operation in progress. */
-	SLS_DBG("Checkpointing (%lx, %d)\n", kn->kn_kevent.ident, kn->kn_kevent.filter);
+	SLS_KTR2("Checkpointing (%lx, %d)", kn->kn_kevent.ident, kn->kn_kevent.filter);
 
 	/* Write each kevent to the sbuf. */
 	/* Get all relevant fields, mostly the identifier a*/
@@ -272,7 +272,7 @@ slsrest_kqregister(int fd, struct kqueue *kq, slsset *slskns)
 
 	KVSET_FOREACH(slskns, iter, slskn) {
 		kev = slskn->kn_kevent;
-		SLS_DBG("Registering knote (%lx, %d)\n", kev.ident, kev.filter);
+		SLS_KTR2("Registering knote (%lx, %d)", kev.ident, kev.filter);
 		/*
 		 * We need to modify the action flags so that the call to
 		 * kqfd_register() does exactly what we want: We want the knote
@@ -426,9 +426,9 @@ slsrest_knotes(int fd, slsset *slskns)
 		kn->kn_kevent = slskn->kn_kevent;
 		kn->kn_sfflags = slskn->kn_sfflags;
 		kn->kn_sdata = slskn->kn_sdata;
-		CTR6(KTR_SLS, "%s:%d: Restoring knote ident = %d, filter = %d"
+		SLS_KTR4("Restoring knote ident = %d, filter = %d"
 			"flags = 0x%x status = 0x%x",
-			__FILE__, __LINE__, kn->kn_id, kn->kn_filter,
+			kn->kn_id, kn->kn_filter,
 			kn->kn_flags, kn->kn_status);
 	}
 

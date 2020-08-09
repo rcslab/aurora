@@ -61,6 +61,8 @@ static vfs_sync_t	slsfs_sync;
 
 extern struct buf_ops bufops_slsfs;
 
+int slsfs_btree_trace = 0;
+
 static const char *slsfs_opts[] = { "from" };
 struct unrhdr *slsid_unr;
 
@@ -82,6 +84,7 @@ struct extent {
 	uint64_t start;
 	uint64_t end;
 	uint64_t target;
+	uint64_t epoch;
 };
 
 static void
@@ -110,19 +113,20 @@ extent_clip_tail(struct extent *extent, uint64_t boundary)
 }
 
 static void
-set_extent(struct extent *extent, uint64_t lbn, uint64_t size, uint64_t target)
+set_extent(struct extent *extent, uint64_t lbn, uint64_t size, uint64_t target, uint64_t epoch)
 {
 	KASSERT(size % PAGE_SIZE == 0, ("Size %lu is not a multiple of the page size", size));
 
 	extent->start = lbn;
 	extent->end = lbn + (size / PAGE_SIZE);
 	extent->target = target;
+	extent->epoch = epoch;
 }
 
 static void
 diskptr_to_extent(struct extent *extent, uint64_t lbn, const diskptr_t *diskptr)
 {
-	set_extent(extent, lbn, diskptr->size, diskptr->offset);
+	set_extent(extent, lbn, diskptr->size, diskptr->offset, diskptr->epoch);
 }
 
 static void
@@ -131,6 +135,7 @@ extent_to_diskptr(const struct extent *extent, uint64_t *lbn, diskptr_t *diskptr
 	*lbn = extent->start;
 	diskptr->offset = extent->target;
 	diskptr->size = (extent->end - extent->start) * PAGE_SIZE;
+	diskptr->epoch = extent->epoch;
 }
 
 /*
@@ -177,7 +182,10 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 	uint64_t key;
 	diskptr_t value;
 
-	set_extent(&main, lbn, size, 0);
+	slsfs_btree_trace = 1;
+	DEBUG5("%s:%d: %s with logical offset %u, len %u", __FILE__, __LINE__, __func__, lbn, size);
+	set_extent(&main, lbn, size, 0, 0);
+	DEBUG5("%s:%d: %s with extent [%u, %u)", __FILE__, __LINE__, __func__, main.start, main.end);
 
 	key = main.start;
 	error = fbtree_keymin_iter(tree, &key, &iter);
@@ -185,17 +193,25 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 		panic("fbtree_keymin_iter() error %d in range insert", error);
 	}
 
+
 	if (ITER_ISNULL(iter)) {
 		// No extents are before the start, so start from the beginning
 		iter.it_index = 0;
 	}
+
+	DEBUG2("===================RANGEINSERT [%d, %d)===================", main.start, main.end);
+	fnode_print_left_neighbor(iter.it_node);
+	KASSERT(key <= main.start, ("Got minimum %ld as an infimum for %ld\n", key, main.start));
 
 	while (!ITER_ISNULL(iter)) {
 		key = ITER_KEY_T(iter, uint64_t);
 		value = ITER_VAL_T(iter, diskptr_t);
 
 		diskptr_to_extent(&current, key, &value);
+		DEBUG4("current [%d, %d), main [%d, %d)", current.start, current.end,
+		   main.start, main.end);
 		if (current.start >= main.end) {
+			DEBUG("BREAK");
 			break;
 		}
 
@@ -205,17 +221,20 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 			KASSERT(head.start == head.end, ("Found multiple heads [%lu, %lu) and [%lu, %lu)",
 			         head.start, head.end, new_head.start, new_head.end));
 			head = new_head;
+			DEBUG2("Head clip [%d, %d)", head.start, head.end);
 		}
 
 		new_tail = current;
 		extent_clip_tail(&new_tail, main.end);
-		if (new_tail.start != new_head.end) {
+		if (new_tail.start != new_tail.end) {
 			if (tail.start != tail.end) {
 				fnode_print(iter.it_node);
 			        panic("Found multiple tails [%lu, %lu) and [%lu, %lu) %lu, %lu",
 			         tail.start, tail.end, new_tail.start, new_tail.end, main.start, main.end);
 			}
 			tail = new_tail;
+			DEBUG3("Tail clip [%d, %d), current.start vs main.end %d",
+			    tail.start, tail.end, current.start == main.end);
 		}
 
 		error = fiter_remove(&iter);
@@ -226,6 +245,8 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 
 	if (head.start != head.end) {
 		extent_to_diskptr(&head, &key, &value);
+		DEBUG5("(%p, %d): Inserting (%ld, %ld, %ld)", curthread, __LINE__,
+			(uint64_t) key, value.offset, value.size);
 		error = fbtree_insert(tree, &key, &value);
 		if (error) {
 			panic("Error %d inserting head", error);
@@ -233,6 +254,8 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 	}
 
 	extent_to_diskptr(&main, &key, &value);
+	DEBUG5("(%p, %d): Inserting (%ld, %ld, %ld)", curthread, __LINE__,
+		(uint64_t) key, value.offset, value.size);
 	error = fbtree_insert(tree, &key, &value);
 	if (error) {
 		panic("Error %d inserting main", error);
@@ -241,6 +264,8 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 
 	if (tail.start != tail.end) {
 		extent_to_diskptr(&tail, &key, &value);
+		DEBUG5("(%p, %d): Inserting (%ld, %ld, %ld)", curthread, __LINE__,
+		    (uint64_t) key, value.offset, value.size);
 		error = fbtree_insert(tree, &key, &value);
 		if (error) {
 			fnode_print(tree->bt_rootnode);
@@ -250,6 +275,8 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 				tail.end, head.start, head.end);
 		}
 	}
+
+	slsfs_btree_trace = 0;
 
 	return (0);
 }
@@ -362,7 +389,7 @@ slsfs_inodes_init(struct mount *mp, struct slos *slos)
 	DEBUG1("Initing the root inode %lu", slos->slos_sb->sb_root.offset);
 	error = slsfs_vget(mp, SLOS_INODES_ROOT, 0, &slos->slsfs_inodes);
 	if (error) {
-		panic("Issue trying to find root node on init");	
+		panic("Issue trying to find root node on init");
 		return (error);
 	}
 	VOP_UNLOCK(slos->slsfs_inodes, 0);
@@ -409,10 +436,13 @@ slsfs_bdone(struct buf *bp)
 	struct slsfs_taskctx *ctx;
 
 	/* Free the reference to the object taken at the beginning of the IO. */
+	for (int i = 0; i < bp->b_npages; i++)
+		KASSERT(bp->b_pages[i]->object != 0, ("page without an associated object found"));
+
+#if 0
 	MPASS(bp != NULL);
 	DEBUG4("%s:%d: buf 0x%p has %d pages\n", __FILE__, __LINE__,  bp, bp->b_npages);
 	KASSERT(bp->b_npages > 0, ("no pages in buffer 0x%p before bdone", bp));
-	bdone(bp);
 
 	/*
 	 * We cannot call vm_object_deallocate() from an interrupt context, so
@@ -420,10 +450,15 @@ slsfs_bdone(struct buf *bp)
 	 */
 	KASSERT(bp->b_npages > 0, ("no pages in buffer 0x%p after bdone", bp));
 	KASSERT(bp->b_pages[0] != 0, ("invalid page address 0x%p", bp->b_pages[0]));
-	DEBUG3("%s:%d: Adding a task for buf 0x%p", __FILE__, __LINE__, bp);
+	//DEBUG3("%s:%d: Adding a task for buf 0x%p", __FILE__, __LINE__, bp);
 	DEBUG3("%s:%d: Getting an object from page 0x%p\n", __FILE__, __LINE__, bp->b_pages[0]);
+#endif
+
 	ctx = slsfs_createtask(NULL, bp->b_pages[0]->object, NULL, 0, 0, 0);
-	free(bp, M_SLOS);
+#if 0
+	DEBUG3("%s:%d: freeing bp %p", __FILE__, __LINE__, bp);
+#endif
+	//free(bp, M_SLOS);
 	TASK_INIT(&ctx->tk, 0, &slsfs_obj_deallocate, ctx);
 	taskqueue_enqueue(slos.slos_tq, &ctx->tk);
 }
@@ -432,7 +467,6 @@ slsfs_bdone(struct buf *bp)
 static void
 slsfs_performio(void *ctx, int pending)
 {
-	vm_page_t start;
 	struct buf *bp;
 	size_t bytecount;
 	struct slsfs_taskctx *task = (struct slsfs_taskctx *)ctx;
@@ -443,25 +477,36 @@ slsfs_performio(void *ctx, int pending)
 	vm_object_t obj = task->obj;
 	vm_pindex_t size; 
 	size_t offset;
+	vm_page_t m;
 	int i;
 
 	KASSERT(iotype == BIO_READ || iotype == BIO_WRITE, ("invalid IO type %d", iotype));
 
 	bp = malloc(sizeof(*bp), M_SLOS, M_WAITOK);
 	size = 0;
-	start = task->startpage;
+	m = task->startpage;
 
+	DEBUG4("%s:%d: iotype %d for bp %p", __FILE__, __LINE__, iotype, bp);
 	KASSERT((task->size / PAGE_SIZE) < btoc(MAXPHYS), ("IO too large"));
 	i = 0;
-	TAILQ_FOREACH_FROM(start, &obj->memq, listq) {
+
+	VM_OBJECT_RLOCK(obj);
+	TAILQ_FOREACH_FROM(m, &obj->memq, listq) {
 		/*  We are done grabbing pages. */
 		KASSERT(i < btoc(MAXPHYS), ("overran b_pages[] array"));
-		bp->b_pages[i++] = start;
-		size += pagesizes[start->psind];
+		KASSERT(obj->ref_count >= obj->shadow_count + 1,
+		    ("object has %d references and %d shadows",
+		    obj->ref_count, obj->shadow_count));
+		KASSERT(m->object == obj, ("page %p in object %p "
+			"associated with object %p",
+			m, obj, m->object));
+		bp->b_pages[i++] = m;
+		size += pagesizes[m->psind];
 		if (size == task->size) {
 			break;
 		}
 	}
+	VM_OBJECT_RUNLOCK(obj);
 
 	/* If the IO would be empty, this function is a no-op.*/
 	if (i == 0) {
@@ -472,22 +517,22 @@ slsfs_performio(void *ctx, int pending)
 
 	KASSERT(i > 0, ("object %p is has no pages to dump", obj));
 
-	/* Get a reference to the object, freed when the buffer is done.  */
-	vm_object_reference(obj);
-
-	/* 
-	 * We can do the merging of keys and all the functionality here.  I'm 
-	 * sure this code could be cleaned up but for readability separating all 
+	/*
+	 * We can do the merging of keys and all the functionality here.  I'm
+	 * sure this code could be cleaned up but for readability separating all
 	 * the cases pretty distinctly.
 	 *
 	 * This is only needed for writes, reads are just a bio.
 	 */
 	if (iotype == BIO_WRITE) {
 		BTREE_LOCK(tree, LK_EXCLUSIVE);
+		DEBUG4("%s:%d: (td %p) btree lock %p", __FILE__, __LINE__, curthread, tree);
+
 		if (task->tk.ta_func == NULL)
 			DEBUG1("Warning: %s called synchronously", __func__);
 
 		slsfs_fbtree_rangeinsert(tree, task->startpage->pindex + 1, task->size);
+		DEBUG4("%s:%d: (td %p) btree unlock %p", __FILE__, __LINE__, curthread, tree);
 		BTREE_UNLOCK(tree, 0);
 
 	}
@@ -499,18 +544,20 @@ slsfs_performio(void *ctx, int pending)
 	bp->b_offset = 0;
 	bp->b_data = unmapped_buf;
 	bp->b_offset = 0;
-	DEBUG4( "%s:%d: buf %p has %d pages", __FILE__, __LINE__, bp, bp->b_npages);
+	DEBUG4("%s:%d: buf %p has %d pages", __FILE__, __LINE__, bp, bp->b_npages);
 
+
+	DEBUG3("%s:%d: Setting the size of vnode %p", __FILE__, __LINE__, task->vp);
 	bytecount = bp->b_npages << PAGE_SHIFT;
 	offset = IDX_TO_OFF(task->startpage->pindex + 1);
 	if (offset + bytecount > sivp->ino_size) {
 		sivp->ino_size = offset + bytecount;
 		vnode_pager_setsize(task->vp, sivp->ino_size);
 	}
+	DEBUG3("%s:%d: Size of vnode %p set", __FILE__, __LINE__, task->vp);
 
 	bp->b_vp = task->vp;
 	bp->b_bufobj = &task->vp->v_bufobj;
-	bufobj_wref(bp->b_bufobj);
 	bp->b_iocmd = iotype;
 	bp->b_rcred = crhold(curthread->td_ucred);
 	bp->b_wcred = crhold(curthread->td_ucred);
@@ -519,12 +566,14 @@ slsfs_performio(void *ctx, int pending)
 	bp->b_iodone = slsfs_bdone;
 	bp->b_lblkno = task->startpage->pindex + 1;
 	bp->b_flags |= B_MANAGED;
+	bp->b_vflags = 0;
 
 	KASSERT(bp->b_npages > 0, ("no pages in the IO"));
 
-	VOP_LOCK(task->vp, LK_SHARED);
+	VOP_LOCK(task->vp, LK_EXCLUSIVE);
+	bufobj_wref(bp->b_bufobj);
 	bstrategy(bp);
-	VOP_UNLOCK(task->vp, LK_SHARED);
+	VOP_UNLOCK(task->vp, 0);
 
 	free(task, M_SLOS);
 }
@@ -538,6 +587,13 @@ slsfs_io_async(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int i
 	/* Ignore IOs of size 0. */
 	if (len == 0)
 		return (0);
+
+	/*
+	 * Get a reference to the object, freed when the buffer is done. We have
+	 * to do this here, if we do it in the task the page might be dead by
+	 * then.
+	 */
+	vm_object_reference(obj);
 
 	ctx = slsfs_createtask(vp, obj, m, len, iotype, cb);
 	TASK_INIT(&ctx->tk, 0, &slsfs_performio, ctx);
@@ -555,6 +611,13 @@ slsfs_io(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int iotype)
 	/* Ignore IOs of size 0. */
 	if (len == 0)
 		return (0);
+
+	/*
+	 * Get a reference to the object, freed when the buffer is done. We have
+	 * to do this here, if we do it in the task the page might be dead by
+	 * then.
+	 */
+	vm_object_reference(obj);
 
 	ctx = slsfs_createtask(vp, obj, m, len, iotype, NULL);
 	KASSERT(len != 0, ("IO of size 0"));
@@ -908,6 +971,7 @@ slsfs_checkpoint(struct mount *mp, int closing)
 	diskptr_t ptr;
 	int error;
 
+	DEBUG2("%s:%d: checkpoint starting", __FILE__, __LINE__);
 	td = curthread;
 	/* Go throught the list of vnodes attached to the filesystem. */
 	MNT_VNODE_FOREACH_ACTIVE(vp, mp, mvp) {
@@ -950,6 +1014,7 @@ slsfs_checkpoint(struct mount *mp, int closing)
 		vput(vp);
 	}
 
+	DEBUG2("%s:%d: inodes checkpointed, inode btree starts", __FILE__, __LINE__);
 	bo = &(SLSVP(slos.slsfs_inodes)->sn_tree.bt_backend->v_bufobj);
 	// Check if both the underlying Btree needs a sync or the inode itself 
 	// - should be a way to make it the same TODO
@@ -1024,6 +1089,7 @@ slsfs_checkpoint(struct mount *mp, int closing)
 
 		bbarrierwrite(bp);
 	}
+	DEBUG2("%s:%d: checkpoint complete", __FILE__, __LINE__);
 }
 
 /*

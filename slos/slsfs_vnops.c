@@ -566,7 +566,7 @@ slsfs_write(struct vop_write_args *args)
 
 		error = slsfs_retrieve_buf(vp, uio->uio_offset, uio->uio_resid, uio->uio_rw, gbflag, &bp);
 		if (error) {
-			DEBUG("Problem getting buffer for write %d", error);
+			DEBUG1("Problem getting buffer for write %d", error);
 			return (error);
 		}
 
@@ -798,6 +798,7 @@ slsfs_update_cksum(struct buf *bp)
 		cksum = calculate_crc32c(~0, bp->b_data + size, cksize);
 		size += cksize;
 		error = fbtree_keymin_iter(tree, &blk, &iter);
+		KASSERT(error == 0, ("error %d by fbtree_keymin_iter", error));
 		if (ITER_ISNULL(iter) || ITER_KEY_T(iter, uint64_t) != blk) {
 			error = fnode_insert(iter.it_node, &blk, &cksum);
 		} else {
@@ -817,7 +818,7 @@ slsfs_cksum(struct buf *bp)
 	int error;
 	struct fbtree *tree = &slos.slos_cktree->sn_tree;
 
-	if (bp->b_data == unmapped_buf || (bp->b_vp == slos.slos_cktree->sn_fdev) 
+	if (bp->b_data == unmapped_buf || (bp->b_vp == slos.slos_cktree->sn_fdev)
 		|| slos.slos_sb->sb_epoch == (-1)) {
 		return 0;
 	}
@@ -836,7 +837,8 @@ slsfs_cksum(struct buf *bp)
 
 			return (error);
 		default:
-			DEBUG("Unknown command");
+			panic("Unknown buffer IO command %d for bp %p",
+			    bp->b_iocmd, bp);
 	};
 
 	return (-1);
@@ -949,7 +951,7 @@ slsfs_strategy(struct vop_strategy_args *args)
 	if (checksum_enabled) {
 		error = slsfs_cksum(bp);
 		if (error) {
-			panic("Problem with checksum");
+			panic("Problem with checksum for buffer %p", bp);
 		}
 	}
 

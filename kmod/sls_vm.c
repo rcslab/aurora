@@ -218,8 +218,8 @@ slsvm_proc_shadow(struct proc *p, struct slskv_table *table, int is_fullckpt)
 			vm_object_clear_flag(vmshadow, OBJ_ONEMAPPING);
 			slsvm_object_reftransfer(obj, vmshadow);
 			VM_OBJECT_WUNLOCK(vmshadow);
-			SLS_DBG("(TRANSFER) Object %p has %d references\n", obj, obj->ref_count);
-			SLS_DBG("(TRANSFER) Shadow %p has %d references\n", vmshadow, vmshadow->ref_count);
+			SLS_KTR2("(TRANSFER) Object %p has %d references", obj, obj->ref_count);
+			SLS_KTR2("(TRANSFER) Shadow %p has %d references", vmshadow, vmshadow->ref_count);
 			continue;
 		}
 
@@ -301,12 +301,12 @@ slsvm_object_shadowexact(vm_object_t *objp)
 	vm_object_t obj;
 
 	obj = *objp;
-	SLS_DBG("(PRE) Object %p has %d references\n", obj, obj->ref_count);
+	DEBUG2("(PRE) Object %p has %d references\n", obj, obj->ref_count);
 	vm_object_shadow(objp, &offset, ptoa((*objp)->size));
 
 	KASSERT((obj != *objp), ("object %p wasn't shadowed", obj));
-	SLS_DBG("(POST) Object %p has %d references\n", obj, obj->ref_count);
-	SLS_DBG("(SHADOW) Object %p has shadow %p\n", obj, *objp);
+	DEBUG2("(POST) Object %p has %d references\n", obj, obj->ref_count);
+	DEBUG2("(SHADOW) Object %p has shadow %p\n", obj, *objp);
 	/* Inherit the unique object ID from the parent. */
 	(*objp)->objid = obj->objid;
 }

@@ -134,23 +134,23 @@ fnode_print(struct fnode *node)
 		return;
 	}
 
-	printf("%s - NODE(%p): %lu\n", node->fn_tree->bt_name, node, node->fn_location);
-	printf("(%u)size (%u)type\n", NODE_SIZE(node), NODE_TYPE(node));
+	DEBUG3("%s - NODE(%p): %lu\n", node->fn_tree->bt_name, node, node->fn_location);
+	DEBUG2("(%u)size (%u)type\n", NODE_SIZE(node), NODE_TYPE(node));
 	if (NODE_TYPE(node) == BT_INTERNAL) {
 		bnode_ptr *p = fnode_getval(node, 0);
-		printf("| C %lu |", *p);
+		DEBUG1("| C %lu |", *p);
 		for (int i = 0; i < NODE_SIZE(node); i++) {
 			p = fnode_getval(node, i + 1);
 			uint64_t __unused *t = fnode_getkey(node, i);
-			printf("| K %lu|| C %lu |", *t, *p);
+			DEBUG2("| K %lu|| C %lu |", *t, *p);
 		}
-		printf("Child memory\n");
+		DEBUG("Child memory\n");
 		for (int i = 0; i <= NODE_SIZE(node); i++) {
 			if (node->fn_pointers[i] != NULL) {
 				struct fnode *n = (struct fnode *)node->fn_pointers[i];
-				printf("| node(%lu) |", n->fn_location);
+				DEBUG1("| node(%lu) |", n->fn_location);
 			} else {
-				printf("| NULL |");
+				DEBUG("| NULL |");
 			}
 		}
 	} else if (NODE_TYPE(node) == BT_EXTERNAL) {
@@ -158,29 +158,123 @@ fnode_print(struct fnode *node)
 			uint64_t *t = fnode_getkey(node, i);
 			if (node->fn_tree->bt_valsize == sizeof(diskptr_t)) {
 				diskptr_t *v = fnode_getval(node, i);
-				printf("| %lu (%u)-> %lu, %lu, %lu |,", *t, node->fn_types[i], v->offset, v->size, v->epoch);
+				DEBUG5("| %lu (%u)-> %lu, %lu, %lu |,", *t, node->fn_types[i], v->offset, v->size, v->epoch);
 			} else {
 				uint64_t *v = fnode_getval(node, i);
-				printf("| %lu (%u)-> %lu|,", *t, node->fn_types[i], *v);
+				DEBUG3("| %lu (%u)-> %lu|,", *t, node->fn_types[i], *v);
 			}
 		}
 	}
-	printf("\n");
 }
 
-/* Print a whole level of the btree, starting from the */
+
+/*
+ * Print an external node and its left neighbor, if it exists.
+ */
+void
+fnode_print_left_neighbor(struct fnode *fnode)
+{
+	struct fnode *left, *parent;
+	bnode_ptr ptr;
+	int i;
+
+	/*
+	 * Go to the parent of the current node. If we have no parents, we have
+	 * no neighbors, so just print ourselves.
+	 */
+	fnode_parent(fnode, &parent);
+	if (parent == NULL) {
+		fnode_print(fnode);
+		return ;
+	}
+
+	/* Get the offset in the parent. */
+	for (i = 0; i < NODE_SIZE(parent) + 1; i++) {
+		if (fnode == parent->fn_pointers[i])
+			break;
+	}
+	KASSERT(i <= NODE_SIZE(parent),
+	    ("Did not find fnode %p in parent %p", fnode, parent));
+
+	/* Print the parent of the node. */
+	fnode_print(parent);
+
+	/* If we have an intermediate left neighbor, print it. */
+	if (i > 0) {
+		ptr = * (bnode_ptr *) fnode_getval(parent, i - 1);
+		fnode_init(fnode->fn_tree, ptr, (struct fnode **) &parent->fn_pointers[i - 1]);
+		left = parent->fn_pointers[i - 1];
+		fnode_print(left);
+	}
+
+	/* Print the node itself. */
+	fnode_print(fnode);
+}
+
+/*
+ * Print an external node and its left and right neighbors, if they exist.
+ */
+void
+fnode_print_neighbors(struct fnode *node)
+{
+	struct fnode *left, *right, *parent;
+	bnode_ptr ptr;
+	int i;
+
+	/*
+	 * Go to the parent of the current node. If we have no parents, we have
+	 * no neighbors, so just print ourselves.
+	 */
+	fnode_parent(node, &parent);
+	if (parent == NULL) {
+		fnode_print(node);
+		return ;
+	}
+
+	/* Get the offset in the parent. */
+	for (i = 0; i < NODE_SIZE(parent) + 1; i++) {
+		if (node == parent->fn_pointers[i])
+			break;
+	}
+	KASSERT(i <= NODE_SIZE(parent),
+	    ("Did not find fnode %p in parent %p", node, parent));
+
+	/* Print the parent of the node. */
+	fnode_print(parent);
+
+	/* If we have an intermediate left neighbor, print it. */
+	if (i > 0) {
+		ptr = * (bnode_ptr *) fnode_getval(parent, i - 1);
+		fnode_init(node->fn_tree, ptr, (struct fnode **) &parent->fn_pointers[i - 1]);
+		left = parent->fn_pointers[i - 1];
+		fnode_print(left);
+	}
+
+	/* Print the node itself. */
+	fnode_print(node);
+
+	/* Same for a right neighbor. */
+	if (i < NODE_SIZE(parent)) {
+		ptr = * (bnode_ptr *) fnode_getval(parent, i + 1);
+		fnode_init(node->fn_tree, ptr, (struct fnode **) &parent->fn_pointers[i + 1]);
+		right = parent->fn_pointers[i + 1];
+		fnode_print(right);
+	}
+}
+
+
+/* Print a whole level of the btree, starting from a subtree root. */
 void
 fnode_print_level(struct fnode *node)
 {
-
 	struct fnode *right;
+
 	KASSERT(node != NULL, ("nonexistent node"));
 	do {
 		fnode_print(node);
 		fnode_right(node, &right);
 		node = right;
 	} while (node != NULL);
-
 }
 
 /* Print an internal node and all its immediate children. */
@@ -193,7 +287,7 @@ fnode_print_internal(struct fnode *parent)
 
 	KASSERT((NODE_TYPE(parent) == BT_INTERNAL) != 0, ("Checking external node"));
 
-	printf("=====PARENT=====");
+	DEBUG("=====PARENT=====");
 	fnode_print(parent);
 	for (i = 0; i <= NODE_SIZE(parent); i++) {
 		/* Get the next child. If */
@@ -202,7 +296,7 @@ fnode_print_internal(struct fnode *parent)
 			DEBUG2("Warning: fnode_fetch failed with %d in %s", error, __func__);
 			return;
 		}
-		printf("-----CHILD %d-----", i);
+		DEBUG1("-----CHILD %d-----", i);
 		fnode_print(child);
 	}
 }
@@ -225,7 +319,7 @@ fnode_getbufptr(struct fbtree *tree, bnode_ptr ptr, struct buf **bp)
 	struct buf *buf;
 	int error;
 
-	struct slos *slos =((struct slos_node*)tree->bt_backend->v_data)->sn_slos;
+	struct slos *slos = ((struct slos_node*)tree->bt_backend->v_data)->sn_slos;
 
 	KASSERT(ptr != 0, ("Should never be 0"));
 	error = bread(tree->bt_backend, ptr, BLKSIZE(slos), curthread->td_ucred, &buf);
@@ -278,8 +372,56 @@ fnode_fetch(struct fnode *node, int index, struct fnode **next)
 }
 
 /*
- * Follows the key through the btree, using a modified binary search (first key 
- * greater than) to find the correct path. There is a modified use case where 
+ * Find the index of the first key >= the target (or NODE_SIZE(node) on failure).
+ */
+static int
+fnode_first_greater_equal(struct fnode *node, const void *target)
+{
+	int start = 0;
+	int end = NODE_SIZE(node);
+	int mid;
+	const void *key;
+
+	while (start < end) {
+		mid = start + (end - start) / 2;
+		key = fnode_getkey(node, mid);
+		if (NODE_COMPARE(node, key, target) < 0) {
+			start = mid + 1;
+		} else {
+			end = mid;
+		}
+	}
+
+	return (start);
+}
+
+/*
+ * Find the index of the first key >= the target (or NODE_SIZE(node) on failure).
+ */
+static int
+fnode_first_greater(struct fnode *node, const void *target)
+{
+	int start = 0;
+	int end = NODE_SIZE(node);
+	int mid;
+	const void *key;
+
+	while (start < end) {
+		mid = start + (end - start) / 2;
+		key = fnode_getkey(node, mid);
+		if (NODE_COMPARE(node, key, target) <= 0) {
+			start = mid + 1;
+		} else {
+			end = mid;
+		}
+	}
+
+	return (start);
+}
+
+/*
+ * Follows the key through the btree, using a modified binary search (first key
+ * greater than) to find the correct path. There is a modified use case where
  * the caller can specify the "to" argument which allows us to find the parent
  * of a node.
  *
@@ -293,53 +435,15 @@ static int
 fnode_follow(struct fnode *root, const void *key, struct fnode *to, struct fnode **node)
 {
 	int error = 0;
-	void *keyt, *keyn;
 	struct fnode *next;
 	struct fnode *cur;
-	int index, start, end, mid, compare;
+	int index;
 
 	cur = root;
 	MPASS(root != NULL);
 
 	while (NODE_TYPE(cur) == BT_INTERNAL) {
-		start = 0;
-		end = NODE_SIZE(cur) - 1;
-		if (NODE_SIZE(cur)) {
-			index = INDEX_INVAL;
-			while (start <= end) {
-				mid = (start + end) / 2;
-				keyt = fnode_getkey(cur, mid);
-				compare = NODE_COMPARE(cur, keyt, key);
-				if (compare < 0) {
-					start = mid + 1;
-				} else {
-					index = mid;
-					end = mid - 1;
-				}
-			}
-
-			if (index == INDEX_INVAL) {
-				index = NODE_SIZE(cur) - 1;
-			}
-		} else {
-			index = 0;
-		}
-
-		while (index > 0) {
-			keyt = fnode_getkey(cur, index - 1);
-			keyn = fnode_getkey(cur, index);
-			compare = NODE_COMPARE(cur, keyt, key);
-			if (compare) {
-				break;
-			}
-			else {
-				index--;
-			}
-		}
-
-		if (NODE_COMPARE(cur, fnode_getkey(cur, index), key) <= 0) {
-			index++;
-		}
+		index = fnode_first_greater(cur, key);
 
 		if (to != NULL && to->fn_location == *(bnode_ptr *)fnode_getval(cur, index)) {
 			*node = cur;
@@ -356,7 +460,7 @@ fnode_follow(struct fnode *root, const void *key, struct fnode *to, struct fnode
 	}
 
 	*node = cur;
-	KASSERT((NODE_TYPE(*node) == BT_INTERNAL) == 0, ("Node still internal"));
+	KASSERT(NODE_TYPE(*node) != BT_INTERNAL, ("Node still internal"));
 
 	return (error);
 }
@@ -389,7 +493,7 @@ fnode_cow(struct buf *bp)
 
 	BP_SETCOWED(cur->fn_buf);
 
-	DEBUG("fnode_cow(%p) %lu->%lu", bp->b_lblkno, ptr.offset);
+	DEBUG3("fnode_cow(%p) %lu->%lu", bp, bp->b_lblkno, ptr.offset);
 	// Alocate a new block the btree node
 	error = ALLOCATEPTR(slos, BLKSIZE(slos), &ptr);
 	MPASS(error == 0);
@@ -511,7 +615,6 @@ fnode_right(struct fnode *node, struct fnode **right)
 
 	if (i > (NODE_SIZE(parent))) {
 		*right = NULL;
-
 		return (0);
 	}
 
@@ -687,48 +790,14 @@ fbtree_size(struct fbtree *tree)
 	return size;
 }
 
-/*
- * Find the location of the largest key smaller than or equal to the one provided.
- */
-static int
-fnode_keymin_iter(struct fnode *root, void *key, struct fnode_iter *iter)
+#ifdef INVARIANTS
+static void
+fnode_keymin_check(const void *key, const struct fnode_iter *iter)
 {
-	int error;
-	void *keyt;
-	int start, mid, end;
-
-	struct fnode *node;
-
-#ifdef INVARIANTS
+	const void *keyt;
+	struct fnode *node = iter->it_node, *parent;
 	struct fnode_iter next;
-#endif
 
-	// Follow catches if this is an external node or not
-	error = fnode_follow(root, key, NULL, &node);
-	if (error) {
-		return (error);
-	}
-
-	KASSERT(NODE_TYPE(node) != (BT_INTERNAL), ("Should be on a external node now"));
-
-	// Binary search for the first element > key
-	start = 0;
-	end = NODE_SIZE(node);
-	while (start < end) {
-		mid = start + (end - start) / 2;
-		keyt = fnode_getkey(node, mid);
-		if (NODE_COMPARE(node, keyt, key) <= 0) {
-			start = mid + 1;
-		} else {
-			end = mid;
-		}
-	}
-
-	// -1 to find the last element <= key, or null if no such element
-	iter->it_index = start - 1;
-	iter->it_node = node;
-
-#ifdef INVARIANTS
 	if (!ITER_ISNULL(*iter)) {
 		// Check that the returned node is <= the key
 		keyt = ITER_KEY(*iter);
@@ -736,12 +805,11 @@ fnode_keymin_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 
 		// Check that the next node is > the key
 		next = *iter;
-		struct fnode *parent;
 		fnode_iter_next(&next, 0);
 		if (!ITER_ISNULL(next)) {
 			keyt = ITER_KEY(next);
 			if (NODE_COMPARE(node, keyt, key) <= 0) {
-				printf("%lu %lu", *(uint64_t*)keyt, *(uint64_t*)key);
+				printf("%lu %lu", *(const uint64_t*)keyt, *(const uint64_t*)key);
 				printf("1st parent");
 				fnode_parent(iter->it_node, &parent);
 				fnode_print(parent);
@@ -750,7 +818,40 @@ fnode_keymin_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 			}
 		}
 	}
+}
 #endif
+
+/*
+ * Find the location of the largest key smaller than or equal to the one provided.
+ */
+static int
+fnode_keymin_iter(struct fnode *root, void *key, struct fnode_iter *iter)
+{
+	int error;
+
+	// Follow catches if this is an external node or not
+	error = fnode_follow(root, key, NULL, &iter->it_node);
+	if (error) {
+		return (error);
+	}
+
+	KASSERT(NODE_TYPE(iter->it_node) != (BT_INTERNAL), ("Should be on a external node now"));
+
+	// Binary search for the first element > key
+	iter->it_index = fnode_first_greater(iter->it_node, key);
+
+	// Go back to find the last element <= key
+	fnode_iter_prev(iter);
+
+	if (slsfs_btree_trace && !ITER_ISNULL(*iter)) {
+		DEBUG2("keymin [%d]=%lu", iter->it_index, ITER_KEY_T(*iter, uint64_t));
+		DEBUG1("node size %d", NODE_SIZE(iter->it_node));
+	}
+
+#ifdef INVARIANTS
+	fnode_keymin_check(key, iter);
+#endif
+
 	return (0);
 }
 
@@ -800,7 +901,7 @@ fbtree_keymin_iter(struct fbtree *tree, void *key, struct fnode_iter *iter)
 }
 
 /*
- * If at the end of a node, skip to the next non-empty node.
+ * If at the end of a node, skip to the next node.
  */
 static void
 fnode_iter_skip(struct fnode_iter *it)
@@ -808,64 +909,28 @@ fnode_iter_skip(struct fnode_iter *it)
 	//KASSERT(it->it_index <= NODE_SIZE(it->it_node), ("Iterator was out of 
 	//bounds"));
 
-	/* If we've exhausted the current node, switch, and skip empty siblings. */
+	/* If we've exhausted the current node, skip. */
 	struct fnode *right;
-	while (it->it_index >= NODE_SIZE(it->it_node)) {
+	if (it->it_index >= NODE_SIZE(it->it_node)) {
 		fnode_right(it->it_node, &right);
 		if (right == NULL) {
-			/* Iteration done. */
+			/* End of the tree. */
 			it->it_index = INDEX_INVAL;
-			break;
 		} else {
 			/* Otherwise switch nodes. */
+			MPASS(NODE_SIZE(right) > 0);
 			it->it_node = right;
 			it->it_index = 0;
 		}
 	}
 }
 
-/*
- * Find the smallest key in the subtree that's larger than or equal to the key provided.
- */
-static int
-fnode_keymax_iter(struct fnode *root, void *key, struct fnode_iter *iter)
-{
-	int error;
-	void *keyt;
-	int start, mid, end;
-	struct fnode *node;
-
-	// Follow catches if this is an external node or not
-	error = fnode_follow(root, key, NULL, &node);
-	if (error) {
-		return (error);
-	}
-
-	KASSERT(NODE_TYPE(node) != (BT_INTERNAL), ("Should be on a external node now"));
-
-	// Binary search for the first element >= key
-	start = 0;
-	end = NODE_SIZE(node);
-	while (start < end) {
-		mid = start + (end - start) / 2;
-		keyt = fnode_getkey(node, mid);
-		if (NODE_COMPARE(node, keyt, key) < 0) {
-			start = mid + 1;
-		} else {
-			end = mid;
-		}
-	}
-
-	iter->it_node = node;
-	iter->it_index = start;
-
-	/*
-	 * Due to the way we follow the value down the tree, we need to make
-	 * sure we are actually the largest value in the tree, and there is no
-	 * key to the right.
-	 */
-	fnode_iter_skip(iter);
 #ifdef INVARIANTS
+static void
+fnode_keymax_check(const void *key, const struct fnode_iter *iter)
+{
+	const void *keyt;
+
 	if (!ITER_ISNULL(*iter)) {
 		// We should be in bounds at this point.
 		KASSERT(iter->it_index < NODE_SIZE(iter->it_node),
@@ -875,14 +940,45 @@ fnode_keymax_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 		keyt = fnode_getkey(iter->it_node, iter->it_index);
 		KASSERT(NODE_COMPARE(iter->it_node, keyt, key) >= 0,
 		    ("leftmost key %lu smaller than key %lu",
-		    * (uint64_t *) keyt, * (uint64_t *) key));
+		    *(const uint64_t *)keyt, *(const uint64_t *)key));
 
-		// Make sure this is the first one. //
+		// Make sure this is the first one.
 		if (iter->it_index > 0) {
 			keyt = fnode_getkey(iter->it_node, iter->it_index - 1);
 			KASSERT(NODE_COMPARE(iter->it_node, keyt, key) < 0, ("keymax too big"));
 		}
 	}
+}
+#endif
+
+/*
+ * Find the smallest key in the subtree that's larger than or equal to the key provided.
+ */
+static int
+fnode_keymax_iter(struct fnode *root, const void *key, struct fnode_iter *iter)
+{
+	int error;
+
+	// Follow catches if this is an external node or not
+	error = fnode_follow(root, key, NULL, &iter->it_node);
+	if (error) {
+		return (error);
+	}
+
+	KASSERT(NODE_TYPE(iter->it_node) != (BT_INTERNAL), ("Should be on a external node now"));
+
+	// Binary search for the first element >= key
+	iter->it_index = fnode_first_greater_equal(iter->it_node, key);
+
+	/*
+	 * Due to the way we follow the value down the tree, we need to make
+	 * sure we are actually the largest value in the tree, and there is no
+	 * key to the right.
+	 */
+	fnode_iter_skip(iter);
+
+#ifdef INVARIANTS
+	fnode_keymax_check(key, iter);
 #endif
 
 	return (0);
@@ -1027,6 +1123,80 @@ fnode_iter_next(struct fnode_iter *it, int bucket_traverse)
 
 	return (0);
 };
+
+static int
+fnode_left(struct fnode *node, struct fnode **left)
+{
+	int error;
+	int index;
+	struct fnode *parent;
+
+	for (;;) {
+		error = fnode_parent(node, &parent);
+		if (error != 0) {
+			*left = NULL;
+			return (error);
+		}
+
+		if (parent == NULL) {
+			*left = NULL;
+			return (0);
+		}
+
+		// Find our index in the parent
+		for (index = 0; index <= NODE_SIZE(parent); ++index) {
+			if (parent->fn_pointers[index] == node) {
+				break;
+			}
+		}
+		KASSERT(index <= NODE_SIZE(parent), ("Node btree node %p not in parent %p", node, parent));
+
+		// If we're the leftmost child, keep going up, else break
+		if (index > 0) {
+			--index;
+			break;
+		}
+
+		node = parent;
+	}
+
+	// Go back down the tree, as far right as possible
+	while (NODE_TYPE(parent) == BT_INTERNAL) {
+		error = fnode_fetch(parent, index, &node);
+		if (error != 0) {
+			*left = NULL;
+			return (error);
+		}
+
+		index = NODE_SIZE(node);
+		parent = node;
+	}
+
+	*left = node;
+	return (0);
+}
+
+int
+fnode_iter_prev(struct fnode_iter *iter)
+{
+	struct fnode *left;
+
+	/* An invalid iterator is still invalid after iteration. */
+	if (iter->it_index == INDEX_INVAL) {
+		return (0);
+	}
+
+	if (iter->it_index == 0) {
+		fnode_left(iter->it_node, &left);
+		if (left != NULL) {
+			iter->it_node = left;
+			iter->it_index = NODE_SIZE(left);
+		}
+	}
+
+	--iter->it_index;
+	return (0);
+}
 
 /*
  * Search a key-value pair in the btree, reaturn it if found.
@@ -1287,7 +1457,6 @@ fnode_balance(struct fnode *left, struct fnode *right, size_t i)
 	}
 }
 
-
 int
 fnode_parent(struct fnode *node, struct fnode **parent)
 {
@@ -1414,12 +1583,12 @@ fnode_split(struct fnode *node)
 		}
 		KASSERT(node->fn_location != node->fn_tree->bt_root, ("Problem with fnode - %p", node));
 		newroot = 1;
-	}  else {
+	} else {
 		fnode_parent(node, &parent);
-		if(parent == NULL) {
+		if (parent == NULL) {
 			fnode_print(node);
 			panic("No parent found");
-		};
+		}
 	}
 
 	/* Make the right node. */
@@ -1468,6 +1637,8 @@ fnode_split(struct fnode *node)
 	if (newroot) {
 		fbtree_execrc(parent->fn_tree);
 	}
+
+	DEBUG2("split %p, %p", node, right);
 	return (0);
 }
 
@@ -1477,37 +1648,11 @@ fnode_split(struct fnode *node)
 static int
 fnode_internal_insert(struct fnode *node, void *key, bnode_ptr *val)
 {
-	void *keyt;
 	int error = 0;
-	int start, end, index, mid;
-	int compare;
+	int index;
 
 	/* Find the proper position in the bnode to insert. */
-	start = 0;
-	end = NODE_SIZE(node) - 1;
-	if (NODE_SIZE(node)) {
-		index = INDEX_INVAL;
-		while (start <= end) {
-			mid = (start + end) / 2;
-			keyt = fnode_getkey(node, mid);
-			compare = NODE_COMPARE(node, keyt, key);
-			/* We can't enter duplicates. */
-			if (compare == 0) {
-				panic("Should never occur");
-			} else if (compare < 0) {
-				start = mid + 1;
-			} else {
-				index = mid;
-				end = mid - 1;
-			}
-		}
-
-		if (index == INDEX_INVAL) {
-			index = NODE_SIZE(node);
-		}
-	} else {
-		index = 0;
-	}
+	index = fnode_first_greater_equal(node, key);
 
 	fnode_insert_at(node, key, val, index);
 
@@ -1518,8 +1663,10 @@ fnode_internal_insert(struct fnode *node, void *key, bnode_ptr *val)
 
 	return (error);
 }
-/* Buckets are just linked lists of pages, with the last "value"
- *being the next pointer, so buckets are NODE_MAX(node) - 1 in size
+
+/*
+ * Buckets are just linked lists of pages, with the last "value"
+ * being the next pointer, so buckets are NODE_MAX(node) - 1 in size
  */
 static int
 fnode_bucket_insert(struct fnode *parent, struct fnode *node, int at, void *key, void *value)
@@ -1540,7 +1687,6 @@ fnode_bucket_insert(struct fnode *parent, struct fnode *node, int at, void *key,
 
 		return fnode_bucket_insert(parent, bucket, at, key, value);
 	}
-		
 
 	fnode_setval(node, NODE_SIZE(node), value);
 	node->fn_dnode->dn_numkeys += 1;
@@ -1593,51 +1739,25 @@ fnode_external_insert(struct fnode *node, void *key, void *value)
 {
 	void *keyt;
 	int error = 0;
-	int start, end, index, mid;
+	int index;
 	bnode_ptr ptr;
 	int compare;
 	struct fnode *bucket = NULL;
 
-	start = 0;
-	end = NODE_SIZE(node) - 1;
-	if (NODE_SIZE(node)) {
-		index = INDEX_INVAL;
-		while (start <= end) {
-			mid = (start + end) / 2;
-			keyt = fnode_getkey(node, mid);
-			compare = NODE_COMPARE(node, keyt, key);
-			/* Can't enter duplicates. */
-			if (compare == 0) {
-				if (node->fn_tree->bt_flags & FN_ALLOWDUPLICATE) {
-					index = mid;
-					break;
-				} else {
-					return (EINVAL);
-				}
-			} else if (compare < 0) {
-				start = mid + 1;
-			} else {
-				index = mid;
-				end = mid - 1;
-			}
-		}
-
-		if (index == INDEX_INVAL) {
-			index = NODE_SIZE(node);
-			compare = 1;
-		}
+	index = fnode_first_greater_equal(node, key);
+	if (index < NODE_SIZE(node)) {
+		keyt = fnode_getkey(node, index);
+		compare = NODE_COMPARE(node, keyt, key);
 	} else {
-		index = 0;
 		compare = 1;
 	}
 
 	if (compare) {
 		fnode_insert_at(node, key, value, index);
 	} else {
-		keyt = fnode_getkey(node, index);
-		compare = NODE_COMPARE(node, keyt, key);
-		MPASS(compare == 0);
-		MPASS(node->fn_tree->bt_flags & FN_ALLOWDUPLICATE);
+		if (!(node->fn_tree->bt_flags & FN_ALLOWDUPLICATE)) {
+			return (EINVAL);
+		}
 
 		if (NODE_ISBUCKETAT(node, index)) {
 			ptr = *(bnode_ptr *)fnode_getval(node, index);
@@ -1690,10 +1810,11 @@ fnode_insert(struct fnode *node, void *key, void *value)
 	} else if (NODE_TYPE(node) == BT_BUCKET) {
 		panic("Should not be using fnode insert for buckets");
 	} else {
-		error = fnode_external_insert(node, key,  value);
+		error = fnode_external_insert(node, key, value);
 	}
 
-	MPASS(error == 0);
+	KASSERT(error == 0, ("error %d for inserting key %lu in %p",
+	    error, *(uint64_t *) key, node));
 
 	fnode_write(node);
 
@@ -1706,21 +1827,24 @@ fnode_insert(struct fnode *node, void *key, void *value)
 static int
 fnode_remove_at(struct fnode *node, void *value, int i)
 {
+	size_t ntail = NODE_SIZE(node) - i - 1;
 	char *src = fnode_getkey(node, i);
 
 	/* Scoot over the keys to the left, overwriting the one in position i.*/
-	memmove(src, src + node->fn_tree->bt_keysize, (NODE_SIZE(node) - i) * NODE_KS(node));
+	memmove(src, src + node->fn_tree->bt_keysize, ntail * NODE_KS(node));
 
 	/* The offset of the corresponding value is different depending if the node is internal or not. */
 	if (NODE_TYPE(node) == BT_INTERNAL) {
 		src = fnode_getval(node, i + 1);
-		memmove(src, src + NODE_VS(node), (NODE_SIZE(node) - i) * NODE_VS(node));
+		memmove(src, src + NODE_VS(node), ntail * NODE_VS(node));
+		memmove(&node->fn_pointers[i + 1], &node->fn_pointers[i + 2], ntail  * sizeof(node->fn_pointers[i]));
 	} else {
 		src = fnode_getval(node, i);
 		if (value) {
 			memcpy(value, src, node->fn_tree->bt_valsize);
 		}
-		memmove(src, src + NODE_VS(node), (NODE_SIZE(node) - i) * NODE_VS(node));
+		memmove(src, src + NODE_VS(node), ntail  * NODE_VS(node));
+		memmove(&node->fn_types[i], &node->fn_types[i + 1], ntail * sizeof(node->fn_types[i]));
 	}
 	node->fn_dnode->dn_numkeys -= 1;
 
@@ -1819,12 +1943,40 @@ int
 fiter_remove(struct fnode_iter *it)
 {
 	struct fnode *fnode = it->it_node;
+	struct fnode *parent;
+	size_t i;
+	bnode_ptr *ptr;
 
-	KASSERT(it->it_index < NODE_SIZE(it->it_node),
+	KASSERT(it->it_index < NODE_SIZE(fnode),
 	        ("Removing an out-of-bounds iterator"));
 
 	fnode_remove_at(fnode, NULL, it->it_index);
 	fnode_iter_skip(it);
+
+	// If we removed the last key from this node, remove the entire node
+	// TODO: merging
+	while (NODE_SIZE(fnode) == 0) {
+		fnode_parent(fnode, &parent);
+		if (parent == NULL) {
+			break;
+		}
+
+		for (i = 0; i < NODE_SIZE(parent) + 1; ++i) {
+			if (fnode == parent->fn_pointers[i]) {
+				break;
+			}
+		}
+		MPASS(i < NODE_SIZE(parent) + 1);
+
+		ptr = fnode_getval(parent, i);
+		MPASS(fnode->fn_location == *ptr);
+
+		fnode_remove_at(parent, NULL, i);
+		NODE_FREE(fnode);
+		fnode = parent;
+	}
+
+	fnode_write(fnode);
 	return (0);
 }
 
@@ -2374,7 +2526,6 @@ out:
 #endif /* SLOS_TEST */
 
 #ifdef DDB
-#include "opt_ddb.h"
 #include <ddb/ddb.h>
 
 DB_SHOW_COMMAND(fnode, db_fnode)

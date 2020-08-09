@@ -184,6 +184,10 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 
 			/* If the page is within the entry's bounds, add it to the map. */
 			VM_OBJECT_WLOCK(object);
+			KASSERT(vaddr < VM_MAXUSER_ADDRESS, 
+			    ("entering invalid address %lx (pindex 0x%lx "
+			    "start 0x%lx, offset 0x%lx\n", vaddr, page->pindex,
+			    entry->start, entry->offset));
 			error = pmap_enter(vm_map_pmap(map), vaddr, page, 
 			    entry->protection, VM_PROT_READ, page->psind);
 			VM_OBJECT_WUNLOCK(object);
