@@ -94,29 +94,33 @@ sls_module_exiting(void)
     printf(fmt, ##__VA_ARGS__);			    \
 } while (0)
 
-// XXX Fix this thing #define PROGRAMPOS (__FILE__ :  __func__ : __LINE__ :)
-#define PROGRAMPOS ("(Preprocessor macro not ready)")
+#define SLS_KTR_STRING(x) SLS_KTR_STRING_IMPL(x)
+#define SLS_KTR_STRING_IMPL(x) #x
 
-#define SLS_KTR(fmt)			do { CTR0(KTR_SLS, fmt); } while(0)
-#define SLS_KTR1(fmt, a)		do { CTR1(KTR_SLS, fmt, a); } while (0)
-#define SLS_KTR2(fmt, a, b)		do { CTR2(KTR_SLS, fmt, a, b); } while (0)
-#define SLS_KTR3(fmt, a, b, c)		do { CTR3(KTR_SLS, fmt, a, b, c); } while (0)
-#define SLS_KTR4(fmt, a, b, c, d)	do { CTR4(KTR_SLS, fmt, a, b, c, d); } while (0)
-#define SLS_KTR5(fmt, a, b, c, d, e)	do { CTR5(KTR_SLS, fmt, a, b, c, d, e); } while (0)
-#define SLS_KTR6(fmt, a, b, c, d, e, f) do { CTR6(KTR_SLS, fmt, a, b, c, d, e, f); } while (0)
+#define SLS_KTR(fmt) \
+	CTR1(KTR_SLS, __FILE__ ":" SLS_KTR_STRING(__LINE__) ": %s: " fmt, __func__)
+#define SLS_KTR1(fmt, a) \
+	CTR2(KTR_SLS, __FILE__ ":" SLS_KTR_STRING(__LINE__) ": %s: " fmt, __func__, a)
+#define SLS_KTR2(fmt, a, b) \
+	CTR3(KTR_SLS, __FILE__ ":" SLS_KTR_STRING(__LINE__) ": %s: " fmt, __func__, a, b)
+#define SLS_KTR3(fmt, a, b, c) \
+	CTR4(KTR_SLS, __FILE__ ":" SLS_KTR_STRING(__LINE__) ": %s: " fmt, __func__, a, b, c)
+#define SLS_KTR4(fmt, a, b, c, d) \
+	CTR5(KTR_SLS, __FILE__ ":" SLS_KTR_STRING(__LINE__) ": %s: " fmt, __func__, a, b, c, d)
+#define SLS_KTR5(fmt, a, b, c, d, e) \
+	CTR6(KTR_SLS, __FILE__ ":" SLS_KTR_STRING(__LINE__) ": %s: " fmt, __func__, a, b, c, d, e)
 
 #define sls_tmp(fmt, ...) printf(fmt, ##__VA_ARGS__)
 #else
 
 #define SLS_DBG(fmt, ...)
 
-#define SLS_KTR(fmt)
-#define SLS_KTR1(fmt, a)
-#define SLS_KTR2(fmt, a, b)
-#define SLS_KTR3(fmt, a, b, c)
-#define SLS_KTR4(fmt, a, b, c, d)
-#define SLS_KTR5(fmt, a, b, c, d, e)
-#define SLS_KTR6(fmt, a, b, c, d, e, f)
+#define SLS_KTR(fmt) ((void)0)
+#define SLS_KTR1(fmt, a) ((void)0)
+#define SLS_KTR2(fmt, a, b) ((void)0)
+#define SLS_KTR3(fmt, a, b, c) ((void)0)
+#define SLS_KTR4(fmt, a, b, c, d) ((void)0)
+#define SLS_KTR5(fmt, a, b, c, d, e) ((void)0)
 
 #define sls_tmp(fmt, ...) panic("debug printf not removed")
 #endif /* SLS_MSG */
