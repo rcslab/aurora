@@ -61,8 +61,6 @@ static vfs_sync_t	slsfs_sync;
 
 extern struct buf_ops bufops_slsfs;
 
-int slsfs_btree_trace = 0;
-
 static const char *slsfs_opts[] = { "from" };
 struct unrhdr *slsid_unr;
 
@@ -182,7 +180,6 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 	uint64_t key;
 	diskptr_t value;
 
-	slsfs_btree_trace = 1;
 	DEBUG5("%s:%d: %s with logical offset %u, len %u", __FILE__, __LINE__, __func__, lbn, size);
 	set_extent(&main, lbn, size, 0, 0);
 	DEBUG5("%s:%d: %s with extent [%u, %u)", __FILE__, __LINE__, __func__, main.start, main.end);
@@ -275,8 +272,6 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 				tail.end, head.start, head.end);
 		}
 	}
-
-	slsfs_btree_trace = 0;
 
 	return (0);
 }

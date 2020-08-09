@@ -229,6 +229,4 @@ void fnode_print_left_neighbor(struct fnode *node);
 void fnode_print_neighbors(struct fnode *node);
 int slsfs_fbtree_test(void);
 
-extern int slsfs_btree_trace;
-
 #endif /* _FB_BTREE_H_ */

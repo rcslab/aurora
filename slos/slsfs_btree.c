@@ -598,72 +598,52 @@ fbtree_init(struct vnode *backend, bnode_ptr ptr, fb_keysize keysize,
 int
 fnode_right(struct fnode *node, struct fnode **right)
 {
-	int i = 0;
-	struct fnode *parent, *pr;
-	fnode_parent(node, &parent);
-	if (parent == NULL) {
-		*right = NULL;
+	int error;
+	int index;
+	struct fnode *parent;
 
-		return (0);
-	}
-
-	for (; i < NODE_SIZE(parent) + 1; i++) {
-		if (node == parent->fn_pointers[i]) {
-			break;
+	for (;;) {
+		error = fnode_parent(node, &parent);
+		if (error != 0) {
+			*right = NULL;
+			return (error);
 		}
-	}
 
-	if (i > (NODE_SIZE(parent))) {
-		*right = NULL;
-		return (0);
-	}
-
-	bnode_ptr ptr = *(bnode_ptr *)fnode_getval(parent, i);
-	if (ptr != node->fn_location) {
-		fnode_print(parent);
-		fnode_print(node);
-		panic("Problem with location %lu %d", ptr, i);
-	}
-
-	if (i == (NODE_SIZE(parent))) {
-		fnode_right(parent, &pr);
-		if (pr == NULL) {
+		if (parent == NULL) {
 			*right = NULL;
 			return (0);
 		}
 
-		ptr = *(bnode_ptr *)fnode_getval(pr,  0);
-		if (ptr == 0) {
-			fnode_print(parent);
-			panic("Should not be zero ptr %d %lu", i, node->fn_location);
+		// Find our index in the parent
+		for (index = 0; index <= NODE_SIZE(parent); ++index) {
+			if (parent->fn_pointers[index] == node) {
+				break;
+			}
 		}
-		fnode_init(node->fn_tree, ptr, (struct fnode **)&pr->fn_pointers[0]);
-		*right = pr->fn_pointers[0];
-	} else {
-		ptr = *(bnode_ptr *)fnode_getval(parent, i + 1);
-		if (ptr == 0) {
-			fnode_print(parent);
-			panic("Should not be zero ptr %d %lu", i, node->fn_location);
+		KASSERT(index <= NODE_SIZE(parent), ("Node btree node %p not in parent %p", node, parent));
+
+		// If we're the rightmost child, keep going up, else break
+		if (index < NODE_SIZE(parent)) {
+			++index;
+			break;
 		}
-		fnode_init(node->fn_tree, ptr, (struct fnode **)&parent->fn_pointers[i + 1]);
-		*right = parent->fn_pointers[i + 1];
-	}
-	if (NODE_TYPE(*right) == BT_INTERNAL) {
-		if ((NODE_TYPE(node) != BT_INTERNAL)) {
-			fnode_print(*right);
-			fnode_print(node);
-			fnode_print(parent);
-			panic("Going right to a btree node of different types (INTERNAL)");
-		}
-	} else {
-		if (NODE_TYPE(node) == BT_INTERNAL) {
-			fnode_print(*right);
-			fnode_print(node);
-			fnode_print(parent);
-			panic("Going right to a btree node of different types (EXTERNAL)");
-		}
+
+		node = parent;
 	}
 
+	// Go back down the tree, as far right as possible
+	while (NODE_TYPE(parent) == BT_INTERNAL) {
+		error = fnode_fetch(parent, index, &node);
+		if (error != 0) {
+			*right = NULL;
+			return (error);
+		}
+
+		index = 0;
+		parent = node;
+	}
+
+	*right = node;
 	return (0);
 }
 
@@ -842,11 +822,6 @@ fnode_keymin_iter(struct fnode *root, void *key, struct fnode_iter *iter)
 
 	// Go back to find the last element <= key
 	fnode_iter_prev(iter);
-
-	if (slsfs_btree_trace && !ITER_ISNULL(*iter)) {
-		DEBUG2("keymin [%d]=%lu", iter->it_index, ITER_KEY_T(*iter, uint64_t));
-		DEBUG1("node size %d", NODE_SIZE(iter->it_node));
-	}
 
 #ifdef INVARIANTS
 	fnode_keymin_check(key, iter);
