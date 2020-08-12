@@ -1,18 +1,20 @@
-#include <sys/param.h>
 
-#include <sys/systm.h>
-#include <sys/uio.h>
+#include <sys/param.h>
 #include <sys/bio.h>
 #include <sys/buf.h>
-#include <btree.h>
-#include <slos.h>
+#include <sys/bufobj.h>
 #include <sys/errno.h>
+#include <sys/kernel.h>
 #include <sys/lock.h>
-#include <sys/vnode.h>
+#include <sys/malloc.h>
+#include <sys/pctrie.h>
 #include <sys/rwlock.h>
 #include <sys/stat.h>
-#include <sys/bufobj.h>
-#include <sys/pctrie.h>
+#include <sys/systm.h>
+#include <sys/types.h>
+#include <sys/uio.h>
+#include <sys/vnode.h>
+
 #include <machine/atomic.h>
 
 #include "slosmm.h"
@@ -35,6 +37,7 @@
 
 #define BP_TOFNODE(node) ((struct fnode *)(node)->b_fsprivate2)
 
+static MALLOC_DEFINE(M_SLOS_BTREE, "slos btree", "SLOS Btrees");
 uma_zone_t fnode_zone;
 
 static void
@@ -52,7 +55,7 @@ fbtree_execrc(struct fbtree *tree)
 void
 fbtree_reg_rootchange(struct fbtree *tree, rootchange_t fn, void *ctx)
 {
-	struct fbtree_rcentry *entry = malloc(sizeof(struct fbtree_rcentry), M_SLOS, M_WAITOK);
+	struct fbtree_rcentry *entry = malloc(sizeof(struct fbtree_rcentry), M_SLOS_BTREE, M_WAITOK);
 	entry->rc_fn = fn;
 	entry->rc_ctx = ctx;
 	SLIST_INSERT_HEAD(&tree->bt_rcfn, entry, rc_entry);
@@ -588,7 +591,7 @@ fbtree_init(struct vnode *backend, bnode_ptr ptr, fb_keysize keysize,
 	while(!SLIST_EMPTY(&tree->bt_rcfn)) {
 		entry = SLIST_FIRST(&tree->bt_rcfn);
 		SLIST_REMOVE_HEAD(&tree->bt_rcfn, rc_entry);
-		free(entry, M_SLOS);
+		free(entry, M_SLOS_BTREE);
 	}
 
 	return (0);
@@ -1052,7 +1055,7 @@ fbtree_destroy(struct fbtree *tree)
 	while(!SLIST_EMPTY(&tree->bt_rcfn)) {
 		entry = SLIST_FIRST(&tree->bt_rcfn);
 		SLIST_REMOVE_HEAD(&tree->bt_rcfn, rc_entry);
-		free(entry, M_SLOS);
+		free(entry, M_SLOS_BTREE);
 	}
 
 	vinvalbuf(tree->bt_backend, 0, 0, 0);
@@ -1533,8 +1536,8 @@ fnode_verifysplit(void *space, struct fnode *left, struct fnode *right, struct f
 			}
 		}
 	}
-	free(space, M_SLOS);
-	free(op, M_SLOS);
+	free(space, M_SLOS_BTREE);
+	free(op, M_SLOS_BTREE);
 	return (0);
 }
 #endif // INVARIANTS
@@ -2137,8 +2140,10 @@ fbtree_test(struct fbtree *tree)
 	int size = 2000 * 2;
 	struct fnode_iter iter;
 	tree->bt_flags = FN_ALLOWDUPLICATE;
-	size_t  *keys = (size_t *)malloc(sizeof(size_t) * size, M_SLOS, M_WAITOK);
+	size_t *keys = (size_t *)malloc(sizeof(size_t) * size, M_SLOS_BTREE, M_WAITOK);
+
 	srandom(1);
+
 	BTREE_LOCK(tree, LK_EXCLUSIVE);
 	for (int i = 0; i < size; i++) {
 		keys[i] = random();
@@ -2210,7 +2215,7 @@ fbtree_test(struct fbtree *tree)
 	}
 
 	BTREE_UNLOCK(tree, 0);
-	free(keys, M_SLOS);
+	free(keys, M_SLOS_BTREE);
 
 	return (0);
 }
@@ -2282,7 +2287,7 @@ slsfs_fbtree_test(void)
 	 * Our values are of arbitrary size, so create a random legible string
 	 * of characters for each one. We reuse the buffer later.
 	 */
-	value = malloc(VALSIZE, M_SLOS, M_WAITOK);
+	value = malloc(VALSIZE, M_SLOS_BTREE, M_WAITOK);
 
 
 	/*
@@ -2292,9 +2297,9 @@ slsfs_fbtree_test(void)
 	 * generated increase strictly monotonically, we don't
 	 * need to worry about duplicates.
 	 */
-	keys = malloc(sizeof(*keys) * KEYSPACE, M_SLOS, M_WAITOK);
-	is_there = malloc(sizeof(*is_there) * KEYSPACE, M_SLOS, M_WAITOK | M_ZERO);
-	was_there = malloc(sizeof(*was_there) * KEYSPACE, M_SLOS, M_WAITOK | M_ZERO);
+	keys = malloc(sizeof(*keys) * KEYSPACE, M_SLOS_BTREE, M_WAITOK);
+	is_there = malloc(sizeof(*is_there) * KEYSPACE, M_SLOS_BTREE, M_WAITOK | M_ZERO);
+	was_there = malloc(sizeof(*was_there) * KEYSPACE, M_SLOS_BTREE, M_WAITOK | M_ZERO);
 
 	printf("Starting test");
 
@@ -2310,9 +2315,9 @@ slsfs_fbtree_test(void)
 	for (i = 1; i < KEYSPACE; i++)
 		keys[i] = keys[i - 1] + 1 + (random() % KEYINCR);
 
-	values = malloc(sizeof(*values) * KEYSPACE, M_SLOS, M_WAITOK);
+	values = malloc(sizeof(*values) * KEYSPACE, M_SLOS_BTREE, M_WAITOK);
 	for (i = 0; i < KEYSPACE; i++) {
-		values[i] = malloc(VALSIZE, M_SLOS, M_WAITOK);
+		values[i] = malloc(VALSIZE, M_SLOS_BTREE, M_WAITOK);
 		for (j = 0; j < VALSIZE - 1; j++)
 			((char *) values[i])[j] = 'a' + (random() % ('z' - 'a'));
 		((char *) values[i])[VALSIZE - 1] = '\0';
@@ -2347,30 +2352,7 @@ slsfs_fbtree_test(void)
 			is_there[index] = 1;
 			was_there[index] = 1;
 		} else if (operation < PINSERT + PDELETE) {
-
-#if 0
-			printf("Deleting %lx", key);
-			error = fbtree_remove(btree, &key, value);
-			if (error != 0 && key_present) {
-				printf("ERROR: Deletion of existing key failed");
-				goto out;
-			} else if (error == 0 && !key_present) {
-				printf("ERROR: Deletion of nonexistent key succeeded");
-				error = EINVAL;
-				goto out;
-			}
-
-			is_there[index] = 0;
-
-			/* Check if the popped value is the expected one. */
-			if (error == 0 && (memcmp(value, values[index], VALSIZE) != 0)) {
-				printf("ERROR: Value %.*s not equal to expected %.*s",
-				    (int) VALSIZE, (char *) value, (int) VALSIZE, (char *) values[index]);
-				error = EINVAL;
-				goto out;
-
-			}
-#endif
+			// XXX: Add tests when delete is supported
 		} else if (operation < PINSERT + PDELETE + PSEARCH) {
 
 			error = fbtree_get(btree, &key, value);
@@ -2468,19 +2450,6 @@ slsfs_fbtree_test(void)
 
 		}
 
-#if 0
-		/*
-		 * Every once in a while we do a full tree check. This check makes sure both
-		 * invariants of the tree are held (ordering and node capacity).
-		 */
-		if (i % CHECKPER == 0) {
-			if (btree_test(btree, keys, is_there, was_there, values) != 0) {
-				printf("ERROR: Integrity of btree violated");
-				error = EINVAL;
-				goto out;
-			}
-		}
-#endif
 	}
 
 	error = 0;
@@ -2488,14 +2457,14 @@ out:
 	printf("Iterations: %d", i);
 
 	for (i = 0; i < KEYSPACE; i++)
-		free(values[i], M_SLOS);
-	free(values, M_SLOS);
+		free(values[i], M_SLOS_BTREE);
+	free(values, M_SLOS_BTREE);
 
-	free(value, M_SLOS);
+	free(value, M_SLOS_BTREE);
 
-	free(keys, M_SLOS);
-	free(is_there, M_SLOS);
-	free(was_there, M_SLOS);
+	free(keys, M_SLOS_BTREE);
+	free(is_there, M_SLOS_BTREE);
+	free(was_there, M_SLOS_BTREE);
 
 	vput(vp);
 	/* XXX Destroy the on-disk node created when we have reclamation. */

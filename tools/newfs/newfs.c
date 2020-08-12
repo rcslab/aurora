@@ -1,9 +1,11 @@
+
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/disk.h>
 #include <sys/vnode.h>
 
+#include <assert.h>
 #include <fcntl.h>
 #include <getopt.h>
 #include <stdbool.h>
@@ -67,7 +69,6 @@ main(int argc, const char *argv[])
 			exit(1);
 		}
 
-		printf("Size of disk %lu\n", disksize);
 		ssize = sectorsize;
 		size = disksize;
 
@@ -88,16 +89,14 @@ main(int argc, const char *argv[])
 		exit(1);
 	}
 
-	printf("%lu size\n", size);
-	printf("Disk Size %luGiB\n", size / (1024*1024*1024));
-	printf("Block Size %ukiB\n", bsize / 1024);
-	printf("Sector Size %uB\n", ssize);
+	printf("%s: %lu GiB (%lu sectors), block size %u kiB, sector size %u B\n",
+		argv[1], size / (1024*1024*1024), size / ssize, bsize / 1024, ssize);
 
 	// We have to allocate the appropriate super blocks
-	
+
+	printf("creating super blocks\n");
 	struct slos_sb * sb = (struct slos_sb *)malloc(ssize);
-	printf("Size of superblock %lu\n", sizeof(struct slos_sb));
-	printf("%llu magic\n", SLOS_MAGIC);
+	static_assert(sizeof(struct slos_sb) <= 512, "superblock larger than sector size");
 	sb->sb_magic = SLOS_MAGIC;
 	sb->sb_epoch = EPOCH_INVAL;
 	sb->sb_ssize = ssize;
@@ -108,10 +107,11 @@ main(int argc, const char *argv[])
 		sb->sb_index = i;
 		ssize_t written = write(fd, sb, ssize);
 		if (written == (-1)) {
-			printf("Problem writing");
-			printf("%s\n", strerror(errno));
+			perror("writing superblock failed");
+			return (1);
 		}
 	}
+	printf("complete\n");
 
 	return (0);
 }

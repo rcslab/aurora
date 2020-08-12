@@ -51,8 +51,9 @@
 #include "slsfs_buf.h"
 #include "slsfs_alloc.h"
 
-
-static MALLOC_DEFINE(M_SLSFSMNT, "slsfs_mount", "SLS mount structures");
+static MALLOC_DEFINE(M_SLSFSBUF, "slsfs_buf", "SLSFS buf");
+static MALLOC_DEFINE(M_SLSFSMNT, "slsfs_mount", "SLSFS mount structures");
+static MALLOC_DEFINE(M_SLSFSTSK, "slsfs_taskctx", "SLSFS task context");
 
 static vfs_root_t	slsfs_root;
 static vfs_statfs_t	slsfs_statfs;
@@ -76,6 +77,11 @@ struct slsfs_taskctx {
 	vm_page_t startpage;
 	int iotype;
 	uint64_t size;
+};
+
+struct slsfs_taskbdctx {
+	struct task tk;
+	struct buf *bp;
 };
 
 struct extent {
@@ -398,60 +404,29 @@ slsfs_inodes_init(struct mount *mp, struct slos *slos)
 	return (0);
 }
 
-static struct slsfs_taskctx *
-slsfs_createtask(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int iotype, slsfs_callback cb)
-{
-	struct slsfs_taskctx *ctx;
-
-	ctx = malloc(sizeof(*ctx), M_SLOS, M_WAITOK | M_ZERO);
-	*ctx = (struct slsfs_taskctx) {
-		.vp = vp,
-		.obj = obj,
-		.startpage = m,
-		.size = len,
-		.iotype = iotype,
-		.cb = cb,
-	};
-
-	return (ctx);
-}
-
 static void
-slsfs_obj_deallocate(void *ctx, int performio)
+slsfs_obj_deallocate(void *arg, int unused)
 {
-	vm_object_deallocate(((struct slsfs_taskctx *) ctx)->obj);
-	free(ctx, M_SLOS);
+	struct slsfs_taskbdctx *ctx = (struct slsfs_taskbdctx *)arg;
+
+	vm_object_deallocate(ctx->bp->b_pages[0]->object);
+	free(ctx->bp, M_SLSFSBUF);
+	free(ctx, M_SLSFSTSK);
 }
 
 static void
 slsfs_bdone(struct buf *bp)
 {
-	struct slsfs_taskctx *ctx;
+	struct slsfs_taskbdctx *ctx;
+
+	ctx = malloc(sizeof(*ctx), M_SLSFSTSK, M_WAITOK | M_ZERO);
 
 	/* Free the reference to the object taken at the beginning of the IO. */
 	for (int i = 0; i < bp->b_npages; i++)
 		KASSERT(bp->b_pages[i]->object != 0, ("page without an associated object found"));
 
-#if 0
-	MPASS(bp != NULL);
-	DEBUG4("%s:%d: buf 0x%p has %d pages\n", __FILE__, __LINE__,  bp, bp->b_npages);
-	KASSERT(bp->b_npages > 0, ("no pages in buffer 0x%p before bdone", bp));
+	ctx->bp = bp;
 
-	/*
-	 * We cannot call vm_object_deallocate() from an interrupt context, so
-	 * we create a task for that.
-	 */
-	KASSERT(bp->b_npages > 0, ("no pages in buffer 0x%p after bdone", bp));
-	KASSERT(bp->b_pages[0] != 0, ("invalid page address 0x%p", bp->b_pages[0]));
-	//DEBUG3("%s:%d: Adding a task for buf 0x%p", __FILE__, __LINE__, bp);
-	DEBUG3("%s:%d: Getting an object from page 0x%p\n", __FILE__, __LINE__, bp->b_pages[0]);
-#endif
-
-	ctx = slsfs_createtask(NULL, bp->b_pages[0]->object, NULL, 0, 0, 0);
-#if 0
-	DEBUG3("%s:%d: freeing bp %p", __FILE__, __LINE__, bp);
-#endif
-	//free(bp, M_SLOS);
 	TASK_INIT(&ctx->tk, 0, &slsfs_obj_deallocate, ctx);
 	taskqueue_enqueue(slos.slos_tq, &ctx->tk);
 }
@@ -475,7 +450,7 @@ slsfs_performio(void *ctx, int pending)
 
 	KASSERT(iotype == BIO_READ || iotype == BIO_WRITE, ("invalid IO type %d", iotype));
 
-	bp = malloc(sizeof(*bp), M_SLOS, M_WAITOK);
+	bp = malloc(sizeof(*bp), M_SLSFSBUF, M_WAITOK);
 	size = 0;
 	m = task->startpage;
 
@@ -503,7 +478,7 @@ slsfs_performio(void *ctx, int pending)
 
 	/* If the IO would be empty, this function is a no-op.*/
 	if (i == 0) {
-		free(bp, M_SLOS);
+		free(bp, M_SLSFSBUF);
 		return;
 	}
 
@@ -568,7 +543,25 @@ slsfs_performio(void *ctx, int pending)
 	bstrategy(bp);
 	VOP_UNLOCK(task->vp, 0);
 
-	free(task, M_SLOS);
+	free(task, M_SLSFSTSK);
+}
+
+static struct slsfs_taskctx *
+slsfs_createtask(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int iotype, slsfs_callback cb)
+{
+	struct slsfs_taskctx *ctx;
+
+	ctx = malloc(sizeof(*ctx), M_SLSFSTSK, M_WAITOK | M_ZERO);
+	*ctx = (struct slsfs_taskctx) {
+		.vp = vp,
+		.obj = obj,
+		.startpage = m,
+		.size = len,
+		.iotype = iotype,
+		.cb = cb,
+	};
+
+	return (ctx);
 }
 
 static int
@@ -675,7 +668,7 @@ slsfs_startupfs(struct mount *mp)
 		}
 	} else {
 		if (slos.slos_sb == NULL)
-			slos.slos_sb = malloc(sizeof(struct slos_sb), M_SLOS, M_WAITOK);
+			slos.slos_sb = malloc(sizeof(struct slos_sb), M_SLOS_SB, M_WAITOK);
 		slos_sbat(&slos, smp->sp_index, slos.slos_sb);
 	}
 
@@ -688,15 +681,19 @@ slsfs_startupfs(struct mount *mp)
 			panic("Problem creating taskqueue");
 		}
 	}
-	/* Initialize in memory the allocator and the vnode used for inode 
-	 * bookkeeping. */
+	/* 
+	 * Initialize in memory the allocator and the vnode used for inode 
+	 * bookkeeping.
+	 */
 
 	slsfs_checksumtree_init(&slos);
 	slsfs_allocator_init(&slos);
 	slsfs_inodes_init(mp, &slos);
 
-	// Start the threads, probably should have a sysctl to define number of 
-	// threads here.
+	/*
+	 * Start the threads, probably should have a sysctl to define number of 
+	 * threads here.
+	 */
 	error = taskqueue_start_threads(&slos.slos_tq, 10, PVM, "SLOS Taskqueue Threads");
 	if (error) {
 		panic("%d issue starting taskqueue", error);

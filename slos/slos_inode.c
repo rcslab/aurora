@@ -387,55 +387,6 @@ slos_icreate(struct slos *slos, uint64_t pid, mode_t mode)
 int
 slos_iremove(struct slos *slos, uint64_t pid)
 {
-#if 0
-	struct slos_node *vp;
-	struct slos_diskptr inoptr; 
-	int error;
-
-	SLOS_LOCK(slos);
-
-	/* 
-	 * If there are no open versions of the
-	 * inode, destroy right now, otherwise
-	 * the inode is going to be destroyed
-	 * then the refcount goes to 0.
-	 */
-	vp = slos_vhtable_find(slos, pid);
-	if (vp == NULL) { 
-		/* Get the on-disk position of the inode. */
-		error = btree_search(slos->slos_inodes, pid, &inoptr);
-		if (error != 0) {
-			SLOS_UNLOCK(slos);
-			return error;
-		}
-
-		/* 
-		 * We need the vnode to be able to
-		 * traverse the inode's resources.
-		 */
-		vp = slos_vpimport(slos, inoptr.offset);
-		if (vp == NULL) {
-			SLOS_UNLOCK(slos);
-			return EIO;
-		}
-		/* Free both in-memory and on-disk resources. */
-		SLOS_UNLOCK(slos);
-		slos_ifree(slos, vp);
-
-		return (0);
-	} else {
-		/* 
-		 * If there are still open inodes, we have to
-		 * wait until they are done to free the resources.
-		 * Mark the vnode as being deleted. 
-		 */
-		vp->sn_status = SLOS_VDEAD;
-
-	}
-
-	SLOS_UNLOCK(slos);
-#endif
-
 	/* Not yet implemented. */
 	return (ENOSYS);
 }
