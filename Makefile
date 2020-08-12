@@ -1,4 +1,4 @@
-SUBDIR=libsls slos tests tools shim
+SUBDIR=libsls kmod slos tests tools shim
 
 IDENT=${:!sysctl -n kern.ident!}
 .if (${IDENT} == "FASTDBG")
