@@ -70,7 +70,7 @@ slsckpt_posixshm(struct shmfd *shmfd, struct sbuf *sb)
 	slsposixshm.slsid = (uint64_t) shmfd;
 	slsposixshm.magic = SLSPOSIXSHM_ID;
 	slsposixshm.mode = shmfd->shm_mode;
-	slsposixshm.object = (uint64_t) shmfd->shm_object;
+	slsposixshm.object = (uint64_t) shmfd->shm_object->objid;
 	slsposixshm.is_anon = (shmfd->shm_path == NULL) ? 1 : 0;
 
 	/* 
@@ -104,22 +104,29 @@ slsrest_posixshm(struct slsposixshm *info, struct slskv_table *objtable, int *fd
 	int error;
 	int fd;
 
+
 	/* First and foremost, go fetch the object backing the shared memory. */
 	error = slskv_find(objtable, info->object, (uintptr_t *) &obj);
 	if (error != 0)
 		return (error);
 
 	path = (info->sb != NULL) ? sbuf_data(info->sb) : SHM_ANON;
+	SLS_KTR1("Restoring shared memory with path %p",
+	    path == SHM_ANON ? path : "(anon)");
 
 	/* First try to create the shared memory mapping. */
-	error = kern_shm_open(curthread, path, UIO_SYSSPACE, 
+	error = kern_shm_open(curthread, path, UIO_SYSSPACE,
 	    O_RDWR | O_CREAT | O_EXCL, info->mode, NULL);
 	if (error != 0) {
+		SLS_KTR("Failed to create new shared memory segment");
+
 		/* Maybe it's already created then? */
 		error = kern_shm_open(curthread, path, UIO_SYSSPACE,
 		    O_RDWR, info->mode, NULL);
 		if (error != 0)
 			return (error);
+
+		SLS_KTR("Shared memory segment already created");
 
 		/* It was - return the fd and let the main code take care of the rest. */
 		*fdp = curthread->td_retval[0];
@@ -130,9 +137,10 @@ slsrest_posixshm(struct slsposixshm *info, struct slskv_table *objtable, int *fd
 	fd = curthread->td_retval[0];
 
 	/* Change the shared memory segment to point to the restored data. */
-	fp = FDTOFP(curproc, fd);	
+	fp = FDTOFP(curproc, fd);
 	shmfd = (struct shmfd *) fp->f_data;
 
+	SLS_KTR1("Swapped object %p into shared memory segment", obj);
 	vm_object_reference(obj);
 
 	oldobj = shmfd->shm_object;
