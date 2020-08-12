@@ -1,12 +1,12 @@
 #ifndef __SLSBTREE_H__
 #define __SLSBTREE_H__ 
 
-extern "C" {
-#include <btree.h>
 #include <stdio.h>
-}
 
 #include <iterator>
+#include <memory>
+
+#include <btree.h>
 
 class Snapshot;
 
@@ -23,7 +23,7 @@ class BtreeIter {
 		BtreeIter<K, V>(BtreeIter<K, V> *n) :
 		    node(n->node), at(n->at) {};
 		BtreeIter<K, V>() : at(-1), node(nullptr) {};
-		BtreeIter<K, V>(BtreeNode<K, V> *node, int at) :
+		BtreeIter<K, V>(std::shared_ptr<BtreeNode<K, V>> node, int at) :
 		    node(node), at(at) {};
 
 		K key();
@@ -31,7 +31,7 @@ class BtreeIter {
 
 		BtreeIter<K, V> next();
 		int valid();
-		BtreeNode<K, V> *node;
+		std::shared_ptr<BtreeNode<K, V>> node;
 		int at;
 
 };

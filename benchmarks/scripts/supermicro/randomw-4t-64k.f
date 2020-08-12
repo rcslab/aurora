@@ -4,7 +4,7 @@ set $iosize=64k
 set $nthreads=1
 set $workingset=0
 set $directio=0
-set $runtime=10
+set $runtime=30
 
 define file name=largefile1,path=$dir,size=$filesize,prealloc,reuse,paralloc
 define file name=largefile2,path=$dir,size=$filesize,prealloc,reuse,paralloc

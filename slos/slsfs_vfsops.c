@@ -27,6 +27,7 @@
 #include <sys/taskqueue.h>
 #include <sys/pctrie.h>
 #include <sys/sysctl.h>
+#include <sys/syscallsubr.h>
 
 #include <geom/geom.h>
 #include <geom/geom_vfs.h>
@@ -66,8 +67,7 @@ static const char *slsfs_opts[] = { "from" };
 struct unrhdr *slsid_unr;
 
 // sysctl variables
-static struct sysctl_ctx_list slsfs_list;
-int checksum_enabled = 1;
+int checksum_enabled = 0;
 
 struct slsfs_taskctx {
 	struct task tk;
@@ -269,7 +269,6 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 		    (uint64_t) key, value.offset, value.size);
 		error = fbtree_insert(tree, &key, &value);
 		if (error) {
-			fnode_print(tree->bt_rootnode);
 			fnode_print(iter.it_node);
 			panic("Error %d inserting  - %lu : %lu-%lu - %lu-%lu %lu-%lu %lu-%lu", 
 				error, key, value.offset, value.size, lbn, size, tail.start, 
@@ -291,19 +290,12 @@ slsfs_init(struct vfsconf *vfsp)
 
 	/* Get a new unique identifier generator. */
 	slsid_unr = new_unrhdr(SLOS_SYSTEM_MAX, INT_MAX, NULL);
-	fnode_zone = uma_zcreate("Btree Fnode slabs", sizeof(struct fnode), 
-	    &fnode_construct, &fnode_deconstruct, NULL, NULL, UMA_ALIGN_PTR, 0);
 
-	struct sysctl_oid *root;
+	fnode_zone = uma_zcreate("Btree Fnode Slabs", sizeof(struct fnode),
+		&fnode_construct, &fnode_deconstruct, NULL, NULL, UMA_ALIGN_PTR, 0);
+	fnode_trie_zone = uma_zcreate("Btree Fnode Trie Slabs", pctrie_node_size(),
+		NULL, NULL, pctrie_zone_init, NULL, UMA_ALIGN_PTR, UMA_ZONE_NOFREE);
 
-	sysctl_ctx_init(&slsfs_list);
-
-	root = SYSCTL_ADD_ROOT_NODE(&slsfs_list, OID_AUTO, "SLSFS", CTLFLAG_RW, 0,
-	    "SLSFS Configuration Variable");
-
-	SYSCTL_ADD_INT(&slsfs_list, SYSCTL_CHILDREN(root), OID_AUTO, "Checksum enabled",
-	    CTLFLAG_RW, &checksum_enabled,
-	    0, "Checksum enabled");
 	/* The constructor never fails. */
 	KASSERT(slsid_unr != NULL, ("slsid unr creation failed"));;
 	return (0);
@@ -321,8 +313,8 @@ slsfs_uninit(struct vfsconf *vfsp)
 	delete_unrhdr(slsid_unr);
 	slsid_unr = NULL;
 	uma_zdestroy(fnode_zone);
+	//uma_zdestroy(fnode_trie_zone);
 	slos_uninit();
-	sysctl_ctx_free(&slsfs_list);
 
 	return (0);
 }
@@ -484,6 +476,9 @@ slsfs_performio(void *ctx, int pending)
 
 
 	KASSERT(i > 0, ("object %p is has no pages to dump", obj));
+
+	/* Get a reference to the object, freed when the buffer is done.  */
+	vm_object_reference(obj);
 
 	/*
 	 * We can do the merging of keys and all the functionality here.  I'm
@@ -716,11 +711,10 @@ slsfs_create_slos(struct mount *mp, struct vnode *devvp)
 	mtx_init(&slos.slsfs_sync_lk, "syncer lock",  NULL, MTX_DEF);
 	slos.slsfs_dirtybufcnt = 0;
 	slos.slsfs_syncing = 0;
-	slos.slsfs_checkpointtime = 1;
 	slos.slsfs_mount = mp;
 
 	slos.slos_vp = devvp;
-	devvp->v_data = &slos;
+	//devvp->v_data = &slos;
 	/* Hook up the SLOS into the GEOM provider for the backing device. */
 	g_topology_lock();
 	error = g_vfs_open(devvp, &slos.slos_cp, "slsfs", 1);
@@ -814,7 +808,9 @@ slsfs_valloc(struct vnode *dvp, mode_t mode, struct ucred *creds, struct vnode *
 
 	/* Inherit group id from parent directory */
 	SLSVP(vp)->sn_ino.ino_gid = SLSVP(dvp)->sn_ino.ino_gid;
-	SLSVP(vp)->sn_ino.ino_uid = creds->cr_uid;
+	if (creds != NULL) {
+		SLSVP(vp)->sn_ino.ino_uid = creds->cr_uid;
+	}
 	DEBUG2("Creating file with gid(%lu) uid(%lu)", SLSVP(vp)->sn_ino.ino_gid, SLSVP(vp)->sn_ino.ino_uid);
 
 	*vpp = vp;
@@ -949,34 +945,45 @@ error:
  * where the inodes root is, as well as the new allocation tree roots (these 
  * should aways be dirty in a dirty checkpoint), update epoch and done.
  */
+
+uint64_t checkpoints = 0;
+
 static void
 slsfs_checkpoint(struct mount *mp, int closing)
 {
-	struct vnode *vp, *mvp;
-	struct thread *td;
+	struct vnode *vp, *mvp = NULL;
 	struct bufobj *bo;
 	struct buf *bp;
 	struct slos_node *svp;
 	struct slos_inode *ino;
+	struct timespec te;
 	diskptr_t ptr;
 	int error;
 
-	DEBUG2("%s:%d: checkpoint starting", __FILE__, __LINE__);
-	td = curthread;
+	DEBUG3("Pre Checkpoint: %lu, %lu, %lu", checkpoints, slos.slos_sb->sb_data_synced, slos.slos_sb->sb_meta_synced);
+
+again:
 	/* Go throught the list of vnodes attached to the filesystem. */
 	MNT_VNODE_FOREACH_ACTIVE(vp, mp, mvp) {
-		/* XXX Is this right? Why are we unlocking the vnode's VI lock? We never locked it.  */
-		if(VOP_ISLOCKED(vp)) {
+		/* If we can't get a reference, the vnode is probably dead. */
+		if (vp->v_type == VNON) {
+			VI_UNLOCK(vp);
+			continue;
+		}
+		
+		if (vp == slos.slsfs_inodes) {
 			VI_UNLOCK(vp);
 			continue;
 		}
 
-		/* If we can't get a reference, the vnode is probably dead. */
-		if (vget(vp, LK_EXCLUSIVE | LK_INTERLOCK | LK_NOWAIT, td) != 0) {
+		if ((error = vget(vp, LK_EXCLUSIVE | LK_INTERLOCK | LK_NOWAIT, curthread)) != 0) {
+			if (error == ENOENT) {
+				MNT_VNODE_FOREACH_ALL_ABORT(mp, mvp);
+				goto again;
+			}
 			continue;
 		}
 
-		bo = &vp->v_bufobj;
 		// Skip over the btrees for now as we will sync them after the 
 		// data syncs
 		if ((vp->v_vflag & VV_SYSTEM) || ((vp->v_type != VDIR) && (vp->v_type != VREG)) || (vp->v_data == NULL)) {
@@ -984,9 +991,11 @@ slsfs_checkpoint(struct mount *mp, int closing)
 			continue;
 		}
 
-		if ((SLSVP(vp)->sn_status & SLOS_DIRTY)) {
+
+		if (SLSVP(vp)->sn_status & SLOS_DIRTY) {
 			/* Step 1 and 2 Sync data and mark underlying Btree Copy 
 			 * on write*/
+			DEBUG1("Flushing %p", vp);
 			error = slsfs_sync_vp(vp, closing);
 			if (error) {
 				vput(vp);
@@ -1008,22 +1017,26 @@ slsfs_checkpoint(struct mount *mp, int closing)
 	bo = &(SLSVP(slos.slsfs_inodes)->sn_tree.bt_backend->v_bufobj);
 	// Check if both the underlying Btree needs a sync or the inode itself 
 	// - should be a way to make it the same TODO
-	if (bo->bo_dirty.bv_cnt > 0 || SLSVP(slos.slsfs_inodes)->sn_status & SLOS_DIRTY) {
-		// Just a hack for now to get this thing working XXX Why is it 
-		// a hack?
-		/* Sync the inode root itself. */
+	// Just a hack for now to get this thing working XXX Why is it a hack?
+	/* Sync the inode root itself. */
+	if (slos.slos_sb->sb_data_synced) {
+		DEBUG("Flushing metadata");
 		error = ALLOCATEPTR(&slos, BLKSIZE(&slos), &ptr);
 		MPASS(error == 0);
 
 		/* 3 Sync Root Inodes and btree */
-		vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
+		error = vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
+		if (error) {
+			panic("What");
+		}
 		svp = SLSVP(slos.slsfs_inodes);
 		ino = &svp->sn_ino;
+		DEBUG2("Flushing inodes %p %p", slos.slsfs_inodes, svp->sn_fdev);
 		error = slsfs_sync_vp(slos.slsfs_inodes, closing);
 		if (error) {
+			panic("Issue in checkpoint");
 			return;
 		}
-		VOP_UNLOCK(slos.slsfs_inodes, 0);
 
 		/* 
 		 * Allocate a new blk for the root inode write it and give it 
@@ -1037,7 +1050,7 @@ slsfs_checkpoint(struct mount *mp, int closing)
 		bp = getblk(svp->sn_fdev, ptr.offset, BLKSIZE(&slos), 0, 0, 0);
 		MPASS(bp);
 		memcpy(bp->b_data, ino, sizeof(struct slos_inode));
-		bwrite(bp);
+		bawrite(bp);
 
 		// Write out the checksum tree;
 		error = ALLOCATEPTR(&slos, BLKSIZE(&slos), &ptr);
@@ -1045,6 +1058,7 @@ slsfs_checkpoint(struct mount *mp, int closing)
 			panic("Problem with allocation");
 		}
 
+		DEBUG1("Flushing checksum %p", slos.slos_cktree->sn_tree.bt_backend);
 		ino = &slos.slos_cktree->sn_ino;
 		MPASS(slos.slos_cktree != SLSVP(slos.slsfs_inodes));
 		ino->ino_blk = ptr.offset;
@@ -1052,7 +1066,7 @@ slsfs_checkpoint(struct mount *mp, int closing)
 		bp = getblk(svp->sn_fdev, ptr.offset, BLKSIZE(&slos), 0, 0, 0);
 		MPASS(bp);
 		memcpy(bp->b_data, ino, sizeof(struct slos_inode));
-		bwrite(bp);
+		bawrite(bp);
 
 		slos.slos_sb->sb_cksumtree = ptr;
 
@@ -1062,7 +1076,6 @@ slsfs_checkpoint(struct mount *mp, int closing)
 
 		MPASS(ptr.offset != slos.slos_sb->sb_root.offset);
 
-		slos.slos_sb->sb_epoch += 1;
 		slos.slos_sb->sb_index = (slos.slos_sb->sb_epoch) % 100;
 
 		/* 4 Sync the allocator */
@@ -1077,11 +1090,28 @@ slsfs_checkpoint(struct mount *mp, int closing)
 
 		fbtree_sync(&slos.slos_cktree->sn_tree);
 
+		nanotime(&te);
+		slos.slos_sb->sb_time = te.tv_sec;
+		slos.slos_sb->sb_time_nsec = te.tv_nsec;
+
 		bbarrierwrite(bp);
+
+		VOP_UNLOCK(slos.slsfs_inodes, 0);
+
+		checkpoints++;
+		DEBUG3("Checkpoint: %lu, %lu, %lu", checkpoints, slos.slos_sb->sb_data_synced, slos.slos_sb->sb_meta_synced);
+
+		slos.slos_sb->sb_data_synced = 0;
+		slos.slos_sb->sb_meta_synced = 0;
+		slos.slos_sb->sb_attempted_checkpoints = 0;
+		slos.slos_sb->sb_epoch += 1;
+	} else {
+		slos.slos_sb->sb_attempted_checkpoints++;
 	}
 	DEBUG2("%s:%d: checkpoint complete", __FILE__, __LINE__);
 }
 
+uint64_t checkpointsps = 1;
 /*
  * Daemon that flushes dirty buffers to the device.
  *
@@ -1092,21 +1122,42 @@ static void
 slsfs_syncer(struct slos *slos)
 {
 	slos->slsfs_sync_exit = 0;
+	struct timespec ts, te;
+	int error;
+	uint64_t elapsed, period;
 
-	/* Periodically sync until we unmount. */
+		/* Periodically sync until we unmount. */
 	while (!slos->slsfs_sync_exit) {
 		slos->slsfs_syncing = 1;
+		nanotime(&ts);
 		slsfs_checkpoint(slos->slsfs_mount, 0);
+		nanotime(&te);
 		/* Notify anyone waiting to synchronize. */
 		mtx_lock(&slos->slsfs_sync_lk);
 		slos->slsfs_syncing = 0;
 		cv_broadcast(&slos->slsfs_sync_cv);
 		mtx_unlock(&slos->slsfs_sync_lk);
 
+		elapsed = (1000000000ULL * (te.tv_sec - ts.tv_sec)) + (te.tv_nsec - ts.tv_nsec);
+
+		period = 1000000000ULL / checkpointsps;
+
+		te.tv_sec = 0;
+		if (elapsed < period) {
+			te.tv_nsec = period - elapsed;
+		} else {
+			te.tv_nsec = 0;
+		}
+
 		/* Wait until it's time to flush again. */
 		if (!slos->slsfs_sync_exit) {
-			tsleep(&slos->slsfs_syncing, PRIBIO, "-",
-			    (hz * slos->slsfs_checkpointtime) >> 1);
+			error = 0;
+			while(ts.tv_nsec > 0) {
+				error = kern_nanosleep(curthread, &te, &te);
+				if (error == 0) {
+					break;
+				}
+			}
 		}
 	}
 
@@ -1170,6 +1221,7 @@ slsfs_init_fs(struct mount *mp)
 		name.cn_nameptr = buf;
 		name.cn_namelen = 5;
 		slsfs_init_dir(vp, vp, NULL);
+		name.cn_cred = curthread->td_ucred;
 		struct vnode *svp;
 		error = VOP_MKDIR(vp, &svp, &name, &attr);
 		MPASS(SLSVP(svp)->sn_ino.ino_nlink == 2);
@@ -1201,13 +1253,13 @@ slsfs_init_fs(struct mount *mp)
 static int
 slsfs_wakeup_syncer(int is_exiting)
 {
-	mtx_lock(&slos.slsfs_sync_lk);
 	/* Don't sync again if already in progress. */
 	/* XXX Maybe exit if it's already in progress? How do we
 	 * serialize writes and syncs? (If a write after the last
 	 * sync but before this one doesn't get  written by the former
 	 * then we have to go through with the latter).
 	 */
+	mtx_lock(&slos.slsfs_sync_lk);
 	if (slos.slsfs_syncing) {
 		cv_wait(&slos.slsfs_sync_cv, &slos.slsfs_sync_lk);
 	}
@@ -1240,8 +1292,14 @@ slsfs_mount(struct mount *mp)
 	int error = 0;
 	char *from;
 
+	DEBUG("Mounting drive");
+
+	if (mp->mnt_data != NULL)  {
+		return (0);
+	}
+
 	if (mp->mnt_flag & MNT_UPDATE) {
-		// XXX Not implemented yet
+		return (0);
 	} else if (mp->mnt_data != NULL) {
 		slsfs_wakeup_syncer(1);
 		vflush(mp, 0, FORCECLOSE, curthread);
@@ -1592,7 +1650,7 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 static int
 slsfs_sync(struct mount *mp, int waitfor)
 {
-	slsfs_wakeup_syncer(0);
+	//slsfs_wakeup_syncer(0);
 	return (0);
 }
 

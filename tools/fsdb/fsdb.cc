@@ -8,12 +8,10 @@
 #include <unistd.h>
 #include <histedit.h>
 
-extern "C" {
 #include <slsfs.h>
 #include <slos.h>
 #include <btree.h>
 #include <slos_inode.h>
-}
 
 #include <iostream>
 #include <vector>
@@ -32,7 +30,7 @@ size_t sectorsize;
 int err = 0;
 vector<Snapshot> snaps;
 Snapshot * curr = nullptr;
-SFile * currinode = nullptr;
+std::shared_ptr<SFile> currinode = nullptr;
 
 #define MAX_ARGC (32)
 
@@ -56,7 +54,7 @@ retrieveSnaps(vector<Snapshot> &snaps)
 		memcpy(&sb, buf, sizeof(struct slos_sb));
 
 		if (sb.sb_magic != SLOS_MAGIC) {
-			cout << "Corrupted superblock at " << i << endl;
+			//cout << "Corrupted superblock at " << i << endl;
 		}
 
 		if (sb.sb_epoch != EPOCH_INVAL) {
@@ -86,6 +84,22 @@ listsnaps(Snapshot *sb, vector<string> &args)
 	}
 
 	return (0);
+}
+
+uint64_t
+lastsnap()
+{
+	int error;
+	error = retrieveSnaps(snaps);
+	if (error) {
+		return (error);
+	}
+	uint64_t max = 0;
+	for (auto k : snaps) {
+		max = std::max(k.super.sb_epoch, max);
+	}
+	
+	return max;
 }
 
 
@@ -134,11 +148,6 @@ selectinode(Snapshot *sb, vector<string> &args)
 
 
 	auto inode = sb->getInodeFile();
-	delete inode;
-
-	if (currinode != nullptr) {
-		delete currinode;
-	}
 
 	currinode = inode->getFile(ino);
 	if (currinode == nullptr) {
@@ -165,8 +174,6 @@ listinodes(Snapshot *sb, vector<string> &args)
 		cout << k.first << " -> (" << k.second.offset;
 		cout << ", " << k.second.epoch << ")" << endl;
 	}
-
-	delete inode;
 
 	return (0);
 }
@@ -323,18 +330,18 @@ fsdb_cli(void)
 
 
 int
-main(int argc, char *argv[])
+main(int argc, char **argv)
 {
 	struct stat stats;
 	int error;
 
-	if (argc != 2) {
+	if (argc < 2) {
 		cout << "Invalid number of arguments" << endl;
 		return (-1);
 	}
 
 
-	dev = open(argv[1], O_RDONLY);
+	dev = open(argv[argc - 1], O_RDONLY);
 	if (dev == -1) {
 		cout << strerror(errno) << endl;
 		return (-1);
@@ -346,13 +353,21 @@ main(int argc, char *argv[])
 		return (-1);
 	}
 
-	
-	cout << "=== Starting FSDB ===" << endl;
-	cout << endl;
-
 	sectorsize = 512;
 	blksize = stats.st_blksize;
 
+	int c = 0;
+	while ((c = getopt(argc, argv, "s")) != -1) {
+		switch (c) {
+			case 's':
+				cout << lastsnap() << endl;
+				return (0);
+			default:
+				break;
+		}
+	}
+
+	cout << "=== Starting FSDB ===" << endl;
 	cout << "Device Information" << endl;
 	cout << "==================" << endl;
 	cout << "Sector size: " << sectorsize << "B" << endl;

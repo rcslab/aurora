@@ -64,7 +64,6 @@ extern uma_zone_t fnodes_zone;
 
 #define BUCKET_SETNEXT(node, val) (fnode_setval(node, NODE_MAX(node), val))
 #define BUCKET_HASNEXT(node) ((*(bnode_ptr *)fnode_getval(node, NODE_MAX(node))) != 0)
-#define BUCKET_SETPOINTER(node, bucket) ((node)->fn_pointers[NODE_MAX(node)] = bucket)
 #define BUCKET_GETNEXT(node, next) (fnode_fetch(node, NODE_MAX(node), next))
 
 struct alloc_d {
@@ -84,6 +83,7 @@ struct fbtree_rcentry {
 	rootchange_t		    rc_fn;
 	void			    *rc_ctx;
 };
+
 
 /* 
  * File Backed Btree
@@ -105,6 +105,8 @@ struct fbtree {
 	size_t		bt_splits;
 	size_t		bt_removes;
 	size_t		bt_replaces;
+	struct mtx	bt_trie_lock;
+	struct pctrie	bt_trie;
 	size_t		bt_gets;
 	size_t		bt_root_replaces;
 	struct fnode	*bt_rootnode;
@@ -150,8 +152,6 @@ struct fnode {
 	uint8_t			*fn_types;
 	void			*fn_values;	/* Pointer to values list */
 	void			*fn_keys;	/* Pointer to keys list */
-	void			*fn_pointers[FNODE_PTRSIZE];
-	SLIST_ENTRY(fnode)	fn_dirtyentry;	/* List entry to collect dirty fnodes */
 };
 
 /*
@@ -225,8 +225,6 @@ int fbtree_test(struct fbtree *tree);
 void fnode_print(struct fnode *node);
 void fnode_print_internal(struct fnode *node);
 void fnode_print_level(struct fnode *node);
-void fnode_print_left_neighbor(struct fnode *node);
-void fnode_print_neighbors(struct fnode *node);
 int slsfs_fbtree_test(void);
 
 #endif /* _FB_BTREE_H_ */

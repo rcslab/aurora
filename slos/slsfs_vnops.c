@@ -148,7 +148,6 @@ slsfs_mkdir(struct vop_mkdir_args *args)
 		return (error);
 	} 
 
-
 	SLSVP(vp)->sn_ino.ino_gid = SLSVP(dvp)->sn_ino.ino_gid;
 	SLSVP(vp)->sn_ino.ino_uid = name->cn_cred->cr_uid;
 
@@ -864,7 +863,7 @@ slsfs_strategy(struct vop_strategy_args *args)
 			("No logical block number should be -1 - vnode effect %lu", 
 			 SLSVP(vp)->sn_pid));
 
-		error = BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_SHARED);
+		error = BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_EXCLUSIVE);
 		if (error) {
 			panic("Problem getting lock %d", error);
 		}
@@ -874,12 +873,6 @@ slsfs_strategy(struct vop_strategy_args *args)
 		}
 
 		if (ITER_ISNULL(iter)) {
-			struct fnode *parent;
-			fnode_print(iter.it_node);
-			fnode_parent(iter.it_node, &parent);
-			fnode_print(parent);
-			fnode_right(iter.it_node, &parent);
-			fnode_print(parent);
 			fnode_print(iter.it_node);
 			panic("Issue finding block vp(%p), lbn(%lu), fnode(%p) bp(%p)", vp, bp->b_lblkno, 
 			    iter.it_node, bp);
@@ -887,13 +880,9 @@ slsfs_strategy(struct vop_strategy_args *args)
 		ptr = ITER_VAL_T(iter, diskptr_t);
 		if (ITER_KEY_T(iter, uint64_t) != bp->b_lblkno) {
 			if (!INTERSECT(iter, bp->b_lblkno, IOSIZE(SLSVP(vp)))) {
-				struct fnode *parent;
 				fnode_print(iter.it_node);
-				fnode_parent(iter.it_node, &parent);
-				fnode_print(parent);
-				fnode_right(iter.it_node, &parent);
-				fnode_print(parent);
-				panic("Key not found %lu %lu %lu %lu", ITER_KEY_T(iter, uint64_t), ptr.offset, ptr.size, bp->b_lblkno);
+				panic("Key not found %lu %lu %lu %lu", 
+					ITER_KEY_T(iter, uint64_t), ptr.offset, ptr.size, bp->b_lblkno);
 			}
 		}
 
@@ -901,10 +890,10 @@ slsfs_strategy(struct vop_strategy_args *args)
 			if (ptr.epoch == slos.slos_sb->sb_epoch && ptr.offset != 0) {
 				adjust_ptr(bp->b_lblkno, ITER_KEY_T(iter, uint64_t), &ptr);
 			} else {
-				error = BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_UPGRADE);
-				if (error) {
-					panic("Problem getting lock %d", error);
-				}
+				/*error = BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_UPGRADE);*/
+				/*if (error) {*/
+					/*panic("Problem getting lock %d", error);*/
+				/*}*/
 				
 				error = slsfs_fbtree_rangeinsert(&SLSVP(vp)->sn_tree, 
 					bp->b_lblkno, bp->b_bcount);
@@ -917,6 +906,7 @@ slsfs_strategy(struct vop_strategy_args *args)
 				MPASS(error == 0);
 			}
 			bp->b_blkno = ptr.offset;
+			atomic_add_64(&slos.slos_sb->sb_data_synced, bp->b_bcount);
 		} else if (bp->b_iocmd == BIO_READ) {
 			if (ptr.offset != (0))  {
 				adjust_ptr(bp->b_lblkno, ITER_KEY_T(iter, uint64_t), &ptr);
@@ -935,9 +925,12 @@ slsfs_strategy(struct vop_strategy_args *args)
 		    slos.slos_vp->v_bufobj.bo_bsize;
 		SDT_PROBE3(slos, , , slsfs_deviceblk, bp->b_blkno, 
 		    bp->b_bufobj->bo_bsize, change);
+		atomic_add_64(&slos.slos_sb->sb_meta_synced, bp->b_bcount);
 	}
 
 	KASSERT(bp->b_blkno != 0, ("Cannot be 0 %p - %p", bp, vp));
+	daddr_t old_l = bp->b_lblkno;
+	daddr_t old_b = bp->b_blkno;
 	int change =  bp->b_bufobj->bo_bsize / slos.slos_vp->v_bufobj.bo_bsize;
 	bp->b_blkno = bp->b_blkno * change;
 	bp->b_iooffset = dbtob(bp->b_blkno);
@@ -949,7 +942,6 @@ slsfs_strategy(struct vop_strategy_args *args)
 		DEBUG4("bio_read: bp(%p), vp(%lu) - %lu:%lu", bp, SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno);
 	}
 #endif
-
 	g_vfs_strategy(&slos.slos_vp->v_bufobj, bp);
 	if (checksum_enabled) {
 		error = slsfs_cksum(bp);
@@ -957,6 +949,9 @@ slsfs_strategy(struct vop_strategy_args *args)
 			panic("Problem with checksum for buffer %p", bp);
 		}
 	}
+
+	bp->b_blkno = old_b;
+	bp->b_lblkno = old_l;
 
 	return (0);
 }
@@ -1597,6 +1592,7 @@ slsfs_ioctl(struct vop_ioctl_args *ap)
 	struct slos_node *svp = SLSVP(vp);
 	struct slos_rstat *st = NULL;
 	struct uio *uio = NULL;
+	uint64_t *checks;
 	struct slsfs_getsnapinfo *info = NULL;
 
 	switch(com) {
@@ -1620,6 +1616,11 @@ slsfs_ioctl(struct vop_ioctl_args *ap)
 		DEBUG("Remounting on snap");
 		info = (struct slsfs_getsnapinfo *) ap->a_data;
 		return (slsfs_mountsnapshot(info->index));
+	case SLSFS_COUNT_CHECKPOINTS:
+		checks = (uint64_t *) ap->a_data;
+		*checks = checkpoints;
+		return (0);
+
 	case FIOSEEKDATA: // Fallthrough
 	case FIOSEEKHOLE:
 		printf("UNSUPPORTED SLSFS IOCTL FIOSEEKDATA/HOLE");

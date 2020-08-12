@@ -1,14 +1,13 @@
 #ifndef __SLSBFILE_H__
 #define __SLSBFILE_H__ 
 
-extern "C" {
 #include <slos.h>
 #include <slsfs.h>
 #include <slos_inode.h>
-}
 
 #include <string>
 #include <vector>
+#include <memory>
 
 #include "slsbtree.h"
 
@@ -20,7 +19,7 @@ class Snapshot {
 		Snapshot(int dev, struct slos_sb &sb) : 
 		    super(sb), dev(dev) {};
 		std::string toString(int verbose);
-		InodeFile *getInodeFile();
+		std::shared_ptr<InodeFile> getInodeFile();
 
 		struct slos_sb super;
 		int dev;
@@ -51,7 +50,7 @@ class SFile {
 		virtual std::ostream& out(std::ostream &where) = 0;
 		
 
-		friend SFile *createFile(Snapshot *sb, long blknum);
+		friend std::shared_ptr<SFile> createFile(Snapshot *sb, long blknum);
 		friend std::ostream& operator<<(std::ostream& os, SFile& file);
 };
 
@@ -82,7 +81,7 @@ class InodeFile : public SFile {
 	public:
 		InodeFile(Snapshot *sb, slos_inode &ino);
 		~InodeFile() {};
-		SFile * getFile(uint64_t inodeNum);
+		std::shared_ptr<SFile> getFile(uint64_t inodeNum);
 
 		Btree<size_t, diskptr_t> tree;
 		int dumpTo(std::string path);

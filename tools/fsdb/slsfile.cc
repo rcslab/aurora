@@ -21,15 +21,20 @@ Snapshot::toString(int verbose = 0)
 	ss << "Snapshot " << super.sb_index << " - Epoch " << super.sb_epoch << std::endl;
 	if (verbose) {
 		ss << "Inode Tree: " << super.sb_root.offset << std::endl;
+		ss << "Dirty Meta Synced: " << super.sb_meta_synced << std::endl;
+		ss << "Dirty Data Synced: " << super.sb_data_synced << std::endl;
+		ss << "Attempted Checkpoints: " << super.sb_attempted_checkpoints << std::endl;
 		ss << "Checksum Tree: " << super.sb_cksumtree.offset << std::endl;
 		ss << "Allocator Size Tree: " << super.sb_allocsize.offset << std::endl;
 		ss << "Allocator Offset Tree: " << super.sb_allocoffset.offset << std::endl;
+		ss << "Time(s): " << super.sb_time << std::endl;
+		ss << "Time(nsec): " << super.sb_time_nsec << std::endl;
 	}
 
 	return ss.str();
 }
 
-SFile *
+std::shared_ptr<SFile> 
 createFile(Snapshot *sb, long blknum)
 {
 	struct slos_inode ino;
@@ -48,7 +53,7 @@ createFile(Snapshot *sb, long blknum)
 	}
 
 	if (S_ISDIR(ino.ino_mode)) {
-		return new SDir(sb, ino);
+		return std::make_shared<SDir>(sb, ino);
 	} else if (S_ISBLK(ino.ino_mode)) {
 		std::cout << "Not implemented" << std::endl;
 		return nullptr;
@@ -56,7 +61,7 @@ createFile(Snapshot *sb, long blknum)
 		std::cout << "Not implemented" << std::endl;
 		return nullptr;
 	} else if (S_ISREG(ino.ino_mode)) {
-		return new SReg(sb, ino);
+		return std::make_shared<SReg>(sb, ino);
 	} else if (S_ISFIFO(ino.ino_mode)) {
 		std::cout << "Not implemented" << std::endl;
 		return nullptr;
@@ -67,24 +72,24 @@ createFile(Snapshot *sb, long blknum)
 		std::cout << "Not implemented" << std::endl;
 		return nullptr;
 	} else if (ino.ino_pid == 0) {
-		return new InodeFile(sb, ino);
+		return std::make_shared<InodeFile>(sb, ino);
 	}
 
 	return nullptr;
 
 }
 
-InodeFile *
+std::shared_ptr<InodeFile>
 Snapshot::getInodeFile()
 {
-	SFile *f = createFile(this, super.sb_root.offset);
+	auto f = createFile(this, super.sb_root.offset);
 	if (f == nullptr) {
 		return nullptr;
 	}
-	return dynamic_cast<InodeFile*>(f);
+	return std::dynamic_pointer_cast<InodeFile>(f);
 }
 
-SFile *
+std::shared_ptr<SFile>
 InodeFile::getFile(uint64_t pid)
 {
 	for (auto k : availableInodes()) {

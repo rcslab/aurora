@@ -345,7 +345,7 @@ slsvm_print_crc32_vmspace(struct vmspace *vm)
 			continue;
 		TAILQ_FOREACH(m, &obj->memq, listq) {
 			addr = IDX_TO_OFF(m->pindex) - entry->offset + entry->start;
-			CTR3(KTR_SLS, "0x%lx, 0x%x 0x%x",  addr,
+			DEBUG3("0x%lx, 0x%x 0x%x",  addr,
 			    * (uint64_t *) PHYS_TO_DMAP(m->phys_addr),
 			    * ((uint64_t *) PHYS_TO_DMAP(m->phys_addr) + 1));
 		}

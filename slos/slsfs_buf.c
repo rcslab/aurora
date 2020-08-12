@@ -83,7 +83,9 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw
 	bool isaligned = (offset % blksize) == 0;
 	uint64_t bno = offset / blksize;
 
+#ifdef VERBOSE
 	DEBUG1("Attemping to retrieve buffer %lu bno", bno);
+#endif
 	error = slsfs_lookupbln(svp, bno, &biter);
 	if (error) {
 		DEBUG1("%d", error);

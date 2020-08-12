@@ -1,3 +1,4 @@
+#
 # CDDL HEADER START
 #
 # The contents of this file are subject to the terms of the
@@ -23,23 +24,47 @@
 #
 # ident	"%Z%%M%	%I%	%E% SMI"
 
-set $dir=/testmnt
-set $filesize=2g
-set $iosize=64k
-set $iters=100
-set $nthreads=1
+# Single threaded asynchronous ($sync) sequential writes (1MB I/Os) to
+# a 1GB file.
+# Stops after 1 series of 1024 ($count) writes has been done.
 
-define file name=bigfile,path=$dir,size=$filesize,prealloc,reuse
+set $dir=/testmnt
+set $cached=false
+set $iosize=64k
+set $nthreads=1
+set $sync=false
+set $runtime=30
+
+define file name=bigfile1,path=$dir,size=0,prealloc
+define file name=bigfile2,path=$dir,size=0,prealloc
+define file name=bigfile3,path=$dir,size=0,prealloc
+define file name=bigfile4,path=$dir,size=0,prealloc
 
 define process name=filewriter,instances=1
 {
+
   thread name=filewriterthread,memsize=10m,instances=$nthreads
   {
-    flowop write name=write-file,filename=bigfile,random,dsync,iosize=$iosize,iters=$iters
-    flowop fsync name=sync-file
+    flowop appendfile name=write-file1,dsync=$sync,filename=bigfile1,iosize=$iosize
   }
+
+  thread name=filewriterthread,memsize=10m,instances=$nthreads
+  {
+    flowop appendfile name=write-file2,dsync=$sync,filename=bigfile2,iosize=$iosize
+  }
+
+  thread name=filewriterthread,memsize=10m,instances=$nthreads
+  {
+    flowop appendfile name=write-file3,dsync=$sync,filename=bigfile3,iosize=$iosize
+  }
+
+  thread name=filewriterthread,memsize=10m,instances=$nthreads
+  {
+    flowop appendfile name=write-file4,dsync=$sync,filename=bigfile4,iosize=$iosize
+  }
+
 }
 
-run 30
+run $runtime
 
-echo  "FileMicro-WriteRandDsync Version 2.1 personality successfully loaded"
+echo  "FileMicro-SeqWrite Version 2.2 personality successfully loaded"

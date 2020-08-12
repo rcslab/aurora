@@ -37,6 +37,7 @@ struct fbtree;
 #define SLS_VGET(aa, bb, cc, dd) (aa->v_mount->mnt_op->vfs_vget(aa->v_mount, bb, cc, dd))
 
 extern uma_zone_t fnode_zone;
+extern uma_zone_t fnode_trie_zone;
 extern struct buf_ops bufops_slsfs;
 
 struct slsfs_getsnapinfo {
@@ -46,8 +47,9 @@ struct slsfs_getsnapinfo {
 
 #define SLSFS_SNAP (0x1)
 
-#define SLSFS_GET_SNAP		_IOWR('N', 100, struct slsfs_getsnapinfo)
-#define SLSFS_MOUNT_SNAP	_IOWR('N', 101, struct slsfs_getsnapinfo)
+#define SLSFS_GET_SNAP			_IOWR('N', 100, struct slsfs_getsnapinfo)
+#define SLSFS_MOUNT_SNAP		_IOWR('N', 101, struct slsfs_getsnapinfo)
+#define SLSFS_COUNT_CHECKPOINTS 	_IOR('N', 102, uint64_t)
 
 struct slsfsmount {
     STAILQ_ENTRY(slsfsmount)	sp_next_mount;

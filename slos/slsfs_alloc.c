@@ -61,7 +61,6 @@ allocate_chunk(struct slos *slos, diskptr_t *ptr)
 
 	error = fbtree_keymax_iter(STREE(slos), &asked, &iter);
 	if (error || ITER_ISNULL(iter)) {
-		fnode_print(STREE(slos)->bt_rootnode);
 		panic("Problem with keymax %d\n", error);
 	}
 	fullsize = ITER_KEY_T(iter, uint64_t);
@@ -330,6 +329,7 @@ slsfs_allocator_sync(struct slos *slos, struct slos_sb *newsb)
 	error = fbtree_sync_withalloc(STREE(slos), &ptr);
 	MPASS(error == 0);
 
+	DEBUG2("off(%p), size(%p)", slos->slsfs_alloc.a_offset->sn_fdev,slos->slsfs_alloc.a_size->sn_fdev);
 	// Update the inodes and dirty them as well
 	bp = getblk(slos->slsfs_alloc.a_offset->sn_fdev, ptr.offset, BLKSIZE(slos), 0, 0, 0);
 	MPASS(bp);

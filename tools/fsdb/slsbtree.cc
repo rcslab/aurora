@@ -24,15 +24,6 @@ printBtreeNode(struct fnode *node)
 			uint64_t __unused *t = (uint64_t *)fnode_getkey(node, i);
 			printf("| K %lu|| C %lu |", *t, *p);
 		}
-		printf("Child memory\n");
-		for (int i = 0; i <= NODE_SIZE(node); i++) {
-			if (node->fn_pointers[i] != NULL) {
-				struct fnode *n = (struct fnode *)node->fn_pointers[i];
-				printf("| node(%lu) |", n->fn_location);
-			} else {
-				printf("| NULL |");
-			}
-		}
 	} else if (NODE_TYPE(node) == BT_EXTERNAL) {
 		for (i = 0; i < NODE_SIZE(node); i++) {
 			uint64_t *t = (uint64_t *)fnode_getkey(node, i);
@@ -202,7 +193,8 @@ BtreeIter<K,V> BtreeNode<K, V>::follow_to(K key, long blknum)
 	next.parentkey = *(K *)fnode_getkey(&node, index);
 
 	if (next.blknum == blknum) {
-		return BtreeIter<K, V> { new BtreeNode(&next), index };
+		auto n = std::make_shared<BtreeNode<K, V>>(&next);
+		return BtreeIter<K, V> { n, index };
 	} else {
 		return next.follow_to(key, blknum);
 	}
@@ -228,9 +220,6 @@ BtreeIter<K, V> BtreeIter<K, V>::next()
 	BtreeIter<K, V> iter;
 
 	if (!valid()) {
-		if (node != nullptr) {
-			delete node;
-		}
 
 		return BtreeIter<K, V> {};
 	}
@@ -244,10 +233,9 @@ BtreeIter<K, V> BtreeIter<K, V>::next()
 			} 
 
 			bnode_ptr ptr = *(bnode_ptr *)fnode_getval(&parentIter.node->node, parentIter.at);
-			iter =  BtreeIter<K, V> {
-					new BtreeNode<K, V> { node->btree, node->snap, static_cast<long>(ptr) }, 0};
+			auto n = std::make_shared<BtreeNode<K, V>>(node->btree, node->snap, static_cast<long>(ptr));
+			iter =  BtreeIter<K, V> { n, 0};
 
-			delete node;
 			return iter;
 
 		}
@@ -288,7 +276,7 @@ BtreeIter<K, V> BtreeNode<K, V>::keymax(K key)
 		}
 	}
 
-	auto node = new BtreeNode<K, V>(this);
+	auto node = std::make_shared<BtreeNode<K, V>>(this);
 	return BtreeIter<K, V>(node, i);
 }
 

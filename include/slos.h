@@ -41,12 +41,14 @@
     } while (0) 
 
 #else
+
 #define DEBUG(fmt, ...) ((void)(0));
 #define DEBUG1(fmt, ...) ((void)(0));
 #define DEBUG2(fmt, ...) ((void)(0));
 #define DEBUG3(fmt, ...) ((void)(0));
 #define DEBUG4(fmt, ...) ((void)(0));
 #define DEBUG5(fmt, ...) ((void)(0));
+
 #endif // KTR
 
 #define ALLOCATEPTR(slos, bytes, ptr) ((slos)->slsfs_blkalloc(slos, bytes, ptr))
@@ -55,8 +57,6 @@
 typedef uint64_t bnode_ptr;
 typedef uint64_t vnode_off_key_t[2];
 typedef struct slos_diskptr diskptr_t;
-
-extern uma_zone_t fnodes_zone;
 
 /*
  * SLOS Pointer
@@ -99,6 +99,9 @@ struct slsfs_blkalloc {
 #define SLOS_FLAG_HASH	0x00000002 /* Checksum Support */
 
 typedef void (*slsfs_callback)(void *context);
+
+extern uint64_t checkpoints;
+extern uint64_t checkpointsps;
 
 struct slos {
 	SLIST_ENTRY(slos)	next_slos;
@@ -154,6 +157,11 @@ struct slos_sb {
 	uint32_t		sb_flags;	/* feature flags */
 	uint64_t		sb_epoch;	/* epoch number */
 	uint32_t		sb_index;	/* Index superblock is in the array of size NUMSBS */
+	uint64_t		sb_time;	/* Time */
+	uint64_t		sb_time_nsec;	/* Time nsec */
+	uint64_t		sb_meta_synced;
+	uint64_t		sb_data_synced;
+	uint64_t		sb_attempted_checkpoints;
 
 	/* Identification information */
 	struct uuid		sb_uuid;	/* object store uuid */
