@@ -234,14 +234,21 @@ printhelp(Snapshot *, vector<string> &args)
 	return (0);
 }
 
+int
+cmd_exit(Snapshot *unused, vector<string> &args)
+{
+	exit(0);
+}
+
 std::map<string, std::pair<cmd_t, string>> cmds = {
-    { "help", std::make_pair(printhelp, "Print help for commands") },
     { "ls", std::make_pair(listsnaps, "List snapshots on disk") },
     { "snap", std::make_pair(selectsnap, "Select snapshot to work with (Ex. snap NUM)") },
     { "li", std::make_pair(listinodes, "List all inodes Ex. INO_NUM -> (BLKNUM, EPOCH)") },
     { "inode", std::make_pair(selectinode, "Select an inode (Ex. inode NUM)") },
     { "dump", std::make_pair(dumpinode, "Dump current selected inode to path (Ex. dump path/to/dump.txt)") },
-    { "pi", std::make_pair(printinode, "Print current selected inode to path (Ex. pi)") }
+    { "pi", std::make_pair(printinode, "Print current selected inode to path (Ex. pi)") },
+    { "help", std::make_pair(printhelp, "Print help for commands") },
+    { "exit", std::make_pair(cmd_exit, "Exit the program") }
 };
 
 static char *
@@ -327,7 +334,11 @@ fsdb_cli(void)
 	history_end(hist);
 }
 
-
+void
+usage()
+{
+	cout << "Usage: fsdb DEVICE" << endl;
+}
 
 int
 main(int argc, char **argv)
@@ -336,21 +347,21 @@ main(int argc, char **argv)
 	int error;
 
 	if (argc < 2) {
-		cout << "Invalid number of arguments" << endl;
-		return (-1);
+		usage();
+		return (1);
 	}
 
 
 	dev = open(argv[argc - 1], O_RDONLY);
 	if (dev == -1) {
-		cout << strerror(errno) << endl;
-		return (-1);
+		perror("open");
+		return (1);
 	}
 
 	error = fstat(dev, &stats);
 	if (error) {
-		cout << strerror(errno) << endl;
-		return (-1);
+		perror("fstat");
+		return (1);
 	}
 
 	sectorsize = 512;

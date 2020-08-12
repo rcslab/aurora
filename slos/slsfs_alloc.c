@@ -250,7 +250,6 @@ slsfs_allocator_init(struct slos *slos)
 		off = offset * BLKSIZE(slos);
 		total = slos->slos_sb->sb_size - (offset * BLKSIZE(slos));
 
-		printf("%lu %lu", OTREE(slos)->bt_root, STREE(slos)->bt_root);
 		KASSERT(fbtree_size(OTREE(slos)) == 0, ("Bad size\n"));
 		KASSERT(fbtree_size(STREE(slos)) == 0, ("Bad size\n"));
 

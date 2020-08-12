@@ -393,7 +393,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 			return (error);
 
 #endif /* SLS_TEST */
-		printf("SLS Loaded.\n");
+		printf("SLS Loaded\n");
 		break;
 
 	case MOD_UNLOAD:
@@ -422,7 +422,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		if (sls_blackholefp != NULL)
 			fdrop(sls_blackholefp, curthread);
 
-		printf("SLS Unloaded.\n");
+		printf("SLS Unloaded\n");
 		break;
 	default:
 		error = EOPNOTSUPP;

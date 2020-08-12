@@ -297,7 +297,10 @@ slsfs_init(struct vfsconf *vfsp)
 		NULL, NULL, pctrie_zone_init, NULL, UMA_ALIGN_PTR, UMA_ZONE_NOFREE);
 
 	/* The constructor never fails. */
-	KASSERT(slsid_unr != NULL, ("slsid unr creation failed"));;
+	KASSERT(slsid_unr != NULL, ("slsid unr creation failed"));
+
+	printf("SLOS/SLSFS Loaded\n");
+
 	return (0);
 }
 
@@ -313,8 +316,10 @@ slsfs_uninit(struct vfsconf *vfsp)
 	delete_unrhdr(slsid_unr);
 	slsid_unr = NULL;
 	uma_zdestroy(fnode_zone);
-	//uma_zdestroy(fnode_trie_zone);
+	uma_zdestroy(fnode_trie_zone);
 	slos_uninit();
+
+	printf("SLOS/SLSFS Loaded\n");
 
 	return (0);
 }
@@ -1394,7 +1399,6 @@ slsfs_statfs(struct mount *mp, struct statfs *sbp)
 	struct slsfs_device	    *slsdev;
 	struct slsfsmount	    *smp;
 
-	bzero(sbp, sizeof(*sbp));
 	smp = TOSMP(mp);
 	slsdev = smp->sp_sdev;
 	sbp->f_bsize = slsdev->devblocksize;
@@ -1404,6 +1408,7 @@ slsfs_statfs(struct mount *mp, struct statfs *sbp)
 	sbp->f_bavail = 100;
 	sbp->f_ffree = 0;
 	sbp->f_files = 1000;
+	sbp->f_namemax = SLSFS_NAME_LEN;
 
 	return (0);
 }
