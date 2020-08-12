@@ -3,6 +3,7 @@
 #include <machine/param.h>
 
 #include <sys/conf.h>
+#include <sys/exec.h>
 #include <sys/fcntl.h>
 #include <sys/limits.h>
 #include <sys/mman.h>
@@ -335,20 +336,48 @@ int
 slsrest_vmspace(struct proc *p, struct slsvmspace *info, struct shmmap_state *shmstate)
 {
 	struct vmspace *vmspace;
-	struct vm_map *vm_map;
+	vm_offset_t sv_minuser;
+	struct sysentvec *sv;
+	vm_map_t map;
+	int error;
+	int map_at_zero;
+	ssize_t size;
 
 	/* Shorthands */
 	vmspace = p->p_vmspace;
-	vm_map = &vmspace->vm_map;
+	map = &vmspace->vm_map;
+	sv = p->p_sysent;
+
+	size = sizeof(map_at_zero);
+	error = kernel_sysctlbyname(curthread, "security.bsd.map_at_zero",
+	    &map_at_zero, &size, NULL, 0, NULL, 0);
 
 	/* Blow away the old address space, as done in exec_new_vmspace. */
-	/* XXX Only FreeBSD binaries for now*/
-	shmexit(vmspace);
-	pmap_remove_pages(vmspace_pmap(vmspace));
-	vm_map_remove(vm_map, vm_map_min(vm_map), vm_map_max(vm_map));
-	vm_map_lock(vm_map);
-	vm_map_modflags(vm_map, 0, MAP_WIREFUTURE);
-	vm_map_unlock(vm_map);
+	if (error == 0 && map_at_zero)
+		sv_minuser = sv->sv_minuser;
+	else
+		sv_minuser = MAX(sv->sv_minuser, PAGE_SIZE);
+	if (vmspace->vm_refcnt == 1 && vm_map_min(map) == sv_minuser &&
+	    vm_map_max(map) == sv->sv_maxuser &&
+	    cpu_exec_vmspace_reuse(p, map)) {
+		shmexit(vmspace);
+		pmap_remove_pages(vmspace_pmap(vmspace));
+		vm_map_remove(map, vm_map_min(map), vm_map_max(map));
+		/*
+		 * An exec terminates mlockall(MCL_FUTURE), ASLR state
+		 * must be re-evaluated.
+		 */
+		vm_map_lock(map);
+		vm_map_modflags(map, 0, MAP_WIREFUTURE | MAP_ASLR |
+		    MAP_ASLR_IGNSTART);
+		vm_map_unlock(map);
+	} else {
+		error = vmspace_exec(p, sv_minuser, sv->sv_maxuser);
+		if (error)
+			return (error);
+		vmspace = p->p_vmspace;
+		map = &vmspace->vm_map;
+	}
 
 	/* Refresh the value of vmspace in case it changed above */
 	vmspace = p->p_vmspace;
