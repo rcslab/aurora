@@ -17,6 +17,7 @@
 
 #include "slosmm.h"
 #include "slos.h"
+#include "slsfs.h"
 #include "btree.h"
 #include "slos_inode.h"
 #include "slsfs_alloc.h"
@@ -129,6 +130,7 @@ fnode_setval(struct fnode *node, int i, void *val)
 void
 fnode_print(struct fnode *node)
 {
+#ifdef KTR 
 	int i;
 	if (node == NULL) {
 		return;
@@ -165,6 +167,7 @@ fnode_print(struct fnode *node)
 			}
 		}
 	}
+#endif /* KTR */
 }
 
 
@@ -483,6 +486,8 @@ fnode_cow(struct buf *bp)
 	struct fnode *parent;
 	struct slos *slos = ((struct slos_node *)tree->bt_backend->v_data)->sn_slos;
 	struct bufobj *bo = &tree->bt_backend->v_bufobj;
+
+	ASSERT_BO_WLOCKED(bo);
 
 	BUF_LOCK(cur->fn_buf, LK_EXCLUSIVE, 0);
 	// Already cowed, we can stop

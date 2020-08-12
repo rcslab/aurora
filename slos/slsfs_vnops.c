@@ -43,8 +43,11 @@ slsfs_inactive(struct vop_inactive_args *args)
 	struct slos_node *svp = SLSVP(vp);
 
 	if (svp->sn_status == SLOS_VDEAD) {
+		/* XXX Do not destroy the file,  we need it for the SLS. */
+		/*
 		error = slsfs_truncate(vp, 0);
 		slsfs_destroy_node(svp);
+		*/
 		vrecycle(vp);
 	}
 
@@ -111,7 +114,7 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 	VI_UNLOCK(vp);
 
 	vinvalbuf(vp, 0, 0, 0);
-	
+
 	vnode_destroy_vobject(vp);
 	if (vp->v_type != VCHR) {
 		cache_purge(vp);

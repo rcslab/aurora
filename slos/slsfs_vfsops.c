@@ -196,8 +196,6 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 		iter.it_index = 0;
 	}
 
-	DEBUG2("===================RANGEINSERT [%d, %d)===================", main.start, main.end);
-	fnode_print_left_neighbor(iter.it_node);
 	KASSERT(key <= main.start, ("Got minimum %ld as an infimum for %ld\n", key, main.start));
 
 	while (!ITER_ISNULL(iter)) {
@@ -1341,6 +1339,7 @@ slsfs_statfs(struct mount *mp, struct statfs *sbp)
 	struct slsfs_device	    *slsdev;
 	struct slsfsmount	    *smp;
 
+	bzero(sbp, sizeof(*sbp));
 	smp = TOSMP(mp);
 	slsdev = smp->sp_sdev;
 	sbp->f_bsize = slsdev->devblocksize;
