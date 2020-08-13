@@ -123,6 +123,8 @@ struct slsfile {
 
 	off_t offset;
 	uint64_t backer;
+	uint64_t ino;
+	int has_path;
 
 	/* 
 	* Let's not bother with this flag from the filedescent struct.

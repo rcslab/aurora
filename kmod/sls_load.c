@@ -259,8 +259,13 @@ slsload_vnode(struct sbuf **path, char **bufp, size_t *bufsizep)
 	int error;
 
 	error = slsload_path(path, bufp, bufsizep);
-	if (error != 0)
-		return (error);
+	if (error != 0) {
+		SLS_KTR("No path found");
+		/* If there's no path, add an empty buffer. */
+		*path = sbuf_new_auto();
+		sbuf_finish(*path);
+		return (0);
+	}
 
 	return (0);
 }
@@ -599,7 +604,7 @@ slsload_path(struct sbuf **sbp, char **bufp, size_t *bufsizep)
 		error = ENOMEM;
 		goto error;
 	}
-	
+
 	error = sls_info(path, sblen, bufp, bufsizep);
 	if (error != 0)
 		goto error;

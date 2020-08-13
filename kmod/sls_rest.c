@@ -643,7 +643,6 @@ slsrest_dovmobjects(struct slskv_table *metatable, struct slskv_table *objtable)
 			continue;
 		}
 
-		CTR2(KTR_SLS, "Shadowing (%p, %p)\n", parent, object);
 		slsrest_shadow(object, parent, slsvmobjectp->backer_off);
 	}
 	SLS_DBG("Restoration of VM Objects\n");

@@ -218,8 +218,6 @@ slsvm_proc_shadow(struct proc *p, struct slskv_table *table, int is_fullckpt)
 			vm_object_clear_flag(vmshadow, OBJ_ONEMAPPING);
 			slsvm_object_reftransfer(obj, vmshadow);
 			VM_OBJECT_WUNLOCK(vmshadow);
-			SLS_KTR2("(TRANSFER) Object %p has %d references", obj, obj->ref_count);
-			SLS_KTR2("(TRANSFER) Shadow %p has %d references", vmshadow, vmshadow->ref_count);
 			continue;
 		}
 

@@ -9,7 +9,6 @@
 #include <sys/pctrie.h>
 #include <sys/bufobj.h>
 #include <slos.h>
-#include <slsfs.h>
 
 
 typedef int (*compare_t)(const void *, const void *);

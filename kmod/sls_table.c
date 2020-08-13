@@ -453,8 +453,6 @@ sls_readdata_slos_pages(struct vnode *vp, vm_object_t obj, struct uio *auiop)
 		KASSERT(pagesizes[m->psind] == PAGE_SIZE,
 			("got page with size %lu", pagesizes[m->psind]));
 
-		CTR2(KTR_SLS, "(%p) READ offset %lx", obj, IDX_TO_OFF(m->pindex));
-
 		/* Create the UIO for the disk. */
 		aiovp = &auiop->uio_iov[0];
 		aiovp->iov_base = (void *) PHYS_TO_DMAP(m->phys_addr);
@@ -863,8 +861,6 @@ sls_writeobj_slos(struct vnode *vp, vm_object_t obj)
 		startm = m;
 		contig_len = sls_contig_pages(obj, &m);
 		KASSERT(contig_len <= sls_contig_limit, ("writing %lx bytes, limit %lx", contig_len, sls_contig_limit));
-
-		CTR2(KTR_SLS, "(%p) WRITE offset %lx", obj, IDX_TO_OFF(startm->pindex));
 
 		if (sls_async_slos) {
 			/* Spawn kernel tasks for each IO. */

@@ -58,6 +58,7 @@
 #include "sls_internal.h"
 #include "sls_mm.h"
 #include "sls_path.h"
+#include "sls_vm.h"
 
 #include "imported_sls.h"
 
@@ -68,12 +69,8 @@ slsckpt_getvnode(struct proc *p, struct file *fp, struct slsfile *info, struct s
 
 	info->backer = (uint64_t) fp->f_vnode;
 
-	/* Write out the struct file. */
-	error = sbuf_bcat(sb, (void *) info, sizeof(*info));
-	if (error != 0)
-		return (error);
-
-	error = slsckpt_vnode(p, fp->f_vnode, sb);
+	/* Get the location of the node in the VFS/SLSFS. */
+	error = slsckpt_vnode(p, fp->f_vnode, info, sb);
 	if (error != 0)
 		return (error);
 
@@ -83,22 +80,9 @@ slsckpt_getvnode(struct proc *p, struct file *fp, struct slsfile *info, struct s
 static inline int
 slsckpt_getfifo(struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
 {
-	int error;
-
-	info->backer = (uint64_t) fp->f_vnode;
-
-	/* Write out the struct file. */
-	error = sbuf_bcat(sb, (void *) info, sizeof(*info));
-	if (error != 0)
-		return (error);
-
-	/* FIFOs are actually vnodes. */
-	error = slsckpt_vnode(p, fp->f_vnode, sb);
-	if (error != 0)
-		return (error);
-
-	return (0);
+	return slsckpt_getvnode(p, fp, info, sb);
 }
+
 static int
 slsckpt_getkqueue(struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
 {
@@ -280,7 +264,6 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slsckpt_da
 	struct sbuf *sb, *oldsb;
 	struct sls_record *rec;
 	struct slsfile info;
-	vm_ooffset_t offset;
 	uint64_t sockid;
 	int error;
 
@@ -297,6 +280,7 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slsckpt_da
 	info.type = fp->f_type;
 	info.flag = fp->f_flag;
 	info.offset = fp->f_offset;
+	info.has_path = 0;
 
 	/* 
 	 * XXX Change SLS ID to the encoding used for the rest of the objects.  
@@ -443,18 +427,9 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slsckpt_da
 			break;
 		}
 
-		/* Otherwise we have to create the shadow ourselves. */
-
-		/* XXX Again, we're copying ourselves here, use the existing shadowing logic. */
-		vm_object_reference(obj);
-
-		offset = 0;
-		shadow = obj;
-		vm_object_shadow(&shadow, &offset, ptoa(obj->size));
-
-		((struct shmfd *) fp->f_data)->shm_object = shadow;
-		error = slskv_add(sckpt_data->sckpt_objtable, (uint64_t) obj, (uintptr_t) shadow);
-		KASSERT((error == 0), ("shadow already exists"));
+		error = slsvm_object_shadow(sckpt_data->sckpt_objtable, &obj);
+		KASSERT(error == 0, ("object %p already has a shadow", obj));
+		((struct shmfd *) fp->f_data)->shm_object = obj;
 
 		break;
 
@@ -527,7 +502,7 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 
 	switch(info->type) {
 	case DTYPE_VNODE:
-		error = slsrest_vnode((struct sbuf *) slsbacker, info, &fd);
+		error = slsrest_vnode((struct sbuf *) slsbacker, info, &fd, 1);
 		if (error != 0)
 			return (error);
 
@@ -668,6 +643,44 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 	return (0);
 }
 
+/* List of paths for device vnodes that can be included in a checkpoint. */
+char *sls_accepted_devices[] = {
+	"/dev/null",
+	"/dev/zero",
+	"/dev/hpet0",
+	"/dev/random",
+	"/dev/urandom",
+	NULL,
+};
+
+static int
+slsckpt_is_accepted_device(struct vnode *vp)
+{
+	struct sbuf *sb;
+	char *path;
+	int error;
+	int i;
+
+	/* Get the path of the vnode. */
+	error = sls_vn_to_path(vp, &sb);
+	if (error != 0) {
+		SLS_DBG("Could not get path for character device vnode %p", vp);
+		return (0);
+	}
+
+	path = sbuf_data(sb);
+
+	for (i = 0; sls_accepted_devices[i] != NULL; i++) {
+		if (strncmp(path, sls_accepted_devices[i], PATH_MAX) != 0) {
+			sbuf_delete(sb);
+			return (1);
+		}
+	}
+	sbuf_delete(sb);
+
+	return (0);
+}
+
 static int
 slsckpt_file_supported(struct file *fp)
 {
@@ -683,12 +696,8 @@ slsckpt_file_supported(struct file *fp)
 		    ((fp->f_vnode->v_rdev->si_devsw->d_flags & D_TTY) != 0))
 			return (1);
 
-		/* 
-		 * XXX Make sure /dev/{zero,null,random} are ok here
-		 * unify the code path with that of the hpet0. 
-		 */
 		if (fp->f_vnode->v_type == VCHR)
-			return (1);
+			return (slsckpt_is_accepted_device(fp->f_vnode));
 
 		/* Handle only regular vnodes for now. */
 		if (fp->f_vnode->v_type != VREG)
@@ -793,6 +802,7 @@ slsckpt_filedesc(struct proc *p, struct slsckpt_data *sckpt_data, struct sbuf *s
 		if (!fdisused(filedesc, fd))
 			continue;
 
+		SLS_KTR1("Checkpointing fd %d", fd);
 		KASSERT((filedesc == p->p_fd), ("wrong file descriptor table"));
 		fp = FDTOFP(p, fd);
 

@@ -60,47 +60,43 @@
 
 #include "imported_sls.h"
 
-/* Get the name of a vnode. This is the only information we need about it. */
 static int
-slsckpt_path(struct proc *p, struct vnode *vp, struct sbuf *sb)
+sls_vn_to_inode(struct vnode *vp, uint64_t *inop)
 {
-	int error;
+	/* Get the inode number of the file through the vnode. */
 
-	error = sls_vn_to_path_append(vp, sb);
+	if (vp->v_mount != slos.slsfs_mount) 
+		panic("unlinked vnode %p not in the SLOS", vp);
 
-	/* 
-	 * XXX Make sure the unlinked file case is handled. 
-	 */
-	if (error == ENOENT)
-		return (0);
+	SLS_KTR1("Got inum %lx from the SLOS", INUM(SLSVP(vp)));
+
+	*inop = INUM(SLSVP(vp));
+
+	SLS_KTR1("Checkpointing vnode backed by inode %lx", *inop);
 
 	return (0);
+
 }
 
+/*
+ * Restore a vnode from a VFS path.
+ */
 static int
-slsrest_path(struct sbuf *path, struct slsfile *info, int *fdp, int seekable)
+slsrest_path(struct sbuf *path, struct slsfile *info, int *fdp)
 {
-	char *filepath;
 	int error;
 	int fd;
 
-	filepath = sbuf_data(path);
-	printf("Restoring %s\n", filepath);
-
-	/* XXX Permissions/flags. Also, is O_CREAT reasonable? */
-	error = kern_openat(curthread, AT_FDCWD, filepath, 
-	    UIO_SYSSPACE, O_RDWR, S_IRWXU);	
-	if (error != 0)
+	/* XXX Permissions/flags. */
+	error = kern_openat(curthread, AT_FDCWD, sbuf_data(path),
+	    UIO_SYSSPACE, O_RDWR, S_IRWXU);
+	if (error != 0) {
+		printf("ERR\n");
 		return (error);
+	}
 
 	fd = curthread->td_retval[0];
 
-	/* Vnodes are seekable. Fix up the offset here. */
-	if (seekable != 0) {
-		error = kern_lseek(curthread, fd, info->offset, SEEK_SET);
-		if (error != 0)
-			return (error);
-	}
 
 	/* Export the fd to the caller. */
 	*fdp = fd;
@@ -108,27 +104,177 @@ slsrest_path(struct sbuf *path, struct slsfile *info, int *fdp, int seekable)
 	return (0);
 }
 
-
-int
-slsckpt_vnode(struct proc *p, struct vnode *vp, struct sbuf *sb)
+/*
+ * Restore a vnode from a SLOS inode. This is mostly code from kern_openat()
+ */
+static int
+slsrest_inode(struct slsfile *info, int *fdp)
 {
-	return slsckpt_path(p, vp, sb);
+	struct thread *td = curthread;
+	struct filecaps *fcaps = NULL;
+	int flags = FREAD | FWRITE;
+	struct vnode *vp;
+	struct file *fp;
+	int indx = -1;
+	int error;
+
+	KASSERT(info->has_path == 0, ("restoring linked file by inode number"));
+
+	SLS_KTR1("Restoring vnode backed by inode %lx", info->ino);
+
+	/* Get an empty struct file. */
+	error = falloc_noinstall(td, &fp);
+	if (error != 0)
+		return (error);
+
+	/* Try to get the vnode from the SLOS. */
+	error = VFS_VGET(slos.slsfs_mount, info->ino, LK_EXCLUSIVE, &vp);
+	if (error != 0)
+		goto error;
+
+	fp->f_flag = FFLAGS(O_RDWR) & FMASK;
+
+	error = vn_open_vnode(vp, FREAD | FWRITE, td->td_ucred, td, fp);
+	if (error != 0) {
+		vput(vp);
+		goto error;
+	}
+
+	/* XXX We don't know what to do with anonymous FIFOs just yet. */
+	KASSERT(vp->v_type != VFIFO, ("Unexpected FIFO"));
+
+	/* Set up the file struct. */
+	fp->f_seqcount = 1;
+	finit(fp, (flags & FMASK) | (fp->f_flag & FHASLOCK),
+	    DTYPE_VNODE, vp, &vnops);
+
+	VOP_UNLOCK(vp, 0);
+
+	fp->f_vnode = vp;
+
+	/* Add the new file struct to the table. */
+	error = finstall(td, fp, &indx, flags, fcaps);
+	if (error != 0)
+		goto error;
+
+	/* Export the fd to the caller. */
+	*fdp = indx;
+
+	/* Drop this thread's reference to the file struct. */
+	fdrop(fp, td);
+
+	return (0);
+
+error:
+	/* Drop the file table's reference. */
+	if (indx != -1)
+		kern_close(td, indx);
+
+	/* Remove the reference from the SLS itself. */
+	fdrop(fp, td);
+
+	return (error);
+
 }
 
 int
-slsrest_vnode(struct sbuf *path, struct slsfile *info, int *fdp)
+slsckpt_vnode(struct proc *p, struct vnode *vp, struct slsfile *info, struct sbuf *sb)
 {
-	return slsrest_path(path, info, fdp, 0);
+	char *freepath = NULL;
+	char *fullpath = "";
+	size_t len;
+	int error;
+
+	vref(vp);
+	error = vn_fullpath(curthread, vp, &fullpath, &freepath);
+	vrele(vp);
+	switch(error) {
+	case 0:
+		/* Successfully found a path, go on with . */
+		break;
+
+	case ENOENT:
+		/* File not in the VFS, try to get its location in the SLOS. */
+		free(freepath, M_TEMP);
+
+		error = sls_vn_to_inode(vp, &info->ino);
+		if (error != 0)
+			return (error);
+
+		info->has_path = 0;
+
+		/* Write out the struct file. */
+		error = sbuf_bcat(sb, (void *) info, sizeof(*info));
+		if (error != 0)
+			return (error);
+
+		return (0);
+
+	default:
+		/* Miscellaneous error. */
+		goto error;
+	}
+
+	info->has_path = 1;
+	/* Write out the struct file. */
+	error = sbuf_bcat(sb, (void *) info, sizeof(*info));
+	if (error != 0)
+		goto error;
+
+
+	len = strnlen(fullpath, PATH_MAX);
+	error = sls_path_append(fullpath, len, sb);
+	if (error != 0)
+		goto error;
+
+	free(freepath, M_TEMP);
+
+	return (0);
+
+error:
+
+	free(freepath, M_TEMP);
+	return (error);
 }
 
 int
-slsckpt_fifo(struct proc *p, struct vnode *vp, struct sbuf *sb)
+slsrest_vnode(struct sbuf *path, struct slsfile *info, int *fdp, int seekable)
 {
-	return slsckpt_path(p, vp, sb);
+	struct thread *td = curthread;
+	int error, close_error;
+
+	/* Get the vnode either from the inode or the path. */
+	if (info->has_path == 1)
+		error = slsrest_path(path, info, fdp);
+	else
+		error = slsrest_inode(info, fdp);
+	if (error != 0)
+		return (error);
+
+	if (seekable == 0)
+		return (0);
+
+	/* Vnodes might be seekable. Fix up the offset here. */
+	error = kern_lseek(td, *fdp, info->offset, SEEK_SET);
+	if (error != 0) {
+		close_error = kern_close(td, *fdp);
+		if (close_error != 0)
+			SLS_DBG("error %d when closing fd %d", close_error, *fdp);
+		return error;
+	}
+
+	return (0);
+}
+
+
+int
+slsckpt_fifo(struct proc *p, struct vnode *vp, struct slsfile *info, struct sbuf *sb)
+{
+	return slsckpt_vnode(p, vp, info, sb);
 }
 
 int
 slsrest_fifo(struct sbuf *path, struct slsfile *info, int *fdp)
 {
-	return slsrest_path(path, info, fdp, 1);
+	return slsrest_vnode(path, info, fdp, 0);
 }

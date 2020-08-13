@@ -9,6 +9,8 @@
 #include <vm/uma.h>
 
 #include "slos.h"
+#include "btree.h"
+#include "slos_inode.h"
 
 struct fbtree;
 

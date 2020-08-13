@@ -157,7 +157,7 @@ slsckpt_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
 	 * For the SLS, all kqueue states are either irrelevant or illegal.
 	 * Check for the illegal ones.
 	 */
-	KASSERT((kq->kq_state & (KQ_SEL | KQ_FLUXWAIT | KQ_ASYNC)) == 0,
+	KASSERT((kq->kq_state & (KQ_FLUXWAIT | KQ_ASYNC)) == 0,
 	    ("illegal kqueue state %x", kq->kq_state));
 
 	/* Get all knotes in the dynamic array. */
@@ -311,35 +311,45 @@ slsrest_kq_sockhack(struct proc *p, struct kqueue *kq)
 		if (!fdisused(fdp, fd))
 			continue;
 
+		SLS_KTR2("%s:%d", __FILE__, __LINE__);
 		/* Filter out everything but connected inet sockets. */
 		fp = FDTOFP(p, fd);
 		if (fp->f_type != DTYPE_SOCKET)
 			continue;
 
+		SLS_KTR2("%s:%d", __FILE__, __LINE__);
 		so = (struct socket *) fp->f_data;
 		if (so->so_proto->pr_domain->dom_family != AF_INET)
 			continue;
 
+		SLS_KTR2("%s:%d", __FILE__, __LINE__);
 		if ((so->so_options & SO_ACCEPTCONN) != 0)
 			continue;
 
+		SLS_KTR2("%s:%d", __FILE__, __LINE__);
 		/*
 		 * Find all knotes for the identifier, set them as EOF.
 		 * The knote identifier is the fd of the file.
 		 */
 		SLIST_FOREACH(kn, &kq->kq_knlist[fd], kn_link) {
+		SLS_KTR2("%s:%d", __FILE__, __LINE__);
+			CTR6(KTR_SLS, "%s:%d: Restoring knote ident = %d, filter = %d "
+				"flags = 0x%x status = 0x%x",
+				__FILE__, __LINE__, kn->kn_id, kn->kn_filter,
+				kn->kn_flags, kn->kn_status);
+		SLS_KTR2("%s:%d", __FILE__, __LINE__);
+
 			if ((kn->kn_status & KN_QUEUED) == 0) {
 				kn->kn_status |= (KN_ACTIVE | KN_QUEUED);
 				TAILQ_INSERT_TAIL(&kq->kq_head, kn, kn_tqe);
 				kq->kq_count += 1;
 			}
+		SLS_KTR2("%s:%d", __FILE__, __LINE__);
 			kn->kn_flags |= EV_ERROR;
 			kn->kn_data = ECONNRESET;
-			CTR6(KTR_SLS, "%s:%d: Restoring knote ident = %d, filter = %d "
-				"flags = 0x%x status = 0x%x",
-				__FILE__, __LINE__, kn->kn_id, kn->kn_filter,
-				kn->kn_flags, kn->kn_status);
+		SLS_KTR2("%s:%d", __FILE__, __LINE__);
 		}
+		SLS_KTR2("%s:%d", __FILE__, __LINE__);
 	}
 }
 

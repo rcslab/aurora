@@ -39,7 +39,7 @@ function aurload {
 
     # Create the filesystem on disk.
     "$SLSFS" $DRIVE
-    mount -rw -t slsfs $DRIVE /testmnt
+    mount -rw -t slsfs $DRIVE $MOUNTFILE
 
     # Load and configure the SLS>
     kldload "$SLSDIR"/kmod/sls.ko

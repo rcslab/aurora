@@ -9,10 +9,9 @@
 #include <sys/vnode.h>
 
 #include "slos.h"
-#include "slos_record.h"
 #include "btree.h"
+#include "slos_record.h"
 
-struct btree;
 
 #define SLOS_VALIVE	(0x1)
 #define SLOS_VDEAD	(0x10)
@@ -32,8 +31,8 @@ struct btree;
 #define	ISGID	    0002000
 #define	ISUID	    0004000
 
-#define SVPBLK(svp) (svp->sn_slos->slos_sb->sb_bsize);
-#define INUM(node) (node->sn_ino->ino_pid);
+#define SVPBLK(svp) (svp->sn_slos->slos_sb->sb_bsize)
+#define INUM(node) (node->sn_ino.ino_pid)
 #define RECORDDATASIZ(vp) ((vp->sn_slos->slos_sb->sb_bsize) - (sizeof(struct slos_record)))
 
 /*
