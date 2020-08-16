@@ -5,7 +5,7 @@ SLSFS="$SLSDIR/tools/newfs/newfs"
 
 # SLS parameters
 OID="1000"
-BACKEND="slos"
+BACKEND="memory"
 CKPTFREQ="1000"
 DELTA="no"
 RESTSTOP="yes"
@@ -24,6 +24,7 @@ STRIPEDISKS="vtbd0 vtbd1 vtbd2 vtbd3"
 STRIPENAME="st0"
 STRIPEDRIVE="/dev/stripe/$STRIPENAME"
 MOUNTFILE="/testmnt"
+SLSBENCHDIR="/root/sls-bench/"
 
 DRIVE="/dev/vtbd1"
 

@@ -20,7 +20,7 @@ DEBUG_FLAGS += -DSLS_TEST
 .endif
 
 .ifdef PERF
-DEBUG_FLAGS += -g3 -O2 -DKTR
+DEBUG_FLAGS += -g3 -O2 -DKTR -DDDB
 .endif
 
 .ifdef FASTDBG

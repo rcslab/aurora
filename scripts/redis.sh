@@ -69,6 +69,6 @@ function rdbench {
 
     # Run the benchmark
     "$CLIENTBIN" -t "$TESTS" -c "$CLIENTNO" -n "$REQUESTS" -d "$VALSIZE" \
-	-P "$PIPELINE" -k "$KEYSPACE" 
+	-P "$PIPELINE" -k "$KEYSPACE" &
 
 }

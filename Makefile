@@ -7,6 +7,8 @@ IDENT=${:!sysctl -n kern.ident!}
 .MAKEOVERRIDES=SLOWDBG
 .elif (${IDENT} == "PERF")
 .MAKEOVERRIDES=PERF
+.elif (${IDENT} == "GENERIC")
+.MAKEOVERRIDES=GENERIC
 .else
 .warning Unknown kernel ident
 .endif
