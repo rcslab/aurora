@@ -104,7 +104,6 @@ slsfs_setupfakedev(struct slos *slos, struct slos_node *vp)
 	if (error) {
 		panic("Problem getting fake vnode for device\n");
 	}
-	VREF(vp->sn_fdev);
 	devvp = vp->sn_fdev;
 	/* Set up the necessary backend state to be able to do IOs to the device. */
 	devvp->v_bufobj.bo_ops = &bufops_slsfs;

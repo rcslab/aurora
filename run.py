@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 import configargparse
 import subprocess
 import os
@@ -31,7 +30,11 @@ def set_defaults(p):
     p.add('--newfs',required=True, metavar='newfs', help='Path to newfs tool')
     p.add('--mountdir', required=True, metavar='md', help='Directory to mount onto')
     p.add('--stripename', required=True, metavar='n', help='name of stripe device')
+    p.add('--type', required=True, metavar='n', help='Type of filesystem to benchmark', choices=['sls','zfs','ffs'])
     p.add('--checkps', required=True, metavar='cps', help="number of checkpoints per second")
+    p.add('--compress', default=False, action="store_true", help="Turn on compress")
+    p.add('--checksum', default=False, action="store_true", help="Checksumming on")
+    p.add('--runs', default=1, type=int, required=False, help="Runs")
     p.add_argument('--withgstat', required=False, action='store_true', help="Capture Gstat")
 
 parser = configargparse.ArgParser(add_help=True)
@@ -77,13 +80,14 @@ def runcmd(lst, fail_okay=False):
 
 
 def geom_init(options, disks, stripe):
-    create = ["gstripe", "create", "-s", stripe, "-v", options.stripename]
-    create.extend(disks)
-    destroy_geom = ["gstripe", "destroy", options.stripename]
-    runcmd(destroy_geom, fail_okay=True)
-    runcmd(create)
-    runcmd(destroy_geom)
-    runcmd(create)
+    if (options.type != "zfs"):
+        create = ["gstripe", "create", "-s", stripe, "-v", options.stripename]
+        create.extend(disks)
+        destroy_geom = ["gstripe", "destroy", options.stripename]
+        runcmd(destroy_geom, fail_okay=True)
+        runcmd(create)
+        runcmd(destroy_geom)
+        runcmd(create)
 
 def kldload(path):
     kldl = ["kldload", path]
@@ -94,38 +98,87 @@ def kldunload(path):
     runcmd(kldl, fail_okay=True)
 
 def newfs(options):
-    newf = [options.newfs, "/dev/stripe/{}".format(options.stripename)]
-    runcmd(newf)
+    if (options.type == "sls"):
+        newf = [options.newfs, "/dev/stripe/{}".format(options.stripename)]
+        runcmd(newf)
+    elif (options.type == "ffs"):
+        newf = ["newfs", "-j", "-S", "4096", "-b", options.stripe, "/dev/stripe/{}".format(options.stripename)]
+        runcmd(newf)
+    elif (options.type == "zfs"):
+        zpool = ["zpool", "create", options.stripename]
+        zpool.extend(options.disks)
+        runcmd(zpool)
+
+        if (options.compress):
+            zpool = ["zfs", "set", "compression=lz4", options.stripename]
+            runcmd(zpool)
+
+        if (options.checksum):
+            zpool = ["zfs", "set", "checksum=on", options.stripename]
+            runcmd(zpool)
+        else:
+            zpool = ["zfs", "set", "checksum=off", options.stripename]
+            runcmd(zpool)
+
+        zpool = ["zfs", "set", "recordsize={}".format(options.stripe), 
+                options.stripename]
+        runcmd(zpool)
+
+        zpool = ["zfs", "create", "{}{}".format(options.stripename, options.mountdir)]
+        runcmd(zpool)
+
+    else:
+        exit(1)
 
 def mount(options):
-    cmd = ["mount", "-t", "slsfs", "/dev/stripe/{}".format(options.stripename), options.mountdir]
+    if (options.type == "sls"):
+        cmd = ["mount", "-t", "slsfs", "/dev/stripe/{}".format(options.stripename), options.mountdir]
+    elif (options.type == "zfs"):
+        cmd = ["zfs", "set", "mountpoint={}".format(options.mountdir), "{}{}".format(options.stripename, options.mountdir)]
+    elif (options.type == "ffs"):
+        cmd = ["mount", "/dev/stripe/{}".format(options.stripename), options.mountdir]
+    else:
+        exit(1);
     runcmd(cmd)
-
-def umount(path):
-    cmd = ["umount", path]
-    runcmd(cmd, fail_okay=True)
+   
+def umount(options):
+    if (options.type == "zfs"):
+        cmd = ["zfs", "destroy", "-r", "{}{}".format(options.stripename, options.mountdir)]
+        runcmd(cmd)
+        cmd = ["zpool", "destroy", options.stripename]
+        runcmd(cmd)
+    else:
+        cmd = ["umount", options.mountdir]
+        runcmd(cmd, fail_okay=True)
 
 def init(options):
-    geom_init(options, options.disks, options.stripe)
-    kldload(options.slosmodule)
-    #kldload(options.slsmodule)
+    if (options.type != "zfs"):
+        geom_init(options, options.disks, options.stripe)
+    if (options.type == "sls"):
+        kldload(options.slosmodule)
+        #kldload(options.slsmodule)
     newfs(options)
     mount(options)
 
 def uninit(options):
-    umount(options.mountdir)
-    kldunload("slos.ko")
-    #kldunload("sls.ko")
-    destroy_geom = ["gstripe", "destroy", options.stripename]
-    runcmd(destroy_geom, fail_okay=True)
+    umount(options)
+    if (options.type == "sls"):
+        kldunload("slos.ko")
+        #kldunload("sls.ko")
+    if (options.type != "zfs"):
+        destroy_geom = ["gstripe", "destroy", options.stripename]
+        runcmd(destroy_geom, fail_okay=True)
 
 def loaded(options):
     return path.exists("/dev/stripe/{}".format(options.stripename))
 
 def get_num_snaps(options):
-    cmd = ["./tools/fsdb/fsdb", "-s", "/dev/stripe/{}".format(options.stripename)]
-    result = subprocess.run(cmd, stdout=subprocess.PIPE)
-    return int(result.stdout.decode('utf-8'))
+    if (options.type == "sls"):
+        cmd = ["./tools/fsdb/fsdb", "-s", "/dev/stripe/{}".format(options.stripename)]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE)
+        return int(result.stdout.decode('utf-8'))
+    else:
+        return 0
 
 def gstat(name, timeout, path):
     cmd = ["timeout", str(timeout), "gstat", "-C", "-f", name]
@@ -150,7 +203,7 @@ def runbench(options, path, output):
 
     if (options.withgstat and output != ""):
             path = "{}.gstat.csv".format(output)
-            gthread = startgstat(options.stripename, 35, path)
+            gthread = startgstat(options.stripename, 50, path)
 
     subprocess.run(cmd, stdout=stdout)
     if (output != ""):
@@ -194,8 +247,7 @@ def benchmark(options):
 
     checkps(options.checkps)
     runbench(options, options.script, outpath)
-    umount(options.mountdir)
-    #unload(options)
+    unload(options)
 
 def checkps(num):
     sysctl = ["sysctl", "aurora_slos.checkps={}".format(num)]
@@ -208,40 +260,50 @@ def allbenchmarks(options):
     if loaded(options):
         print("Already loaded. Unload first to runbenchmark")
     files = [f for f in listdir(options.dir) if isfile(join(options.dir, f))]
-
-    for i, file in enumerate(files):
-        print("======= Running %s ======" % file)
-        print("======= [%s of %s] ======" % (i + 1, len(files)))
-        fullpath = options.dir + "/" + file
-        output = ""
-        if options.o:
-            output= options.o + "/" + file + ".out"
-
-        load(options)
-        checkps(options.checkps)
-        runbench(options, fullpath, output)
-        unload(options)
+    out = options.o
+    for x in range(0, int(options.runs)):
+        print("===== Run %s ======" % str(x))
+        if out:
+            outdir = out + "/" + str(x) + "/"
+            try:
+                os.mkdir(outdir)
+                os.chmod(outdir, 0o777)
+            except:
+                pass
+        else:
+            outdir = ""
+        for i, file in enumerate(files):
+            print("======= Running %s ======" % file)
+            print("======= [%s of %s] ======" % (i + 1, len(files)))
+            fullpath = options.dir + "/" + file
+            output = ""
+            if outdir:
+                output = outdir + "/" + file + ".out"
+            load(options)
+            checkps(options.checkps)
+            runbench(options, fullpath, output)
+            unload(options)
 
 @Command(required=["script", "min", "max", "steps"], captureOut=CapturedOut.MULTI,
         help="Time series")
 def series(options):
     max = int(options.max)
     min = int(options.min)
-    stepsize = int((max - min) / int(options.steps))
 
     if loaded(options):
         print("Already loaded. Unload first to runbenchmark")
         return
 
-    for x in range(min, max + 1, stepsize):
-        print("======= Running Step %s ======" % x)
-        sysctl = ["sysctl", "aurora_slos.checkps={}".format(x)]
+    for x in range(0,  int(options.steps)):
+        value = min + (((max - min) * x) // (int(options.steps) - 1))
+        print("======= Running Step %s ======" % value)
+        sysctl = ["sysctl", "aurora_slos.checkps={}".format(value)]
         output = ""
         if options.o:
-            output= "{}/{}.out".format(options.o, x)
+            output= "{}/{}.out".format(options.o, value)
 
         load(options)
-        checkps(x)
+        checkps(value)
         runbench(options, options.script, output)
         unload(options)
          
@@ -250,20 +312,32 @@ def series(options):
         captureOut=CapturedOut.MULTI,
         help="Time series")
 def allseries(options):
-    outdir = options.o
+    outputdir = options.o
     dir = options.script
-    files = [f for f in listdir(options.script) if isfile(join(options.script, f))]
-    for file in files:
-        if (outdir != ""):
-            path = "{}/{}".format(outdir, file)
+    files = [f for f in listdir(dir) if isfile(join(dir, f))]
+    for x in range(0, options.runs):
+        print("===== Run %s ======" % str(x))
+        if (outputdir != ""):
+            outdir = outputdir + "/" + str(x) + "/"
             try:
-                os.mkdir(path)
+                os.mkdir(outdir)
+                os.chmod(outdir, 0o777)
             except:
                 pass
-            options.o = path
-        options.script = "{}/{}".format(dir, file)
-        print("======= Running File %s ======" % file)
-        series(options)
+        else:
+            outdir = ""
+        for file in files:
+            if (outdir != ""):
+                path = "{}/{}".format(outdir, file)
+                try:
+                    os.mkdir(path)
+                    os.chmod(path, 0o777)
+                except:
+                    pass
+                options.o = path
+            options.script = "{}/{}".format(dir, file)
+            print("======= Running File %s ======" % file)
+            series(options)
     
 def main():
     global parser

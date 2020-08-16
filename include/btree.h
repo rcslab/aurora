@@ -104,11 +104,10 @@ struct fbtree {
 	size_t		bt_splits;
 	size_t		bt_removes;
 	size_t		bt_replaces;
-	struct mtx	bt_trie_lock;
+	struct rwlock	bt_trie_lock;
 	struct pctrie	bt_trie;
 	size_t		bt_gets;
 	size_t		bt_root_replaces;
-	struct fnode	*bt_rootnode;
 	char		bt_name[255];
 	void		*bt_hash;
 	u_long		bt_hashmask;

@@ -26,7 +26,7 @@
 set $dir=/testmnt
 set $filesize=2g
 set $nthreads=1
-set $iosize=4k
+set $iosize=64k
 
 define file name=largefile1,path=$dir,size=$filesize,prealloc
 define file name=largefile2,path=$dir,size=$filesize,prealloc

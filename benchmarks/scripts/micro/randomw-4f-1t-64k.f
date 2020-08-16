@@ -1,6 +1,6 @@
 set $dir=/testmnt
 set $filesize=2g
-set $iosize=4k
+set $iosize=64k
 set $nthreads=1
 set $workingset=0
 set $directio=0
@@ -15,19 +15,19 @@ define process name=rand-rw,instances=1
 {
   thread name=thwr1,memsize=5m,instances=$nthreads
   {
-    flowop write name=rw1,filename=largefile1,iosize=$iosize,random,workingset=$workingset
+    flowop write name=rw1,filename=largefile1,iosize=$iosize,random,workingset=$workingset,directio=$directio
   }
   thread name=thwr2,memsize=5m,instances=$nthreads
   {
-    flowop write name=rw2,filename=largefile2,iosize=$iosize,random,workingset=$workingset
+    flowop write name=rw2,filename=largefile2,iosize=$iosize,random,workingset=$workingset,directio=$directio
   }
   thread name=thwr3,memsize=5m,instances=$nthreads
   {
-    flowop write name=rw3,filename=largefile3,iosize=$iosize,random,workingset=$workingset
+    flowop write name=rw3,filename=largefile3,iosize=$iosize,random,workingset=$workingset,directio=$directio
   }
   thread name=thwr4,memsize=5m,instances=$nthreads
   {
-    flowop write name=rw4,filename=largefile4,iosize=$iosize,random,workingset=$workingset
+    flowop write name=rw4,filename=largefile4,iosize=$iosize,random,workingset=$workingset,directio=$directio
   }
 }
 

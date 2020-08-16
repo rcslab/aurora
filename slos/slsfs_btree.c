@@ -34,6 +34,21 @@
 #define BP_SETCOWED(bp) (((bp)->b_fsprivate3) = (void *)1)
 
 #define INDEX_INVAL (-1)
+#define NODE_ISROOT(node) ((node)->fn_location == (node)->fn_tree->bt_root)
+
+/*
+ * TODO: We probably dont even need our own PCTRIE we can hook into the 
+ * gbincore on the bufobj of the tree->bt_backend, I thin we just have to 
+ * explore more on the operations the occur on that struct,  this might
+ * also allow us to better understand which of our buffers are in memory or not 
+ * if we move away from managed buffers
+ *
+ * I think the process could be gbincore to check if we need to actually create 
+ * a node, call bread if not and create or just use gbincore to grab the buffer
+ * which will point to our fnode using a private field.  But having the global 
+ * mapping is pretty crucial and easier to reason about
+ *
+ */
 
 static MALLOC_DEFINE(M_SLOS_BTREE, "slos btree", "SLOS Btrees");
 uma_zone_t fnode_zone;
@@ -238,12 +253,16 @@ fnode_getbufptr(struct fbtree *tree, bnode_ptr ptr, struct buf **bp)
 	struct slos *slos = ((struct slos_node*)tree->bt_backend->v_data)->sn_slos;
 	if (*bp != NULL) {
 		buf = *bp;
+		BUF_LOCK(buf, LK_EXCLUSIVE, 0);
 		int cached = buf->b_flags & B_CACHE;
+		int inval = buf->b_flags & B_INVAL;
 		int same = buf->b_lblkno == ptr;
 		int samevp = buf->b_vp == tree->bt_backend;
-		if (cached && same && samevp) {
+		if (cached && same && samevp && !inval) {
+			BUF_UNLOCK(buf);
 			return (0);
 		}
+		BUF_UNLOCK(buf);
 	}
 
 	KASSERT(ptr != 0, ("Should never be 0"));
@@ -255,7 +274,7 @@ fnode_getbufptr(struct fbtree *tree, bnode_ptr ptr, struct buf **bp)
 
 	buf->b_fsprivate2 = NULL;
 	buf->b_fsprivate3 = 0;
-	buf->b_flags |= B_MANAGED;
+	buf->b_flags |= B_MANAGED | B_CLUSTEROK;
 	bqrelse(buf);
 
 	*bp = buf;
@@ -399,12 +418,12 @@ fnode_cow(struct fbtree *tree, struct buf *bp)
 		return (0);
 	}
 
-	mtx_lock(&tree->bt_trie_lock);
+	// Dont need mutex locks as we should be holding the VP lock and tree 
+	// lock exclusively 
 	struct fnode *cur = FNODE_PCTRIE_LOOKUP(&tree->bt_trie, bp->b_lblkno);
 	if (cur == NULL) {
 		panic("WTF");
 	}
-	mtx_unlock(&tree->bt_trie_lock);
 
 	MPASS(cur->fn_buf == bp);
 	// Alocate a new block the btree node
@@ -420,9 +439,7 @@ fnode_cow(struct fbtree *tree, struct buf *bp)
 	// Get the parent
 	fnode_parent(cur, &parent);
 
-	mtx_lock(&tree->bt_trie_lock);
 	FNODE_PCTRIE_REMOVE(&tree->bt_trie, bp->b_lblkno);
-	mtx_unlock(&tree->bt_trie_lock);
 
 	// Release the buf from the current vnode, this allows us to remove the 
 	// logical mapping in the bufobject
@@ -439,10 +456,8 @@ fnode_cow(struct fbtree *tree, struct buf *bp)
 	cur->fn_location = ptr.offset;
 	bgetvp(tree->bt_backend, cur->fn_buf);
 
-	mtx_lock(&tree->bt_trie_lock);
 	error = FNODE_PCTRIE_INSERT(&tree->bt_trie, cur);
 	MPASS(error == 0);
-	mtx_unlock(&tree->bt_trie_lock);
 
 	BO_UNLOCK(bo);
 	// Final reassignment of buffer to proper blkno
@@ -471,6 +486,8 @@ fnode_cow(struct fbtree *tree, struct buf *bp)
 		tree->bt_root = cur->fn_location;
 	}
 
+	
+	cur->fn_buf->b_flags |= B_MANAGED;
 	bdwrite(cur->fn_buf);
 
 	return 0;
@@ -494,12 +511,11 @@ fbtree_init(struct vnode *backend, bnode_ptr ptr, fb_keysize keysize,
 	tree->bt_root = ptr;
 	tree->bt_flags = flags;
 	strcpy(tree->bt_name, name);
-	tree->bt_rootnode = NULL;
 	pctrie_init(&tree->bt_trie);
 
 	if (!lock_initialized(&tree->bt_lock.lock_object)) {
 		lockinit(&tree->bt_lock, PVFS, "Btree Lock", 0, LK_CANRECURSE);
-		mtx_init(&tree->bt_trie_lock, "trie lock", NULL, MTX_DEF);
+		rw_init(&tree->bt_trie_lock, "trie lock");
 	}
 
 	while(!SLIST_EMPTY(&tree->bt_rcfn)) {
@@ -607,7 +623,6 @@ tryagain:
 			if (!BP_ISCOWED(bp)) {
 				panic("what");
 			}
-			bp->b_flags &= ~B_MANAGED;
 			bawrite(bp);
 			DEBUG1("Flushing %p", bp);
 			BO_LOCK(bo);
@@ -624,13 +639,13 @@ tryagain:
 		BUF_LOCK(bp, LK_EXCLUSIVE | LK_INTERLOCK, BO_LOCKPTR(bo));
 		if (bp->b_flags & B_MANAGED) {
 			bp->b_flags &= ~(B_MANAGED);
-			mtx_lock(&tree->bt_trie_lock);
+			rw_wlock(&tree->bt_trie_lock);
 			node = FNODE_PCTRIE_LOOKUP(&tree->bt_trie, bp->b_lblkno);
-			mtx_unlock(&tree->bt_trie_lock);
 			if (node != NULL) {
 				FNODE_PCTRIE_REMOVE(&tree->bt_trie, node->fn_location);
 				NODE_FREE(node);
 			}
+			rw_wunlock(&tree->bt_trie_lock);
 			brelse(bp);
 		} else {
 			BUF_UNLOCK(bp);
@@ -674,14 +689,14 @@ fbtree_size(struct fbtree *tree)
 	int error;
 	size_t key = 0;
 	size_t size = 0;
+	struct fnode *node, *root;
 
-	error = fnode_init(tree, tree->bt_root, &tree->bt_rootnode);
+	error = fnode_init(tree, tree->bt_root, &root);
 	if (error) {
 		return (error);
 	}
 
-	struct fnode *node;
-	error = fnode_follow(tree->bt_rootnode, &key, NULL, &node);
+	error = fnode_follow(root, &key, NULL, &node);
 	if (error) {
 		DEBUG("Problem following node");
 		return (error);
@@ -794,15 +809,16 @@ int
 fbtree_keymin_iter(struct fbtree *tree, void *key, struct fnode_iter *iter)
 {
 	int error;
+	struct fnode *root;
 
 	/* Bootstrap the search process by initializing the in-memory node. */
-	error = fnode_init(tree, tree->bt_root, &tree->bt_rootnode);
+	error = fnode_init(tree, tree->bt_root, &root);
 	if (error) {
 		DEBUG("Problem initing");
 		return (error);
 	}
 
-	error = fnode_keymin_iter(tree->bt_rootnode, key, iter);
+	error = fnode_keymin_iter(root, key, iter);
 	return (error);
 }
 
@@ -924,15 +940,16 @@ int
 fbtree_keymax_iter(struct fbtree *tree, void *key, struct fnode_iter *iter)
 {
 	int error;
+	struct fnode *root;
 
 	/* Bootstrap the search process by initializing the in-memory node. */
-	error = fnode_init(tree, tree->bt_root, &tree->bt_rootnode);
+	error = fnode_init(tree, tree->bt_root, &root);
 	if (error) {
 		BTREE_UNLOCK(tree, 0);
 		return (error);
 	}
 
-	error = fnode_keymax_iter(tree->bt_rootnode, key, iter);
+	error = fnode_keymax_iter(root, key, iter);
 	return (error);
 }
 
@@ -1128,8 +1145,9 @@ fbtree_get(struct fbtree *tree, const void *key, void *value)
 {
 	char check[tree->bt_keysize];
 	int error;
+	struct fnode *node;
 
-	error = fnode_init(tree, tree->bt_root, &tree->bt_rootnode);
+	error = fnode_init(tree, tree->bt_root, &node);
 	if (error) {
 		BTREE_UNLOCK(tree, 0);
 		return (error);
@@ -1141,13 +1159,13 @@ fbtree_get(struct fbtree *tree, const void *key, void *value)
 	 * A keymin operation does a superset of the
 	 * work a search does, so we reuse the logic.
 	 */
-	error = fnode_keymin(tree->bt_rootnode, check, value);
+	error = fnode_keymin(node, check, value);
 	if (error) {
 		return (error);
 	}
 
 	/* Check if the keymin returned the key. */
-	if (NODE_COMPARE(tree->bt_rootnode, key, check)) {
+	if (NODE_COMPARE(node, key, check)) {
 		value = NULL;
 		return (EINVAL);
 	}
@@ -1223,7 +1241,6 @@ fbtree_allocnode(struct fbtree *tree, struct fnode **created, uint8_t type)
 	struct fnode *tmp = NODE_ALLOC(M_WAITOK);
 	struct fnode *t2;
 
-	mtx_lock(&tree->bt_trie_lock);
 	error = ALLOCATEPTR(slos, BLKSIZE(slos), &ptr);
 	MPASS(error == 0);
 	if (error) {
@@ -1238,6 +1255,7 @@ fbtree_allocnode(struct fbtree *tree, struct fnode **created, uint8_t type)
 		return (error);
 	}
 
+	rw_wlock(&tree->bt_trie_lock);
 	t2 = FNODE_PCTRIE_LOOKUP(&tree->bt_trie, ptr.offset);
 	if (t2 != NULL) {
 		fnode_print(t2);
@@ -1248,7 +1266,7 @@ fbtree_allocnode(struct fbtree *tree, struct fnode **created, uint8_t type)
 	DEBUG2("Inserting %lu %p", tmp->fn_location, &tree->bt_trie);
 	error = FNODE_PCTRIE_INSERT(&tree->bt_trie, tmp);
 	MPASS(error == 0);
-	mtx_unlock(&tree->bt_trie_lock);
+	rw_wunlock(&tree->bt_trie_lock);
 
 	*created = tmp;
 	MPASS(NODE_TYPE(*created) == type);
@@ -1304,7 +1322,7 @@ fnode_newroot(struct fnode *node, struct fnode **root)
 	struct fbtree *tree  = node->fn_tree;
 	int error;
 
-	KASSERT(tree->bt_root == node->fn_location, ("node is not the root of its btree"));
+	KASSERT(NODE_ISROOT(node), ("node is not the root of its btree"));
 	/* Allocate a new node. */
 	
 	error = fbtree_allocnode(node->fn_tree, &newroot, BT_INTERNAL);
@@ -1329,7 +1347,6 @@ fnode_newroot(struct fnode *node, struct fnode **root)
 
 	/* Update the tree. */
 	tree->bt_root = newroot->fn_location;
-	tree->bt_rootnode = newroot;
 	*root = newroot;
 	return (0);
 }
@@ -1392,12 +1409,16 @@ int
 fnode_parent(struct fnode *node, struct fnode **parent)
 {
 	int error;
-	if (node == node->fn_tree->bt_rootnode) {
+	struct fnode *root;
+	if (NODE_ISROOT(node)) {
 		*parent = NULL;
 		return (0);
 	}
 
-	error = fnode_follow(node->fn_tree->bt_rootnode, fnode_getkey(node, 0), node, parent);
+	error = fnode_init(node->fn_tree, node->fn_tree->bt_root, &root);
+	MPASS(!error);
+
+	error = fnode_follow(root, fnode_getkey(node, 0), node, parent);
 	MPASS(!error);
 
 	return (error);
@@ -1502,7 +1523,7 @@ fnode_split(struct fnode *node)
 	// specifically as we need 2 node allocations specifically
 	/* Make the left node. If we're splitting the root we need extra bookkeeping */
 	DEBUG1("Fnode split %p", node);
-	if (node == node->fn_tree->bt_rootnode) {
+	if (NODE_ISROOT(node)) {
 		error = fnode_newroot(node, &parent);
 		if (error) {
 			DEBUG("ERROR CREATING NEW ROOT");
@@ -1768,7 +1789,8 @@ fnode_remove_at(struct fnode *node, void *value, int i)
 		memmove(src, src + NODE_VS(node), ntail  * NODE_VS(node));
 		memmove(&node->fn_types[i], &node->fn_types[i + 1], ntail * sizeof(node->fn_types[i]));
 	}
-	node->fn_dnode->dn_numkeys -= 1;
+
+	node->fn_dnode->dn_numkeys--;
 
 	return (0);
 }
@@ -1872,6 +1894,7 @@ fiter_remove(struct fnode_iter *it)
 	KASSERT(it->it_index < NODE_SIZE(fnode),
 	        ("Removing an out-of-bounds iterator"));
 
+	fnode_init(fnode->fn_tree, fnode->fn_location, &fnode);
 	fnode_remove_at(fnode, NULL, it->it_index);
 	fnode_iter_skip(it);
 
@@ -1909,16 +1932,16 @@ int
 fbtree_remove(struct fbtree *tree, void *key, void *value)
 {
 	int error;
-	struct fnode *node;
+	struct fnode *node, *root;
 
 	/* Get an in-memory representation of the root. */
-	error = fnode_init(tree, tree->bt_root, &tree->bt_rootnode);
+	error = fnode_init(tree, tree->bt_root, &root);
 	if (error) {
 		return (error);
 	}
 
 	/* Find the only possible location of the key. */
-	error = fnode_follow(tree->bt_rootnode, key, NULL, &node);
+	error = fnode_follow(root, key, NULL, &node);
 	if (error) {
 		return (error);
 	}
@@ -1936,16 +1959,16 @@ int
 fbtree_insert(struct fbtree *tree, void *key, void *value)
 {
 	int error;
-	struct fnode *node;
+	struct fnode *node, *root;
 
 	/* Get an in-memory representation of the root. */
-	error = fnode_init(tree, tree->bt_root, &tree->bt_rootnode);
+	error = fnode_init(tree, tree->bt_root, &root);
 	if (error) {
 		return (error);
 	}
 
 	/* Find the only possible location where we can add the key. */
-	error = fnode_follow(tree->bt_rootnode, key, NULL, &node);
+	error = fnode_follow(root, key, NULL, &node);
 	if (error) {
 		DEBUG("Problem following node");
 		return (error);
@@ -1984,22 +2007,23 @@ int
 fbtree_replace(struct fbtree *tree, void *key, void *value)
 {
 	struct fnode_iter iter;
+	struct fnode *root;
 	int error;
 
 	/* Get an in-memory representation of the root. */
-	error = fnode_init(tree, tree->bt_root, &tree->bt_rootnode);
+	error = fnode_init(tree, tree->bt_root, &root);
 	if (error) {
 		return (error);
 	}
 
 	/* Find the only possible location of the key. */
-	error = fnode_keymin_iter(tree->bt_rootnode, key, &iter);
+	error = fnode_keymin_iter(root, key, &iter);
 	if (error) {
 		return (error);
 	}
 
 	/* Make sure the key is present, and overwrite the value in place. */
-	if(NODE_COMPARE(tree->bt_rootnode, key, ITER_KEY(iter)) != 0) {
+	if(NODE_COMPARE(root, key, ITER_KEY(iter)) != 0) {
 		panic("%p, %lu", iter.it_node, *(uint64_t *)key);
 		return EINVAL;
 	}
@@ -2050,9 +2074,10 @@ fnode_init(struct fbtree *tree, bnode_ptr ptr, struct fnode **fn)
 {
 	int error;
 	struct fnode *node = NULL;
+	struct fnode *n1 = NULL;
 	int found = 0;
 
-	mtx_lock(&tree->bt_trie_lock);
+	rw_rlock(&tree->bt_trie_lock);
 	node = FNODE_PCTRIE_LOOKUP(&tree->bt_trie, ptr);
 	if (node != NULL) {
 		DEBUG1("Key %lu found", ptr);
@@ -2061,6 +2086,7 @@ fnode_init(struct fbtree *tree, bnode_ptr ptr, struct fnode **fn)
 	} else {
 		node = NODE_ALLOC(M_WAITOK);
 	}
+	rw_runlock(&tree->bt_trie_lock);
 
 	/* Read the data from the disk into the buffer cache. */
 	error = fnode_getbufptr(tree, ptr, &node->fn_buf);
@@ -2072,8 +2098,16 @@ fnode_init(struct fbtree *tree, bnode_ptr ptr, struct fnode **fn)
 	fnode_setup(node, tree, ptr);
 
 	if (!found) {
-		DEBUG2("Key not %lu found %p", node->fn_location, &tree->bt_trie);
-		DEBUG2("Inserting %lu %p", node->fn_location, &tree->bt_trie);
+		rw_wlock(&tree->bt_trie_lock);
+		n1 = FNODE_PCTRIE_LOOKUP(&tree->bt_trie, ptr);
+		if (n1 != NULL) {
+			rw_wunlock(&tree->bt_trie_lock);
+			*fn = n1;
+			NODE_FREE(node);
+
+			return (0);
+		}
+
 		error = FNODE_PCTRIE_INSERT(&tree->bt_trie, node);
 		if (error) {
 			fnode_print(node);
@@ -2082,9 +2116,9 @@ fnode_init(struct fbtree *tree, bnode_ptr ptr, struct fnode **fn)
 			panic("WTF");
 		}
 		MPASS(error == 0);
+		rw_wunlock(&tree->bt_trie_lock);
 	}
 
-	mtx_unlock(&tree->bt_trie_lock);
 
 	*fn = node;
 

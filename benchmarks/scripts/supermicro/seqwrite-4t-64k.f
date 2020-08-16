@@ -19,52 +19,50 @@
 # CDDL HEADER END
 #
 #
-# Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
+# Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-
-# Single threaded asynchronous ($sync) sequential writes (1MB I/Os) to
-# a 1GB file.
-# Stops after 1 series of 1024 ($count) writes has been done.
 
 set $dir=/testmnt
-set $cached=false
-set $iosize=64k
+set $filesize=2g
 set $nthreads=1
-set $sync=false
-set $runtime=30
+set $iosize=64k
 
-define file name=bigfile1,path=$dir,size=0,prealloc
-define file name=bigfile2,path=$dir,size=0,prealloc
-define file name=bigfile3,path=$dir,size=0,prealloc
-define file name=bigfile4,path=$dir,size=0,prealloc
+define file name=largefile1,path=$dir,size=$filesize,prealloc
+define file name=largefile2,path=$dir,size=$filesize,prealloc
+define file name=largefile3,path=$dir,size=$filesize,prealloc
+define file name=largefile4,path=$dir,size=$filesize,prealloc
 
-define process name=filewriter,instances=1
+define process name=seqwrite,instances=1
 {
-
-  thread name=filewriterthread,memsize=10m,instances=$nthreads
+  thread name=seqwrite1,memsize=10m,instances=$nthreads
   {
-    flowop appendfile name=write-file1,dsync=$sync,filename=bigfile1,iosize=$iosize
+    flowop openfile name=sq1open1,filename=largefile1,fd=1
+    flowop write name=seqwrite1,fd=1,iosize=$iosize,iters=31250
+    flowop closefile name=sq1close1,filename=largefile1,fd=1
   }
 
-  thread name=filewriterthread,memsize=10m,instances=$nthreads
+  thread name=seqwrite2,memsize=10m,instances=$nthreads
   {
-    flowop appendfile name=write-file2,dsync=$sync,filename=bigfile2,iosize=$iosize
+    flowop openfile name=sq2open2,filename=largefile2,fd=1
+    flowop write name=seqwrite2,fd=1,iosize=$iosize,iters=31250
+    flowop closefile name=sq1close2,filename=largefile2,fd=1
   }
 
-  thread name=filewriterthread,memsize=10m,instances=$nthreads
+  thread name=seqwrite3,memsize=10m,instances=$nthreads
   {
-    flowop appendfile name=write-file3,dsync=$sync,filename=bigfile3,iosize=$iosize
+    flowop openfile name=sq1open3,filename=largefile3,fd=1
+    flowop write name=seqwrite3,fd=1,iosize=$iosize,iters=31250
+    flowop closefile name=sq1clos3,filename=largefile3,fd=1
   }
 
-  thread name=filewriterthread,memsize=10m,instances=$nthreads
+  thread name=seqwrite4,memsize=10m,instances=$nthreads
   {
-    flowop appendfile name=write-file4,dsync=$sync,filename=bigfile4,iosize=$iosize
+    flowop openfile name=sq1open4,filename=largefile4,fd=1
+    flowop write name=seqwrite4,fd=1,iosize=$iosize,iters=31250
+    flowop closefile name=sq1close4,filename=largefile4,fd=1
   }
-
 }
 
-run $runtime
-
-echo  "FileMicro-SeqWrite Version 2.2 personality successfully loaded"
+run 30
+echo  "Five Stream Write Version 3.0 personality successfully loaded"

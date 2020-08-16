@@ -670,16 +670,16 @@ tryagain:
 	BO_LOCK(bo);
 	TAILQ_FOREACH_SAFE(bp, &bo->bo_clean.bv_hd, b_bobufs, tbd) {
 		BUF_LOCK(bp, LK_EXCLUSIVE | LK_INTERLOCK, BO_LOCKPTR(bo));
-		if (bp->b_flags & B_MANAGED) {
-			bp->b_flags &= ~(B_MANAGED);
-		} else {
-			bremfree(bp);
-		}
-		if (bp->b_fsprivate2) {
+				if (bp->b_fsprivate2) {
 			NODE_FREE(bp->b_fsprivate2);
 			bp->b_fsprivate2 = NULL;
 		}
-		brelse(bp);
+		if (bp->b_flags & B_MANAGED) {
+			bp->b_flags &= ~(B_MANAGED);
+			brelse(bp);
+		} else {
+			BUF_UNLOCK(bp)
+		}
 		BO_LOCK(bo);
 	}
 
@@ -1193,7 +1193,7 @@ fnode_create(struct fbtree *tree, bnode_ptr ptr, struct fnode *node, uint8_t typ
 		node->fn_buf->b_flags |= B_CLUSTEROK | B_MANAGED;
 	}
 
-	brelse(node->fn_buf);
+	bqrelse(node->fn_buf);
 
 	return (0);
 }
@@ -2087,7 +2087,7 @@ fnode_init(struct fbtree *tree, bnode_ptr ptr, struct fnode **fn)
 		node->fn_buf->b_flags |= B_CLUSTEROK | B_MANAGED;
 	}
 
-	brelse(node->fn_buf);
+	bqrelse(node->fn_buf);
 
 	ASSERT_NODE(node);
 	return (0);

@@ -115,6 +115,10 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 
 	vinvalbuf(vp, 0, 0, 0);
 
+	/*
+	 * TODO:
+	 * While rerunning seqwrite-4t-64k twice vfs_hash_remove blew up
+	 */
 	vnode_destroy_vobject(vp);
 	if (vp->v_type != VCHR) {
 		cache_purge(vp);
@@ -863,7 +867,7 @@ slsfs_strategy(struct vop_strategy_args *args)
 			("No logical block number should be -1 - vnode effect %lu", 
 			 SLSVP(vp)->sn_pid));
 
-		error = BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_EXCLUSIVE);
+		error = BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_SHARED);
 		if (error) {
 			panic("Problem getting lock %d", error);
 		}
@@ -890,10 +894,10 @@ slsfs_strategy(struct vop_strategy_args *args)
 			if (ptr.epoch == slos.slos_sb->sb_epoch && ptr.offset != 0) {
 				adjust_ptr(bp->b_lblkno, ITER_KEY_T(iter, uint64_t), &ptr);
 			} else {
-				/*error = BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_UPGRADE);*/
-				/*if (error) {*/
-					/*panic("Problem getting lock %d", error);*/
-				/*}*/
+				error = BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_UPGRADE);
+				if (error) {
+					panic("Problem getting lock %d", error);
+				}
 				
 				error = slsfs_fbtree_rangeinsert(&SLSVP(vp)->sn_tree, 
 					bp->b_lblkno, bp->b_bcount);
@@ -925,7 +929,10 @@ slsfs_strategy(struct vop_strategy_args *args)
 		    slos.slos_vp->v_bufobj.bo_bsize;
 		SDT_PROBE3(slos, , , slsfs_deviceblk, bp->b_blkno, 
 		    bp->b_bufobj->bo_bsize, change);
-		atomic_add_64(&slos.slos_sb->sb_meta_synced, bp->b_bcount);
+		if (bp->b_iocmd == BIO_WRITE) {
+			atomic_add_64(&slos.slos_sb->sb_meta_synced, bp->b_bcount);
+		} 
+		
 	}
 
 	KASSERT(bp->b_blkno != 0, ("Cannot be 0 %p - %p", bp, vp));

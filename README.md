@@ -46,3 +46,8 @@ restore -o 3
 As a bonus, we can remove partitions from the SLOS using slsctl partdel:
 
 slsctl partdel -o <oid>
+
+
+Bugs:
+
+While doing macro varmail benchmark experienced a deadlock.

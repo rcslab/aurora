@@ -63,7 +63,6 @@ slsfs_buf_nocollide(struct vnode *vp, struct fnode_iter *biter, uint64_t bno, ui
 	 */
 	ITER_RELEASE(*biter)
 	size = omin(size, MAXBCACHEBUF);
-	MPASS(MAXBCACHEBUF == 65536);
 	MPASS(size <= MAXBCACHEBUF);
 	error = slsfs_balloc(vp, bno, size, gbflag, bp);
 	return (error);
@@ -99,18 +98,31 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw
 		}
 	} else {
 		uint64_t iter_key = ITER_KEY_T(biter, uint64_t);
+		ptr = ITER_VAL_T(biter, diskptr_t);
 		// There is a key less then us
 		if (iter_key != bno) {
 			// We intersect so need to read off the block on disk
 			if (INTERSECT(biter, bno, blksize)) {
-				size = ENDPOINT(biter, blksize) - (bno * blksize);
+				// Since we max allow 64kb blocks from the 
+				// buffercache  we dont want to make every 
+				// block 64kb so we need to find the smallest 
+				// 64kb offset from iter_key.  So we pushed 
+				// everything to relative 0 s
+				uint64_t changeoffset = (bno * blksize) - (iter_key * blksize);
+				// Round down to the nearest MAXCACHEBUF
+				changeoffset = (changeoffset / MAXBCACHEBUF) * MAXBCACHEBUF;
+				// Add the relative offset to the key back
+				changeoffset += (iter_key * blksize);
+				// Get the block number
+				uint64_t old = bno;
+				bno = changeoffset / blksize;
+				// Update size with shift (could be 0)
+				size += (old - bno) * blksize;
 				size = omin(size, MAXBCACHEBUF);
 				covered  = size <= originalsize;
 				ITER_RELEASE(biter);
 				if (isaligned && covered && (rw == UIO_WRITE)) {
-					SDT_PROBE0(slsfsbuf, , , start);
 					*bp = getblk(vp, bno, size, 0, 0, gbflag);
-					SDT_PROBE0(slsfsbuf, , , end);
 				} else {
 					error = slsfs_bread(vp, bno, size, NULL, gbflag, bp);
 				}
@@ -119,7 +131,8 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw
 			}
 		} else {
 			ptr = ITER_VAL_T(biter, diskptr_t);
-			size = omin(ptr.size, MAXBCACHEBUF);
+			size = omin(size, MAXBCACHEBUF);
+			size = omin(size, ptr.size);
 			covered  = size <= originalsize;
 			ITER_RELEASE(biter);
 			if (isaligned && covered && (rw == UIO_WRITE)) {
