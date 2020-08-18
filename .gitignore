@@ -34,12 +34,9 @@ tests/unlink/unlink
 tests/slsfs/file
 
 
-tools/dumpcompose/dumpcompose
-tools/newosd/newosd
-tools/newfs/newfs
+tools/newfs_sls/newfs_sls
 tools/slsctl/slsctl
 tools/slsdb/slsdb
-tools/fsdb/fsdb
 
 test.sh
 load.sh

@@ -1,7 +1,10 @@
-PROG = slsdb
-SRCS = slsdb.c sls_user.c
-MAN =
+PROG= slsdb
+SRCS= slsdb.cc slsfile.cc slsbtree.cc
+MAN=
 
-CFLAGS += -I../../kmod
+
+LDADD= -lsls -ledit
+LDFLAGS= -L../../libsls -lc++
+CFLAGS= -I../../include
 
 .include <bsd.prog.mk>

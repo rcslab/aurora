@@ -16,6 +16,7 @@
 static struct option checkpoint_longopts[] = {
 	{ "oid", required_argument, NULL, 'o' },
 	{ "recursive", no_argument, NULL, 'r' },
+	{ "help", no_argument, NULL, 'h' },
 	{ NULL,	no_argument, NULL, 0},
 };
 
@@ -28,11 +29,11 @@ checkpoint_usage(void)
 int
 checkpoint_main(int argc, char* argv[])
 {
-	int oid = -1;
-	bool recurse = false;
 	int opt;
+	uint64_t oid = SLS_DEFAULT_PARTITION;
+	bool recurse = false;
 
-	while ((opt = getopt_long(argc, argv, "o:r", checkpoint_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "o:rh", checkpoint_longopts, NULL)) != -1) {
 		switch (opt) {
 		case 'o':
 			oid = strtol(optarg, NULL, 10);
@@ -40,13 +41,14 @@ checkpoint_main(int argc, char* argv[])
 		case 'r':
 			recurse = true;
 			break;
+		case 'h':
 		default:
 			checkpoint_usage();
 			return 0;
 		}
 	}
 
-	if (optind != argc || oid == -1) {
+	if (optind != argc) {
 		checkpoint_usage();
 		return 0;
 	}

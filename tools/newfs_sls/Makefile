@@ -1,5 +1,5 @@
-PROG= newfs
-SRCS= newfs.c
+PROG= newfs_sls
+SRCS= newfs_sls.c
 MAN=
 
 

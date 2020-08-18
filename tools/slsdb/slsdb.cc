@@ -252,16 +252,16 @@ std::map<string, std::pair<cmd_t, string>> cmds = {
 };
 
 static char *
-fsdb_prompt(EditLine *el)
+slsdb_prompt(EditLine *el)
 {
-	static char prompt[] = "fsdb> ";
+	static char prompt[] = "slsdb> ";
 	return (prompt);
 }
 
 HistEvent ev;
 
 static void
-fsdb_cli(void)
+slsdb_cli(void)
 {
 	const char **argv;
 	HistEvent ev;
@@ -273,7 +273,7 @@ fsdb_cli(void)
 	History *hist = history_init();
 	history(hist, &ev, H_SETSIZE, 100);
 
-	 EditLine *el = el_init("fsdb", stdin, stdout, stderr);
+	 EditLine *el = el_init("slsdb", stdin, stdout, stderr);
 
 	/* Editing mode to use. */
 	el_set(el, EL_EDITOR, "vi");
@@ -282,7 +282,7 @@ fsdb_cli(void)
 	el_set(el, EL_HIST, history, hist);
 
 	/* Function that displays the prompt. */
-	el_set(el, EL_PROMPT, fsdb_prompt);
+	el_set(el, EL_PROMPT, slsdb_prompt);
 
 	for (;;) {
 		/* Get the line. */
@@ -337,7 +337,7 @@ fsdb_cli(void)
 void
 usage()
 {
-	cout << "Usage: fsdb DEVICE" << endl;
+	cout << "Usage: slsdb DEVICE" << endl;
 }
 
 int
@@ -389,7 +389,7 @@ main(int argc, char **argv)
 	printhelp(nullptr, a);
 	cout << endl;
 
-	fsdb_cli();
+	slsdb_cli();
 
 	return (0);
 }

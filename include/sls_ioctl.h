@@ -37,7 +37,6 @@ struct sls_partadd_args {
 	struct sls_attr attr;	/* Checkpointing parameters for the process */
 };
 
-
 struct sls_partdel_args {
 	uint64_t    oid;	/* OID of the partition to be detached from the SLS */
 };
@@ -48,6 +47,9 @@ struct sls_partdel_args {
 #define SLS_PARTADD		_IOW('d', 4, struct sls_partadd_args)
 #define SLS_PARTDEL		_IOW('d', 5, struct sls_partdel_args)
 #define SLS_EPOCH		_IOWR('d', 6, struct sls_epoch_args)
+
+#define SLS_DEFAULT_PARTITION	5115
+#define SLS_DEFAULT_MPARTITION	5116
 
 /*
  * XXX Use an encoding to catch errors like

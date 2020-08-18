@@ -346,11 +346,11 @@ static int
 SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	int error = 0;
 	struct vnode __unused *vp = NULL;
+	struct sls_partadd_args partadd_args;
 
 	switch (inEvent) {
 	case MOD_LOAD:
 		bzero(&slsm, sizeof(slsm));
-
 
 		error = sls_setup_blackholefp();
 		if (error != 0)
@@ -382,6 +382,25 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 
 		/* Initialize Aurora-related sysctls. */
 		sls_sysctl_init();
+
+		/* Create a default on-disk and in-memory partition */
+		partadd_args.oid = SLS_DEFAULT_PARTITION;
+		partadd_args.attr.attr_mode = SLS_DELTA;
+		partadd_args.attr.attr_target = SLS_OSD;
+		partadd_args.attr.attr_period = 1000;
+		error = sls_partadd(&partadd_args);
+		if (error) {
+			printf("Problem creating default on-disk partition\n");
+		}
+
+		partadd_args.oid = SLS_DEFAULT_MPARTITION;
+		partadd_args.attr.attr_mode = SLS_FULL;
+		partadd_args.attr.attr_target = SLS_MEM;
+		partadd_args.attr.attr_period = 1000;
+		error = sls_partadd(&partadd_args);
+		if (error) {
+			printf("Problem creating default in-memory partition\n");
+		}
 
 		slsm.slsm_cdev = make_dev(&slsmm_cdevsw, 0,
 		    UID_ROOT, GID_WHEEL, 0666, "sls");
