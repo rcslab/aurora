@@ -9,6 +9,7 @@
 #include "slsfs_alloc.h"
 #include "slsfs_buf.h"
 #include "slsfs_subr.h"
+#include "debug.h"
 
 #define NEWOSDSIZE (30)
 #define AMORTIZED_CHUNK (10000)

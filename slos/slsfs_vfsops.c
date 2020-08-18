@@ -51,6 +51,7 @@
 #include "slsfs_dir.h"
 #include "slsfs_buf.h"
 #include "slsfs_alloc.h"
+#include "debug.h"
 
 static MALLOC_DEFINE(M_SLSFSBUF, "slsfs_buf", "SLSFS buf");
 static MALLOC_DEFINE(M_SLSFSMNT, "slsfs_mount", "SLSFS mount structures");
@@ -716,7 +717,7 @@ slsfs_create_slos(struct mount *mp, struct vnode *devvp)
 	slos.slsfs_mount = mp;
 
 	slos.slos_vp = devvp;
-	//devvp->v_data = &slos;
+
 	/* Hook up the SLOS into the GEOM provider for the backing device. */
 	g_topology_lock();
 	error = g_vfs_open(devvp, &slos.slos_cp, "slsfs", 1);

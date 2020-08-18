@@ -31,15 +31,17 @@
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
+#include <slos.h>
+#include <slos_record.h>
+
 #include "imported_sls.h"
 #include "sls_data.h"
 #include "sls_ioctl.h"
 #include "sls_load.h"
 #include "sls_mm.h"
 #include "sls_vmspace.h"
+#include "debug.h"
 
-#include <slos.h>
-#include <slos_record.h>
 
 /* 
  * Read an info struct from the buffer, if there is enough data,
@@ -260,7 +262,7 @@ slsload_vnode(struct sbuf **path, char **bufp, size_t *bufsizep)
 
 	error = slsload_path(path, bufp, bufsizep);
 	if (error != 0) {
-		SLS_KTR("No path found");
+		DEBUG("No path found");
 		/* If there's no path, add an empty buffer. */
 		*path = sbuf_new_auto();
 		sbuf_finish(*path);

@@ -35,5 +35,9 @@ void slsvm_print_chain(vm_object_t shadow);
 void slsvm_print_crc32_vmspace(struct vmspace *vm);
 void slsvm_print_crc32_object(vm_object_t obj);
 
+void slsvm_print_vmobject(struct vm_object *obj);
+void slsvm_print_vmspace(struct vmspace *space);
+void slsvm_print_chain(vm_object_t shadow);
+
 #endif /* _SLSVM_H_ */
 

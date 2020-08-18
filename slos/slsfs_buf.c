@@ -1,3 +1,4 @@
+
 #include <sys/types.h>
 #include <machine/atomic.h>
 
@@ -10,6 +11,7 @@
 
 #include "slsfs_buf.h"
 #include "btree.h"
+#include "debug.h"
 
 SDT_PROVIDER_DEFINE(slsfsbuf);
 SDT_PROBE_DEFINE(slsfsbuf, , , start);

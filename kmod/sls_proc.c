@@ -20,6 +20,7 @@
 #include "sls_mm.h"
 #include "sls_proc.h"
 #include "sls_path.h"
+#include "debug.h"
 
 /*
  * Get the state of all threads of the process. This function
@@ -108,28 +109,7 @@ sls_thread_create(struct thread *td, void *thunk)
 	td->td_frame->tf_err = slsthread->tf_err;
 	td->td_frame->tf_trapno = slsthread->tf_trapno;
 
-	DEBUG3("%s:%d: Restoring thread %d", __FILE__, __LINE__, td->td_tid);
-	DEBUG4("rax 0x%lx rbx 0x%lx rcx 0x%lx rdx 0x%lx",
-	    td->td_frame->tf_rax, td->td_frame->tf_rbx,
-	    td->td_frame->tf_rcx, td->td_frame->tf_rdx);
-	DEBUG4("rdi 0x%lx rsi 0x%lx rip 0x%lx rflags 0x%lx",
-	    td->td_frame->tf_rdi, td->td_frame->tf_rsi,
-	    td->td_frame->tf_rip, td->td_frame->tf_rflags);
-	DEBUG4("r8 0x%lx r9 0x%lx r10 0x%lx r11 0x%lx",
-	    td->td_frame->tf_r8, td->td_frame->tf_r9,
-	    td->td_frame->tf_r10, td->td_frame->tf_r11);
-	DEBUG4("r12 0x%lx r13 0x%lx r14 0x%lx r15 0x%lx",
-	    td->td_frame->tf_r12, td->td_frame->tf_r13,
-	    td->td_frame->tf_r14, td->td_frame->tf_r15);
-	DEBUG4("cs 0x%x ds 0x%x es 0x%x ss 0x%x",
-	    td->td_frame->tf_cs, td->td_frame->tf_ds,
-	    td->td_frame->tf_es, td->td_frame->tf_ss);
-	DEBUG5("rsp 0x%lx err 0x%lx addr 0x%lx trapno 0x%x flags 0x%x",
-	    td->td_frame->tf_rsp, td->td_frame->tf_err,
-	    td->td_frame->tf_addr, td->td_frame->tf_trapno,
-	    td->td_frame->tf_flags);
-
-	DEBUG3("%s:%d: Restoring thread %d", __FILE__, __LINE__, td->td_tid);
+	DEBUG1("Restoring thread %d", td->td_tid);
 	DEBUG4("rax 0x%lx rbx 0x%lx rcx 0x%lx rdx 0x%lx",
 	    td->td_frame->tf_rax, td->td_frame->tf_rbx,
 	    td->td_frame->tf_rcx, td->td_frame->tf_rdx);

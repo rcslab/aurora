@@ -25,6 +25,7 @@
 #include "sls_internal.h"
 #include "sls_kv.h"
 #include "sls_vm.h"
+#include "debug.h"
 
 SDT_PROBE_DEFINE(sls, , , procset_loop);
 
@@ -291,7 +292,9 @@ slsvm_object_reftransfer(vm_object_t src, vm_object_t dst)
 	vm_object_deallocate(src);
 }
 
-/* Create a shadow of the same size as the object, perfectly aligned. */
+/*
+ * Create a shadow of the same size as the object, perfectly aligned.
+ */
 void
 slsvm_object_shadowexact(vm_object_t *objp)
 {
@@ -299,24 +302,54 @@ slsvm_object_shadowexact(vm_object_t *objp)
 	vm_object_t obj;
 
 	obj = *objp;
-	DEBUG2("(PRE) Object %p has %d references\n", obj, obj->ref_count);
+	DEBUG2("(PRE) Object %p has %d references", obj, obj->ref_count);
 	vm_object_shadow(objp, &offset, ptoa((*objp)->size));
 
 	KASSERT((obj != *objp), ("object %p wasn't shadowed", obj));
-	DEBUG2("(POST) Object %p has %d references\n", obj, obj->ref_count);
-	DEBUG2("(SHADOW) Object %p has shadow %p\n", obj, *objp);
+	DEBUG2("(POST) Object %p has %d references", obj, obj->ref_count);
+	DEBUG2("(SHADOW) Object %p has shadow %p", obj, *objp);
 	/* Inherit the unique object ID from the parent. */
 	(*objp)->objid = obj->objid;
 }
 
+/*
+ * Print vmobject to KTR
+ */
 void
-slsvm_print_chain(vm_object_t shadow)
+slsvm_print_vmobject(struct vm_object *obj)
 {
+	vm_object_t current_object = obj;
+
+	do {
+		DEBUG2("    vm_object:%p offset:%llx",
+			current_object, current_object->backing_object_offset);
+		DEBUG2("                 type:%x flags:%x", current_object->type, current_object->flags);
+	} while ((current_object = current_object->backing_object) != NULL);
+}
+
+/*
+ * Print vmspace to KTR
+ */
+void
+slsvm_print_vmspace(struct vmspace *vm)
+{
+	vm_map_t map = &vm->vm_map;
+	vm_map_entry_t entry;
 	vm_object_t obj;
 
-	for (obj = shadow; (obj != NULL); (obj = obj->backing_object))
-		printf("(%p, %lx) <-- ", obj, obj->objid);
-	printf("\n");
+	for (entry = map->header.next; entry != &map->header; entry = entry->next) {
+		KASSERT((entry->eflags & MAP_ENTRY_IS_SUB_MAP) == 0, ("entry is submap"));
+		DEBUG3("vm_entry:%p range:%llx--%llx", entry, entry->start, entry->end);
+		DEBUG2("            eflags:%x inheritance:%x", entry->eflags, entry->inheritance);
+		DEBUG1("            offset:%x", entry->offset);
+		obj = entry->object.vm_object;
+		if (obj != NULL) {
+			slsvm_print_vmobject(obj);
+		} else {
+			DEBUG("            NULL object");
+		}
+	}
+
 }
 
 /*
@@ -335,7 +368,7 @@ slsvm_print_crc32_vmspace(struct vmspace *vm)
 	for (entry = map->header.next; entry != &map->header; entry = entry->next) {
 		KASSERT((entry->eflags & MAP_ENTRY_IS_SUB_MAP) == 0, ("entry is submap"));
 		obj = entry->object.vm_object;
-		CTR4(KTR_SLS, "entry: 0x%lx\tpresent: %s obj %p pages %ld", entry->start, \
+		DEBUG4("entry: 0x%lx\tpresent: %s obj %p pages %ld", entry->start, \
 		    (obj != NULL) ? "yes" : "no", obj, (obj != NULL) ? obj->resident_page_count : 0);
 		if (obj == NULL)
 			continue;
@@ -368,7 +401,7 @@ slsvm_print_crc32_object(vm_object_t obj)
 		return;
 
 	TAILQ_FOREACH(m, &obj->memq, listq) {
-		CTR4(KTR_SLS, "(%p) 0x%lx, 0x%x 0x%x", obj, IDX_TO_OFF(m->pindex),
+		DEBUG4("(%p) 0x%lx, 0x%x 0x%x", obj, IDX_TO_OFF(m->pindex),
 			* (uint64_t *) PHYS_TO_DMAP(m->phys_addr),
 			* ((uint64_t *) PHYS_TO_DMAP(m->phys_addr) + 1));
 	}

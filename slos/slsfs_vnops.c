@@ -28,6 +28,7 @@
 #include "slsfs_subr.h"
 #include "slsfs_buf.h"
 #include "btree.h"
+#include "debug.h"
 
 SDT_PROVIDER_DEFINE(slos);
 SDT_PROBE_DEFINE3(slos, , , slsfs_deviceblk, "uint64_t", "uint64_t", "int");

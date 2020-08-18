@@ -59,6 +59,7 @@
 #include "sls_path.h"
 
 #include "imported_sls.h"
+#include "debug.h"
 
 static int
 sls_vn_to_inode(struct vnode *vp, uint64_t *inop)
@@ -68,11 +69,11 @@ sls_vn_to_inode(struct vnode *vp, uint64_t *inop)
 	if (vp->v_mount != slos.slsfs_mount) 
 		panic("unlinked vnode %p not in the SLOS", vp);
 
-	SLS_KTR1("Got inum %lx from the SLOS", INUM(SLSVP(vp)));
+	DEBUG1("Got inum %lx from the SLOS", INUM(SLSVP(vp)));
 
 	*inop = INUM(SLSVP(vp));
 
-	SLS_KTR1("Checkpointing vnode backed by inode %lx", *inop);
+	DEBUG1("Checkpointing vnode backed by inode %lx", *inop);
 
 	return (0);
 
@@ -120,7 +121,7 @@ slsrest_inode(struct slsfile *info, int *fdp)
 
 	KASSERT(info->has_path == 0, ("restoring linked file by inode number"));
 
-	SLS_KTR1("Restoring vnode backed by inode %lx", info->ino);
+	DEBUG1("Restoring vnode backed by inode %lx", info->ino);
 
 	/* Get an empty struct file. */
 	error = falloc_noinstall(td, &fp);

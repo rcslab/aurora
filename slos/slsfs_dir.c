@@ -13,6 +13,7 @@
 #include "slsfs_dir.h"
 #include "slsfs_subr.h"
 #include "slsfs_buf.h"
+#include "debug.h"
 
 int
 slsfs_add_dirent(struct vnode *vp, uint64_t ino, char *nameptr, long namelen, uint8_t type)

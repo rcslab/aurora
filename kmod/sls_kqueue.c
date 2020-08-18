@@ -53,7 +53,7 @@
 #include "sls_path.h"
 
 #include "imported_sls.h"
-
+#include "debug.h"
 
 /*
  * All kqueues belong to exactly one file table, and have a backpointer to it.
@@ -113,7 +113,7 @@ slsckpt_knote(struct knote *kn, struct sbuf *sb)
 	KASSERT((kn->kn_kevent.filter != EVFILT_AIO), ("unhandled AIO filter detected"));
 
 	/* XXX Check the kevent's flags in case there is an illegal operation in progress. */
-	SLS_KTR2("Checkpointing (%lx, %d)", kn->kn_kevent.ident, kn->kn_kevent.filter);
+	DEBUG2("Checkpointing (%lx, %d)", kn->kn_kevent.ident, kn->kn_kevent.filter);
 
 	/* Write each kevent to the sbuf. */
 	/* Get all relevant fields, mostly the identifier a*/
@@ -272,7 +272,7 @@ slsrest_kqregister(int fd, struct kqueue *kq, slsset *slskns)
 
 	KVSET_FOREACH(slskns, iter, slskn) {
 		kev = slskn->kn_kevent;
-		SLS_KTR2("Registering knote (%lx, %d)", kev.ident, kev.filter);
+		DEBUG2("Registering knote (%lx, %d)", kev.ident, kev.filter);
 		/*
 		 * We need to modify the action flags so that the call to
 		 * kqfd_register() does exactly what we want: We want the knote
@@ -311,45 +311,36 @@ slsrest_kq_sockhack(struct proc *p, struct kqueue *kq)
 		if (!fdisused(fdp, fd))
 			continue;
 
-		SLS_KTR2("%s:%d", __FILE__, __LINE__);
 		/* Filter out everything but connected inet sockets. */
 		fp = FDTOFP(p, fd);
 		if (fp->f_type != DTYPE_SOCKET)
 			continue;
 
-		SLS_KTR2("%s:%d", __FILE__, __LINE__);
 		so = (struct socket *) fp->f_data;
 		if (so->so_proto->pr_domain->dom_family != AF_INET)
 			continue;
 
-		SLS_KTR2("%s:%d", __FILE__, __LINE__);
 		if ((so->so_options & SO_ACCEPTCONN) != 0)
 			continue;
 
-		SLS_KTR2("%s:%d", __FILE__, __LINE__);
 		/*
 		 * Find all knotes for the identifier, set them as EOF.
 		 * The knote identifier is the fd of the file.
 		 */
 		SLIST_FOREACH(kn, &kq->kq_knlist[fd], kn_link) {
-		SLS_KTR2("%s:%d", __FILE__, __LINE__);
-			CTR6(KTR_SLS, "%s:%d: Restoring knote ident = %d, filter = %d "
+		DEBUG4("Restoring knote ident = %d, filter = %d "
 				"flags = 0x%x status = 0x%x",
-				__FILE__, __LINE__, kn->kn_id, kn->kn_filter,
+				kn->kn_id, kn->kn_filter,
 				kn->kn_flags, kn->kn_status);
-		SLS_KTR2("%s:%d", __FILE__, __LINE__);
 
 			if ((kn->kn_status & KN_QUEUED) == 0) {
 				kn->kn_status |= (KN_ACTIVE | KN_QUEUED);
 				TAILQ_INSERT_TAIL(&kq->kq_head, kn, kn_tqe);
 				kq->kq_count += 1;
 			}
-		SLS_KTR2("%s:%d", __FILE__, __LINE__);
 			kn->kn_flags |= EV_ERROR;
 			kn->kn_data = ECONNRESET;
-		SLS_KTR2("%s:%d", __FILE__, __LINE__);
 		}
-		SLS_KTR2("%s:%d", __FILE__, __LINE__);
 	}
 }
 
@@ -436,7 +427,7 @@ slsrest_knotes(int fd, slsset *slskns)
 		kn->kn_kevent = slskn->kn_kevent;
 		kn->kn_sfflags = slskn->kn_sfflags;
 		kn->kn_sdata = slskn->kn_sdata;
-		SLS_KTR4("Restoring knote ident = %d, filter = %d"
+		DEBUG4("Restoring knote ident = %d, filter = %d"
 			"flags = 0x%x status = 0x%x",
 			kn->kn_id, kn->kn_filter,
 			kn->kn_flags, kn->kn_status);

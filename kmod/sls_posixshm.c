@@ -57,8 +57,8 @@
 #include "sls_internal.h"
 #include "sls_mm.h"
 #include "sls_path.h"
-
 #include "imported_sls.h"
+#include "debug.h"
 
 int
 slsckpt_posixshm(struct shmfd *shmfd, struct sbuf *sb)
@@ -111,14 +111,14 @@ slsrest_posixshm(struct slsposixshm *info, struct slskv_table *objtable, int *fd
 		return (error);
 
 	path = (info->sb != NULL) ? sbuf_data(info->sb) : SHM_ANON;
-	SLS_KTR1("Restoring shared memory with path %p",
+	DEBUG1("Restoring shared memory with path %p",
 	    path == SHM_ANON ? path : "(anon)");
 
 	/* First try to create the shared memory mapping. */
 	error = kern_shm_open(curthread, path, UIO_SYSSPACE,
 	    O_RDWR | O_CREAT | O_EXCL, info->mode, NULL);
 	if (error != 0) {
-		SLS_KTR("Failed to create new shared memory segment");
+		DEBUG("Failed to create new shared memory segment");
 
 		/* Maybe it's already created then? */
 		error = kern_shm_open(curthread, path, UIO_SYSSPACE,
@@ -126,7 +126,7 @@ slsrest_posixshm(struct slsposixshm *info, struct slskv_table *objtable, int *fd
 		if (error != 0)
 			return (error);
 
-		SLS_KTR("Shared memory segment already created");
+		DEBUG("Shared memory segment already created");
 
 		/* It was - return the fd and let the main code take care of the rest. */
 		*fdp = curthread->td_retval[0];
@@ -140,7 +140,7 @@ slsrest_posixshm(struct slsposixshm *info, struct slskv_table *objtable, int *fd
 	fp = FDTOFP(curproc, fd);
 	shmfd = (struct shmfd *) fp->f_data;
 
-	SLS_KTR1("Swapped object %p into shared memory segment", obj);
+	DEBUG1("Swapped object %p into shared memory segment", obj);
 	vm_object_reference(obj);
 
 	oldobj = shmfd->shm_object;

@@ -53,6 +53,7 @@
 #include "sls_table.h"
 #include "sls_vm.h"
 #include "sls_vmspace.h"
+#include "debug.h"
 
 #define SLS_PROCALIVE(proc) \
     (((proc)->p_state != PRS_ZOMBIE) && !((proc)->p_flag & P_WEXIT))
@@ -199,7 +200,13 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	struct proc *p;
 	int error = 0;
 
-	SLS_KTR("Process stopped\n");
+	DEBUG("Process stopped");
+
+#ifdef KTR
+	KVSET_FOREACH(procset, iter, p) {
+		slsvm_print_vmspace(p->p_vmspace);
+	}
+#endif
 
 	/* 
 	 * Check if there are objects from a previous iteration. 
@@ -388,7 +395,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	SDT_PROBE0(sls, , , dedup);
 
 	slsp->slsp_epoch += 1;
-	DEBUG("Checkpointed partition once\n");
+	DEBUG("Checkpointed partition once");
 
 	return (0);
 
@@ -514,7 +521,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 
 	(void) fhold(sls_blackholefp);
 
-	SLS_KTR("Process active\n");
+	DEBUG("Process active");
 	/* Check if the partition is available for checkpointing. */
 
 	if (atomic_cmpset_int(&slsp->slsp_status, SPROC_AVAILABLE,
@@ -591,7 +598,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		if (msec_left > 0)
 			pause_sbt("slscpt", SBT_1MS * msec_left, 0, C_HARDCLOCK | C_CATCH);
 
-		SLS_KTR("Woke up\n");
+		DEBUG("Woke up");
 	}
 
 	/*
@@ -600,7 +607,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	 */
 	atomic_cmpset_int(&slsp->slsp_status, SPROC_CHECKPOINTING, SPROC_AVAILABLE);
 
-	SLS_KTR("Stopped checkpointing\n");
+	DEBUG("Stopped checkpointing");
 
 out:
 

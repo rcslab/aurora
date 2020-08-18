@@ -24,6 +24,7 @@
 #include "slos_inode.h"
 #include "slsfs_alloc.h"
 #include "slsfs_buf.h"
+#include "debug.h"
 
 #define NODE_LOCK(node, flags) (BUF_LOCK((node)->fn_buf, flags, NULL))
 #define NODE_ISLOCKED(node) (BUF_ISLOCKED((node)->fn_buf))

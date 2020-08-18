@@ -94,33 +94,9 @@ sls_module_exiting(void)
     printf(fmt, ##__VA_ARGS__);			    \
 } while (0)
 
-#define SLS_KTR_STRING(x) SLS_KTR_STRING_IMPL(x)
-#define SLS_KTR_STRING_IMPL(x) #x
-
-#define SLS_KTR(fmt) \
-	CTR1(KTR_SLS, __FILE__ ":" SLS_KTR_STRING(__LINE__) ": %s: " fmt, __func__)
-#define SLS_KTR1(fmt, a) \
-	CTR2(KTR_SLS, __FILE__ ":" SLS_KTR_STRING(__LINE__) ": %s: " fmt, __func__, a)
-#define SLS_KTR2(fmt, a, b) \
-	CTR3(KTR_SLS, __FILE__ ":" SLS_KTR_STRING(__LINE__) ": %s: " fmt, __func__, a, b)
-#define SLS_KTR3(fmt, a, b, c) \
-	CTR4(KTR_SLS, __FILE__ ":" SLS_KTR_STRING(__LINE__) ": %s: " fmt, __func__, a, b, c)
-#define SLS_KTR4(fmt, a, b, c, d) \
-	CTR5(KTR_SLS, __FILE__ ":" SLS_KTR_STRING(__LINE__) ": %s: " fmt, __func__, a, b, c, d)
-#define SLS_KTR5(fmt, a, b, c, d, e) \
-	CTR6(KTR_SLS, __FILE__ ":" SLS_KTR_STRING(__LINE__) ": %s: " fmt, __func__, a, b, c, d, e)
-
-#define sls_tmp(fmt, ...) printf(fmt, ##__VA_ARGS__)
 #else
 
 #define SLS_DBG(fmt, ...)
-
-#define SLS_KTR(fmt) ((void)0)
-#define SLS_KTR1(fmt, a) ((void)0)
-#define SLS_KTR2(fmt, a, b) ((void)0)
-#define SLS_KTR3(fmt, a, b, c) ((void)0)
-#define SLS_KTR4(fmt, a, b, c, d) ((void)0)
-#define SLS_KTR5(fmt, a, b, c, d, e) ((void)0)
 
 #define sls_tmp(fmt, ...) panic("debug printf not removed")
 #endif /* SLS_MSG */
@@ -181,11 +157,6 @@ SDT_PROVIDER_DECLARE(sls);
     do {						    \
 	printf("%s: %s in line %d (%s) failed with %d\n",   \
 	    __FILE__, #func, __LINE__, __func__, error);	    \
-    } while (0)
-
-#define SLS_BREAKPOINT()					    \
-    do {							    \
-	printf("%s: %s, line %d\n", __FILE__, __func__, __LINE__);  \
     } while (0)
 
 #endif /* _SLS_H_ */

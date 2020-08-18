@@ -21,7 +21,7 @@
 #include "slsfs.h"
 #include "slsfs_subr.h"
 #include "slsfs_buf.h"
-
+#include "debug.h"
 
 static MALLOC_DEFINE(M_SLOS_INO, "slos inodes", "SLOSI");
 

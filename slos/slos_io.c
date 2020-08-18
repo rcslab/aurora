@@ -35,6 +35,7 @@
 
 #include "slos_io.h"
 #include "slosmm.h"
+#include "debug.h"
 
 
 /* 

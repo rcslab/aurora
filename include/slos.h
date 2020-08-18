@@ -15,42 +15,6 @@
 #include <vm/vm_object.h>
 #include <vm/uma.h>
 
-#ifdef KTR
-#define DEBUG(fmt) do {				    \
-    CTR1(KTR_SPARE5, "%s: " fmt, __func__);			    \
-    } while (0) 
-
-#define DEBUG1(fmt, ...) do {			    \
-    CTR2(KTR_SPARE5, "%s: " fmt, __func__, ##__VA_ARGS__);	    \
-    } while (0) 
-
-#define DEBUG2(fmt, ...) do {			    \
-    CTR3(KTR_SPARE5, "%s: " fmt, __func__, ##__VA_ARGS__);	     \
-    } while (0) 
-
-#define DEBUG3(fmt, ...) do {			    \
-    CTR4(KTR_SPARE5, "%s: " fmt, __func__, ##__VA_ARGS__);	    \
-    } while (0) 
-
-#define DEBUG4(fmt, ...) do {			    \
-    CTR5(KTR_SPARE5, "%s: " fmt, __func__, ##__VA_ARGS__);	    \
-    } while (0) 
-
-#define DEBUG5(fmt, ...) do {			    \
-    CTR6(KTR_SPARE5, "%s: " fmt, __func__, ##__VA_ARGS__);	    \
-    } while (0) 
-
-#else
-
-#define DEBUG(fmt, ...) ((void)(0));
-#define DEBUG1(fmt, ...) ((void)(0));
-#define DEBUG2(fmt, ...) ((void)(0));
-#define DEBUG3(fmt, ...) ((void)(0));
-#define DEBUG4(fmt, ...) ((void)(0));
-#define DEBUG5(fmt, ...) ((void)(0));
-
-#endif // KTR
-
 #define ALLOCATEPTR(slos, bytes, ptr) ((slos)->slsfs_blkalloc(slos, bytes, ptr))
 #define NUMSBS (100)
 

@@ -61,6 +61,7 @@
 #include "sls_vm.h"
 
 #include "imported_sls.h"
+#include "debug.h"
 
 static int
 slsckpt_getvnode(struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
@@ -802,7 +803,7 @@ slsckpt_filedesc(struct proc *p, struct slsckpt_data *sckpt_data, struct sbuf *s
 		if (!fdisused(filedesc, fd))
 			continue;
 
-		SLS_KTR1("Checkpointing fd %d", fd);
+		DEBUG1("Checkpointing fd %d", fd);
 		KASSERT((filedesc == p->p_fd), ("wrong file descriptor table"));
 		fp = FDTOFP(p, fd);
 

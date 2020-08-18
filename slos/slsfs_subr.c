@@ -28,6 +28,7 @@
 #include "slsfs_subr.h"
 #include "slsfs_dir.h"
 #include "slsfs_buf.h"
+#include "debug.h"
 
 #define SYNCERR (-1)
 #define DONE (0)

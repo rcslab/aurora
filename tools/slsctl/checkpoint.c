@@ -22,7 +22,7 @@ static struct option checkpoint_longopts[] = {
 void
 checkpoint_usage(void)
 {
-	printf("Usage: slsctl checkpoint <-p oid> [-r] \n");
+	printf("Usage: slsctl checkpoint <-o oid> [-r] \n");
 }
 
 int
