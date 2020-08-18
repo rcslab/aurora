@@ -23,6 +23,10 @@ BEGIN
 	deduptime = 0;
 	synctime = 0;
 
+	vptonamestart = 0;
+	vptonameend = 0;
+	vptopathtime = 0;
+
 	iters = 0;
 }
 
@@ -36,6 +40,17 @@ sls:sls::stopped
 	stopped = timestamp;
 	stoptime += stopped - start;
 	iters += 1;
+}
+
+sls:sls::vptopathstart
+{
+	vptopathstart = timestamp;
+}
+
+sls:sls::vptopathend
+{
+	vptopathend = timestamp;
+	vptopathtime += vptopathend - vptopathstart;
 }
 
 sls:sls::sysv
@@ -105,4 +120,5 @@ END
 	printf("%s, %u\n", "dump", dumptime / iters);
 	printf("%s, %u\n", "sync", synctime / iters);
 	printf("%s, %u\n", "dedup", deduptime / iters);
+	printf("%s, %u\n", "vptopath", vptopathtime / iters);
 }

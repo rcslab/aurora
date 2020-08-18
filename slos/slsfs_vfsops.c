@@ -482,9 +482,6 @@ slsfs_performio(void *ctx, int pending)
 
 	KASSERT(i > 0, ("object %p is has no pages to dump", obj));
 
-	/* Get a reference to the object, freed when the buffer is done.  */
-	vm_object_reference(obj);
-
 	/*
 	 * We can do the merging of keys and all the functionality here.  I'm
 	 * sure this code could be cleaned up but for readability separating all

@@ -7,7 +7,11 @@ NGINXTHREAD="5"
 NGINXCONNS="10"
 NGINXWRKCONFFILE="$OUTDIR/nginx_wrk.conf"
 NGINXWRKFILE="$OUTDIR/nginx_wrk.results"
-NGINXURL="http://localhost"
+NGINXURL="http://129.97.75.126:80/"
+NGINXREMOTEURL="tortilla"
+NGINXFILE="/bigfile"
+#NGINXCONFFILE="$SLSDIR/scripts/nginx.conf"
+NGINXCONFFILE="/usr/local/nginx/conf/nginx.conf"
 
 NGINXMAXPID="65536"
 NGINXPID="$NGINXMAXPID"
@@ -20,7 +24,7 @@ function ngstart {
     ln -s "$NGINXLOGDIRSLS" "$NGINXLOGDIRUSR"
 
     cd "$MOUNTFILE"
-    "$NGINX"
+    "$NGINX" -c "$SNGINXCONFFILE"
     cd -
 }
 
@@ -29,7 +33,7 @@ function ngbench {
     echo "NGINXTHREAD,$NGINXTHREAD" >> "$NGINXWRKCONFFILE"
     echo "NGINXCONNS,$NGINXCONNS" >> "$NGINXWRKCONFFILE"
 
-    wrk -d "$NGINXTIME" -t "$NGINXTIME" -c "$NGINXCONNS" "$NGINXURL"
+    ssh "$NGINXREMOTEURL" wrk -d "$NGINXTIME" -t "$NGINXTIME" -c "$NGINXCONNS" "$NGINXURL/$NGINXFILE"
 }
 
 function ngstop {

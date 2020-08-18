@@ -28,6 +28,9 @@
 #include "sls_mm.h"
 #include "sls_path.h"
 
+SDT_PROBE_DEFINE(sls, , , vptopathstart);
+SDT_PROBE_DEFINE(sls, , , vptopathend);
+
 /*
  * Append the filename of a vnode to a given raw buffer.
  */
@@ -36,22 +39,23 @@ sls_vn_to_path_raw(struct vnode *vp, char *buf)
 {
 	char *freepath = NULL;
 	char *fullpath = "";
-	struct sbuf *sb;
 	int error;
 
-	sb = sbuf_new_auto();
+	SDT_PROBE0(sls, , , vptopathstart);
 
 	vref(vp);
 	error = vn_fullpath(curthread, vp, &fullpath, &freepath);
 	vrele(vp);
 	if (error != 0) {
 		free(freepath, M_TEMP);
+		SDT_PROBE0(sls, , , vptopathend);
 		return (error);
 	}
 
 	memcpy(buf, fullpath, PATH_MAX);
 	free(freepath, M_TEMP);
 
+	SDT_PROBE0(sls, , , vptopathend);
 	return (0);
 }
 
@@ -68,6 +72,7 @@ sls_vn_to_path(struct vnode *vp, struct sbuf **sbp)
 	size_t len;
 	int error;
 
+	SDT_PROBE0(sls, , , vptopathstart);
 	sb = sbuf_new_auto();
 
 	vref(vp);
@@ -85,6 +90,7 @@ sls_vn_to_path(struct vnode *vp, struct sbuf **sbp)
 
 	free(freepath, M_TEMP);
 	*sbp = sb;
+	SDT_PROBE0(sls, , , vptopathend);
 
 	return 0;
 
@@ -92,6 +98,7 @@ error:
 
 	sbuf_delete(sb);
 	free(freepath, M_TEMP);
+	SDT_PROBE0(sls, , , vptopathend);
 
 	return error;
 }
@@ -100,7 +107,7 @@ int
 sls_path_append(const char *data, size_t len, struct sbuf *sb)
 {
 	uint64_t magic = SLSSTRING_ID;
-	int error; 
+	int error;
 
 	error = sbuf_bcat(sb, (void *) &(magic), sizeof(magic));
 	if (error != 0)
@@ -111,14 +118,14 @@ sls_path_append(const char *data, size_t len, struct sbuf *sb)
 		return error;
 
 	error = sbuf_bcat(sb, data, len);
-	if (error != 0) 
+	if (error != 0)
 		return error;
 
 
 	return 0;
 }
 
-int 
+int
 sls_vn_to_path_append(struct vnode *vp, struct sbuf *sb)
 {
 	struct sbuf *path;

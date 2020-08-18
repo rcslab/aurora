@@ -6,7 +6,7 @@ SLSFS="$SLSDIR/tools/newfs/newfs"
 # SLS parameters
 OID="1000"
 BACKEND="memory"
-CKPTFREQ="1000"
+CKPTFREQ="10"
 DELTA="no"
 RESTSTOP="yes"
 
@@ -29,7 +29,9 @@ SLSBENCHDIR="/root/sls-bench/"
 DRIVE="/dev/vtbd1"
 
 function aurstripe {
-    gstripe create -s "$STRIPESIZE" -v "$STRIPENAME" "$STRIPEDISKS"
+    gstripe load
+    gstripe stop "$STRIPENAME"
+    gstripe create -s "$STRIPESIZE" -v "$STRIPENAME" $STRIPEDISKS
     DRIVE=$STRIPEDRIVE
 }
 
@@ -47,6 +49,7 @@ function aurload {
 
     sysctl aurora.async_slos=1
     sysctl aurora.sync_slos=0
+    sysctl aurora_slos.checkps=200
 
     # Dump the configuration to a file.
     mkdir -p "$OUTDIR"
@@ -69,6 +72,7 @@ function aurunload {
     # Remove the SLOS
     umount "$MOUNTFILE"
     kldunload slos
+    gstripe stop "$STRIPENAME"
 }
 
 # Set up the SLS. Done after setting up the benchmark.

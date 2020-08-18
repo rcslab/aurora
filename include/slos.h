@@ -128,7 +128,6 @@ struct slos {
 
 	struct lock		slos_lock;	/* Sleepable lock */
 	struct taskqueue	*slos_tq;	/* Slos taskqueue */
-	struct taskqueue	*slos_vmtq;	/* Slos VM object deallocation taskqueue */
 
 	int (*slsfs_blkalloc)(struct slos*, size_t, diskptr_t *);
 	int (*slsfs_io)(struct vnode *, vm_object_t, vm_page_t, size_t, int);

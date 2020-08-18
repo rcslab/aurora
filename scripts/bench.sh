@@ -12,12 +12,28 @@ source "$SCRIPTDIR/lighttpd.sh"
 
 SYNCHDELAY="4"
 
-REDISTIME=10
-
+# The directory from which the server benchmarks are serving
+AURWEBROOTDIR="/root/www/"
+AURNULLFILE="nullfile"
+AURBIGFILE="bigfile"
+AURBIGFILESIZE="10G"
 
 # ------------------------------------------------------------------
 
+function benchstart {
+    mkdir "$AURWEBROOTDIR"
+    cd "$AURWEBROOTDIR"
+
+    touch "$AURNULLFILE"
+    truncate -s "$AURBIGFILESIZE" "$AURBIGFILE"
+
+    cd -
+}
+
+REDISTIME=10
+
 function redis {
+    aurstripe
     aurload
 
     # Dump the configuration settings to the output file
@@ -37,6 +53,7 @@ function redis {
 }
 
 function memcached {
+    aurstripe
     aurload
     mcstart
 
@@ -50,6 +67,7 @@ function memcached {
 }
 
 function firefox() {
+    aurstripe
     aurload
     ffstart
 
@@ -65,6 +83,7 @@ function firefox() {
 }
 
 function nginx() {
+    aurstripe
     aurload
     ngstart
 
@@ -80,6 +99,7 @@ function nginx() {
 }
 
 function splash() {
+    aurstripe
     aurload
 
     spbench &
@@ -93,6 +113,7 @@ function splash() {
 }
 
 function light() {
+    aurstripe
     aurload
     listart
 
@@ -104,6 +125,8 @@ function light() {
     aurunload
 }
 
-function slsoutclean {
+function benchstop {
     rm -r "$OUTFILE"
+    rm -rf "$AURWEBROOTDIR"
+    aurstripe
 }

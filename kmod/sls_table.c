@@ -1107,12 +1107,13 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 {
 	struct sbuf *sb_manifest;
 	struct sls_record *rec;
+	struct slskv_iter iter;
 	uint64_t slsid;
 	int error;
 
 	sb_manifest = sbuf_new_auto();
 
-	KV_FOREACH_POP(sckpt_data->sckpt_rectable, slsid, rec) {
+	KV_FOREACH(sckpt_data->sckpt_rectable, iter, slsid, rec) {
 		/*
 		 * VM object records are special, since we need to dump
 		 * actual memory along with the metadata.
@@ -1121,30 +1122,28 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 			error = sls_writedata_slos(rec, sckpt_data->sckpt_objtable);
 		else
 			error = sls_writemeta_slos(rec, NULL, true);
-		if (error != 0) {
-			SLS_DBG("Writing the record failed with %d", error);
-			sbuf_delete(sb_manifest);
-			return (error);
-		}
+		if (error != 0)
+			goto error;
 
 		/* Attach the new record to the checkpoint manifest. */
 		error = sbuf_bcat(sb_manifest, &rec->srec_id, sizeof(rec->srec_id));
-		if (error != 0) {
-			sbuf_delete(sb_manifest);
-			return (error);
-		}
-
-		/* XXX Free as we go. */
+		if (error != 0)
+			goto error;
 	}
 
 	error = sls_write_slos_manifest(oid, sb_manifest);
 	if (error != 0)
-		return (error);
+		goto error;
 
 
 	sbuf_delete(sb_manifest);
 
 	return (0);
+
+error:
+
+	sbuf_delete(sb_manifest);
+	return (error);
 }
 
 
@@ -1250,8 +1249,8 @@ slstable_mkinfo(struct slsckpt_data *sckpt_data, struct slsckpt_data *sckpt_tmpd
 {
 	meta_info *minfo;
 	uint64_t slsid;
-	int error = 0;
 	uint64_t type;
+	int error;
 
 	type = (obj != NULL) ? SLOSREC_TESTDATA : SLOSREC_TESTMETA;
 	slsid = (obj != NULL) ? (uint64_t) obj : random();

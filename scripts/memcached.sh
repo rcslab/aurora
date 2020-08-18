@@ -3,7 +3,7 @@ MEMCACHEDPATH="/root/sls-bench/memcached/$MEMCACHEDNAME"
 MEMCACHEDADDR="localhost:11211"
 MEMCACHEDUSER="root"
 MUTILATEPATH="$SLSBENCHDIR/mutilate/mutilate"
-MUTILATETIME="5"
+MUTILATETIME="60"
 
 function mcstart {
     "$MEMCACHEDPATH" -u "$MEMCACHEDUSER" &

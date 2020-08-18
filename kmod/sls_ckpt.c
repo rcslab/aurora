@@ -280,7 +280,8 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 		break;
 
 	case SLS_MEM:
-		/* Associate the checkpoint with the partition. */
+		/* Replace the old checkpoint in the partition. */
+		slsckpt_destroy(slsp->slsp_sckpt);
 		slsp->slsp_sckpt = sckpt_data;
 		sckpt_data = NULL;
 		break;
@@ -568,9 +569,13 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		SDT_PROBE0(sls, , , stopped);
 
 		/* Checkpoint the process once. */
-		sls_ckpt_done += 1;
 		sls_checkpoint(procset, slsp);
 		nanotime(&tend);
+
+		if (error != 0)
+			printf("%s: Checkpoint failed with %d\n", __func__, error);
+		else
+			sls_ckpt_done += 1;
 
 		/* Release all checkpointed processes. */
 		KVSET_FOREACH_POP(procset, p)

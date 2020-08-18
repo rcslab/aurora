@@ -1,15 +1,18 @@
 LIGHTLOGDIRSLS="$MOUNTFILE/lighttpd_log"
 LIGHTLOGDIRUSR="/usr/local/lighttpd"
 LIGHT="/usr/local/sbin/lighttpd"
-LIGHTCONFFILE="/usr/local/etc/lighttpd/lighttpd.conf"
+LIGHTCONFFILE="$SLSDIR/scripts/lighttpd.conf"
 
 LIGHTWRKCONFFILE="$OUTDIR/lighttpd_wrk.conf"
 LIGHTTIME="10"
 LIGHTTHREAD="5"
 LIGHTCONNS="10"
-LIGHTURL="http://localhost"
+LIGHTWRKURL="http://129.97.75.126:80/"
+LIGHTWRKFILE="/bigfile"
+LIGHTREMOTE="tortilla"
 
 function listart {
+    # Remove the log directory
     rm -rf "$LIGHTLOGDIRUSR" "$LIGHTLOGDIRSLS"
     mkdir "$LIGHTLOGDIRSLS"
     ln -s "$LIGHTLOGDIRSLS" "$LIGHTLOGDIRUSR"
@@ -24,7 +27,7 @@ function libench {
     echo "LIGHTTHREAD,$LIGHTTHREAD" >> "$LIGHTWRKCONFFILE"
     echo "LIGHTCONNS,$LIGHTCONNS" >> "$LIGHTWRKCONFFILE"
 
-    wrk -d "$LIGHTTIME" -t "$LIGHTTIME" -c "$LIGHTCONNS" "$LIGHTURL"
+    ssh "$LIGHTREMOTE" wrk -d "$LIGHTTIME" -t "$LIGHTTHREAD" -c "$LIGHTCONNS" "$LIGHTWRKURL/$LIGHTWRKFILE"
 }
 
 function listop {
