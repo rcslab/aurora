@@ -242,6 +242,7 @@ slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset)
 		goto error;
 
 	/* Save the path of the executable. */
+	KASSERT(p->p_textvp != NULL, ("process %p has no text vnode", p));
 	error = sls_vn_to_path_append(p->p_textvp, sb);
 	if (error != 0)
 		goto error;
@@ -332,11 +333,11 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 	KASSERT(!SESS_LEADER(p), ("process is a session leader"));
 	/* Check if we were the original session leader. */
 	if (slsproc->pid == slsproc->sid) {
-		pgrp = malloc(sizeof(*pgrp), M_PGRP, M_ZERO);
+		pgrp = malloc(sizeof(*pgrp), M_PGRP, M_WAITOK | M_ZERO);
 		if (pgrp == NULL)
 			goto alloc_error;
 
-		sess = malloc(sizeof(*sess), M_SESSION, M_ZERO);
+		sess = malloc(sizeof(*sess), M_SESSION, M_WAITOK | M_ZERO);
 		if (sess == NULL)
 			goto alloc_error;
 
@@ -374,7 +375,7 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 		if (daemon != 0) {
 
 			/* Otherwise we just create a new pgrp if we were the group leader. */
-			pgrp = malloc(sizeof(*pgrp), M_PGRP, M_ZERO);
+			pgrp = malloc(sizeof(*pgrp), M_PGRP, M_WAITOK | M_ZERO);
 			if (pgrp == NULL)
 				goto alloc_error;
 
@@ -446,7 +447,9 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 		 * We might already be in the right pgrp, if that is the group
 		 * of the parent process that called sls_restore().
 		 */
-		if (!(pgrp->pg_id == p->p_pgid)) {
+		/* XXX Enter the session of the pgroup, too. */
+#if 0
+		if (pgrp->pg_id != p->p_pgid) {
 			sx_xlock(&proctree_lock);
 			PROC_UNLOCK(p);
 			error = enterthispgrp(p, pgrp);
@@ -458,6 +461,7 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 				goto error;
 			}
 		}
+#endif
 
 	} else if (!SESS_LEADER(p) && (slsproc->sid != 0)) {
 		/* We are the pgrp leader, but not the session leader. */
@@ -524,6 +528,8 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 
 	/* Restore the executable name and path. */
 	memcpy(p->p_comm, slsproc->name, MAXCOMLEN + 1);
+	vref(textvp);
+	vrele(p->p_textvp);
 	p->p_textvp = textvp;
 
 	/* Restore the standard syscall vector.*/

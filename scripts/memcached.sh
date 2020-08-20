@@ -1,16 +1,9 @@
-MEMCACHEDNAME="memcached"
-MEMCACHEDPATH="/root/sls-bench/memcached/$MEMCACHEDNAME"
-MEMCACHEDADDR="localhost:11211"
-MEMCACHEDUSER="root"
-MUTILATEPATH="$SLSBENCHDIR/mutilate/mutilate"
-MUTILATETIME="60"
-
 function mcstart {
-    "$MEMCACHEDPATH" -u "$MEMCACHEDUSER" &
+    "$MEMCACHEDPATH" -u $USER &
 }
 
 function mcbench {
-    "$MUTILATEPATH" --server "$MEMCACHEDADDR" -t "$MUTILATETIME"
+    "$MUTILATEPATH" --server "$MUTILATEADDR" -t "$MUTILATETIME"
 }
 
 function mcstop {

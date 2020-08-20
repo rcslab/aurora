@@ -73,6 +73,7 @@ sls_vn_to_path(struct vnode *vp, struct sbuf **sbp)
 	int error;
 
 	SDT_PROBE0(sls, , , vptopathstart);
+	KASSERT(vp != NULL, ("Getting the path of a non-existent vnode"));
 	sb = sbuf_new_auto();
 
 	vref(vp);

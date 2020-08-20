@@ -1,33 +1,3 @@
-# SLS script location
-SLSDIR="/root/sls/"
-SLSCTL="$SLSDIR/tools/slsctl/slsctl"
-SLSFS="$SLSDIR/tools/newfs/newfs"
-
-# SLS parameters
-OID="1000"
-BACKEND="memory"
-CKPTFREQ="10"
-DELTA="no"
-RESTSTOP="yes"
-
-# Output files
-OUTDIR="./output/"
-CONFFILE="$OUTDIR/aurora.conf"
-DTRACEFILE="$OUTDIR/stages.csv"
-
-# Dtrace script
-DTRACE="$SCRIPTDIR/stages.d"
-
-# SLOS setup configuration
-STRIPESIZE="65536"
-STRIPEDISKS="vtbd0 vtbd1 vtbd2 vtbd3"
-STRIPENAME="st0"
-STRIPEDRIVE="/dev/stripe/$STRIPENAME"
-MOUNTFILE="/testmnt"
-SLSBENCHDIR="/root/sls-bench/"
-
-DRIVE="/dev/vtbd1"
-
 function aurstripe {
     gstripe load
     gstripe stop "$STRIPENAME"
@@ -42,7 +12,7 @@ function aurload {
 
     # Create the filesystem on disk.
     "$SLSFS" $DRIVE
-    mount -rw -t slsfs $DRIVE $MOUNTFILE
+    mount -rw -t slsfs $DRIVE $MOUNTDIR
 
     # Load and configure the SLS>
     kldload "$SLSDIR"/kmod/sls.ko
@@ -70,7 +40,7 @@ function aurunload {
     sync
 
     # Remove the SLOS
-    umount "$MOUNTFILE"
+    umount "$MOUNTDIR"
     kldunload slos
     gstripe stop "$STRIPENAME"
 }
@@ -84,10 +54,6 @@ function slsckpt {
     else
 	DELTACONF=" "
     fi
-
-    echo "BACKEND,$BACKEND" >> "$CONFFILE"
-    echo "CKPTFREQ,$CKPTFREQ" >> "$CONFFILE"
-    echo "DELTA,$DELTA" >> "$CONFFILE"
 
     #dtrace -s "$DTRACE" > "$DTRACEFILE" &
 

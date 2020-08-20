@@ -1,6 +1,3 @@
-SPLASHDIR="$SLSBENCHDIR/splash/codes/"
-SPLASHAPPBENCHES="barnes fmm water-nsquared water-spatial"
-
 function spbench() {
     # Some benchmarks need to have their input piped to them
     for splashbench in $SPLASHAPPBENCHES
@@ -12,6 +9,7 @@ function spbench() {
 
     # Some benchmarks take command line options instead of an input file.  
     # Hardcode the configuration here instead of on the file.
+    # TODO Get a way of turning these apps off and on
     cd "$SPLASHDIR/apps/"
     "$SPLASHDIR/apps/radiosity/RADIOSITY" \
 	-ae 5000 -bf 0.0005 -en 0.0005 -largeroom -batch

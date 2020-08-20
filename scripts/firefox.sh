@@ -1,7 +1,3 @@
-FIREFOXDIR="$SLSBENCHDIR/firefox/"
-FIREFOXSCRIPT="$FIREFOXDIR/run.sh"
-JSBENCHMARKPATH="$FIREFOXDIR/hosted"
-
 # Hollow out the python script, turn it into just the geckodriver setup/launch
 function ffstart() {
     cd "$JSBENCHMARKPATH"
@@ -10,7 +6,7 @@ function ffstart() {
 }
 
 function ffbench() {
-    cd "$MOUNTFILE"
+    cd "$MOUNTDIR"
     python "$FIREFOXDIR/benchmark.py"
 }
 

@@ -64,6 +64,7 @@
 #include "sls_vm.h"
 #include "sls_vmobject.h"
 #include "sls_vmspace.h"
+#include "debug.h"
 
 #include "imported_sls.h"
 

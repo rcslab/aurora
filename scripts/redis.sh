@@ -1,20 +1,6 @@
 # NOTE: This file isn't standalone, it needs the definition of $OUTDIR and 
 # $SCRIPTDIR. This is by design, since this is supposed to be a helper library.
 
-# Location of the binaries.
-REDISDIR="/root/sls-bench/redis/"
-SERVER="redis-server"
-CLIENT="redis-benchmark"
-SERVERBIN="$REDISDIR/src/$SERVER"
-CLIENTBIN="$REDISDIR/src/$CLIENT"
-
-REDISCONF="$REDISDIR/redis.conf"
-REDISCSVCONF="$REDISDIR/redis.conf.csv"
-
-CONFIGDUMPSCRIPT="$SCRIPTDIR/redisconf.py"
-REDISFILE="$OUTDIR/redis.csv"
-REDISCONFFILE="$OUTDIR/redis_benchmark.conf"
-
 # Redis benchmark parameters
 
 #Script for the Redis benchmarks. Run at the base Redis directory.
@@ -60,13 +46,6 @@ PIPELINE="10"
 KEYSPACE=$((1024 * 1024 * 1024))
 
 function rdbench {
-    echo "TESTS,$TESTS" >> "$REDISCONFFILE"
-    echo "CLIENTNO,$CLIENTNO" >> "$REDISCONFFILE"
-    echo "REQUESTS,$REQUESTS" >> "$REDISCONFFILE"
-    echo "VALSIZE,$VALSIZE" >> "$REDISCONFFILE"
-    echo "PIPELINE,$PIPELINE" >> "$REDISCONFFILE"
-    echo "KEYSPACE,$KEYSPACE" >> "$REDISCONFFILE"
-
     # Run the benchmark
     "$CLIENTBIN" -t "$TESTS" -c "$CLIENTNO" -n "$REQUESTS" -d "$VALSIZE" \
 	-P "$PIPELINE" -k "$KEYSPACE" &

@@ -75,5 +75,5 @@ load.sh
 sky.sk
 sls.sh
 unload.sh
-*.conf
 out
+index*

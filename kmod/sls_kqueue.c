@@ -103,8 +103,13 @@ slsckpt_knote(struct knote *kn, struct sbuf *sb)
 	int error;
 
 	KASSERT(kn->kn_influx == 0, ("knote in flux while checkpointing"));
+	/*
 	KASSERT((kn->kn_status & (KN_DETACHED | KN_MARKER | KN_SCAN)) == 0,
-		("illegal kqueue state %x", kn->kn_status));
+		("illegal knote state %x", kn->kn_status));
+		*/
+
+	if ((kn->kn_status & (KN_MARKER | KN_DETACHED)) != 0)
+		return (0);
 
 	/*
 	 * The AIO subsystem stores kernel pointers in knotes' private data, which we 
@@ -156,8 +161,10 @@ slsckpt_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
 	/*
 	 * For the SLS, all kqueue states are either irrelevant or illegal.
 	 * Check for the illegal ones.
+	 *
+	 * XXX KQ_ASYNC and KQ_SEL are dodgy, but don't seem to be a problem.
 	 */
-	KASSERT((kq->kq_state & (KQ_FLUXWAIT | KQ_ASYNC)) == 0,
+	KASSERT((kq->kq_state & (KQ_FLUXWAIT)) == 0,
 	    ("illegal kqueue state %x", kq->kq_state));
 
 	/* Get all knotes in the dynamic array. */

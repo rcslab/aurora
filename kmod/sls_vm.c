@@ -55,7 +55,7 @@ slsvm_object_shadow(struct slskv_table *objtable, vm_object_t *objp)
 	 * by processes, so we cannot modify them or dump them.
 	 */
 	KASSERT(((*objp)->flags & OBJ_AURORA) == 0, ("shadow is in Aurora"));
-	//printf("Shadow pair (%p, %p)\n", obj, *objp);
+	DEBUG2("Shadow pair (%p, %p)\n", obj, *objp);
 	error = slskv_add(objtable, (uint64_t) obj, (uintptr_t) *objp);
 	if (error != 0) {
 		vm_object_deallocate(*objp);
@@ -71,8 +71,9 @@ slsvm_objtable_collapse(struct slskv_table *objtable)
 	struct slskv_iter iter;
 	vm_object_t obj, shadow;
 
-	/* Remove the Aurora - created shadow. */
+	/* Remove the Aurora reference from the backing objects. */
 	KV_FOREACH(objtable, iter, obj, shadow) {
+		DEBUG4("Deallocating object %p (ID %lx), with %d references and %d shadows", obj, obj->objid, obj->ref_count, obj->shadow_count);
 		vm_object_deallocate(obj);
 	}
 
@@ -84,11 +85,11 @@ slsvm_objtable_collapse(struct slskv_table *objtable)
  * sense for writable entries, read-only entries are retained.
  */
 static void
-slsvm_entry_zap(struct proc *p, struct vm_map_entry *entry, vm_object_t obj)
+slsvm_entry_zap_partial(struct proc *p, struct vm_map_entry *entry, vm_object_t obj)
 {
 	if (((entry->eflags & MAP_ENTRY_NEEDS_COPY) == 0) &&
 	    ((entry->protection & VM_PROT_WRITE) != 0)) {
-		pmap_protect_pglist(&p->p_vmspace->vm_pmap, 
+		pmap_protect_pglist(&p->p_vmspace->vm_pmap,
 		    entry->start, entry->end, entry->start - entry->offset,
 		    &obj->memq, entry->protection & ~VM_PROT_WRITE, AURORA_PMAP_TEST_FULL);
 	}
@@ -109,8 +110,20 @@ slsvm_object_zap(vm_object_t obj)
 }
 
 static void
+slsvm_entry_zap(struct proc *p, struct vm_map_entry *entry)
+{
+	KASSERT(entry->wired_count == 0, ("wired count is %d", entry->wired_count));
+	if (((entry->eflags & MAP_ENTRY_NEEDS_COPY) == 0) &&
+	    ((entry->protection & VM_PROT_WRITE) != 0)) {
+		pmap_remove(&p->p_vmspace->vm_pmap, entry->start, entry->end);
+	}
+}
+
+static void
 slsvm_entry_protect(struct proc *p, struct vm_map_entry *entry)
 {
+	KASSERT(entry->wired_count == 0, ("wired count is %d", entry->wired_count));
+
 	if (((entry->eflags & MAP_ENTRY_NEEDS_COPY) == 0) &&
 	    ((entry->protection & VM_PROT_WRITE) != 0)) {
 		pmap_protect(&p->p_vmspace->vm_pmap,
@@ -209,11 +222,44 @@ slsvm_proc_shadow(struct proc *p, struct slskv_table *table, int is_fullckpt)
 		 * have the process map point to the shadow.
 		 */
 		if (slskv_find(table, (uint64_t) obj, (uintptr_t *) &vmshadow) == 0) {
-			/* If the object is not shadowed, we don't need to do anything else */
-			if (vmshadow == NULL)
+			KASSERT((obj->flags & OBJ_AURORA) != 0,
+			    ("object %p in table not in Aurora", obj));
+
+			/*
+			 * If an object is already in the table, and it has no
+			 * shadow, it means it was the ancestor of an object 
+			 * attached to a VM entry. That means it had a shadow.  
+			 * Objects with shadows _cannot_ be directly to, since 
+			 * that would mean that the shadow would either see or 
+			 * not see the writes, depending on whether it already 
+			 * had a private copy (the kernel asserts for this in 
+			 * some places). If the object is writable but has a 
+			 * shadow, then the entry _has_ to be marked CoW, so 
+			 * that the fault handler fixes up the entry after 
+			 * forking.
+			 */
+			if (vmshadow == NULL) {
+				KASSERT((obj->shadow_count == 0) ||
+				    ((entry->protection & VM_PROT_WRITE) == 0) ||
+				    ((entry->eflags & MAP_ENTRY_COW) != 0),
+				    ("directly accessible writable object %p has %d shadows",
+				    obj, obj->shadow_count));
+
+				/*
+				 * In all these cases, we don't actually need to 
+				 * do anything; the object cannot be written to, 
+				 * and will be safely shadowed by the system if 
+				 * needed.
+				 */
+
 				continue;
-			/* The object is already zapped */
-			slsvm_entry_zap(p, entry, obj);
+			}
+
+			/*
+			 * There is no race with the process here for the
+			 * entry, so there is no need to lock the map.
+			 */
+			slsvm_entry_protect(p, entry);
 			entry->object.vm_object = vmshadow;
 			VM_OBJECT_WLOCK(vmshadow);
 			vm_object_clear_flag(vmshadow, OBJ_ONEMAPPING);
@@ -223,16 +269,15 @@ slsvm_proc_shadow(struct proc *p, struct slskv_table *table, int is_fullckpt)
 		}
 
 		/* Shadow the object, retain it in Aurora. */
-		//slsvm_object_zap(obj);
-		slsvm_entry_zap(p, entry, obj);
+		slsvm_entry_protect(p, entry);
 		error = slsvm_object_shadow(table, &entry->object.vm_object);
 		if (error != 0)
 			goto error;
 
 
-		/* 
-		 * Only go ahead if it's a full checkpoint or we have not 
-		 * checkpointed this object before. 
+		/*
+		 * Only go ahead if it's a full checkpoint or we have not
+		 * checkpointed this object before.
 		 */
 		if ((!is_fullckpt) && (obj->flags & OBJ_AURORA))
 			continue;
@@ -242,6 +287,7 @@ slsvm_proc_shadow(struct proc *p, struct slskv_table *table, int is_fullckpt)
 		while (OBJT_ISANONYMOUS(obj)) {
 			vm_object_reference(obj);
 			obj->flags |= OBJ_AURORA;
+			DEBUG2("Shadow pair (%p, %p)", obj, NULL);
 			/* These objects have no shadows. */
 			error = slskv_add(table, (uint64_t) obj, (uintptr_t) NULL);
 			if (error != 0) {
@@ -265,8 +311,8 @@ error:
 }
 
 /* Collapse the backing objects of all processes under checkpoint. */
-int 
-slsvm_procset_shadow(slsset *procset, struct slskv_table *table, int is_fullckpt) 
+int
+slsvm_procset_shadow(slsset *procset, struct slskv_table *table, int is_fullckpt)
 {
 	struct slskv_iter iter;
 	struct proc *p;
@@ -302,11 +348,10 @@ slsvm_object_shadowexact(vm_object_t *objp)
 	vm_object_t obj;
 
 	obj = *objp;
-	DEBUG2("(PRE) Object %p has %d references", obj, obj->ref_count);
 	vm_object_shadow(objp, &offset, ptoa((*objp)->size));
 
 	KASSERT((obj != *objp), ("object %p wasn't shadowed", obj));
-	DEBUG2("(POST) Object %p has %d references", obj, obj->ref_count);
+	KASSERT(obj->size == (*objp)->size, ("obj size %lx vs shadow %lx", obj->size, (*objp)->size));
 	DEBUG2("(SHADOW) Object %p has shadow %p", obj, *objp);
 	/* Inherit the unique object ID from the parent. */
 	(*objp)->objid = obj->objid;
@@ -341,7 +386,7 @@ slsvm_print_vmspace(struct vmspace *vm)
 		KASSERT((entry->eflags & MAP_ENTRY_IS_SUB_MAP) == 0, ("entry is submap"));
 		DEBUG3("vm_entry:%p range:%llx--%llx", entry, entry->start, entry->end);
 		DEBUG2("            eflags:%x inheritance:%x", entry->eflags, entry->inheritance);
-		DEBUG1("            offset:%x", entry->offset);
+		DEBUG2("            offset:%x protection:%x", entry->offset, entry->protection);
 		obj = entry->object.vm_object;
 		if (obj != NULL) {
 			slsvm_print_vmobject(obj);

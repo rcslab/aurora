@@ -130,6 +130,8 @@ slsckpt_metadata(struct proc *p, struct slspart *slsp, slsset *procset, struct s
 	struct sbuf *sb;
 	int error = 0;
 
+	KASSERT(p->p_pid != 0, ("Trying to checkpoint the kernel"));
+
 	/* Dump the process state */
 	PROC_LOCK(p);
 	if (!SLS_PROCALIVE(p)) {
@@ -303,10 +305,6 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	slsp_epoch_advance(slsp);
 
 
-	/* Possibly wait until the checkpoint is done. */
-	if (sls_sync)
-		VFS_SYNC(slos.slsfs_mount, MNT_WAIT);
-
 	SDT_PROBE0(sls, , , sync);
 
 	/* 
@@ -385,7 +383,9 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	}
 
 	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
-	taskqueue_drain_all(slos.slos_tq);
+	if (slsp->slsp_attr.attr_target)
+		taskqueue_drain_all(slos.slos_tq);
+	VFS_SYNC(slos.slsfs_mount, (sls_sync != 0 ) ? MNT_WAIT : MNT_NOWAIT);
 
 	/*
 	 * XXX Advance the epoch of the SLOS, and associate the SLS epoch with
@@ -417,6 +417,7 @@ slsckpt_gather_processes(struct slspart *slsp, slsset *procset)
 	int error;
 
 	KVSET_FOREACH(slsp->slsp_procs, iter, pid) {
+
 		/* Remove the PID of the unavailable process from the set. */
 		if (deadpid != 0) {
 			slsp_detach(slsp->slsp_oid, deadpid);
@@ -541,6 +542,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 
 	for (;;) {
 		sls_ckpt_attempted += 1;
+		DEBUG1("Attempting checkpoint %d", sls_ckpt_attempted);
 		/* Check if the partition got detached from the SLS. */
 		if (slsp->slsp_status != SPROC_CHECKPOINTING)
 			break;

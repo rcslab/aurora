@@ -37,6 +37,7 @@
 #include "sls_internal.h"
 #include "sls_mm.h"
 #include "sls_partition.h"
+#include "debug.h"
 
 int
 slsckpt_create(struct slsckpt_data **sckpt_datap)
@@ -121,6 +122,12 @@ slsp_attach(uint64_t oid, pid_t pid)
 	uintptr_t oldoid;
 	int error;
 
+	/* We cannot checkpoint the kernel. */
+	if (pid == 0) {
+		DEBUG("Trying to attach the kernel to a partition");
+		return (EINVAL);
+	}
+	
 	/* Make sure the PID isn't in the SLS already. */
 	if (slskv_find(slsm.slsm_procs, pid, &oldoid) == 0)
 		return (EINVAL);
