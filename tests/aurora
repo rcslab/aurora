@@ -1,0 +1,72 @@
+
+NEWFS=$SRCROOT/tools/newfs_sls/newfs_sls
+SLSCTL=$SRCROOT/tools/slsctl/slsctl
+
+# Load and unload kernel modules
+loadmod()
+{
+    kldload ../slos/slos.ko
+    kldload ../kmod/sls.ko
+}
+
+unloadmod()
+{
+    kldunload sls
+    kldunload slos
+}
+
+# Create and destroy memory device
+createmd()
+{
+MDDISK=`mdconfig -a -t malloc -s 1g`
+    echo $MDDISK | cut -b3-
+}
+
+destroymd()
+{
+    mdconfig -d -u $MDDISK
+}
+
+slsnewfs()
+{
+    $NEWFS /dev/md$MDDISK
+}
+
+slsmount()
+{
+    mount -t slsfs /dev/md$MDDISK /mnt
+}
+
+slsunmount()
+{
+    umount /mnt
+}
+
+slscheckpoint()
+{
+    $SLSCTL attach -p $1 -m
+    $SLSCTL checkpoint -m
+}
+
+slsrestore()
+{
+    $SLSCTL restore -m &
+}
+
+slsosdcheckpoint()
+{
+    $SLSCTL attach -p $1
+    $SLSCTL checkpoint
+}
+
+slsosdrestore()
+{
+    $SLSCTL restore &
+}
+
+killandwait()
+{
+    kill $1
+    wait $1
+}
+

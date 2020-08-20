@@ -520,7 +520,6 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 
 	(void) fhold(sls_blackholefp);
 
-	DEBUG("Process active");
 	/* Check if the partition is available for checkpointing. */
 
 	if (atomic_cmpset_int(&slsp->slsp_status, SPROC_AVAILABLE,
@@ -610,7 +609,6 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	DEBUG("Stopped checkpointing");
 
 out:
-
 	fdrop(sls_blackholefp, curthread);
 
 	/* Drop the reference we got for the SLS process. */

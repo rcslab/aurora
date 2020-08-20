@@ -8,6 +8,8 @@ shim/shim.pico
 shim/*.so
 shim/tests/test
 
+tests/testbench.log
+tests/ktrdump.log
 tests/array/array
 tests/compute/compute
 tests/fd/fd

@@ -55,7 +55,7 @@ slsvm_object_shadow(struct slskv_table *objtable, vm_object_t *objp)
 	 * by processes, so we cannot modify them or dump them.
 	 */
 	KASSERT(((*objp)->flags & OBJ_AURORA) == 0, ("shadow is in Aurora"));
-	DEBUG2("Shadow pair (%p, %p)\n", obj, *objp);
+	DEBUG2("Shadow pair (%p, %p)", obj, *objp);
 	error = slskv_add(objtable, (uint64_t) obj, (uintptr_t) *objp);
 	if (error != 0) {
 		vm_object_deallocate(*objp);

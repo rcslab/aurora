@@ -1,0 +1,80 @@
+#!/bin/sh
+
+export SRCROOT=..
+MDDISK=""
+export MOUNTPT="/mnt"
+export TESTLOG="testbench.log"
+export KTRLOG="ktrdump.log"
+
+TIMEOUT=30
+
+. aurora
+
+ESC=`printf "\033"`
+CR=`printf "\015"`
+CLEAR="$CR$ESC[K"
+RED=$ESC"[0;31m"
+GREEN=$ESC"[0;32m"
+#YELLOW= $ESC"[0;33m"
+NORMAL=$ESC"[0;39m"
+
+FORMAT="%-40s [ %s%-7s"$NORMAL" ]"
+TFORMAT="%-40s [ %s%-7s ] %-10.6f"
+
+print_fail()
+{
+    echo -n $CLEAR
+    printf "$FORMAT\n" $1 $RED "fail"
+}
+
+print_success()
+{
+    echo -n $CLEAR
+    printf "$FORMAT\n" $1 $GREEN "success"
+}
+
+print_running()
+{
+    printf "$FORMAT" $1 "" "running"
+}
+
+run_test()
+{
+    NAME=`basename $1`
+    print_running $NAME
+    $t >> $TESTLOG
+    if [ $? -eq 0 ]; then
+	print_success $NAME
+    else
+	print_fail $NAME
+	ktrdump >> $KTRLOG
+    fi
+}
+
+run_tests()
+{
+    rm -f $TESTLOG
+    rm -f $KTRLOG
+
+    echo Build: `uname -sri`
+    echo Test started: `date`
+    printf "%-40s   %-9s   %-10s\n" "Test" "Status" "Time"
+    echo "-----------------------------------------------------------"
+    for t in `find $SRCROOT/tests -name \*.sh`; do
+	run_test $t
+    done
+}
+
+
+loadmod
+MDDISK=`createmd`
+slsnewfs > /dev/null
+slsmount
+
+export MDDISK=$MDDISK
+run_tests
+
+slsunmount
+destroymd $MDDISK
+unloadmod
+

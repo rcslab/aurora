@@ -144,7 +144,7 @@ slsrest_thread(struct proc *p, struct slsthread *slsthread)
 	int error;
 
 	PROC_UNLOCK(p);
-	DEBUG1("Trying to resture thread with tid %lu", slsthread->tid);
+	DEBUG1("Trying to restore thread with tid %lu", slsthread->tid);
 	error = thread_create(curthread, slsthread->tid, NULL, sls_thread_create,
 	    (void *) slsthread);
 	PROC_LOCK(p);

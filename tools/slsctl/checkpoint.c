@@ -33,8 +33,13 @@ checkpoint_main(int argc, char* argv[])
 	uint64_t oid = SLS_DEFAULT_PARTITION;
 	bool recurse = false;
 
-	while ((opt = getopt_long(argc, argv, "o:rh", checkpoint_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "mo:rh", checkpoint_longopts, NULL)) != -1) {
 		switch (opt) {
+		case 'm':
+			if (oid == SLS_DEFAULT_PARTITION) {
+				oid = SLS_DEFAULT_MPARTITION;
+			}
+			break;
 		case 'o':
 			oid = strtol(optarg, NULL, 10);
 			break;

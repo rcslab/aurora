@@ -318,8 +318,6 @@ slsfs_init(struct vfsconf *vfsp)
 	/* The constructor never fails. */
 	KASSERT(slsid_unr != NULL, ("slsid unr creation failed"));
 
-	printf("SLOS/SLSFS Loaded\n");
-
 	return (0);
 }
 
@@ -337,8 +335,6 @@ slsfs_uninit(struct vfsconf *vfsp)
 	uma_zdestroy(fnode_zone);
 	uma_zdestroy(fnode_trie_zone);
 	slos_uninit();
-
-	printf("SLOS/SLSFS Loaded\n");
 
 	return (0);
 }
@@ -1048,14 +1044,14 @@ again:
 		/* 3 Sync Root Inodes and btree */
 		error = vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
 		if (error) {
-			panic("What");
+			panic("vn_lock failed");
 		}
 		svp = SLSVP(slos.slsfs_inodes);
 		ino = &svp->sn_ino;
 		DEBUG2("Flushing inodes %p %p", slos.slsfs_inodes, svp->sn_fdev);
 		error = slsfs_sync_vp(slos.slsfs_inodes, closing);
 		if (error) {
-			panic("Issue in checkpoint");
+			panic("slsfs_sync_vp failed to checkpoint");
 			return;
 		}
 

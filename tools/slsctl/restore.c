@@ -11,11 +11,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include <sls.h>
 
 static struct option restore_longopts[] = {
 	{ "daemon", no_argument, NULL, 'd' },
+	{ "memory", no_argument, NULL, 'm' },
 	{ "rest_stopped", no_argument, NULL, 's' },
 	{ NULL, no_argument, NULL, 0 },
 };
@@ -23,21 +25,20 @@ static struct option restore_longopts[] = {
 void
 restore_usage(void)
 {
-	printf("Usage: slsctl restore -o <oid> [-d] [-s]\n");
+	printf("Usage: slsctl restore -o <oid> [-m] [-d] [-s]\n");
 }
 
 int
 restore_main(int argc, char* argv[]) {
 	int error;
 	int status;
-	int oid_set;
-	uint64_t oid;
+	uint64_t oid = SLS_DEFAULT_PARTITION;
 	pid_t childpid;
 	bool daemon = false;
 	bool rest_stopped = false;
 	int opt;
 
-	while ((opt = getopt_long(argc, argv, "do:s", restore_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "dmo:s", restore_longopts, NULL)) != -1) {
 		switch(opt) {
 		case 'd':
 			/*
@@ -46,16 +47,14 @@ restore_main(int argc, char* argv[]) {
 			 */
 			daemon = true;
 			break;
+		case 'm':
+			if (oid == SLS_DEFAULT_PARTITION)
+			    oid = SLS_DEFAULT_MPARTITION;
+			break;
 
 		case 'o':
-			if (oid_set == 1) {
-				restore_usage();
-				return (0);
-			}
 			/* The id is the PID of the checkpointed process. */
 			oid = strtol(optarg, NULL, 10);
-
-			oid_set = 1;
 			break;
 
 		case 's':
@@ -84,11 +83,21 @@ restore_main(int argc, char* argv[]) {
 	 * Wait for all children. If we end up
 	 * with no children the program exits.
 	 */
-	for (;;) {
-		childpid = wait(&status);
-		if (childpid < 0) {
-			perror("wait");
-			return (0);
+	if (!daemon) {
+		while (1) {
+			childpid = wait(&status);
+			if (childpid < 0 && errno == ECHILD) {
+				return (0);
+			} else if (childpid < 0) {
+				perror("wait");
+				return (1);
+			} else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+				fprintf(stderr, "Process exited with status %d\n", WEXITSTATUS(status));
+				return (2);
+			} else if (WIFSIGNALED(status)) {
+				fprintf(stderr, "Process terminated with signal %d\n", WTERMSIG(status));
+				return (3);
+			}
 		}
 	}
 

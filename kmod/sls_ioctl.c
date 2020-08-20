@@ -396,7 +396,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		partadd_args.oid = SLS_DEFAULT_MPARTITION;
 		partadd_args.attr.attr_mode = SLS_FULL;
 		partadd_args.attr.attr_target = SLS_MEM;
-		partadd_args.attr.attr_period = 1000;
+		partadd_args.attr.attr_period = 0;
 		error = sls_partadd(&partadd_args);
 		if (error) {
 			printf("Problem creating default in-memory partition\n");
@@ -412,7 +412,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 			return (error);
 
 #endif /* SLS_TEST */
-		printf("SLS Loaded\n");
 		break;
 
 	case MOD_UNLOAD:
@@ -441,7 +440,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		if (sls_blackholefp != NULL)
 			fdrop(sls_blackholefp, curthread);
 
-		printf("SLS Unloaded\n");
 		break;
 	default:
 		error = EOPNOTSUPP;
