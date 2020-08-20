@@ -158,7 +158,10 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 	 * proper arguments (mainly flags).
 	 */
 	vm_map_lock(map);
-	guard = (info->eflags & MAP_ENTRY_GUARD) ? MAP_CREATE_GUARD : 0;
+	guard = MAP_NO_MERGE;
+	if (info->eflags & MAP_ENTRY_GUARD) {
+		guard |= MAP_CREATE_GUARD;
+	}
 	error = vm_map_insert(map, object, info->offset, 
 	    info->start, info->end, 
 	    info->protection, info->max_protection, guard);
@@ -169,7 +172,12 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 	/* Get the entry from the map. */
 	contained = vm_map_lookup_entry(map, info->start, &entry);
 	KASSERT(contained == TRUE, ("lost inserted vm_map_entry"));
-	printf("Entry %lx for %lx\n", entry->start, info->start);
+	KASSERT(entry->start == info->start,
+		("vm_map_entry start doesn't match: %lx vs. %lx", entry->start,
+		 info->start));
+	KASSERT(entry->end == info->end,
+		("vm_map_entry end doesn't match: %lx vs. %lx", entry->end,
+		 info->end));
 
 	entry->eflags = info->eflags;
 	entry->inheritance = info->inheritance;
