@@ -38,31 +38,30 @@ define process name=seqwrite,instances=1
   thread name=seqwrite1,memsize=10m,instances=$nthreads
   {
     flowop openfile name=sq1open1,filename=largefile1,fd=1
-    flowop write name=seqwrite1,fd=1,iosize=$iosize,iters=500000
+    flowop write name=seqwrite1,fd=1,iosize=$iosize,iters=31250
     flowop closefile name=sq1close1,filename=largefile1,fd=1
   }
 
   thread name=seqwrite2,memsize=10m,instances=$nthreads
   {
     flowop openfile name=sq2open2,filename=largefile2,fd=1
-    flowop write name=seqwrite2,fd=1,iosize=$iosize,iters=500000
+    flowop write name=seqwrite2,fd=1,iosize=$iosize,iters=31250
     flowop closefile name=sq1close2,filename=largefile2,fd=1
   }
 
   thread name=seqwrite3,memsize=10m,instances=$nthreads
   {
     flowop openfile name=sq1open3,filename=largefile3,fd=1
-    flowop write name=seqwrite3,fd=1,iosize=$iosize,iters=500000
+    flowop write name=seqwrite3,fd=1,iosize=$iosize,iters=31250
     flowop closefile name=sq1clos3,filename=largefile3,fd=1
   }
 
   thread name=seqwrite4,memsize=10m,instances=$nthreads
   {
     flowop openfile name=sq1open4,filename=largefile4,fd=1
-    flowop write name=seqwrite4,fd=1,iosize=$iosize,iters=500000
+    flowop write name=seqwrite4,fd=1,iosize=$iosize,iters=31250
     flowop closefile name=sq1close4,filename=largefile4,fd=1
   }
-
 }
 
 run 30

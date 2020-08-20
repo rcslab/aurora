@@ -187,9 +187,13 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 	uint64_t key;
 	diskptr_t value;
 
+#ifdef VERBOSE
 	DEBUG5("%s:%d: %s with logical offset %u, len %u", __FILE__, __LINE__, __func__, lbn, size);
+#endif
 	set_extent(&main, lbn, size, 0, 0);
+#ifdef VERBOSE
 	DEBUG5("%s:%d: %s with extent [%u, %u)", __FILE__, __LINE__, __func__, main.start, main.end);
+#endif
 
 	key = main.start;
 	error = fbtree_keymin_iter(tree, &key, &iter);
@@ -210,10 +214,14 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 		value = ITER_VAL_T(iter, diskptr_t);
 
 		diskptr_to_extent(&current, key, &value);
+#ifdef VERBOSE
 		DEBUG4("current [%d, %d), main [%d, %d)", current.start, current.end,
 		   main.start, main.end);
+#endif
 		if (current.start >= main.end) {
+#ifdef VERBOSE
 			DEBUG("BREAK");
+#endif
 			break;
 		}
 
@@ -223,7 +231,9 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 			KASSERT(head.start == head.end, ("Found multiple heads [%lu, %lu) and [%lu, %lu)",
 			         head.start, head.end, new_head.start, new_head.end));
 			head = new_head;
+#ifdef VERBOSE
 			DEBUG2("Head clip [%d, %d)", head.start, head.end);
+#endif
 		}
 
 		new_tail = current;
@@ -235,8 +245,10 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 			         tail.start, tail.end, new_tail.start, new_tail.end, main.start, main.end);
 			}
 			tail = new_tail;
+#ifdef VERBOSE
 			DEBUG3("Tail clip [%d, %d), current.start vs main.end %d",
 			    tail.start, tail.end, current.start == main.end);
+#endif
 		}
 
 		error = fiter_remove(&iter);
@@ -247,8 +259,10 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 
 	if (head.start != head.end) {
 		extent_to_diskptr(&head, &key, &value);
+#ifdef VERBOSE
 		DEBUG5("(%p, %d): Inserting (%ld, %ld, %ld)", curthread, __LINE__,
 			(uint64_t) key, value.offset, value.size);
+#endif
 		error = fbtree_insert(tree, &key, &value);
 		if (error) {
 			panic("Error %d inserting head", error);
@@ -256,8 +270,10 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 	}
 
 	extent_to_diskptr(&main, &key, &value);
+#ifdef VERBOSE
 	DEBUG5("(%p, %d): Inserting (%ld, %ld, %ld)", curthread, __LINE__,
 		(uint64_t) key, value.offset, value.size);
+#endif
 	error = fbtree_insert(tree, &key, &value);
 	if (error) {
 		panic("Error %d inserting main", error);
@@ -266,8 +282,10 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 
 	if (tail.start != tail.end) {
 		extent_to_diskptr(&tail, &key, &value);
+#ifdef VERBOSE
 		DEBUG5("(%p, %d): Inserting (%ld, %ld, %ld)", curthread, __LINE__,
 		    (uint64_t) key, value.offset, value.size);
+#endif
 		error = fbtree_insert(tree, &key, &value);
 		if (error) {
 			fnode_print(iter.it_node);
@@ -492,15 +510,20 @@ slsfs_performio(void *ctx, int pending)
 	 */
 	if (iotype == BIO_WRITE) {
 		BTREE_LOCK(tree, LK_EXCLUSIVE);
-		DEBUG4("%s:%d: (td %p) btree lock %p", __FILE__, __LINE__, curthread, tree);
 
 		if (task->tk.ta_func == NULL)
 			DEBUG1("Warning: %s called synchronously", __func__);
 
 		slsfs_fbtree_rangeinsert(tree, task->startpage->pindex + 1, task->size);
-		DEBUG4("%s:%d: (td %p) btree unlock %p", __FILE__, __LINE__, curthread, tree);
-		BTREE_UNLOCK(tree, 0);
+		size_t end = ((task->startpage->pindex + 1) * IOSIZE(SLSVP(task->vp))) + task->size;
+		if (SLSVP(task->vp)->sn_ino.ino_size < end) {
+			SLSVP(task->vp)->sn_ino.ino_size = end;
+			SLSVP(task->vp)->sn_status |= SLOS_DIRTY;
+		}
 
+		DEBUG3("(td %p) vp(%p) - SIZE %lu", curthread, task->vp, SLSVP(task->vp)->sn_ino.ino_size);
+
+		BTREE_UNLOCK(tree, 0);
 	}
 
 	/* Now that the btree is edited we create the buffer for the write. */
@@ -673,11 +696,11 @@ slsfs_startupfs(struct mount *mp)
 	slos.slsfs_io = &slsfs_io;
 	slos.slsfs_io_async = &slsfs_io_async;
 	if (slos.slos_tq == NULL) {
-		DEBUG("Creating taskqueue");
 		slos.slos_tq = taskqueue_create("SLOS Taskqueue", M_WAITOK, taskqueue_thread_enqueue, &slos.slos_tq);
 		if (slos.slos_tq == NULL) {
 			panic("Problem creating taskqueue");
 		}
+		DEBUG1("Creating taskqueue %p", slos.slos_tq);
 	}
 	/* 
 	 * Initialize in memory the allocator and the vnode used for inode 
@@ -963,8 +986,6 @@ slsfs_checkpoint(struct mount *mp, int closing)
 	diskptr_t ptr;
 	int error;
 
-	DEBUG3("Pre Checkpoint: %lu, %lu, %lu", checkpoints, slos.slos_sb->sb_data_synced, slos.slos_sb->sb_meta_synced);
-
 again:
 	/* Go throught the list of vnodes attached to the filesystem. */
 	MNT_VNODE_FOREACH_ACTIVE(vp, mp, mvp) {
@@ -998,7 +1019,6 @@ again:
 		if (SLSVP(vp)->sn_status & SLOS_DIRTY) {
 			/* Step 1 and 2 Sync data and mark underlying Btree Copy 
 			 * on write*/
-			DEBUG1("Flushing %p", vp);
 			error = slsfs_sync_vp(vp, closing);
 			if (error) {
 				vput(vp);
@@ -1016,14 +1036,12 @@ again:
 		vput(vp);
 	}
 
-	DEBUG2("%s:%d: inodes checkpointed, inode btree starts", __FILE__, __LINE__);
 	bo = &(SLSVP(slos.slsfs_inodes)->sn_tree.bt_backend->v_bufobj);
 	// Check if both the underlying Btree needs a sync or the inode itself 
 	// - should be a way to make it the same TODO
 	// Just a hack for now to get this thing working XXX Why is it a hack?
 	/* Sync the inode root itself. */
 	if (slos.slos_sb->sb_data_synced) {
-		DEBUG("Flushing metadata");
 		error = ALLOCATEPTR(&slos, BLKSIZE(&slos), &ptr);
 		MPASS(error == 0);
 
@@ -1111,7 +1129,7 @@ again:
 	} else {
 		slos.slos_sb->sb_attempted_checkpoints++;
 	}
-	DEBUG2("%s:%d: checkpoint complete", __FILE__, __LINE__);
+
 }
 
 uint64_t checkpointsps = 1;
@@ -1126,12 +1144,13 @@ slsfs_syncer(struct slos *slos)
 {
 	slos->slsfs_sync_exit = 0;
 	struct timespec ts, te;
-	int error;
 	uint64_t elapsed, period;
 
 		/* Periodically sync until we unmount. */
+	mtx_lock(&slos->slsfs_sync_lk);
 	while (!slos->slsfs_sync_exit) {
 		slos->slsfs_syncing = 1;
+		mtx_unlock(&slos->slsfs_sync_lk);
 		nanotime(&ts);
 		slsfs_checkpoint(slos->slsfs_mount, 0);
 		nanotime(&te);
@@ -1153,32 +1172,26 @@ slsfs_syncer(struct slos *slos)
 		}
 
 		/* Wait until it's time to flush again. */
-		if (!slos->slsfs_sync_exit) {
-			error = 0;
-			while(ts.tv_nsec > 0) {
-				error = kern_nanosleep(curthread, &te, &te);
-				if (error == 0) {
-					break;
-				}
-			}
-		}
+		mtx_lock(&slos->slsfs_sync_lk);
+		msleep_sbt(&slos->slsfs_syncing, &slos->slsfs_sync_lk, 
+			PRIBIO, "Sync-wait", SBT_1NS * te.tv_nsec, 0, C_HARDCLOCK);
 	}
 
 	DEBUG("Syncer exiting");
-	mtx_lock(&slos->slsfs_sync_lk);
 	slos->slsfs_syncing = 1;
 	mtx_unlock(&slos->slsfs_sync_lk);
 	/* One last checkpoint before we exit. */
 	slsfs_checkpoint(slos->slsfs_mount, 1);
 
-	/* Notify anyone else waiting to flush one last time. */
 	mtx_lock(&slos->slsfs_sync_lk);
+	/* Notify anyone else waiting to flush one last time. */
 	slos->slsfs_syncing = 0;
 	DEBUG("Wake- up external");
 	cv_broadcast(&slos->slsfs_sync_cv);
-	mtx_unlock(&slos->slsfs_sync_lk);
 
 	DEBUG("Syncer exited");
+	slos->slsfs_syncertd = NULL;
+	mtx_unlock(&slos->slsfs_sync_lk);
 	kthread_exit();
 }
 
@@ -1262,7 +1275,13 @@ slsfs_wakeup_syncer(int is_exiting)
 	 * sync but before this one doesn't get  written by the former
 	 * then we have to go through with the latter).
 	 */
+
 	mtx_lock(&slos.slsfs_sync_lk);
+	if (slos.slsfs_syncertd == NULL) {
+		mtx_unlock(&slos.slsfs_sync_lk);
+		return (0);
+	}
+
 	if (slos.slsfs_syncing) {
 		cv_wait(&slos.slsfs_sync_cv, &slos.slsfs_sync_lk);
 	}
@@ -1275,6 +1294,10 @@ slsfs_wakeup_syncer(int is_exiting)
 	/* The actual wakeup. */
 	wakeup(&slos.slsfs_syncing);
 
+	if (slos.slsfs_syncertd == NULL) {
+		mtx_unlock(&slos.slsfs_sync_lk);
+		return (0);
+	}
 	/* Wait until the syncer notifies us it's done. */
 	cv_wait(&slos.slsfs_sync_cv, &slos.slsfs_sync_lk);
 	mtx_unlock(&slos.slsfs_sync_lk);
@@ -1653,7 +1676,7 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 static int
 slsfs_sync(struct mount *mp, int waitfor)
 {
-	//slsfs_wakeup_syncer(0);
+	slsfs_wakeup_syncer(0);
 	return (0);
 }
 

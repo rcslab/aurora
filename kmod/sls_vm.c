@@ -348,11 +348,16 @@ slsvm_object_shadowexact(vm_object_t *objp)
 	vm_object_t obj;
 
 	obj = *objp;
+#ifdef VERBOSE
+	DEBUG2("(PRE) Object %p has %d references", obj, obj->ref_count);
+#endif
 	vm_object_shadow(objp, &offset, ptoa((*objp)->size));
 
 	KASSERT((obj != *objp), ("object %p wasn't shadowed", obj));
-	KASSERT(obj->size == (*objp)->size, ("obj size %lx vs shadow %lx", obj->size, (*objp)->size));
+#ifdef VERBOSE
+	DEBUG2("(POST) Object %p has %d references", obj, obj->ref_count);
 	DEBUG2("(SHADOW) Object %p has shadow %p", obj, *objp);
+#endif
 	/* Inherit the unique object ID from the parent. */
 	(*objp)->objid = obj->objid;
 }

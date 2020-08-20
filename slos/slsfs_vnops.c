@@ -61,7 +61,10 @@ slsfs_getattr(struct vop_getattr_args *args)
 	struct vnode *vp = args->a_vp;
 	struct vattr *vap = args->a_vap;
 	struct slos_node *slsvp = SLSVP(vp);
-	DEBUG1("getattr on vnode %lu", slsvp->sn_pid);
+
+#ifdef VERBOSE
+	DEBUG1("VOP_GETATTR on vnode %lu", slsvp->sn_pid);
+#endif
 
 	VATTR_NULL(vap);
 	vap->va_type = IFTOVT(slsvp->sn_ino.ino_mode);
@@ -194,7 +197,6 @@ slsfs_access(struct vop_access_args *args)
 
 	error = vaccess(vp->v_type, vap.va_mode, vap.va_uid, 
 		vap.va_gid, accmode, cred, NULL);
-	DEBUG2("Checking access rights for %p %d", vp, error);
 
 	return (error);
 }
@@ -421,7 +423,11 @@ slsfs_rmdir(struct vop_rmdir_args *args)
 	MPASS(SLSVP(dvp)->sn_ino.ino_nlink >= 3);
 	slsfs_declink(dvp);
 	SLSVP(dvp)->sn_status |= SLOS_DIRTY;
+	// XXX This is wierd , this is something FFS does, it purges the cache of the
+	// parent directory which seems funky
 	cache_purge(dvp);
+	// Purge name entries that point to vp
+	cache_purge(vp);
 
 	error = slsfs_truncate(vp, 0);
 	if (error) {
@@ -495,7 +501,7 @@ slsfs_remove(struct vop_remove_args *args)
 		return (EPERM);
 	}
 
-	DEBUG1("Removing file %s", cnp->cn_nameptr);
+	DEBUG2("Removing file %s %lu", cnp->cn_nameptr, SLSVP(vp)->sn_ino.ino_pid);
 	error = slsfs_remove_node(dvp, vp, cnp);
 	if (error) {
 		return (error);
@@ -531,9 +537,9 @@ slsfs_write(struct vop_write_args *args)
 		return (EINVAL);
 	}
 	if (uio->uio_resid == 0) {
-		DEBUG("Write of no buff");
 		return (0);
 	}
+
 	switch(vp->v_type) {
 	case VREG:
 		break;
@@ -632,13 +638,12 @@ slsfs_read(struct vop_read_args *args)
 	if (uio->uio_resid == 0)
 		return (0);
 
-	DEBUG2("Reading filesize %lu - %lu", SLSVP(vp)->sn_pid, filesize);
 	if (uio->uio_offset >= filesize) {
 		return (0);
 	}
 
 	resid = omin(uio->uio_resid, (filesize - uio->uio_offset));
-	DEBUG2("READING global off %lu, global size %lu", uio->uio_offset, uio->uio_resid); 
+	DEBUG3("Reading filesize %lu - %lu, %lu", SLSVP(vp)->sn_pid, filesize, uio->uio_offset);
 	while(resid) {
 		if (!checksum_enabled) {
 			gbflag |= GB_UNMAPPED;
@@ -652,7 +657,6 @@ slsfs_read(struct vop_read_args *args)
 	
 		off = uio->uio_offset - (bp->b_lblkno * blksize);
 		toread = omin(resid, bp->b_bcount - off);
-		DEBUG4("%lu --- %lu, %lu, %p", resid, bp->b_bcount, off, vp);
 
 		/* One thing thats weird right now is our inodes and meta data 
 		 * is currently not
@@ -660,10 +664,6 @@ slsfs_read(struct vop_read_args *args)
 		 * dirtying those buffers,
 		 * but later we will have to dirty them.
 		 */
-		DEBUG3("Reading: Read at bno %lu for vnode %p, read size %lu", 
-		    bp->b_lblkno, vp, toread);
-		DEBUG3("Relative offset %lu, global off %lu, global size %lu", 
-		    off, uio->uio_offset, uio->uio_resid); 
 		KASSERT(toread != 0, ("Should not occur"));
 		if (buf_mapped(bp)) {
 			error = vn_io_fault_uiomove((char *)bp->b_data + off, toread, uio);
@@ -1523,12 +1523,10 @@ slsfs_seekextent(struct slos_node *svp, struct uio *uio)
 {
 	struct fnode_iter iter;
 	uint64_t offset;
-	uint64_t size;
-	uint64_t blocks;
+	uint64_t size, end;
 	int error;
 
-	offset = uio->uio_offset / PAGE_SIZE;
-	size = 0;
+	offset = uio->uio_offset / IOSIZE(svp);
 
 	/* Get btree for vnode */
 	BTREE_LOCK(&svp->sn_tree, LK_SHARED);
@@ -1545,21 +1543,33 @@ slsfs_seekextent(struct slos_node *svp, struct uio *uio)
 	}
 
 	offset = ITER_KEY_T(iter, uint64_t);
-	blocks = (ITER_VAL_T(iter, diskptr_t).size) / PAGE_SIZE;
-	KASSERT(blocks != 0, ("zero IO"));
+	size = (ITER_VAL_T(iter, diskptr_t).size);
 
-	uio->uio_offset = offset * PAGE_SIZE;
-	uio->uio_resid = blocks * PAGE_SIZE;
+	uio->uio_offset = offset * IOSIZE(svp);
+	if (uio->uio_offset >= svp->sn_ino.ino_size) {
+		uio->uio_offset = EOF;
+		uio->uio_resid = 0;
+		goto out;
+	}
+
+	DEBUG3("uio(%lu), off(%lu), size(%lu)", uio->uio_offset, offset, size);
 
 	for (; !ITER_ISNULL(iter); ITER_NEXT(iter)) {
-		if (offset + blocks != ITER_KEY_T(iter, uint64_t))
+		end = offset + size;
+		if ((offset + (size / IOSIZE(svp)) != ITER_KEY_T(iter, uint64_t)) 
+			|| end >= svp->sn_ino.ino_size)
 			break;
 
 		offset = ITER_KEY_T(iter, uint64_t);
-		blocks = (ITER_VAL_T(iter, diskptr_t).size) / PAGE_SIZE;
-
-		uio->uio_resid += blocks * PAGE_SIZE;
+		size += ITER_VAL_T(iter, diskptr_t).size;
+		DEBUG2("off(%lu), size(%lu)", offset, size);
 	}
+
+	size -=  (uio->uio_offset + size) - (svp->sn_ino.ino_size);
+	uio->uio_resid = size;
+
+	DEBUG3("Size of file %lu - %lu -- %lu", svp->sn_pid, svp->sn_ino.ino_size, uio->uio_offset + uio->uio_resid);
+	MPASS((uio->uio_offset + uio->uio_resid) <= svp->sn_ino.ino_size);
 
 out:
 	ITER_RELEASE(iter);

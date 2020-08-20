@@ -71,7 +71,7 @@ slsload_thread(struct slsthread *slsthread, char **bufp, size_t *bufsizep)
 		return (error);
 
 	if (slsthread->magic != SLSTHREAD_ID) {
-		SLS_DBG("magic mismatch\n");
+		DEBUG("magic mismatch\n");
 		return (EINVAL);
 	}
 

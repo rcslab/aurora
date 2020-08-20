@@ -77,11 +77,6 @@ slos_init(void)
 	sysctl_ctx_init(&slos_ctx);
 	root = SYSCTL_ADD_ROOT_NODE(&slos_ctx, OID_AUTO, "aurora_slos", CTLFLAG_RW, 0,
 	    "Aurora object store statistics and configuration variables");
-	(void) SYSCTL_ADD_UMA_MAX(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "slos_node_zone_max",
-	    CTLFLAG_RW, slos_node_zone, "In-memory node UMA maximum");
-
-	(void) SYSCTL_ADD_UMA_CUR(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "slos_node_zone_cur",
-	    CTLFLAG_RW, slos_node_zone, "In-memory node UMA current");
 
 	(void) SYSCTL_ADD_INT(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "checksum_enabled",
 	    CTLFLAG_RW, &checksum_enabled, 0, "Checksum enabled");

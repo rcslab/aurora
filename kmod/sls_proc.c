@@ -46,6 +46,7 @@ slsckpt_thread(struct thread *td, struct sbuf *sb)
 	bcopy(&td->td_sigmask, &slsthread.sigmask, sizeof(sigset_t));
 	bcopy(&td->td_oldsigmask, &slsthread.oldsigmask, sizeof(sigset_t));
 
+	DEBUG1("Saving thread %x", td->td_tid);
 	slsthread.tid = td->td_tid;
 	slsthread.fs_base = td->td_pcb->pcb_fsbase;
 	slsthread.magic = SLSTHREAD_ID;
@@ -143,6 +144,7 @@ slsrest_thread(struct proc *p, struct slsthread *slsthread)
 	int error;
 
 	PROC_UNLOCK(p);
+	DEBUG1("Trying to resture thread with tid %lu", slsthread->tid);
 	error = thread_create(curthread, slsthread->tid, NULL, sls_thread_create,
 	    (void *) slsthread);
 	PROC_LOCK(p);

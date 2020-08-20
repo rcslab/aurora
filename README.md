@@ -51,3 +51,10 @@ slsctl partdel -o <oid>
 Bugs:
 
 While doing macro varmail benchmark experienced a deadlock.
+
+DEPENDENCIES TO INSTALL FOR EVERYTHING
+VIRTUALENV with configargparse
+
+lighttpd
+wrk
+pidof

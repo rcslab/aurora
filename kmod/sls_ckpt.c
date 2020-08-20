@@ -203,13 +203,11 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	int error = 0;
 
 	DEBUG("Process stopped");
-
 #ifdef KTR
 	KVSET_FOREACH(procset, iter, p) {
 		slsvm_print_vmspace(p->p_vmspace);
 	}
 #endif
-
 	/* 
 	 * Check if there are objects from a previous iteration. 
 	 * If there are, we need to discern between them and those
@@ -304,7 +302,6 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	/* Advance the current epoch. */
 	slsp_epoch_advance(slsp);
 
-
 	SDT_PROBE0(sls, , , sync);
 
 	/* 
@@ -315,6 +312,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	 *
 	 * (P) --> (S)
 	 *
+	 * DEBUG("TASKQUEUE : %p\n", slos.slos_tq);
 	 * For the next checkpoint, we shadow the shadow itself, creating
 	 * the chain:
 	 *

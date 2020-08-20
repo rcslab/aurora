@@ -45,6 +45,7 @@
 #include "sls_kv.h"
 #include "sls_mm.h"
 #include "sls_table.h"
+#include "debug.h"
 
 #ifdef SLS_TEST
 #include "slstable_test.h"
@@ -107,6 +108,7 @@ sls_doio(struct vnode *vp, struct uio *auio)
 {
 	int error = 0;
 	size_t iosize = 0;
+	uint64_t back = 0;
 	char *base;
 
 	/* If we don't want to do anything just return. */
@@ -139,12 +141,16 @@ sls_doio(struct vnode *vp, struct uio *auio)
 	iosize = auio->uio_resid;
 	base = ((char *) auio->uio_iov[0].iov_base);
 	while (auio->uio_resid > 0) {
-		if (auio->uio_rw == UIO_WRITE)
+		back = auio->uio_resid;
+		if (auio->uio_rw == UIO_WRITE) {
 			error = VOP_WRITE(vp, auio, 0, NULL);
-		else
+		} else {
 			error = VOP_READ(vp, auio, 0, NULL);
-		if (error != 0)
+		}
+		if (error != 0) {
 			goto out;
+		}
+		MPASS(back != auio->uio_resid);
 	}
 	if (auio->uio_rw == UIO_WRITE)
 		sls_bytes_sent += iosize;
@@ -654,9 +660,10 @@ sls_read_slos_record(uint64_t oid, struct slskv_table *rectable, struct slskv_ta
 	/* Get the record type. */
 	VOP_UNLOCK(vp, LK_EXCLUSIVE);
 	error = VOP_IOCTL(vp, SLS_GET_RSTAT, &st, 0, NULL, td);
-	VOP_LOCK(vp, LK_EXCLUSIVE);
+	vn_lock(vp, LK_EXCLUSIVE);
 	if (error != 0) {
-		SLS_DBG("getting record type failed with %d\n", error);
+		vput(vp);
+		DEBUG1("getting record type failed with %d\n", error);
 		return (error);
 	}
 
@@ -677,7 +684,7 @@ sls_read_slos_record(uint64_t oid, struct slskv_table *rectable, struct slskv_ta
 out:
 	close_error = VOP_CLOSE(vp, mode, NULL, td);
 	if (close_error != 0)
-		SLS_DBG("error %d, could not close slos node", close_error);
+		DEBUG1("error %d, could not close slos node", close_error);
 
 	vput(vp);
 
@@ -952,7 +959,7 @@ sls_writemeta_slos(struct sls_record *rec, struct vnode **vpp, bool overwrite)
 	error = VOP_IOCTL(vp, SLS_SET_RSTAT, &st, 0, NULL, td);
 	VOP_LOCK(vp, LK_EXCLUSIVE);
 	if (error != 0) {
-		SLS_DBG("setting record type failed with %d\n", error);
+		DEBUG1("setting record type failed with %d\n", error);
 		return (error);
 	}
 
@@ -986,6 +993,8 @@ error:
 		close_error = VOP_CLOSE(vp, mode, NULL, td);
 		if (close_error != 0)
 			SLS_DBG("error %d, could not close SLSFS vnode\n", close_error);
+
+		vput(vp);
 	}
 
 	if (vpp != NULL)

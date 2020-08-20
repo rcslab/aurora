@@ -48,7 +48,6 @@
 #include <vm/uma.h>
 
 #include <slos.h>
-#include <slos_record.h>
 #include <slos_inode.h>
 
 #include "sls_data.h"
@@ -67,6 +66,7 @@
 #include "debug.h"
 
 #include "imported_sls.h"
+#include "debug.h"
 
 
 static int
@@ -76,12 +76,16 @@ slsrest_dothread(struct proc *p, char **bufp, size_t *buflenp)
 	int error;
 
 	error = slsload_thread(&slsthread, bufp, buflenp);
-	if (error != 0)
+	if (error != 0) {
+		DEBUG1("Error in slsload_thread %d", error);
 		return (error);
+	}
 
 	error = slsrest_thread(p, &slsthread);
-	if (error != 0)
+	if (error != 0) {
+		DEBUG1("Error in slsrest_thread %d", error);
 		return (error);
+	}
 
 	return (0);
 }
@@ -101,15 +105,18 @@ slsrest_doproc(struct proc *p, uint64_t daemon, char **bufp,
 	/* 
 	 * Save the old process - new process pairs.
 	 */
+	DEBUG("Adding id to slskv table");
 	error = slskv_add(restdata->proctable, (uint64_t) slsproc.slsid, (uintptr_t) p);
 	if (error != 0)
 		SLS_DBG("Error: Could not add process %p to table\n", p);
 
+	DEBUG("Attempting restore of proc");
 	error = slsrest_proc(p, name, daemon, &slsproc, restdata);
 	if (error != 0)
 		return (error);
 
 	for (i = 0; i < slsproc.nthreads; i++) {
+		DEBUG("Attempting restore of thread");
 		error = slsrest_dothread(p, bufp, buflenp);
 		if (error != 0)
 			return (error);
@@ -428,19 +435,23 @@ slsrest_metadata(void *args)
 	 * Restore CPU state, file state, and memory 
 	 * state, parsing the buffer at each step. 
 	 */
+	DEBUG("SLS Restore Proc");
 	error = slsrest_doproc(p, daemon, &buf, &buflen, restdata); 
 	PROC_UNLOCK(p);
 	if (error != 0)
 		goto error; 
 
+	DEBUG("SLS Restore VMSPACE");
 	error = slsrest_dovmspace(p, &buf, &buflen, restdata->objtable);
 	if (error != 0)
 		goto error; 
 
+	DEBUG("SLS Restore filedesc");
 	error = slsrest_dofiledesc(p, &buf, &buflen, restdata->filetable);
 	if (error != 0)
 		goto error; 
 
+	DEBUG("SLS Restore knotes");
 	error = slsrest_doknotes(p, restdata->kevtable);
 	if (error != 0)
 		goto error; 
@@ -469,6 +480,7 @@ slsrest_metadata(void *args)
 	mtx_unlock(&slsm.slsm_mtx);
 
 	PROC_LOCK(p);
+	DEBUG("SLS Restore ttyfixup");
 	error = slsrest_ttyfixup(p);
 	if (error != 0)
 		SLS_DBG("tty_fixup failed with %d\n", error);

@@ -64,7 +64,7 @@ fnode_trie_alloc(struct pctrie *ptree)
 static void
 fnode_trie_free(struct pctrie *ptree, void *node)
 {
-	return uma_zfree(fnode_trie_zone, node);
+	uma_zfree(fnode_trie_zone, node);
 }
 
 PCTRIE_DEFINE(FNODE, fnode, fn_location, fnode_trie_alloc, fnode_trie_free);
@@ -429,7 +429,9 @@ fnode_cow(struct fbtree *tree, struct buf *bp)
 	MPASS(cur->fn_buf == bp);
 	// Alocate a new block the btree node
 	error = ALLOCATEPTR(slos, BLKSIZE(slos), &ptr);
+#ifdef SHOWCOW
 	DEBUG3("fnode_cow(%p) %lu->%lu", bp, bp->b_lblkno, ptr.offset);
+#endif
 	MPASS(error == 0);
 
 	BO_LOCK(bo);
@@ -625,7 +627,6 @@ tryagain:
 				panic("what");
 			}
 			bawrite(bp);
-			DEBUG1("Flushing %p", bp);
 			BO_LOCK(bo);
 		}
 		MPASS(bo->bo_dirty.bv_cnt == 0);
@@ -1002,6 +1003,7 @@ fbtree_destroy(struct fbtree *tree)
 	}
 
 
+	rw_wlock(&tree->bt_trie_lock);
 	for (;;) {
 		node = FNODE_PCTRIE_LOOKUP_GE(&tree->bt_trie, 0);
 		if (node == NULL) {
@@ -1011,6 +1013,8 @@ fbtree_destroy(struct fbtree *tree)
 		NODE_FREE(node);
 	}
 
+	KASSERT(pctrie_is_empty(&tree->bt_trie), ("Trie should be empty"));
+	rw_wunlock(&tree->bt_trie_lock);
 	BTREE_UNLOCK(tree, 0);
 	vput(tree->bt_backend);
 
@@ -2081,7 +2085,6 @@ fnode_init(struct fbtree *tree, bnode_ptr ptr, struct fnode **fn)
 	rw_rlock(&tree->bt_trie_lock);
 	node = FNODE_PCTRIE_LOOKUP(&tree->bt_trie, ptr);
 	if (node != NULL) {
-		DEBUG1("Key %lu found", ptr);
 		found = 1;
 		*fn = node;
 	} else {
