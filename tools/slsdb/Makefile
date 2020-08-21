@@ -1,5 +1,5 @@
 PROG= slsdb
-SRCS= slsdb.cc slsfile.cc slsbtree.cc
+SRCS= slsdb.cc file.cc directory.cc btree.cc snapshot.cc util.cc
 MAN=
 
 

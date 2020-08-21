@@ -1,13 +1,6 @@
 #ifndef __SLSBTREE_H__
 #define __SLSBTREE_H__ 
 
-#include <stdio.h>
-
-#include <iterator>
-#include <memory>
-
-#include <btree.h>
-
 class Snapshot;
 
 template <typename K, typename V>

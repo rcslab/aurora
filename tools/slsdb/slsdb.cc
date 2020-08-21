@@ -5,13 +5,9 @@
 #include <sys/stat.h>
 #include <stdlib.h>
 #include <limits.h>
+#include <signal.h>
 #include <unistd.h>
 #include <histedit.h>
-
-#include <slsfs.h>
-#include <slos.h>
-#include <btree.h>
-#include <slos_inode.h>
 
 #include <iostream>
 #include <vector>
@@ -19,10 +15,20 @@
 #include <iomanip>
 #include <map>
 
-#include "slsfile.h"
-#include "slsbtree.h"
+#include <slsfs.h>
+#include <slos.h>
+#include <btree.h>
+#include <slos_inode.h>
+
+#include "btree.h"
+#include "snapshot.h"
+#include "file.h"
+#include "util.h"
 
 using namespace std;
+
+#define MAX_ARGC (32)
+typedef int (*cmd_t)(Snapshot *, vector<string> &);
 
 int dev;
 size_t blksize;
@@ -32,17 +38,19 @@ vector<Snapshot> snaps;
 Snapshot * curr = nullptr;
 std::shared_ptr<SFile> currinode = nullptr;
 
-#define MAX_ARGC (32)
+int cmd_help(Snapshot *, vector<string> &args);
 
 int 
 retrieveSnaps(vector<Snapshot> &snaps)
 {
+	char buf[SECTOR_SIZE] = {};
+	struct slos_sb sb;
+	int readin;
+
 	if (snaps.size() != 0) {
 		return (0);
 	}
-	char buf[512] = {};
-	struct slos_sb sb;
-	int readin;
+
 	for (int i = 0; i < NUMSBS; i++) {
 		off_t offset = i * sectorsize;
 		readin = pread(dev, buf, sectorsize, offset);
@@ -66,8 +74,26 @@ retrieveSnaps(vector<Snapshot> &snaps)
 	return (0);
 };
 
+uint64_t
+lastsnap()
+{
+	int error;
+	uint64_t max = 0;
+
+	error = retrieveSnaps(snaps);
+	if (error) {
+		return (error);
+	}
+
+	for (auto k : snaps) {
+		max = std::max(k.super.sb_epoch, max);
+	}
+	
+	return max;
+}
+
 int 
-listsnaps(Snapshot *sb, vector<string> &args)
+cmd_ls(Snapshot *sb, vector<string> &args)
 {
 	int error;
 
@@ -86,33 +112,18 @@ listsnaps(Snapshot *sb, vector<string> &args)
 	return (0);
 }
 
-uint64_t
-lastsnap()
-{
-	int error;
-	error = retrieveSnaps(snaps);
-	if (error) {
-		return (error);
-	}
-	uint64_t max = 0;
-	for (auto k : snaps) {
-		max = std::max(k.super.sb_epoch, max);
-	}
-	
-	return max;
-}
-
-
 int 
-selectsnap(Snapshot *sb, vector<string> &args)
+cmd_snap(Snapshot *sb, vector<string> &args)
 {
 	int error;
+	int snap;
 
 	if (args.size() != 2) {
 		cout << "Bad arguments" << endl;
 		return (-1);
 	}
-	int snap  = strtol(args[1].c_str(), NULL, 10);
+
+	snap = strtol(args[1].c_str(), NULL, 10);
 
 	error = retrieveSnaps(snaps);
 	if (error) {
@@ -132,8 +143,10 @@ selectsnap(Snapshot *sb, vector<string> &args)
 }
 
 int
-selectinode(Snapshot *sb, vector<string> &args)
+cmd_inode(Snapshot *sb, vector<string> &args)
 {
+	int ino;
+
 	if (sb == nullptr) {
 		cout << "Current snapshot not selected" << endl;
 		return (-1);
@@ -144,10 +157,12 @@ selectinode(Snapshot *sb, vector<string> &args)
 		return (-1);
 	}
 
-	int ino  = strtol(args[1].c_str(), NULL, 10);
-
+	ino = strtol(args[1].c_str(), NULL, 10);
 
 	auto inode = sb->getInodeFile();
+	if (!inode) {
+		return (-1);
+	}
 
 	currinode = inode->getFile(ino);
 	if (currinode == nullptr) {
@@ -161,7 +176,7 @@ selectinode(Snapshot *sb, vector<string> &args)
 
 
 int 
-listinodes(Snapshot *sb, vector<string> &args)
+cmd_li(Snapshot *sb, vector<string> &args)
 {
 	if (sb == nullptr) {
 		cout << "Current snapshot not selected" << endl;
@@ -179,9 +194,23 @@ listinodes(Snapshot *sb, vector<string> &args)
 }
 
 int 
-dumpinode(Snapshot *sb, vector<string> &args)
+cmd_print(Snapshot *sb, vector<string> &args)
+{
+	if (currinode == nullptr) {
+		cout << "No inode selected" << endl;
+		return (-1);
+	}
+
+	currinode->print();
+
+	return (0);
+}
+
+int 
+cmd_dump(Snapshot *sb, vector<string> &args)
 {
 	int error;
+
 	if (currinode == nullptr) {
 		cout << "No inode selected" << endl;
 		return (-1);
@@ -198,39 +227,20 @@ dumpinode(Snapshot *sb, vector<string> &args)
 	}
 
 	cout << "Dumped to " << args[1] << endl;
+
 	return (0);
 }
 
 int 
-printinode(Snapshot *sb, vector<string> &args)
+cmd_hexdump(Snapshot *sb, vector<string> &args)
 {
-	int error;
 	if (currinode == nullptr) {
 		cout << "No inode selected" << endl;
 		return (-1);
 	}
 
-	cout << "=== Start File ===" << endl;
-	cout << *currinode;
-	cout << "=== End File ===" << endl;
-	return (0);
-}
+	currinode->hexdump();
 
-
-
-typedef int (*cmd_t)(Snapshot *, vector<string> &);
-extern std::map<string, std::pair<cmd_t, string>> cmds;
-
-int
-printhelp(Snapshot *, vector<string> &args)
-{	
-	cout << "Commands to use:" << endl;
-	cout << "===============" << endl;
-	for (auto k : cmds) {
-		cout << setw(20) << left;
-		cout << k.first;
-		cout << k.second.second <<endl;
-	}
 	return (0);
 }
 
@@ -241,24 +251,39 @@ cmd_exit(Snapshot *unused, vector<string> &args)
 }
 
 std::map<string, std::pair<cmd_t, string>> cmds = {
-    { "ls", std::make_pair(listsnaps, "List snapshots on disk") },
-    { "snap", std::make_pair(selectsnap, "Select snapshot to work with (Ex. snap NUM)") },
-    { "li", std::make_pair(listinodes, "List all inodes Ex. INO_NUM -> (BLKNUM, EPOCH)") },
-    { "inode", std::make_pair(selectinode, "Select an inode (Ex. inode NUM)") },
-    { "dump", std::make_pair(dumpinode, "Dump current selected inode to path (Ex. dump path/to/dump.txt)") },
-    { "pi", std::make_pair(printinode, "Print current selected inode to path (Ex. pi)") },
-    { "help", std::make_pair(printhelp, "Print help for commands") },
+    { "ls", std::make_pair(cmd_ls, "List snapshots") },
+    { "snap", std::make_pair(cmd_snap, "Select a snapshot") },
+    { "li", std::make_pair(cmd_li, "List inodes") },
+    { "inode", std::make_pair(cmd_inode, "Select an inode") },
+    { "print", std::make_pair(cmd_print, "Print inode") },
+    { "dump", std::make_pair(cmd_dump, "Dump inode to file") },
+    { "hexdump", std::make_pair(cmd_hexdump, "Hexdump inode") },
+    { "help", std::make_pair(cmd_help, "Show help") },
     { "exit", std::make_pair(cmd_exit, "Exit the program") }
 };
+
+int
+cmd_help(Snapshot *, vector<string> &args)
+{
+	cout << "Commands to use:" << endl;
+	cout << "===============" << endl;
+
+	for (auto k : cmds) {
+		cout << setw(20) << left;
+		cout << k.first;
+		cout << k.second.second <<endl;
+	}
+
+	return (0);
+}
 
 static char *
 slsdb_prompt(EditLine *el)
 {
 	static char prompt[] = "slsdb> ";
+
 	return (prompt);
 }
-
-HistEvent ev;
 
 static void
 slsdb_cli(void)
@@ -270,10 +295,14 @@ slsdb_cli(void)
 	int argc;
 	int error;
 
+	sigset_t mask;
+	sigaddset(&mask, SIGINT);
+	sigprocmask(SIG_BLOCK, &mask, nullptr);
+
 	History *hist = history_init();
 	history(hist, &ev, H_SETSIZE, 100);
 
-	 EditLine *el = el_init("slsdb", stdin, stdout, stderr);
+	EditLine *el = el_init("slsdb", stdin, stdout, stderr);
 
 	/* Editing mode to use. */
 	el_set(el, EL_EDITOR, "vi");
@@ -386,7 +415,7 @@ main(int argc, char **argv)
 	cout << endl;
 
 	vector<string> a;
-	printhelp(nullptr, a);
+	cmd_help(nullptr, a);
 	cout << endl;
 
 	slsdb_cli();

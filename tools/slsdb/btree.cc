@@ -1,11 +1,15 @@
-#include <unistd.h>
 
-#include <btree.h>
+#include <unistd.h>
 
 #include <iostream>
 
-#include "slsbtree.h"
-#include "slsfile.h"
+#include <slos.h>
+#include <slos_inode.h>
+#include <btree.h>
+
+#include "btree.h"
+#include "snapshot.h"
+#include "file.h"
 
 void
 printBtreeNode(struct fnode *node)
