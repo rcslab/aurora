@@ -112,53 +112,6 @@ compare_vnode_t(const void *k1, const void *k2)
 	return (0);
 }
 
-/*
- * Import an inode from the OSD.
- */
-static int
-slos_iread(struct slos *slos, uint64_t blkno, struct slos_inode **inop)
-{
-	struct slos_inode *ino;
-	int error;
-
-	ino = malloc(slos->slos_sb->sb_bsize, M_SLOS_INO, M_WAITOK);
-
-	/* Read the bnode from the disk. */
-	error = slos_readblk(slos, blkno, ino); 
-	if (error != 0) {
-		free(ino, M_SLOS_INO);
-		return error;
-	}
-
-	/* 
-	 * If we can't read the magic, we read
-	 * something that's not an inode. 
-	 */
-	if (ino->ino_magic != SLOS_IMAGIC) {
-		DEBUG1("%lu pid", ino->ino_pid);
-		free(ino, M_SLOS_INO);
-		return EINVAL;
-	}
-
-	*inop = ino;
-
-	return (0);
-}
-
-/*
- * Export an inode to the OSD.
- */
-static int
-slos_iwrite(struct slos *slos, struct slos_inode *ino)
-{
-
-	if (ino->ino_magic != SLOS_IMAGIC)
-		return EINVAL;
-
-	/* Write bnode to the disk. */
-	return slos_writeblk(slos, ino->ino_blk, ino); 
-}
-
 static int
 slos_readino(struct slos *slos, uint64_t pid, struct slos_inode *ino)
 {

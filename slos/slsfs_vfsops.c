@@ -1214,46 +1214,11 @@ slsfs_init_fs(struct mount *mp)
 		panic("Syncer could not start");
 	}
 
-	/*
-	 * I have no idea when this bug occured but right now ls -la doesnt 
-	 * show up the first directory that gets created.  Even though with 
-	 * debugging on I can see it within the buffer and it shows correctly 
-	 * there.
-	 *
-	 * This is a hack as if i create and remove a directory it works 
-	 * perfectly fine.
-	 *
-	 * XXX: Fix this bug
-	 *
-	 */
+	/* Initialize the root directory on first mount */
 	if (SLSINO(SLSVP(vp)).ino_nlink < 2) {
-		struct componentname name;
-		struct vattr attr = {};
-		char * buf = "hackme";
-		name.cn_nameptr = buf;
-		name.cn_namelen = 5;
 		slsfs_init_dir(vp, vp, NULL);
-		name.cn_cred = curthread->td_ucred;
-		struct vnode *svp;
-		error = VOP_MKDIR(vp, &svp, &name, &attr);
-		MPASS(SLSVP(svp)->sn_ino.ino_nlink == 2);
-		MPASS(error == 0);
-		MPASS(svp != NULL);
-		VOP_RMDIR(vp, svp, &name);
-		VOP_CLOSE(svp, 0, NULL, NULL);
-		vgone(svp);
-		vput(svp);
 	}
 
-	//FOR BTREE TESTING
-	/*struct vnode *test;*/
-	/*SLS_VALLOC(vp, 0, NULL, &test);*/
-	/*struct fbtree *tree = &SLSVP(test)->sn_tree;*/
-	/*fbtree_init(tree->bt_backend, tree->bt_root, sizeof(size_t), sizeof(size_t), &uint64_t_comp, "test tree",*/
-		/*0, tree);*/
-	/*fbtree_test(tree);*/
-	/*panic("test done");*/
-	
 	vput(vp);
 
 	return (0);
@@ -1294,6 +1259,7 @@ slsfs_wakeup_syncer(int is_exiting)
 		mtx_unlock(&slos.slsfs_sync_lk);
 		return (0);
 	}
+
 	/* Wait until the syncer notifies us it's done. */
 	cv_wait(&slos.slsfs_sync_cv, &slos.slsfs_sync_lk);
 	mtx_unlock(&slos.slsfs_sync_lk);
@@ -1358,12 +1324,6 @@ slsfs_mount(struct mount *mp)
 			return (error);
 		}
 
-		/* XXX This seems like it's a leftover from before.  */
-		if (error) {
-			vput(devvp);
-			return (error);
-		}
-
 		/* Get an ID for the new filesystem. */
 		vfs_getnewfsid(mp);
 		/* Actually mount the vnode as a filesyste and initialize its 
@@ -1375,6 +1335,7 @@ slsfs_mount(struct mount *mp)
 
 		error = slsfs_init_fs(mp);
 		if (error) {
+			/* XXX: This seems like a broken error path */
 			return (error);
 		}
 
@@ -1403,6 +1364,7 @@ slsfs_root(struct mount *mp, int flags, struct vnode **vpp)
 
 	vp->v_type = VDIR;
 	*vpp = vp;
+
 	return(0);
 }
 

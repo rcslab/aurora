@@ -203,6 +203,11 @@ SFile::hexdump()
 	size_t past_off = file_off;
 	char zeroes[512] =  {};
 
+	if (ino.ino_size == 0) {
+		printf("Empty file\n");
+		return;
+	}
+
 	while (iter.valid()) {
 		/*
 		 * Have to keep in mind about holes in the file

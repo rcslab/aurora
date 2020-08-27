@@ -170,7 +170,6 @@ slsfs_mkdir(struct vop_mkdir_args *args)
 	SLSVP(dvp)->sn_ino.ino_nlink++;
 	SLSVP(dvp)->sn_ino.ino_flags |= IN_CHANGE;
 	SLSVP(dvp)->sn_status |= SLOS_DIRTY;
-	DEBUG2("Initing Directory named %s - %lu", name->cn_nameptr, SLSVP(vp)->sn_ino.ino_nlink);
 
 	MPASS(SLSVP(dvp)->sn_ino.ino_nlink >= 3);
 	MPASS(SLSVP(vp)->sn_ino.ino_nlink == 2);
@@ -269,7 +268,7 @@ slsfs_readdir(struct vop_readdir_args *args)
 				if (io->uio_resid < GENERIC_DIRSIZ(&dir)) {
 					break;
 				}
-				DEBUG1("%s", dir.d_name);
+
 				error = uiomove(&dir, dir.d_reclen, io);
 				if (error) {
 					DEBUG("Problem moving buffer");
