@@ -22,11 +22,11 @@
 #include <slos_io.h>
 #include <slos_record.h>
 #include <slosmm.h>
+#include <slsfs.h>
 #include <btree.h>
 
-#include "slsfs.h"
+#include "../slfs/slsfs_dir.h"
 #include "slsfs_subr.h"
-#include "slsfs_dir.h"
 #include "slsfs_buf.h"
 #include "debug.h"
 

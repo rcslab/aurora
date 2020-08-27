@@ -17,12 +17,12 @@
 
 #include <machine/atomic.h>
 
+#include <slos.h>
+#include <slsfs.h>
+#include <slos_inode.h>
 #include "slosmm.h"
-#include "slos.h"
-#include "slsfs.h"
 #include "btree.h"
-#include "slos_inode.h"
-#include "slsfs_alloc.h"
+#include "slos_alloc.h"
 #include "slsfs_buf.h"
 #include "debug.h"
 

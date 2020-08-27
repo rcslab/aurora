@@ -37,6 +37,7 @@
 #include <vm/vm_page.h>
 
 #include <slos.h>
+#include <slos_alloc.h>
 #include <slos_record.h>
 #include <slos_inode.h>
 #include <slos_btree.h>
@@ -44,13 +45,11 @@
 #include <slosmm.h>
 #include <btree.h>
 
-#include "slsfs_alloc.h"
+#include <slsfs.h>
 
 #include "slsfs_subr.h"
-#include "slsfs.h"
 #include "slsfs_dir.h"
 #include "slsfs_buf.h"
-#include "slsfs_alloc.h"
 #include "debug.h"
 
 static MALLOC_DEFINE(M_SLSFSBUF, "slsfs_buf", "SLSFS buf");

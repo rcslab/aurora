@@ -202,7 +202,7 @@ def loaded(options):
 
 def get_num_snaps(options):
     if (options.type == "sls"):
-        cmd = ["./tools/fsdb/fsdb", "-s", "/dev/stripe/{}".format(options.stripename)]
+        cmd = ["../tools/fsdb/fsdb", "-s", "/dev/stripe/{}".format(options.stripename)]
         result = subprocess.run(cmd, stdout=subprocess.PIPE)
         return int(result.stdout.decode('utf-8'))
     else:
@@ -236,7 +236,7 @@ def runbench(options, path, output):
     subprocess.run(cmd, stdout=stdout)
     if (output != ""):
         stdout.close()
-        c = "benchmarks/fb-post.sh"
+        c = "fb-post.sh"
         cmd = [c, output]
         subprocess.run(cmd)
         stdout = open(output, 'a+')
@@ -420,10 +420,10 @@ def start_sls_on(options, pid):
     print("Starting Aurora Checkpointer on %s" % str(pid))
 
     if options.type == "sls":
-        cmd = ["./tools/slsctl/slsctl", "partadd", "-o", "1000", "-b", "slos", \
+        cmd = ["../tools/slsctl/slsctl", "partadd", "-o", "1000", "-b", "slos", \
                 "-t", str(options.checkps), "-d"]
     elif (options.type == "mem"):
-        cmd = ["./tools/slsctl/slsctl", "partadd", "-o", "1000", "-b", "memory", \
+        cmd = ["../tools/slsctl/slsctl", "partadd", "-o", "1000", "-b", "memory", \
                 "-t", str(options.checkps), "-d"]
     else:
         print("Trying to start checkpoint on non supported backend (sls or mem)")
@@ -431,10 +431,10 @@ def start_sls_on(options, pid):
 
     runcmd(cmd)
 
-    cmd = ["./tools/slsctl/slsctl", "attach", "-o", "1000", "-p", str(pid)]
+    cmd = ["../tools/slsctl/slsctl", "attach", "-o", "1000", "-p", str(pid)]
     runcmd(cmd)
 
-    cmd = ["./tools/slsctl/slsctl", "checkpoint", "-o", "1000"]
+    cmd = ["../tools/slsctl/slsctl", "checkpoint", "-o", "1000"]
     runcmd(cmd)
 
     print("Started Aurora Checkpointer on %s" % str(pid))
@@ -491,7 +491,7 @@ def lighttpd(options):
 
 
     # print("Restoring")
-    # cmd = ["./tools/slsctl/slsctl", "restore", "-o", "1000", "-d"]
+    # cmd = ["../tools/slsctl/slsctl", "restore", "-o", "1000", "-d"]
     # runcmd(cmd)
     # print("RESTORED")
     unload(options)

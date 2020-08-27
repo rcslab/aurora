@@ -10,15 +10,14 @@
 #include <vm/uma.h>
 
 #include <slos.h>
+#include <slos_btree.h>
+#include <slos_bnode.h>
 #include <slos_inode.h>
-#include <slsfs_buf.h>
+#include <slos_io.h>
 #include <slsfs.h>
+#include <slsfs_buf.h>
 
-#include "slos_btree.h"
-#include "slos_bnode.h"
-#include "slos_io.h"
 #include "slosmm.h"
-#include "slsfs.h"
 #include "slsfs_subr.h"
 #include "slsfs_buf.h"
 #include "debug.h"

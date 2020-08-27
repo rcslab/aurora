@@ -3,10 +3,11 @@
 #include <sys/buf.h>
 #include <sys/uio.h>
 
-#include "slos.h"
-#include "slsfs.h"
-#include "slos_inode.h"
-#include "slsfs_alloc.h"
+#include <slos.h>
+#include <slos_inode.h>
+#include <slsfs.h>
+
+#include "slos_alloc.h"
 #include "slsfs_buf.h"
 #include "slsfs_subr.h"
 #include "debug.h"

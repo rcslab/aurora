@@ -31,9 +31,9 @@
 #include <machine/atomic.h>
 #include <machine/vmparam.h>
 
+#include <slos_io.h>
 #include <slsfs.h>
 
-#include "slos_io.h"
 #include "slosmm.h"
 #include "debug.h"
 
