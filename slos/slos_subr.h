@@ -1,14 +1,5 @@
-
-#ifndef __SLOS_SLOS_SUBR_H__
-#define __SLOS_SLOS_SUBR_H__
-
-#include <sys/types.h>
-#include <sys/systm.h>
-#include <sys/unistd.h>
-#include <sys/buf.h>
-
-#include <slos.h>
-#include <slos_inode.h>
+#ifndef _SLOS_SUBR_H_
+#define _SLOS_SUBR_H_
 
 int slos_get_node(struct slos *, uint64_t ino, struct slos_node **spp);
 int slos_remove_node(struct vnode *dvp, struct vnode *vp, struct componentname *name);
@@ -26,4 +17,3 @@ void slos_bufstrategy(struct bufobj *bo, struct buf *bp);
 int slos_sync_vp(struct vnode *vp, int release);
 
 #endif
-

@@ -1,9 +1,5 @@
-#include <sys/param.h>
-#include <sys/vnode.h>
-#include <sys/buf.h>
-#include <sys/ucred.h>
-
-#include <slos_inode.h>
+#ifndef _SLSFS_BUF_H_
+#define _SLSFS_BUF_H_
 
 #define ENDPOINT(iter, blksize) \
 	(ITER_KEY_T((iter), uint64_t) * blksize) +\
@@ -39,3 +35,5 @@ int slsfs_bundirty(struct buf *buf);
  * On failure will return a physical block number of -1
  */
 int slsfs_lookupbln(struct slos_node *svp, uint64_t lbn,  struct fnode_iter *iter);
+
+#endif /* _SLSFS_BUF_H_ */

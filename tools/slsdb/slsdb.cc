@@ -15,10 +15,10 @@
 #include <iomanip>
 #include <map>
 
-#include <slsfs.h>
 #include <slos.h>
-#include <btree.h>
+#include <slos_btree.h>
 #include <slos_inode.h>
+#include <slsfs.h>
 
 #include "btree.h"
 #include "snapshot.h"

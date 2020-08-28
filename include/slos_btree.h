@@ -1,9 +1,5 @@
-#ifndef _BTREE_H_
-#define _BTREE_H_
-
-#include <sys/param.h>
-
-#include <sys/queue.h>
+#ifndef _SLOS_BTREE_H_
+#define _SLOS_BTREE_H_
 
 /* Opcodes for the btree operations. */
 #define OPINSERT    0
@@ -63,6 +59,7 @@ struct btree {
     struct slos	*slos;
 };
 
+#ifdef _KERNEL
 struct btree *btree_init(struct slos *slos, uint64_t blkno, int alloctype);
 void btree_destroy(struct btree *btree);
 
@@ -84,12 +81,6 @@ void btree_discardelem(struct btree *btree);
 void btree_keepelem(struct btree *btree);
 
 int initialize_btree(struct slos *slos, size_t offset, diskptr_t *ptr);
-
-#ifdef SLOS_TESTS
-
-int slos_test_btree(void);
-
-#endif /* SLOS_TESTS */
-
+#endif
 
 #endif /* _BTREE_H_ */

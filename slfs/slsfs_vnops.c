@@ -1,28 +1,31 @@
 #include <sys/types.h>
-#include <sys/filio.h>
 #include <sys/param.h>
+#include <sys/unistd.h>
+#include <sys/filio.h>
 #include <sys/ktr.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
-#include <sys/vnode.h>
+#include <sys/bio.h>
+#include <sys/buf.h>
+#include <sys/namei.h>
 #include <sys/dirent.h>
 #include <sys/priv.h>
-#include <sys/namei.h>
-#include <sys/bio.h>
-#include <geom/geom_vfs.h>
+#include <sys/proc.h>
+#include <sys/ucred.h>
+#include <sys/vnode.h>
 
 #include <vm/vm.h>
 #include <vm/vm_extern.h>
 #include <vm/vnode_pager.h>
 
-#include "../kmod/sls_internal.h"
-#include <slsfs.h>
+#include <geom/geom_vfs.h>
+
 #include <slos.h>
 #include <slos_inode.h>
 #include <slos_io.h>
-#include <slos_record.h>
+#include <slsfs.h>
 
 #include "slos_alloc.h"
 #include "slos_subr.h"

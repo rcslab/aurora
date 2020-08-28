@@ -1,10 +1,5 @@
-#ifndef _BNODE_H_
-#define _BNODE_H_
-
-#include <sys/param.h>
-
-#include <sys/queue.h>
-#include "slos.h"
+#ifndef _SLOS_BNODE_H_
+#define _SLOS_BNODE_H_
 
 #define BNODE_INTERNAL 0
 #define BNODE_EXTERNAL 1
@@ -71,4 +66,4 @@ int bnode_inbounds(struct bnode *bnode, size_t offset);
 
 #endif /* _KERNEL */
 
-#endif /* _BNODE_H_ */
+#endif /* _SLOS_BNODE_H_ */

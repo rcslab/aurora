@@ -1,17 +1,28 @@
 #ifndef _SLOS_INODE_H_
 #define _SLOS_INODE_H_
 
-#include <sys/param.h>
-
-#include <sys/lock.h>
-#include <sys/mutex.h>
-#include <sys/queue.h> 
-#include <sys/vnode.h>
-
-#include "slos.h"
 #include "btree.h"
-#include "slos_record.h"
 
+/* Record types */
+#define SLOSREC_INVALID	    0x00000000	/* Record is invalid */
+#define SLOSREC_PROC	    0x00000001	/* Record holds process-local info */
+#define SLOSREC_SESS	    0x00000002	/* Record holds process-local info */
+#define SLOSREC_MEM	    0x00000003	/* Record holds info related to a vmspace */
+#define SLOSREC_VMOBJ	    0x00000004	/* Record holds info for an object */
+#define SLOSREC_FILE	    0x00000005  /* Record holds info for a file */
+#define SLOSREC_SYSVSHM	    0x00000006	/* Record holds info for SYSV shared memory */
+#define SLOSREC_SOCKBUF	    0x00000007	/* Record holds info for socket buffers */
+#define SLOSREC_DIR	    0x00000008	/* Record holds a directory */
+#define SLOSREC_DATA	    0x00000009	/* Record holds arbitrary data */
+#define SLOSREC_MANIFEST    0x0000000a	/* Record holds the manifest of a checkpoint */
+
+#define SLOS_RMAGIC	    0x51058A1CUL
+
+/* Stat structure for individual records. */
+struct slos_rstat {
+	uint64_t type;	/* The type of the record */
+	uint64_t len;	/* The length of the record */
+};
 
 #define SLOS_VALIVE	(0x1)
 #define SLOS_VDEAD	(0x10)
@@ -99,6 +110,7 @@ struct slos_node {
 /* Maximum length of the inode name. */
 #define SLOS_NAMELEN	64
 
+#ifdef _KERNEL
 LIST_HEAD(slos_vnlist, slos_node);
 
 int slos_init(void);
@@ -125,6 +137,6 @@ int slos_newnode(struct slos *slos, uint64_t pid, struct slos_node **vp);
 int slos_new_node(struct slos *slos, mode_t mode, uint64_t *slsidp);
 
 int initialize_inode(struct slos *slos, uint64_t pid, diskptr_t *p);
-
+#endif
 
 #endif /* _SLOS_INODE_H_ */

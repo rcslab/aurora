@@ -2,6 +2,7 @@
 #include <sys/types.h>
 #include <sys/buf.h>
 #include <sys/uio.h>
+#include <sys/vnode.h>
 
 #include <slos.h>
 #include <slos_alloc.h>

@@ -14,6 +14,7 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <sys/vnode.h>
+#include <sys/mount.h>
 
 #include <machine/atomic.h>
 

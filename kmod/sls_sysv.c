@@ -7,7 +7,7 @@
 #include <vm/vm_param.h>
 
 #include <slos.h>
-#include <slos_record.h>
+#include <slos_inode.h>
 #include <sls_data.h>
 
 #include "imported_sls.h"

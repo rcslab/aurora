@@ -1,15 +1,5 @@
-#ifndef _FB_BTREE_H_
-#define _FB_BTREE_H_
-#include <sys/param.h>
-#include <sys/lock.h>
-#include <sys/rwlock.h>
-#include <sys/vnode.h>
-#include <sys/mutex.h>
-#include <sys/queue.h>
-#include <sys/pctrie.h>
-#include <sys/bufobj.h>
-#include <slos.h>
-
+#ifndef _BTREE_H_
+#define _BTREE_H_
 
 typedef int (*compare_t)(const void *, const void *);
 typedef void (*rootchange_t)(void *, bnode_ptr p);
@@ -225,4 +215,4 @@ void fnode_print_internal(struct fnode *node);
 void fnode_print_level(struct fnode *node);
 int slsfs_fbtree_test(void);
 
-#endif /* _FB_BTREE_H_ */
+#endif /* _BTREE_H_ */

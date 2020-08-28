@@ -32,7 +32,7 @@
 #include <vm/uma.h>
 
 #include <slos.h>
-#include <slos_record.h>
+#include <slos_inode.h>
 
 #include "imported_sls.h"
 #include "sls_data.h"

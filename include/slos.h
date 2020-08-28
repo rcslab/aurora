@@ -6,9 +6,8 @@
 #include <sys/lock.h>
 #include <sys/lockmgr.h>
 #include <sys/mutex.h>
-#include <sys/proc.h>
+#include <sys/condvar.h>
 #include <sys/uuid.h>
-#include <sys/ktr.h>
 #include <sys/limits.h>
 
 #include <vm/vm.h>
@@ -17,6 +16,8 @@
 
 #ifdef _KERNEL
 SDT_PROVIDER_DECLARE(slos);
+
+extern struct slos slos;
 #endif
 
 #define NUMSBS (100)
@@ -155,8 +156,6 @@ struct slos_extent {
 };
 
 _Static_assert(sizeof(struct slos_sb) < DEV_BSIZE, "Block size wrong");
-
-extern struct slos slos;
 
 #endif /* _SLOS_H_ */
 

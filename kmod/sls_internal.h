@@ -17,6 +17,9 @@
 #include <vm/vm.h>
 #include <vm/vm_object.h>
 
+#include <slos.h>
+#include <slos_btree.h>
+#include <slos_inode.h>
 #include <slsfs.h>
 
 #include "sls_kv.h"

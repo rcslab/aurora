@@ -7,6 +7,10 @@
 #include <sys/sbuf.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
+#include <sys/ucred.h>
+#include <sys/uio.h>
+#include <sys/vnode.h>
+
 #include <vm/uma.h>
 
 #include <slos.h>

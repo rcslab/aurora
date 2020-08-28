@@ -1,14 +1,18 @@
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/queue.h>
+#include <sys/buf.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
 #include <sys/mount.h>
 #include <sys/systm.h>
 #include <sys/unistd.h>
+#include <sys/dirent.h>
 #include <sys/namei.h>
 #include <sys/rwlock.h>
 #include <sys/bio.h>
+#include <sys/vnode.h>
+
 #include <vm/vm.h>
 #include <vm/uma.h>
 #include <vm/vm_extern.h>
@@ -20,7 +24,7 @@
 
 #include <slos.h>
 #include <slos_io.h>
-#include <slos_record.h>
+#include <slos_inode.h>
 #include <slosmm.h>
 #include <slsfs.h>
 #include <btree.h>

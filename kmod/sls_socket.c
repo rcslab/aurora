@@ -48,7 +48,8 @@
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
-#include <slos_record.h>
+#include <slos.h>
+#include <slos_inode.h>
 #include <sls_data.h>
 
 #include "sls_file.h"

@@ -25,7 +25,7 @@
 #include <vm/uma.h>
 
 #include <slos.h>
-#include <slos_record.h>
+#include <slos_inode.h>
 
 #include "sls_internal.h"
 #include "sls_kv.h"

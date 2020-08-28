@@ -1,16 +1,5 @@
 #ifndef _SLSFS_H_
 #define _SLSFS_H_
-#include <sys/limits.h>
-#include <sys/param.h>
-#include <sys/queue.h>
-
-#include <sys/mount.h>
-#include <sys/vnode.h>
-#include <vm/uma.h>
-
-#include "slos.h"
-#include "btree.h"
-#include "slos_inode.h"
 
 struct fbtree;
 
@@ -37,10 +26,6 @@ struct fbtree;
 #define SLS_VALLOC(aa, bb, cc, dd) ((TOSMP(aa->v_mount))->sls_valloc(aa, bb, cc, dd))
 #define SLS_VNODE(mp, vp) getnewvnode("slsfs", mp, &sls_vnodeops, &vp)
 #define SLS_VGET(aa, bb, cc, dd) (aa->v_mount->mnt_op->vfs_vget(aa->v_mount, bb, cc, dd))
-
-extern uma_zone_t fnode_zone;
-extern uma_zone_t fnode_trie_zone;
-extern struct buf_ops bufops_slsfs;
 
 struct slsfs_getsnapinfo {
 	int index;
@@ -76,6 +61,11 @@ struct slsfs_device {
     uint64_t			devblocksize;
 };
 
+#ifdef _KERNEL
+extern uma_zone_t fnode_zone;
+extern uma_zone_t fnode_trie_zone;
+extern struct buf_ops bufops_slsfs;
+
 /* Needed by the SLS to create nodes with specific IDs. */
 int slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size);
 int vmobjecttest(struct slos *slos);
@@ -85,6 +75,8 @@ int slsfs_io(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int iot
 
 struct buf;
 int slsfs_cksum(struct buf *bp);
+
+#endif
 
 #define SLS_SEEK_EXTENT _IOWR('s', 1, struct uio *)
 #define SLS_SET_RSTAT	_IOWR('s', 2, struct slos_rstat *)

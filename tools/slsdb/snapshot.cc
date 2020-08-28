@@ -13,8 +13,8 @@
 #include <iostream>
 #include <vector>
 
-#include <btree.h>
 #include <slos.h>
+#include <slos_btree.h>
 #include <slos_inode.h>
 
 #include "btree.h"

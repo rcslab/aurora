@@ -1,14 +1,21 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/systm.h>
+#include <sys/buf.h>
 #include <sys/dirent.h>
 #include <sys/namei.h>
 #include <sys/uio.h>
+#include <sys/param.h>
+#include <sys/queue.h>
+#include <sys/vnode.h>
 
-#include <slsfs.h>
+#include <vm/uma.h>
+
+#include <slos.h>
+#include <slos_btree.h>
 #include <slos_inode.h>
 #include <slos_io.h>
-#include <slosmm.h>
+#include <slsfs.h>
 
 #include "slos_subr.h"
 #include "slsfs_dir.h"

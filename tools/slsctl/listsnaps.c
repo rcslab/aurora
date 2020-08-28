@@ -1,6 +1,7 @@
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/sbuf.h>
+#include <sys/queue.h>
 
 #include <fcntl.h>
 #include <getopt.h>
@@ -11,8 +12,8 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <slsfs.h>
 #include <slos.h>
+#include <slsfs.h>
 
 void
 listsnaps_usage(void)

@@ -1,9 +1,7 @@
-#include <slos.h>
-#include <slos_inode.h>
-#include <slos_record.h>
+#ifndef _SLSFS_DIR_H_
+#define _SLSFS_DIR_H_
 
 #define SLSFS_NAME_LEN (255)
-struct componentname;
 
 int slsfs_init_dir(struct vnode *dvp, struct vnode *vp, 
 	struct componentname *);
@@ -19,3 +17,4 @@ int slsfs_update_dirent(struct vnode *tdvp,
 
 void slsfs_declink(struct vnode *vp);
 
+#endif /* _SLSFS_DIR_H_ */

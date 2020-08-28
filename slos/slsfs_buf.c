@@ -1,13 +1,22 @@
 
 #include <sys/types.h>
+#include <sys/param.h>
+#include <sys/queue.h>
+#include <sys/uio.h>
+#include <sys/buf.h>
+#include <sys/vnode.h>
+
+#include <vm/uma.h>
+
 #include <machine/atomic.h>
 
-#include <slsfs.h>
-#include <slos_record.h>
+#include <slos.h>
 #include <slos_io.h>
 #include <slos_btree.h>
 #include <slos_bnode.h>
+#include <slos_inode.h>
 #include <slosmm.h>
+#include <slsfs.h>
 
 #include "slsfs_buf.h"
 #include "btree.h"
