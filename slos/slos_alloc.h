@@ -1,12 +1,15 @@
-#include <sys/mount.h>
 
-#include "slos.h"
+#ifndef __SLOS_ALLOC_H__
+#define __SLOS_ALLOC_H__
 
 #define OTREE(slos) (&((slos)->slsfs_alloc.a_offset->sn_tree))
 #define STREE(slos) (&((slos)->slsfs_alloc.a_size->sn_tree))
 
-int slsfs_allocator_init(struct slos *slos);
-int bootstrap_tree(struct slos *slos, size_t offset, diskptr_t *ptr);
+int slos_allocator_init(struct slos *slos);
 int uint64_t_comp(const void *k1, const void *k2);
-int slsfs_allocator_uninit(struct slos *slos);
-int slsfs_allocator_sync(struct slos *slos, struct slos_sb *newsb);
+int slos_allocator_uninit(struct slos *slos);
+int slos_allocator_sync(struct slos *slos, struct slos_sb *newsb);
+int slos_blkalloc(struct slos *slos, size_t bytes, diskptr_t *ptr);
+
+#endif
+

@@ -4,9 +4,9 @@
 KMOD	= slos
 DPSRCS = offset.inc
 
-SRCS	= slos.c slos_alloc.c slos_btree.c slos_inode.c slos_io.c
+SRCS	= slos.c slos_alloc.c slos_btree.c slos_inode.c slos_io.c slos_subr.c
 
-SRCS	+= slsfs_subr.c slsfs_vnops.c slsfs_vfsops.c slsfs_dir.c \
+SRCS	+= slsfs_vnops.c slsfs_vfsops.c slsfs_dir.c \
 	  slsfs_buf.c vnode_if.h
 
 CFLAGS	+= -DKDTRACE_HOOKS -DKLD_TIED -I../include

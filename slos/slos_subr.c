@@ -25,8 +25,8 @@
 #include <slsfs.h>
 #include <btree.h>
 
+#include "slos_subr.h"
 #include "../slfs/slsfs_dir.h"
-#include "slsfs_subr.h"
 #include "slsfs_buf.h"
 #include "debug.h"
 
@@ -35,15 +35,15 @@
 #define DIRTY (1)
 
 struct buf_ops bufops_slsfs = {
-	.bop_name	=   "slsfs_bufops",
-	.bop_strategy	=   slsfs_bufstrategy,
-	.bop_write	=   slsfs_bufwrite,
-	.bop_sync	=   slsfs_bufsync,
-	.bop_bdflush	=   slsfs_bufbdflush,
+	.bop_name	=   "slos_bufops",
+	.bop_strategy	=   slos_bufstrategy,
+	.bop_write	=   slos_bufwrite,
+	.bop_sync	=   slos_bufsync,
+	.bop_bdflush	=   slos_bufbdflush,
 };
 
 void
-slsfs_generic_rc(void *ctx, bnode_ptr p)
+slos_generic_rc(void *ctx, bnode_ptr p)
 {
 	struct slos_node *svp = (struct slos_node *)ctx;
 	svp->sn_ino.ino_btree.offset = p;
@@ -54,7 +54,7 @@ slsfs_generic_rc(void *ctx, bnode_ptr p)
  * Allocate a new SLOS inode.
  */
 int
-slsfs_new_node(struct slos *slos, mode_t mode, uint64_t *slsidp)
+slos_new_node(struct slos *slos, mode_t mode, uint64_t *slsidp)
 {
 	int slsid;
 	int slsid_requested;
@@ -96,12 +96,12 @@ slsfs_new_node(struct slos *slos, mode_t mode, uint64_t *slsidp)
 }
 
 int
-slsfs_setupfakedev(struct slos *slos, struct slos_node *vp)
+slos_setupfakedev(struct slos *slos, struct slos_node *vp)
 {
 	struct vnode *devvp;
 	int error;
 
-	error = getnewvnode("SLSFS Fake VNode", slos->slsfs_mount, &sls_vnodeops, &vp->sn_fdev);
+	error = getnewvnode("SLSFS Fake VNode", slos->slsfs_mount, &slfs_vnodeops, &vp->sn_fdev);
 	if (error) {
 		panic("Problem getting fake vnode for device\n");
 	}
@@ -122,7 +122,7 @@ slsfs_setupfakedev(struct slos *slos, struct slos_node *vp)
  * Unlink an inode of a SLOS file from the directory tree.
  */
 int
-slsfs_remove_node(struct vnode *dvp, struct vnode *vp, struct componentname *name)
+slos_remove_node(struct vnode *dvp, struct vnode *vp, struct componentname *name)
 {
 	int error;
 
@@ -139,7 +139,7 @@ slsfs_remove_node(struct vnode *dvp, struct vnode *vp, struct componentname *nam
  * Destroy an in-memory SLOS inode for a deleted file. The node must be already dead.
  */
 int
-slsfs_destroy_node(struct slos_node *vp)
+slos_destroy_node(struct slos_node *vp)
 {
 	KASSERT(vp->sn_status == SLOS_VDEAD, ("destroying still active node"));
 	return (0);
@@ -149,7 +149,7 @@ slsfs_destroy_node(struct slos_node *vp)
  * Retrieve an in-memory SLOS inode, or create one from disk if not present.
  */
 int
-slsfs_get_node(struct slos *slos, uint64_t slsid, struct slos_node **spp)
+slos_get_node(struct slos *slos, uint64_t slsid, struct slos_node **spp)
 {
 	struct slos_node *sp;
 
@@ -166,7 +166,7 @@ slsfs_get_node(struct slos *slos, uint64_t slsid, struct slos_node **spp)
  * Adjust a vnode's data to be of a specified size.
  */
 int
-slsfs_truncate(struct vnode *vp, size_t size)
+slos_truncate(struct vnode *vp, size_t size)
 {
 	struct bufobj *bo;
 	struct slos_node *svp = SLSVP(vp);
@@ -188,9 +188,10 @@ slsfs_truncate(struct vnode *vp, size_t size)
 
 /* Flush a vnode's data to the disk. */
 int
-slsfs_sync_vp(struct vnode *vp, int release)
+slos_sync_vp(struct vnode *vp, int release)
 {
 	struct fbtree *tree  = &SLSVP(vp)->sn_tree;
+
 	vn_fsync_buf(vp, 0);
 	fbtree_sync(tree);
 
@@ -201,27 +202,28 @@ slsfs_sync_vp(struct vnode *vp, int release)
 	 * infinite loop by breaking out.
 	 */
 	SLSVP(vp)->sn_status &= ~(SLOS_DIRTY);
+
 	return (0);
 }
 
 /* Write a SLOS buffer to disk. */
 int
-slsfs_bufwrite(struct buf *buf)
+slos_bufwrite(struct buf *buf)
 {
 	return (bufwrite(buf));
 }
 
 /* Send a SLOS buffer to disk. */
 int
-slsfs_bufsync(struct bufobj *bufobj, int waitfor)
+slos_bufsync(struct bufobj *bufobj, int waitfor)
 {
 	/* Add a check of whether it's dirty. */
-	return (slsfs_sync_vp(bo2vnode(bufobj), 0));
+	return (slos_sync_vp(bo2vnode(bufobj), 0));
 }
 
 /* Mark a buffer as a candidate to be flushed. */
 void
-slsfs_bufbdflush(struct bufobj *bufobj, struct buf *buf)
+slos_bufbdflush(struct bufobj *bufobj, struct buf *buf)
 {
 	bufbdflush(bufobj, buf);
 }
@@ -230,7 +232,7 @@ slsfs_bufbdflush(struct bufobj *bufobj, struct buf *buf)
  * Do a block IO for the buffer.
  */
 void
-slsfs_bufstrategy(struct bufobj *bo, struct buf *bp)
+slos_bufstrategy(struct bufobj *bo, struct buf *bp)
 {
 	struct vnode *vp;
 	int error;

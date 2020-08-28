@@ -37,17 +37,16 @@
 #include <vm/vm_page.h>
 
 #include <slos.h>
-#include <slos_alloc.h>
 #include <slos_record.h>
 #include <slos_inode.h>
 #include <slos_btree.h>
 #include <slos_io.h>
 #include <slosmm.h>
 #include <btree.h>
-
 #include <slsfs.h>
 
-#include "slsfs_subr.h"
+#include "slos_alloc.h"
+#include "slos_subr.h"
 #include "slsfs_dir.h"
 #include "slsfs_buf.h"
 #include "debug.h"
@@ -339,50 +338,12 @@ slsfs_uninit(struct vfsconf *vfsp)
 	return (0);
 }
 
-static int
-bootstrap_inode(struct slos *slos, uint64_t pid, diskptr_t *p)
-{
-	struct buf *bp;
-	int error;
-
-	struct slos_inode ino = {};
-	// We can use the fake device from the allocators they should be inited
-	struct vnode *fdev = slos->slsfs_alloc.a_offset->sn_fdev;
-
-	error = ALLOCATEPTR(slos, BLKSIZE(slos), p);
-	MPASS(error == 0);
-
-	slos_updatetime(&ino);
-
-	ino.ino_blk = p->offset;
-	ino.ino_magic = SLOS_IMAGIC;
-	ino.ino_pid = pid;
-	ino.ino_gid = 0;
-	ino.ino_uid = 0;
-
-	bp = getblk(fdev, ino.ino_blk, BLKSIZE(slos), 0, 0, 0);
-	MPASS(bp);
-
-	error = ALLOCATEPTR(slos, BLKSIZE(slos), &ino.ino_btree);
-	MPASS(error == 0);
-	memcpy(bp->b_data, &ino, sizeof(struct slos_inode));
-	bwrite(bp);
-
-	bp = getblk(fdev, ino.ino_btree.offset, BLKSIZE(slos), 0, 0, 0);
-	MPASS(bp);
-
-	vfs_bio_clrbuf(bp);
-	bwrite(bp);
-
-	return (0);
-}
-
 /*
  * Called after allocator tree and checksum tree have been inited.
- * This function just checks if the mount is a freash mount (by checking the 
- * epoch number), if fresh it bootstraps the inode.
+ * This function just checks if the mount is a fresh mount (by checking the 
+ * epoch number).
  *
- * Then fetches the vnode.  Since everything else has been bootstrapped we
+ * Then fetches the vnode.  Since everything else has been initialized we
  * can fetch it normally. We then try and create the root directory of the 
  * filesystem and are fine if it fails (means it already exists).
  */
@@ -392,8 +353,8 @@ slsfs_inodes_init(struct mount *mp, struct slos *slos)
 	int error;
 
 	if (slos->slos_sb->sb_epoch == EPOCH_INVAL) {
-		DEBUG("Bootstrapping root inode");
-		error = bootstrap_inode(slos, SLOS_INODES_ROOT, &slos->slos_sb->sb_root);
+		DEBUG("Initializing root inode");
+		error = initialize_inode(slos, SLOS_INODES_ROOT, &slos->slos_sb->sb_root);
 		MPASS(error == 0);
 	}
 	/* Create the vnode for the inode root. */
@@ -591,7 +552,7 @@ slsfs_createtask(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int
 	return (ctx);
 }
 
-static int
+int
 slsfs_io_async(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int iotype, slsfs_callback cb)
 {
 	struct slos *slos = SLSVP(vp)->sn_slos;
@@ -616,7 +577,7 @@ slsfs_io_async(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int i
 	return (0);
 }
 
-static int
+int
 slsfs_io(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int iotype)
 {
 	struct slsfs_taskctx *ctx;
@@ -648,8 +609,8 @@ slsfs_checksumtree_init(struct slos *slos)
 	size_t offset = ((NUMSBS * slos->slos_sb->sb_ssize) / slos->slos_sb->sb_bsize) + 1;
 	if (slos->slos_sb->sb_epoch == EPOCH_INVAL) {
 		MPASS(error == 0);
-		error = bootstrap_tree(slos, offset, &ptr);
-		DEBUG1("Bootstrapping checksum tree %lu", ptr.offset);
+		error = initialize_btree(slos, offset, &ptr);
+		DEBUG1("Initializing checksum tree %lu", ptr.offset);
 		MPASS(error == 0);
 	} else {
 		ptr = slos->slos_sb->sb_cksumtree;
@@ -699,8 +660,6 @@ slsfs_startupfs(struct mount *mp)
 		slos_sbat(&slos, smp->sp_index, slos.slos_sb);
 	}
 
-	slos.slsfs_io = &slsfs_io;
-	slos.slsfs_io_async = &slsfs_io_async;
 	if (slos.slos_tq == NULL) {
 		slos.slos_tq = taskqueue_create("SLOS Taskqueue", M_WAITOK, taskqueue_thread_enqueue, &slos.slos_tq);
 		if (slos.slos_tq == NULL) {
@@ -714,7 +673,7 @@ slsfs_startupfs(struct mount *mp)
 	 */
 
 	slsfs_checksumtree_init(&slos);
-	slsfs_allocator_init(&slos);
+	slos_allocator_init(&slos);
 	slsfs_inodes_init(mp, &slos);
 
 	/*
@@ -827,7 +786,7 @@ slsfs_valloc(struct vnode *dvp, mode_t mode, struct ucred *creds, struct vnode *
 	struct vnode *vp;
 
 	/* Create the new inode in the filesystem. */
-	error = slsfs_new_node(VPSLOS(dvp), mode, &pid);
+	error = slos_new_node(VPSLOS(dvp), mode, &pid);
 	if (error) {
 		return (error);
 	}
@@ -1025,7 +984,7 @@ again:
 		if (SLSVP(vp)->sn_status & SLOS_DIRTY) {
 			/* Step 1 and 2 Sync data and mark underlying Btree Copy 
 			 * on write*/
-			error = slsfs_sync_vp(vp, closing);
+			error = slos_sync_vp(vp, closing);
 			if (error) {
 				vput(vp);
 				return;
@@ -1048,7 +1007,7 @@ again:
 	// Just a hack for now to get this thing working XXX Why is it a hack?
 	/* Sync the inode root itself. */
 	if (slos.slos_sb->sb_data_synced) {
-		error = ALLOCATEPTR(&slos, BLKSIZE(&slos), &ptr);
+		error = slos_blkalloc(&slos, BLKSIZE(&slos), &ptr);
 		MPASS(error == 0);
 
 		/* 3 Sync Root Inodes and btree */
@@ -1059,9 +1018,9 @@ again:
 		svp = SLSVP(slos.slsfs_inodes);
 		ino = &svp->sn_ino;
 		DEBUG2("Flushing inodes %p %p", slos.slsfs_inodes, svp->sn_fdev);
-		error = slsfs_sync_vp(slos.slsfs_inodes, closing);
+		error = slos_sync_vp(slos.slsfs_inodes, closing);
 		if (error) {
-			panic("slsfs_sync_vp failed to checkpoint");
+			panic("slos_sync_vp failed to checkpoint");
 			return;
 		}
 
@@ -1080,7 +1039,7 @@ again:
 		bawrite(bp);
 
 		// Write out the checksum tree;
-		error = ALLOCATEPTR(&slos, BLKSIZE(&slos), &ptr);
+		error = slos_blkalloc(&slos, BLKSIZE(&slos), &ptr);
 		if (error) {
 			panic("Problem with allocation");
 		}
@@ -1106,7 +1065,7 @@ again:
 		slos.slos_sb->sb_index = (slos.slos_sb->sb_epoch) % 100;
 
 		/* 4 Sync the allocator */
-		slsfs_allocator_sync(&slos, slos.slos_sb);
+		slos_allocator_sync(&slos, slos.slos_sb);
 		DEBUG2("Epoch %lu done at superblock index %u", slos.slos_sb->sb_epoch, 
 			slos.slos_sb->sb_index);
 		SLSVP(slos.slsfs_inodes)->sn_status &= ~(SLOS_DIRTY);
@@ -1422,7 +1381,7 @@ slsfs_unmount_device(struct slsfs_device *sdev)
 
 	SLOS_UNLOCK(&slos);
 
-	slsfs_allocator_uninit(&slos);
+	slos_allocator_uninit(&slos);
 
 	/* Destroy related in-memory locks. */
 	lockdestroy(&slos.slos_lock);
@@ -1550,7 +1509,7 @@ slsfs_init_vnode(struct vnode *vp, uint64_t ino)
 	}
 
 	if (vp->v_type == VFIFO) {
-		vp->v_op = &sls_fifoops;
+		vp->v_op = &slfs_fifoops;
 	}
 
 	vnode_create_vobject(vp, 0, curthread);
@@ -1586,14 +1545,14 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	}
 
 	/* Bring the inode in memory. */
-	error = slsfs_get_node(&slos, ino, &svnode);
+	error = slos_get_node(&slos, ino, &svnode);
 	if (error) {
 		*vpp = NULL;
 		return (error);
 	}
 
 	/* Get a new blank vnode. */
-	error = getnewvnode("slsfs", mp, &sls_vnodeops, &vp);
+	error = getnewvnode("slsfs", mp, &slfs_vnodeops, &vp);
 	if (error) {
 		DEBUG("Problem getting new inode");
 		*vpp = NULL;
@@ -1648,7 +1607,7 @@ slsfs_sync(struct mount *mp, int waitfor)
 	return (0);
 }
 
-static struct vfsops slsfs_vfsops = {
+static struct vfsops slfs_vfsops = {
 	.vfs_init =		slsfs_init,
 	.vfs_uninit =		slsfs_uninit,
 	.vfs_root =		slsfs_root,
@@ -1659,5 +1618,5 @@ static struct vfsops slsfs_vfsops = {
 	.vfs_sync =		slsfs_sync
 };
 
-VFS_SET(slsfs_vfsops, slsfs, 0);
+VFS_SET(slfs_vfsops, slsfs, 0);
 MODULE_VERSION(slsfs, 0);

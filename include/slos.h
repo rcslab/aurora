@@ -15,7 +15,10 @@
 #include <vm/vm_object.h>
 #include <vm/uma.h>
 
-#define ALLOCATEPTR(slos, bytes, ptr) ((slos)->slsfs_blkalloc(slos, bytes, ptr))
+#ifdef _KERNEL
+SDT_PROVIDER_DECLARE(slos);
+#endif
+
 #define NUMSBS (100)
 
 typedef uint64_t bnode_ptr;
@@ -92,10 +95,6 @@ struct slos {
 
 	struct lock		slos_lock;	/* Sleepable lock */
 	struct taskqueue	*slos_tq;	/* Slos taskqueue */
-
-	int (*slsfs_blkalloc)(struct slos*, size_t, diskptr_t *);
-	int (*slsfs_io)(struct vnode *, vm_object_t, vm_page_t, size_t, int);
-	int (*slsfs_io_async)(struct vnode *, vm_object_t, vm_page_t, size_t, int, slsfs_callback);
 };
 
 /* Identifier allocator */

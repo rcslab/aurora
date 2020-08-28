@@ -83,6 +83,8 @@ void btree_addelem(struct btree *btree, struct bnode *bnode);
 void btree_discardelem(struct btree *btree);
 void btree_keepelem(struct btree *btree);
 
+int initialize_btree(struct slos *slos, size_t offset, diskptr_t *ptr);
+
 #ifdef SLOS_TESTS
 
 int slos_test_btree(void);

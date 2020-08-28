@@ -60,7 +60,7 @@ run_tests()
     echo Test started: `date`
     printf "%-40s   %-9s   %-10s\n" "Test" "Status" "Time"
     echo "-----------------------------------------------------------"
-    for t in `find $SRCROOT/tests -name \*.sh`; do
+    for t in `find $SRCROOT/tests -name \*.sh | sort -n`; do
 	run_test $t
     done
 }

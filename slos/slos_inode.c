@@ -17,8 +17,9 @@
 #include <slsfs.h>
 #include <slsfs_buf.h>
 
+#include "slos_alloc.h"
+#include "slos_subr.h"
 #include "slosmm.h"
-#include "slsfs_subr.h"
 #include "slsfs_buf.h"
 #include "debug.h"
 
@@ -158,7 +159,7 @@ slos_newnode(struct slos *slos, uint64_t pid, struct slos_node **vpp)
 	vp->sn_status = SLOS_VALIVE;
 	vp->sn_refcnt = 0;
 
-	error = slsfs_setupfakedev(slos, vp);
+	error = slos_setupfakedev(slos, vp);
 	if (error) {
 		panic("Issue creating fake device");
 	}
@@ -167,7 +168,7 @@ slos_newnode(struct slos *slos, uint64_t pid, struct slos_node **vpp)
 	    sizeof(diskptr_t), &compare_vnode_t,
 	    "Vnode Tree", 0, &vp->sn_tree);
 
-	fbtree_reg_rootchange(&vp->sn_tree, &slsfs_generic_rc, vp);
+	fbtree_reg_rootchange(&vp->sn_tree, &slos_generic_rc, vp);
 
 	*vpp = vp;
 
@@ -199,7 +200,7 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 	vp = uma_zalloc(slos_node_zone, M_WAITOK);
 	ino = &vp->sn_ino;
 
-	error = slsfs_setupfakedev(slos, vp);
+	error = slos_setupfakedev(slos, vp);
 	if (error) {
 		panic("Issue creating fake device");
 	}
@@ -231,7 +232,7 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 	if (inoblk == slos->slos_sb->sb_root.offset) {
 		fbtree_reg_rootchange(&vp->sn_tree, &slsfs_root_rc, vp);
 	} else {
-		fbtree_reg_rootchange(&vp->sn_tree, &slsfs_generic_rc, vp);
+		fbtree_reg_rootchange(&vp->sn_tree, &slos_generic_rc, vp);
 	}
 
 	return (vp);
@@ -296,7 +297,7 @@ slos_icreate(struct slos *slos, uint64_t pid, mode_t mode)
 	ino.ino_blocks = 0;
 	ino.ino_rstat.type = 0;
 	ino.ino_rstat.len = 0;
-	error = ALLOCATEPTR(slos, BLKSIZE(slos), &ptr);
+	error = slos_blkalloc(slos, BLKSIZE(slos), &ptr);
 	if (error) {
 		return (error);
 	}
@@ -433,3 +434,42 @@ slos_update(struct slos_node *svp)
 
 	return (0);
 }
+
+int
+initialize_inode(struct slos *slos, uint64_t pid, diskptr_t *p)
+{
+	struct buf *bp;
+	int error;
+
+	struct slos_inode ino = {};
+	// We can use the fake device from the allocators they should be inited
+	struct vnode *fdev = slos->slsfs_alloc.a_offset->sn_fdev;
+
+	error = slos_blkalloc(slos, BLKSIZE(slos), p);
+	MPASS(error == 0);
+
+	slos_updatetime(&ino);
+
+	ino.ino_blk = p->offset;
+	ino.ino_magic = SLOS_IMAGIC;
+	ino.ino_pid = pid;
+	ino.ino_gid = 0;
+	ino.ino_uid = 0;
+	
+	bp = getblk(fdev, ino.ino_blk, BLKSIZE(slos), 0, 0, 0);
+	MPASS(bp);
+
+	error = slos_blkalloc(slos, BLKSIZE(slos), &ino.ino_btree);
+	MPASS(error == 0);
+	memcpy(bp->b_data, &ino, sizeof(struct slos_inode));
+	bwrite(bp);
+
+	bp = getblk(fdev, ino.ino_btree.offset, BLKSIZE(slos), 0, 0, 0);
+	MPASS(bp);
+
+	vfs_bio_clrbuf(bp);
+	bwrite(bp);
+
+	return (0);
+}
+

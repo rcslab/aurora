@@ -77,9 +77,11 @@ struct slsfs_device {
 };
 
 /* Needed by the SLS to create nodes with specific IDs. */
-int slsfs_new_node(struct slos *slos, mode_t mode, uint64_t *oidp);
 int slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size);
 int vmobjecttest(struct slos *slos);
+int slsfs_io_async(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len,
+    int iotype, slsfs_callback cb);
+int slsfs_io(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int iotype);
 
 struct buf;
 int slsfs_cksum(struct buf *bp);
@@ -90,6 +92,7 @@ int slsfs_cksum(struct buf *bp);
 
 extern int checksum_enabled;
 
-extern struct vop_vector sls_vnodeops;
-extern struct vop_vector sls_fifoops;
+extern struct vop_vector slfs_vnodeops;
+extern struct vop_vector slfs_fifoops;
+
 #endif // _SLSFS_H_

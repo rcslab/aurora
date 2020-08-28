@@ -18,11 +18,13 @@
 #include <machine/atomic.h>
 
 #include <slos.h>
-#include <slsfs.h>
 #include <slos_inode.h>
+#include <slos_btree.h>
+#include <slsfs.h>
+
+#include "slos_alloc.h"
 #include "slosmm.h"
 #include "btree.h"
-#include "slos_alloc.h"
 #include "slsfs_buf.h"
 #include "debug.h"
 
@@ -428,7 +430,7 @@ fnode_cow(struct fbtree *tree, struct buf *bp)
 
 	MPASS(cur->fn_buf == bp);
 	// Alocate a new block the btree node
-	error = ALLOCATEPTR(slos, BLKSIZE(slos), &ptr);
+	error = slos_blkalloc(slos, BLKSIZE(slos), &ptr);
 #ifdef SHOWCOW
 	DEBUG3("fnode_cow(%p) %lu->%lu", bp, bp->b_lblkno, ptr.offset);
 #endif
@@ -1246,7 +1248,7 @@ fbtree_allocnode(struct fbtree *tree, struct fnode **created, uint8_t type)
 	struct fnode *tmp = NODE_ALLOC(M_WAITOK);
 	struct fnode *t2;
 
-	error = ALLOCATEPTR(slos, BLKSIZE(slos), &ptr);
+	error = slos_blkalloc(slos, BLKSIZE(slos), &ptr);
 	MPASS(error == 0);
 	if (error) {
 		NODE_FREE(tmp);
@@ -2131,6 +2133,37 @@ fnode_init(struct fbtree *tree, bnode_ptr ptr, struct fnode **fn)
 }
 
 int
+initialize_btree(struct slos *slos, size_t offset, diskptr_t *ptr)
+{
+	struct buf *bp;
+	struct slos_inode ino = {};
+	ino.ino_magic = SLOS_IMAGIC;
+	ptr->offset = offset;
+	ptr->size = BLKSIZE(slos);
+	ino.ino_pid = -1;
+	ino.ino_blk = offset;
+	ino.ino_btree.offset = offset + 1;
+	ino.ino_btree.size = BLKSIZE(slos);
+
+	int change =  BLKSIZE(slos) / slos->slos_vp->v_bufobj.bo_bsize;
+	bread(slos->slos_vp, offset * change, BLKSIZE(slos), curthread->td_ucred, &bp);
+	MPASS(bp);
+	bzero(bp->b_data, bp->b_bcount);
+	memcpy(bp->b_data, &ino, sizeof(ino));
+	bwrite(bp);
+
+	bread(slos->slos_vp, (offset + 1) * change, BLKSIZE(slos), curthread->td_ucred, &bp);
+	MPASS(bp);
+
+	bzero(bp->b_data, bp->b_bcount);
+	bwrite(bp);
+	
+	VOP_FSYNC(slos->slos_vp, MNT_WAIT, curthread);
+
+	return (0);
+}
+
+int
 fbtree_test(struct fbtree *tree)
 {
 	int error;
@@ -2246,7 +2279,7 @@ fbtree_test(struct fbtree *tree)
  * and verifying that its ordering and size invariants hold.
  */
 int
-slsfs_fbtree_test(void)
+slos_fbtree_test(void)
 {
 
 	struct fbtree *btree;
@@ -2264,9 +2297,9 @@ slsfs_fbtree_test(void)
 	uint64_t oid;
 
 	oid = FBTEST_ID;
-	error = slsfs_new_node(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
+	error = slos_new_node(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
 	if (error != 0) {
-		printf("slsfs_new_node() failed with %d", error);
+		printf("slos_new_node() failed with %d", error);
 		return (error);
 	}
 

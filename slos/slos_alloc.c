@@ -4,12 +4,13 @@
 #include <sys/uio.h>
 
 #include <slos.h>
+#include <slos_alloc.h>
+#include <slos_btree.h>
 #include <slos_inode.h>
 #include <slsfs.h>
 
-#include "slos_alloc.h"
+#include "slos_subr.h"
 #include "slsfs_buf.h"
-#include "slsfs_subr.h"
 #include "debug.h"
 
 #define NEWOSDSIZE (30)
@@ -109,8 +110,8 @@ allocate_chunk(struct slos *slos, diskptr_t *ptr)
 /*
  * Generic block allocator for the SLOS. We never explicitly free.
  */
-static int
-slsfs_blkalloc(struct slos *slos, size_t bytes, diskptr_t *ptr)
+int
+slos_blkalloc(struct slos *slos, size_t bytes, diskptr_t *ptr)
 {
 	uint64_t asked;
 	uint64_t blksize = BLKSIZE(slos);
@@ -140,42 +141,11 @@ slsfs_blkalloc(struct slos *slos, size_t bytes, diskptr_t *ptr)
 	}
 }
 
-int
-bootstrap_tree(struct slos *slos, size_t offset, diskptr_t *ptr)
-{
-	struct buf *bp;
-	struct slos_inode ino = {};
-	ino.ino_magic = SLOS_IMAGIC;
-	ptr->offset = offset;
-	ptr->size = BLKSIZE(slos);
-	ino.ino_pid = -1;
-	ino.ino_blk = offset;
-	ino.ino_btree.offset = offset + 1;
-	ino.ino_btree.size = BLKSIZE(slos);
-
-	int change =  BLKSIZE(slos) / slos->slos_vp->v_bufobj.bo_bsize;
-	bread(slos->slos_vp, offset * change, BLKSIZE(slos), curthread->td_ucred, &bp);
-	MPASS(bp);
-	bzero(bp->b_data, bp->b_bcount);
-	memcpy(bp->b_data, &ino, sizeof(ino));
-	bwrite(bp);
-		
-	bread(slos->slos_vp, (offset + 1) * change, BLKSIZE(slos), curthread->td_ucred, &bp);
-	MPASS(bp);
-
-	bzero(bp->b_data, bp->b_bcount);
-	bwrite(bp);
-	
-	VOP_FSYNC(slos->slos_vp, MNT_WAIT, curthread);
-
-	return (0);
-}
-
 /*
  * Initialize the in-memory allocator state at mount time.
  */
 int
-slsfs_allocator_init(struct slos *slos)
+slos_allocator_init(struct slos *slos)
 {
 	struct slos_node *offt;
 	struct slos_node *sizet;
@@ -200,9 +170,9 @@ slsfs_allocator_init(struct slos *slos)
 		 * each tree by two, one for the inode itself, and the second 
 		 * for the root of the tree.
 		 */
-		bootstrap_tree(slos, offset, &slos->slos_sb->sb_allocoffset);
+		initialize_btree(slos, offset, &slos->slos_sb->sb_allocoffset);
 		offset += 2;
-		bootstrap_tree(slos, offset, &slos->slos_sb->sb_allocsize);
+		initialize_btree(slos, offset, &slos->slos_sb->sb_allocsize);
 		offset += 2;
 	}
 
@@ -235,11 +205,11 @@ slsfs_allocator_init(struct slos *slos)
 	MPASS(offt && sizet);
 	fbtree_init(offt->sn_fdev, offt->sn_tree.bt_root, sizeof(uint64_t), sizeof(uint64_t),
 	    &uint64_t_comp, "Off Tree", 0, OTREE(slos));
-	fbtree_reg_rootchange(OTREE(slos), &slsfs_generic_rc, offt);
+	fbtree_reg_rootchange(OTREE(slos), &slos_generic_rc, offt);
 
 	fbtree_init(sizet->sn_fdev, sizet->sn_tree.bt_root, sizeof(uint64_t), sizeof(uint64_t),
 	    &uint64_t_comp, "Size Tree", 0, STREE(slos));
-	fbtree_reg_rootchange(STREE(slos), &slsfs_generic_rc, sizet);
+	fbtree_reg_rootchange(STREE(slos), &slos_generic_rc, sizet);
 
 	// New tree add the initial amount allocations.  Im just making some
 	// constant just makes it easier
@@ -272,12 +242,9 @@ slsfs_allocator_init(struct slos *slos)
 		 * TODO: More dynamic allocation that does exactly the allocations
 		 * done?
 		 */
-		slsfs_blkalloc(slos, NEWOSDSIZE * BLKSIZE(slos), &ptr);
+		slos_blkalloc(slos, NEWOSDSIZE * BLKSIZE(slos), &ptr);
 		DEBUG("First time start up for allocator done");
 	}
-
-	/* Bind the allocator function to the SLOS. */
-	slos->slsfs_blkalloc = &slsfs_blkalloc;
 
 	return (0);
 };
@@ -286,7 +253,7 @@ slsfs_allocator_init(struct slos *slos)
  * Initialize the in-memory allocator state at mount time.
  */
 int
-slsfs_allocator_uninit(struct slos *slos)
+slos_allocator_uninit(struct slos *slos)
 {
     slos_vpfree(slos, slos->slsfs_alloc.a_offset);
     slos->slsfs_alloc.a_offset = NULL;
@@ -300,7 +267,7 @@ slsfs_allocator_uninit(struct slos *slos)
  * Flush the allocator state to disk.
  */
 int
-slsfs_allocator_sync(struct slos *slos, struct slos_sb *newsb)
+slos_allocator_sync(struct slos *slos, struct slos_sb *newsb)
 {
 	int error;
 	struct buf *bp;
@@ -323,7 +290,7 @@ slsfs_allocator_sync(struct slos *slos, struct slos_sb *newsb)
 
 	DEBUG("Syncing Allocator");
 	// Allocate and sync the btree's
-	error = ALLOCATEPTR(slos, total_allocations * BLKSIZE(slos), &ptr);
+	error = slos_blkalloc(slos, total_allocations * BLKSIZE(slos), &ptr);
 	MPASS(error == 0);
 	error = fbtree_sync_withalloc(OTREE(slos), &ptr);
 	MPASS(error == 0);

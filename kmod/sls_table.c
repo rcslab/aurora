@@ -37,10 +37,11 @@
 #include <vm/uma.h>
 
 #include <slos.h>
-#include <slsfs.h>
-#include <sls_data.h>
+#include <slos_inode.h>
 #include <slos_io.h>
 #include <slos_record.h>
+#include <slsfs.h>
+#include <sls_data.h>
 
 #include "sls_internal.h"
 #include "sls_kv.h"
@@ -200,9 +201,9 @@ slsio_obj_slos(struct vnode *vp, vm_object_t obj, vm_page_t m,
 	VM_OBJECT_ASSERT_UNLOCKED(obj);
 
 	if (async)
-		return (slos.slsfs_io_async(vp, obj, m, len, bio_cmd, NULL));
+		return (slsfs_io_async(vp, obj, m, len, bio_cmd, NULL));
 	else
-		return (slos.slsfs_io(vp, obj, m, len, bio_cmd));
+		return (slsfs_io(vp, obj, m, len, bio_cmd));
 }
 
 /* Creates an in-memory Aurora record. */
@@ -949,7 +950,7 @@ sls_writemeta_slos(struct sls_record *rec, struct vnode **vpp, bool overwrite)
 
 	/* Try to create the node, if not already there, wrap it in a vnode. */
 	oid = rec->srec_id;
-	error = slsfs_new_node(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
+	error = slos_new_node(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
 	if (error != 0)
 		return (error);
 

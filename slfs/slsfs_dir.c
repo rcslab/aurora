@@ -10,8 +10,8 @@
 #include <slos_io.h>
 #include <slosmm.h>
 
+#include "slos_subr.h"
 #include "slsfs_dir.h"
-#include "slsfs_subr.h"
 #include "slsfs_buf.h"
 #include "debug.h"
 

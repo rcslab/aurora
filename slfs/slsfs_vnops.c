@@ -24,8 +24,9 @@
 #include <slos_io.h>
 #include <slos_record.h>
 
+#include "slos_alloc.h"
+#include "slos_subr.h"
 #include "slsfs_dir.h"
-#include "slsfs_subr.h"
 #include "slsfs_buf.h"
 #include "btree.h"
 #include "debug.h"
@@ -33,8 +34,6 @@
 SDT_PROVIDER_DEFINE(slos);
 SDT_PROBE_DEFINE3(slos, , , slsfs_deviceblk, "uint64_t", "uint64_t", "int");
 SDT_PROBE_DEFINE3(slos, , , slsfs_vnodeblk, "uint64_t", "uint64_t", "int");
-
-extern struct slos slos;
 
 static int
 slsfs_inactive(struct vop_inactive_args *args)
@@ -46,7 +45,7 @@ slsfs_inactive(struct vop_inactive_args *args)
 	if (svp->sn_status == SLOS_VDEAD) {
 		/* XXX Do not destroy the file,  we need it for the SLS. */
 		/*
-		error = slsfs_truncate(vp, 0);
+		error = slos_truncate(vp, 0);
 		slsfs_destroy_node(svp);
 		*/
 		vrecycle(vp);
@@ -414,7 +413,7 @@ slsfs_rmdir(struct vop_rmdir_args *args)
 		return (EPERM);
 	}
 
-	error = slsfs_remove_node(dvp, vp, cnp);
+	error = slos_remove_node(dvp, vp, cnp);
 	if (error) {
 		return (error);
 	}
@@ -428,7 +427,7 @@ slsfs_rmdir(struct vop_rmdir_args *args)
 	// Purge name entries that point to vp
 	cache_purge(vp);
 
-	error = slsfs_truncate(vp, 0);
+	error = slos_truncate(vp, 0);
 	if (error) {
 		return (error);
 	}
@@ -501,7 +500,7 @@ slsfs_remove(struct vop_remove_args *args)
 	}
 
 	DEBUG2("Removing file %s %lu", cnp->cn_nameptr, SLSVP(vp)->sn_ino.ino_pid);
-	error = slsfs_remove_node(dvp, vp, cnp);
+	error = slos_remove_node(dvp, vp, cnp);
 	if (error) {
 		return (error);
 	}
@@ -904,7 +903,7 @@ slsfs_strategy(struct vop_strategy_args *args)
 					bp->b_lblkno, bp->b_bcount);
 				MPASS(error == 0);
 
-				error = ALLOCATEPTR(SLSVP(vp)->sn_slos, bp->b_bcount, &ptr);
+				error = slos_blkalloc(SLSVP(vp)->sn_slos, bp->b_bcount, &ptr);
 				MPASS(error == 0);
 
 				error = fbtree_replace(&SLSVP(vp)->sn_tree, &bp->b_lblkno, &ptr);
@@ -1130,7 +1129,7 @@ slsfs_setattr(struct vop_setattr_args *args)
 		default:
 			return (0);
 		}
-		error = slsfs_truncate(vp, vap->va_size);
+		error = slos_truncate(vp, vap->va_size);
 		if (error) {
 			return (error);
 		}
@@ -1817,7 +1816,7 @@ slsfs_pathconf(struct vop_pathconf_args *args)
 	return (error);
 }
 
-struct vop_vector sls_fifoops = {
+struct vop_vector slfs_fifoops = {
 	.vop_default  =		&fifo_specops,
 	.vop_fsync    =		VOP_PANIC,
 	.vop_access   =		slsfs_access, 
@@ -1830,7 +1829,7 @@ struct vop_vector sls_fifoops = {
 	.vop_write    =		VOP_PANIC,
 };
 
-struct vop_vector sls_vnodeops = {
+struct vop_vector slfs_vnodeops = {
 	.vop_default =		&default_vnodeops,
 	.vop_fsync =		slsfs_fsync, 
 	.vop_read =		slsfs_read, 

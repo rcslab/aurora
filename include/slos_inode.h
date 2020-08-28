@@ -120,5 +120,11 @@ void slos_vpfree(struct slos *slos, struct slos_node *vp);
 int slos_test_inode(void);
 void slsfs_root_rc(void *ctx, bnode_ptr p);
 
+// This is nuts
 int slos_newnode(struct slos *slos, uint64_t pid, struct slos_node **vp);
+int slos_new_node(struct slos *slos, mode_t mode, uint64_t *slsidp);
+
+int initialize_inode(struct slos *slos, uint64_t pid, diskptr_t *p);
+
+
 #endif /* _SLOS_INODE_H_ */
