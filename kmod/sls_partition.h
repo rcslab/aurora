@@ -18,11 +18,12 @@
 #include "sls_internal.h"
 
 /* Possible states of an slspart */
-#define	SPROC_AVAILABLE	    0	/* Process is not doing anything */
-#define	SPROC_CHECKPOINTING 1	/* Process is currently being checkpointed */
-#define SPROC_DETACHED	    2	/* Process has been detached */
+#define	SLSPART_AVAILABLE	    0	/* Partition not doing anything */
+#define	SLSPART_CHECKPOINTING	    1	/* Partition is currently being checkpointed */
+#define SLSPART_DETACHED	    2	/* Partition has been detached */
+#define SLSPART_RESTORING	    3	/* Partition is being restored */
 
-#define SPROC_EPOCHINIT	    1	/* Initial epoch for each partition */
+#define SLSPART_EPOCHINIT	    1	/* Initial epoch for each partition */
 
 struct slspart {
     uint64_t		    slsp_oid;	    /* OID of the partition */

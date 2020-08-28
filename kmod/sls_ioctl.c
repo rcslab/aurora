@@ -193,7 +193,7 @@ sls_partdel(struct sls_partdel_args *args)
 	 * Set the status of the partition as detached, notifying
 	 * processes currently checkpointing it to exit.
 	 */
-	atomic_set_int(&slsp->slsp_status, SPROC_DETACHED);
+	atomic_set_int(&slsp->slsp_status, SLSPART_DETACHED);
 
 	/* 
 	 * Dereference the partition. We can't just delete it,
@@ -214,12 +214,18 @@ sls_sysctl_init(void)
 	root = SYSCTL_ADD_ROOT_NODE(&aurora_ctx, OID_AUTO, "aurora", CTLFLAG_RW, 0,
 	    "Aurora statistics and configuration variables");
 
-	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "bytes_sent",
-	    CTLFLAG_RD, &sls_bytes_sent,
-	    0, "Bytes sent to the disk");
-	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "bytes_received",
-	    CTLFLAG_RD, &sls_bytes_sent,
-	    0, "Bytes received from the disk");
+	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "metadata_sent",
+	    CTLFLAG_RD, &sls_metadata_sent,
+	    0, "Bytes of metadata sent to the disk");
+	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "metadata_received",
+	    CTLFLAG_RD, &sls_metadata_sent,
+	    0, "Bytes of metadata received from the disk");
+	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "data_sent",
+	    CTLFLAG_RD, &sls_data_sent,
+	    0, "Bytes of data sent to the disk");
+	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "data_received",
+	    CTLFLAG_RD, &sls_data_sent,
+	    0, "Bytes of data received from the disk");
 	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "pages_grabbed",
 	    CTLFLAG_RD, &sls_pages_grabbed,
 	    0, "Pages grabbed by the SLS");

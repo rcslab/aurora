@@ -27,7 +27,7 @@ typedef struct slos_diskptr diskptr_t;
  */
 struct slos_diskptr {
 	uint64_t    offset;	/* The block offset of the first block of the region. */
-	uint64_t    size;	/* The size of the region in blocks. */
+	uint64_t    size;	/* The size of the region in bytes. */
 	uint64_t    epoch;
 };
 
@@ -144,6 +144,15 @@ struct slos_sb {
 	diskptr_t		sb_allocoffset; /* Allocator Offset key tree */
 	diskptr_t		sb_allocsize;	/* Allocator Size key tree */
 	diskptr_t		sb_cksumtree;	/* Checksum inode */
+};
+
+/* The offset size in blocks in the VM object inodes where the data starts */
+#define SLOS_OBJOFF (16)
+/* An extent of data in the SLOS. */
+struct slos_extent {
+    uint64_t	sxt_lblkno; /* The logical block number of the first block. */
+    size_t	sxt_cnt;	/* The total size of the extent in blocks. */
+
 };
 
 _Static_assert(sizeof(struct slos_sb) < DEV_BSIZE, "Block size wrong");

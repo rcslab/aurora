@@ -10,9 +10,9 @@ SLSFS="$SLSDIR/tools/newfs_sls/newfs_sls"
 # Base OID to use
 OID="1000"
 # Backend to use when checkpointing
-BACKEND="memory"
+BACKEND="slos"
 # Checkpointing period in milliseconds
-CKPTFREQ="10"
+CKPTFREQ="1000"
 # Use deltas?
 DELTA="no"
 # Restore in a stopped state?
@@ -135,11 +135,20 @@ CLIENT="redis-benchmark"
 SERVERBIN="$REDISDIR/src/$SERVER"
 CLIENTBIN="$REDISDIR/src/$CLIENT"
 
-REDISCONF="$REDISDIR/redis.conf"
-REDISCSVCONF="$REDISDIR/redis.conf.csv"
 
+# Conf 
+REDISCONF="$REDISDIR/redis.conf"
+
+# CSV conf 
+REDISCSVCONF="$OUTPUT/redis.conf.csv"
+
+# Binary used to dump the Redis config in a nice way
 CONFIGDUMPSCRIPT="$SCRIPTDIR/redisconf.py"
+# Output used for the Redis results [TODO Make sure it works across ssh]
 REDISFILE="$OUTDIR/redis.csv"
+
+# How much time we let the benchmark run
+REDISTIME=10
 
 # Directory holding the splash benchmarks
 SPLASHDIR="$SLSBENCHDIR/splash/codes/"

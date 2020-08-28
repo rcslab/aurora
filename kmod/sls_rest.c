@@ -429,14 +429,19 @@ slsrest_metadata(void *args)
 	/* We always work on the current process. */
 	p = curproc;
 	PROC_LOCK(p);
-	kern_psignal(p, SIGSTOP);
 
-	/* 
-	 * Restore CPU state, file state, and memory 
+	/*
+	 * Restore CPU state, file state, and memory
 	 * state, parsing the buffer at each step. 
 	 */
 	DEBUG("SLS Restore Proc");
 	error = slsrest_doproc(p, daemon, &buf, &buflen, restdata); 
+
+	/*
+	 * Make sure everything is stopped at the boundary, otherwise we might
+	 * get newly created threads trying to execute.
+	 */
+	thread_single(p, SINGLE_BOUNDARY);
 	PROC_UNLOCK(p);
 	if (error != 0)
 		goto error; 
@@ -486,9 +491,10 @@ slsrest_metadata(void *args)
 		SLS_DBG("tty_fixup failed with %d\n", error);
 
 	/* Allow the process to continue if we want it to. */
-	if (rest_stopped == 0)
-		kern_psignal(p, SIGCONT);
+	if (rest_stopped == 1)
+		kern_psignal(p, SIGSTOP);
 
+	thread_single_end(p, SINGLE_BOUNDARY);
 	PROC_UNLOCK(p);
 
 	kthread_exit();
@@ -500,6 +506,13 @@ slsrest_metadata(void *args)
 	return;
 
 error:
+	/*
+	 * Get the process unstuck from the boundary. The exit1() call will
+	 * single thread again, this time in order to exit.
+	 */
+	PROC_LOCK(p);
+	thread_single_end(p, SINGLE_BOUNDARY);
+	PROC_UNLOCK(p);
 
 	printf("Error %d while restoring process\n", error);
 	mtx_lock(&slsm.slsm_mtx);
@@ -851,6 +864,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 	struct slos_rstat *st;
 	struct slspart *slsp;
 	struct sbuf *record;
+	int slsstate_changed;
 	uint64_t slsid;
 	size_t buflen;
 	char *buf;
@@ -866,7 +880,13 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 	/* Check if the requested partition exists. */
 	slsp = slsp_find(oid);
 	if (slsp == NULL)
-		goto out;
+		goto cleanup;
+
+	/* Can't restore if we're still in the middle of checkpointing. */
+	while (atomic_cmpset_int(&slsp->slsp_status, SLSPART_AVAILABLE,
+	    SLSPART_RESTORING) == 0) {
+		pause_sbt("slsrs", SBT_1MS, 0, C_HARDCLOCK);
+	}
 
 	/* XXX Very messy because we're transitioning from the 
 	 * metatable/datatable thingy into slsckpt_data even in restores. We'll 
@@ -1027,6 +1047,12 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 	SLS_DBG("Done\n");
 
 out:
+	slsstate_changed = atomic_cmpset_int(&slsp->slsp_status, SLSPART_RESTORING,
+	    SLSPART_AVAILABLE);
+	KASSERT(slsstate_changed != 0, ("invalid state transition"));
+
+cleanup:
+
 	/* Cleanup the tables used for bringing the data in memory. */
 	if ((metatable != NULL) && (slsp->slsp_attr.attr_target != SLS_MEM)) {
 		KV_FOREACH_POP(metatable, record, st) {

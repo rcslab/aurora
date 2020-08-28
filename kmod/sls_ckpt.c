@@ -381,7 +381,8 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	}
 
 	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
-	if (slsp->slsp_attr.attr_target)
+
+	if (slsp->slsp_attr.attr_target == SLS_OSD)
 		taskqueue_drain_all(slos.slos_tq);
 	VFS_SYNC(slos.slsfs_mount, (sls_sync != 0 ) ? MNT_WAIT : MNT_NOWAIT);
 
@@ -515,6 +516,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	struct timespec tstart, tend;
 	long msec_elapsed, msec_left;
 	slsset *procset = NULL;
+	int slsstate_changed;
 	struct proc *p;
 	int error;
 
@@ -522,8 +524,8 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 
 	/* Check if the partition is available for checkpointing. */
 
-	if (atomic_cmpset_int(&slsp->slsp_status, SPROC_AVAILABLE,
-	    SPROC_CHECKPOINTING) == 0) {
+	if (atomic_cmpset_int(&slsp->slsp_status, SLSPART_AVAILABLE,
+	    SLSPART_CHECKPOINTING) == 0) {
 		sls_ckpt_attempted += 1;
 		printf("Overlapping checkpoints\n");
 		SLS_DBG("Partition %ld in state %d\n", slsp->slsp_oid, slsp->slsp_status);
@@ -541,7 +543,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		sls_ckpt_attempted += 1;
 		DEBUG1("Attempting checkpoint %d", sls_ckpt_attempted);
 		/* Check if the partition got detached from the SLS. */
-		if (slsp->slsp_status != SPROC_CHECKPOINTING)
+		if (slsp->slsp_status != SLSPART_CHECKPOINTING)
 			break;
 
 		/* Gather all processes still running. */
@@ -604,7 +606,10 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	 * If we exited normally, and the process is still in the SLOS,
 	 * mark the process as available for checkpointing.
 	 */
-	atomic_cmpset_int(&slsp->slsp_status, SPROC_CHECKPOINTING, SPROC_AVAILABLE);
+	slsstate_changed = atomic_cmpset_int(&slsp->slsp_status,
+	    SLSPART_CHECKPOINTING, SLSPART_AVAILABLE);
+
+	KASSERT(slsstate_changed != 0, ("invalid state transition"));
 
 	DEBUG("Stopped checkpointing");
 

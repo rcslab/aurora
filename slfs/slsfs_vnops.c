@@ -871,6 +871,7 @@ slsfs_strategy(struct vop_strategy_args *args)
 		if (error) {
 			panic("Problem getting lock %d", error);
 		}
+
 		error = fbtree_keymin_iter(&SLSVP(vp)->sn_tree, &bp->b_lblkno, &iter);
 		if (error != 0) {
 			return (error);
@@ -918,7 +919,8 @@ slsfs_strategy(struct vop_strategy_args *args)
 			} else {
 				ITER_RELEASE(iter);
 				bp->b_blkno = (daddr_t) (-1);
-				vfs_bio_clrbuf(bp); bufdone(bp);
+				vfs_bio_clrbuf(bp);
+				bufdone(bp);
 				return (0);
 			}
 		}
@@ -1518,57 +1520,61 @@ bad:
 
 /* Seek an extent. Gets the first start of an extent after the offset. */
 static int
-slsfs_seekextent(struct slos_node *svp, struct uio *uio)
+slsfs_seekextent(struct slos_node *svp, struct slos_extent *extentp)
 {
 	struct fnode_iter iter;
-	uint64_t offset;
-	uint64_t size, end;
+	uint64_t lblkno, fileblkcnt;
+	uint64_t cnt, end;
 	int error;
 
-	offset = uio->uio_offset / IOSIZE(svp);
+	lblkno = extentp->sxt_lblkno;
+	/* The size of the file in blocks. */
+	fileblkcnt = svp->sn_ino.ino_size / IOSIZE(svp);
+	if (svp->sn_ino.ino_size % IOSIZE(svp))
+		fileblkcnt += 1;
 
-	/* Get btree for vnode */
+	/* Find the first logical block after the given block number. */
 	BTREE_LOCK(&svp->sn_tree, LK_SHARED);
-	error = fbtree_keymax_iter(&svp->sn_tree, &offset, &iter);
+	error = fbtree_keymax_iter(&svp->sn_tree, &lblkno, &iter);
 	if (error != 0) {
 		BTREE_UNLOCK(&svp->sn_tree, 0);
 		return (error);
 	}
 
+	/* There are no extentp after the limit, notify the caller. */
 	if (ITER_ISNULL(iter)) {
-		uio->uio_offset = EOF;
-		uio->uio_resid = 0;
+		extentp->sxt_lblkno = 0;
+		extentp->sxt_cnt = 0;
 		goto out;
 	}
 
-	offset = ITER_KEY_T(iter, uint64_t);
-	size = (ITER_VAL_T(iter, diskptr_t).size);
+	/* Start from the key. */
+	lblkno = ITER_KEY_T(iter, uint64_t);
+	cnt = (ITER_VAL_T(iter, diskptr_t).size) / IOSIZE(svp);
 
-	uio->uio_offset = offset * IOSIZE(svp);
-	if (uio->uio_offset >= svp->sn_ino.ino_size) {
-		uio->uio_offset = EOF;
-		uio->uio_resid = 0;
+	/* If we'd read past the EOF, we're done. */
+	if (lblkno >= fileblkcnt) {
+		extentp->sxt_lblkno = 0;
+		extentp->sxt_cnt = 0;
 		goto out;
 	}
-
-	DEBUG3("uio(%lu), off(%lu), size(%lu)", uio->uio_offset, offset, size);
 
 	for (; !ITER_ISNULL(iter); ITER_NEXT(iter)) {
-		end = offset + size;
-		if ((offset + (size / IOSIZE(svp)) != ITER_KEY_T(iter, uint64_t)) 
-			|| end >= svp->sn_ino.ino_size)
+		end = lblkno + cnt;
+		if (lblkno + cnt != ITER_KEY_T(iter, uint64_t))
 			break;
 
-		offset = ITER_KEY_T(iter, uint64_t);
-		size += ITER_VAL_T(iter, diskptr_t).size;
-		DEBUG2("off(%lu), size(%lu)", offset, size);
+		lblkno = ITER_KEY_T(iter, uint64_t);
+		cnt += ITER_VAL_T(iter, diskptr_t).size / IOSIZE(svp);
+		DEBUG2("block (%lu), size (%lu) blocks", lblkno , cnt);
 	}
 
-	size -=  (uio->uio_offset + size) - (svp->sn_ino.ino_size);
-	uio->uio_resid = size;
+	/* If cnt would make us read over the EOF, shorten it. */
+	if (lblkno + cnt > fileblkcnt)
+		cnt = fileblkcnt - lblkno;
 
-	DEBUG3("Size of file %lu - %lu -- %lu", svp->sn_pid, svp->sn_ino.ino_size, uio->uio_offset + uio->uio_resid);
-	MPASS((uio->uio_offset + uio->uio_resid) <= svp->sn_ino.ino_size);
+	extentp->sxt_lblkno = lblkno;
+	extentp->sxt_cnt = cnt;
 
 out:
 	ITER_RELEASE(iter);
@@ -1608,14 +1614,14 @@ slsfs_ioctl(struct vop_ioctl_args *ap)
 	u_long com = ap->a_command;
 	struct slos_node *svp = SLSVP(vp);
 	struct slos_rstat *st = NULL;
-	struct uio *uio = NULL;
+	struct slos_extent *extentp;
 	uint64_t *checks;
 	struct slsfs_getsnapinfo *info = NULL;
 
 	switch(com) {
 	case SLS_SEEK_EXTENT:
-		uio = (struct uio *) ap->a_data;
-		return (slsfs_seekextent(svp, uio));
+		extentp = (struct slos_extent*) ap->a_data;
+		return (slsfs_seekextent(svp, extentp));
 
 	case SLS_SET_RSTAT:
 		st = (struct slos_rstat *) ap->a_data;

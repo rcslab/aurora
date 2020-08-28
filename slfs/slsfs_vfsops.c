@@ -111,6 +111,7 @@ extent_clip_tail(struct extent *extent, uint64_t boundary)
 		}
 		extent->start = boundary;
 	}
+
 	if (boundary > extent->end) {
 		extent->end = boundary;
 	}
@@ -358,7 +359,7 @@ bootstrap_inode(struct slos *slos, uint64_t pid, diskptr_t *p)
 	ino.ino_pid = pid;
 	ino.ino_gid = 0;
 	ino.ino_uid = 0;
-	
+
 	bp = getblk(fdev, ino.ino_blk, BLKSIZE(slos), 0, 0, 0);
 	MPASS(bp);
 
@@ -415,33 +416,6 @@ slsfs_inodes_init(struct mount *mp, struct slos *slos)
 	return (0);
 }
 
-static void
-slsfs_obj_deallocate(void *arg, int unused)
-{
-	struct slsfs_taskbdctx *ctx = (struct slsfs_taskbdctx *)arg;
-
-	vm_object_deallocate(ctx->bp->b_pages[0]->object);
-	free(ctx->bp, M_SLSFSBUF);
-	free(ctx, M_SLSFSTSK);
-}
-
-static void
-slsfs_bdone(struct buf *bp)
-{
-	struct slsfs_taskbdctx *ctx;
-
-	ctx = malloc(sizeof(*ctx), M_SLSFSTSK, M_WAITOK | M_ZERO);
-
-	/* Free the reference to the object taken at the beginning of the IO. */
-	for (int i = 0; i < bp->b_npages; i++)
-		KASSERT(bp->b_pages[i]->object != 0, ("page without an associated object found"));
-
-	ctx->bp = bp;
-
-	TASK_INIT(&ctx->tk, 0, &slsfs_obj_deallocate, ctx);
-	taskqueue_enqueue(slos.slos_tq, &ctx->tk);
-}
-
 /* Perform an IO without copying from the VM objects to the buffer. */
 static void
 slsfs_performio(void *ctx, int pending)
@@ -454,12 +428,15 @@ slsfs_performio(void *ctx, int pending)
 	struct fbtree *tree = &svp->sn_tree;
 	int iotype = task->iotype;
 	vm_object_t obj = task->obj;
-	vm_pindex_t size; 
+	vm_pindex_t size;
 	size_t offset;
 	vm_page_t m;
+	size_t end;
+	int npages;
 	int i;
 
 	KASSERT(iotype == BIO_READ || iotype == BIO_WRITE, ("invalid IO type %d", iotype));
+	ASSERT_VOP_UNLOCKED(task->vp, ("vnode %p is locked", vp));
 
 	bp = malloc(sizeof(*bp), M_SLSFSBUF, M_WAITOK);
 	size = 0;
@@ -467,19 +444,23 @@ slsfs_performio(void *ctx, int pending)
 
 	DEBUG4("%s:%d: iotype %d for bp %p", __FILE__, __LINE__, iotype, bp);
 	KASSERT((task->size / PAGE_SIZE) < btoc(MAXPHYS), ("IO too large"));
-	i = 0;
+	npages  = 0;
 
 	VM_OBJECT_RLOCK(obj);
 	TAILQ_FOREACH_FROM(m, &obj->memq, listq) {
 		/*  We are done grabbing pages. */
-		KASSERT(i < btoc(MAXPHYS), ("overran b_pages[] array"));
+		KASSERT(npages < btoc(MAXPHYS), ("overran b_pages[] array"));
 		KASSERT(obj->ref_count >= obj->shadow_count + 1,
 		    ("object has %d references and %d shadows",
 		    obj->ref_count, obj->shadow_count));
 		KASSERT(m->object == obj, ("page %p in object %p "
-			"associated with object %p",
-			m, obj, m->object));
-		bp->b_pages[i++] = m;
+		    "associated with object %p",
+		    m, obj, m->object));
+		KASSERT(task->startpage->pindex + npages == m->pindex,
+		    ("pages in the buffer are not consecutive "
+		    "(pindex should be %ld, is %ld)",
+		    task->startpage->pindex + npages, m->pindex));
+		bp->b_pages[npages++] = m;
 		size += pagesizes[m->psind];
 		if (size == task->size) {
 			break;
@@ -488,13 +469,16 @@ slsfs_performio(void *ctx, int pending)
 	VM_OBJECT_RUNLOCK(obj);
 
 	/* If the IO would be empty, this function is a no-op.*/
-	if (i == 0) {
+	if (npages == 0) {
 		free(bp, M_SLSFSBUF);
 		return;
 	}
 
 
-	KASSERT(i > 0, ("object %p is has no pages to dump", obj));
+	KASSERT(npages > 0, ("object %p is has no pages to dump", obj));
+
+	/* The size of the IO in bytes. */
+	bytecount = npages << PAGE_SHIFT;
 
 	/*
 	 * We can do the merging of keys and all the functionality here.  I'm
@@ -509,8 +493,8 @@ slsfs_performio(void *ctx, int pending)
 		if (task->tk.ta_func == NULL)
 			DEBUG1("Warning: %s called synchronously", __func__);
 
-		slsfs_fbtree_rangeinsert(tree, task->startpage->pindex + 1, task->size);
-		size_t end = ((task->startpage->pindex + 1) * IOSIZE(SLSVP(task->vp))) + task->size;
+		slsfs_fbtree_rangeinsert(tree, task->startpage->pindex + SLOS_OBJOFF, task->size);
+		end = ((task->startpage->pindex + SLOS_OBJOFF) * IOSIZE(SLSVP(task->vp))) + task->size;
 		if (SLSVP(task->vp)->sn_ino.ino_size < end) {
 			SLSVP(task->vp)->sn_ino.ino_size = end;
 			SLSVP(task->vp)->sn_status |= SLOS_DIRTY;
@@ -519,10 +503,18 @@ slsfs_performio(void *ctx, int pending)
 		DEBUG3("(td %p) vp(%p) - SIZE %lu", curthread, task->vp, SLSVP(task->vp)->sn_ino.ino_size);
 
 		BTREE_UNLOCK(tree, 0);
+
+		/* Possibly update the size of the file in the VM subsystem. */
+		offset = IDX_TO_OFF(task->startpage->pindex + SLOS_OBJOFF);
+		DEBUG3("%s:%d: Setting the size of vnode %p", __FILE__, __LINE__, task->vp);
+		if (offset + bytecount > sivp->ino_size) {
+			sivp->ino_size = offset + bytecount;
+			vnode_pager_setsize(task->vp, sivp->ino_size);
+		}
 	}
 
 	/* Now that the btree is edited we create the buffer for the write. */
-	bp->b_npages = i;
+	bp->b_npages = npages;
 	bp->b_pgbefore = 0;
 	bp->b_pgafter = 0;
 	bp->b_offset = 0;
@@ -531,15 +523,6 @@ slsfs_performio(void *ctx, int pending)
 	DEBUG4("%s:%d: buf %p has %d pages", __FILE__, __LINE__, bp, bp->b_npages);
 
 
-	DEBUG3("%s:%d: Setting the size of vnode %p", __FILE__, __LINE__, task->vp);
-	bytecount = bp->b_npages << PAGE_SHIFT;
-	offset = IDX_TO_OFF(task->startpage->pindex + 1);
-	if (offset + bytecount > sivp->ino_size) {
-		sivp->ino_size = offset + bytecount;
-		vnode_pager_setsize(task->vp, sivp->ino_size);
-	}
-	DEBUG3("%s:%d: Size of vnode %p set", __FILE__, __LINE__, task->vp);
-
 	bp->b_vp = task->vp;
 	bp->b_bufobj = &task->vp->v_bufobj;
 	bp->b_iocmd = iotype;
@@ -547,18 +530,46 @@ slsfs_performio(void *ctx, int pending)
 	bp->b_wcred = crhold(curthread->td_ucred);
 	bp->b_bcount = bp->b_bufsize = bp->b_runningbufspace = bytecount;
 	atomic_add_long(&runningbufspace, bp->b_runningbufspace);
-	bp->b_iodone = slsfs_bdone;
-	bp->b_lblkno = task->startpage->pindex + 1;
-	bp->b_flags |= B_MANAGED;
+	bp->b_iodone = bdone;
+	bp->b_lblkno = task->startpage->pindex + SLOS_OBJOFF;
+	bp->b_flags |= (B_MANAGED | B_VMIO);
 	bp->b_vflags = 0;
 
 	KASSERT(bp->b_npages > 0, ("no pages in the IO"));
 
 	VOP_LOCK(task->vp, LK_EXCLUSIVE);
-	bufobj_wref(bp->b_bufobj);
+	/* Update the number of writes in progress if doing a write. */
+	if (bp->b_iocmd == BIO_WRITE)
+		bufobj_wref(bp->b_bufobj);
+
+
 	bstrategy(bp);
 	VOP_UNLOCK(task->vp, 0);
 
+	/*
+	 * Wait for the buffer to be done. Because the task calling
+	 * slsfs_performio() only exits after bwait() returns, waiting for the
+	 * taskqueue to be drained is equivalent to waiting until all data has
+	 * hit the disk.
+	 */
+	bwait(bp, PRIBIO, "slsrw");
+
+	/*
+	 * Make sure the buffer is still in a sane state after the IO has
+	 * completed.
+	 */
+	KASSERT(bp->b_npages != 0, ("buffer has no pages"));
+	for (i = 0; i < bp->b_npages; i++) {
+		KASSERT(bp->b_pages[i]->object != 0, ("page without an associated object found"));
+		KASSERT(bp->b_pages[i]->object == obj, ("page %p in object %p "
+		    "associated with object %p",
+		    bp->b_pages[i], obj, bp->b_pages[i]->object));
+	}
+
+	/* Free the reference to the object taken at the beginning of the IO. */
+	vm_object_deallocate(bp->b_pages[0]->object);
+
+	free(bp, M_SLSFSBUF);
 	free(task, M_SLSFSTSK);
 }
 

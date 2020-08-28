@@ -18,13 +18,12 @@ function benchstart {
     mkdir "$AURWEBROOTDIR"
     cd "$AURWEBROOTDIR"
 
+    # Create a bunch of files for the web servers to serve
     touch "$AURNULLFILE"
     truncate -s "$AURBIGFILESIZE" "$AURBIGFILE"
 
     cd -
 }
-
-REDISTIME=10
 
 function redis {
     aurstripe
@@ -115,10 +114,4 @@ function light() {
 
     listop
     aurunload
-}
-
-function benchstop {
-    rm -r "$OUTFILE"
-    rm -rf "$AURWEBROOTDIR"
-    aurstripe
 }
