@@ -431,6 +431,7 @@ slsfs_performio(void *ctx, int pending)
 	/* If the IO would be empty, this function is a no-op.*/
 	if (npages == 0) {
 		free(bp, M_SLSFSBUF);
+		free(task, M_SLSFSTSK);
 		return;
 	}
 
@@ -492,7 +493,7 @@ slsfs_performio(void *ctx, int pending)
 	atomic_add_long(&runningbufspace, bp->b_runningbufspace);
 	bp->b_iodone = bdone;
 	bp->b_lblkno = task->startpage->pindex + SLOS_OBJOFF;
-	bp->b_flags |= (B_MANAGED | B_VMIO);
+	bp->b_flags = (B_MANAGED | B_VMIO);
 	bp->b_vflags = 0;
 
 	KASSERT(bp->b_npages > 0, ("no pages in the IO"));
@@ -817,7 +818,6 @@ slsfs_mountfs(struct vnode *devvp, struct mount *mp)
 	struct slsfsmount *smp = NULL;
 	struct slsfs_device *slsfsdev = NULL;
 	int error, ronly;
-	char * from;
 
 	if (mp->mnt_data == NULL) {
 		ronly = (mp->mnt_flag & MNT_RDONLY) != 0;
@@ -829,7 +829,7 @@ slsfs_mountfs(struct vnode *devvp, struct mount *mp)
 		if (mp->mnt_iosize_max > MAXPHYS)
 			mp->mnt_iosize_max = MAXPHYS;
 
-		from = vfs_getopts(mp->mnt_optnew, "from", &error);
+		vfs_getopts(mp->mnt_optnew, "from", &error);
 		if (error)
 			goto error;
 
@@ -942,7 +942,6 @@ static void
 slsfs_checkpoint(struct mount *mp, int closing)
 {
 	struct vnode *vp, *mvp = NULL;
-	struct bufobj *bo;
 	struct buf *bp;
 	struct slos_node *svp;
 	struct slos_inode *ino;
@@ -1000,7 +999,6 @@ again:
 		vput(vp);
 	}
 
-	bo = &(SLSVP(slos.slsfs_inodes)->sn_tree.bt_backend->v_bufobj);
 	// Check if both the underlying Btree needs a sync or the inode itself 
 	// - should be a way to make it the same TODO
 	// Just a hack for now to get this thing working XXX Why is it a hack?

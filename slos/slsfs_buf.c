@@ -109,7 +109,6 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size, enum uio_rw
 		}
 	} else {
 		uint64_t iter_key = ITER_KEY_T(biter, uint64_t);
-		ptr = ITER_VAL_T(biter, diskptr_t);
 		// There is a key less then us
 		if (iter_key != bno) {
 			// We intersect so need to read off the block on disk
