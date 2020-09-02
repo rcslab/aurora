@@ -1900,7 +1900,8 @@ fiter_remove(struct fnode_iter *it)
 	bnode_ptr *ptr;
 
 	KASSERT(it->it_index < NODE_SIZE(fnode),
-	        ("Removing an out-of-bounds iterator"));
+	        ("Removing an out-of-bounds iterator \
+		(index %d, size %d", it->it_index, NODE_SIZE(fnode)));
 
 	fnode_init(fnode->fn_tree, fnode->fn_location, &fnode);
 	fnode_remove_at(fnode, NULL, it->it_index);
@@ -2091,17 +2092,20 @@ fnode_init(struct fbtree *tree, bnode_ptr ptr, struct fnode **fn)
 		found = 1;
 		*fn = node;
 	} else {
-		node = NODE_ALLOC(M_WAITOK);
+		node = NODE_ALLOC(M_NOWAIT);
 	}
 	rw_runlock(&tree->bt_trie_lock);
+
+	if (node == NULL)
+		return (ENOMEM);
 
 	/* Read the data from the disk into the buffer cache. */
 	error = fnode_getbufptr(tree, ptr, &node->fn_buf);
 	if (error) {
-		printf("Problem getting buf");
+		printf("Error %d getting buf", error);
 		return (error);
 	}
-	
+
 	fnode_setup(node, tree, ptr);
 
 	if (!found) {
@@ -2120,7 +2124,7 @@ fnode_init(struct fbtree *tree, bnode_ptr ptr, struct fnode **fn)
 			fnode_print(node);
 			node = FNODE_PCTRIE_LOOKUP(&tree->bt_trie, ptr);
 			fnode_print(node);
-			panic("WTF");
+			panic("Insert disk pointer in trie failed");
 		}
 		MPASS(error == 0);
 		rw_wunlock(&tree->bt_trie_lock);

@@ -195,6 +195,7 @@ int
 slos_sync_vp(struct vnode *vp, int release)
 {
 	struct fbtree *tree  = &SLSVP(vp)->sn_tree;
+	ASSERT_VOP_LOCKED(vp, __func__);
 
 	vn_fsync_buf(vp, 0);
 	fbtree_sync(tree);

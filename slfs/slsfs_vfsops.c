@@ -207,7 +207,7 @@ slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
 
 	KASSERT(key <= main.start, ("Got minimum %ld as an infimum for %ld\n", key, main.start));
 
-	while (!ITER_ISNULL(iter)) {
+	while (!ITER_ISNULL(iter) && NODE_SIZE(iter.it_node) > 0 ) {
 		key = ITER_KEY_T(iter, uint64_t);
 		value = ITER_VAL_T(iter, diskptr_t);
 
@@ -376,6 +376,27 @@ slsfs_inodes_init(struct mount *mp, struct slos *slos)
 	return (0);
 }
 
+/*
+ * Function that turns the IO into a no-op. Cleans up like performio().
+ */
+static void
+slsfs_nullio(void *ctx, int pending)
+{
+	struct slsfs_taskctx *task = (struct slsfs_taskctx *)ctx;
+
+	KASSERT(task->iotype == BIO_READ || task->iotype == BIO_WRITE,
+		("invalid IO type %d", task->iotype));
+	ASSERT_VOP_UNLOCKED(task->vp, ("vnode %p is locked", vp));
+	KASSERT(IOSIZE(svp) == PAGE_SIZE,  ("IOs are not page-sized (size %d)", IOSIZE(svp)));
+
+	/* Just drop the reference and finish up with the task.*/
+	vm_object_deallocate(task->obj);
+
+	free(task, M_SLSFSTSK);
+	return;
+
+}
+
 /* Perform an IO without copying from the VM objects to the buffer. */
 static void
 slsfs_performio(void *ctx, int pending)
@@ -397,14 +418,15 @@ slsfs_performio(void *ctx, int pending)
 
 	KASSERT(iotype == BIO_READ || iotype == BIO_WRITE, ("invalid IO type %d", iotype));
 	ASSERT_VOP_UNLOCKED(task->vp, ("vnode %p is locked", vp));
+	KASSERT(IOSIZE(svp) == PAGE_SIZE,  ("IOs are not page-sized (size %d)", IOSIZE(svp)));
 
-	bp = malloc(sizeof(*bp), M_SLSFSBUF, M_WAITOK);
-	size = 0;
+	bp = malloc(sizeof(*bp), M_SLSFSBUF, M_WAITOK | M_ZERO);
 	m = task->startpage;
+	npages = 0;
+	size = 0;
 
 	DEBUG4("%s:%d: iotype %d for bp %p", __FILE__, __LINE__, iotype, bp);
 	KASSERT((task->size / PAGE_SIZE) < btoc(MAXPHYS), ("IO too large"));
-	npages  = 0;
 
 	VM_OBJECT_RLOCK(obj);
 	TAILQ_FOREACH_FROM(m, &obj->memq, listq) {
@@ -430,13 +452,11 @@ slsfs_performio(void *ctx, int pending)
 
 	/* If the IO would be empty, this function is a no-op.*/
 	if (npages == 0) {
+		vm_object_deallocate(obj);
 		free(bp, M_SLSFSBUF);
 		free(task, M_SLSFSTSK);
 		return;
 	}
-
-
-	KASSERT(npages > 0, ("object %p is has no pages to dump", obj));
 
 	/* The size of the IO in bytes. */
 	bytecount = npages << PAGE_SHIFT;
@@ -450,6 +470,7 @@ slsfs_performio(void *ctx, int pending)
 	 */
 	if (iotype == BIO_WRITE) {
 		BTREE_LOCK(tree, LK_EXCLUSIVE);
+		VOP_LOCK(tree->bt_backend, LK_EXCLUSIVE);
 
 		if (task->tk.ta_func == NULL)
 			DEBUG1("Warning: %s called synchronously", __func__);
@@ -463,6 +484,7 @@ slsfs_performio(void *ctx, int pending)
 
 		DEBUG3("(td %p) vp(%p) - SIZE %lu", curthread, task->vp, SLSVP(task->vp)->sn_ino.ino_size);
 
+		VOP_UNLOCK(tree->bt_backend, 0);
 		BTREE_UNLOCK(tree, 0);
 
 		/* Possibly update the size of the file in the VM subsystem. */
@@ -489,20 +511,23 @@ slsfs_performio(void *ctx, int pending)
 	bp->b_iocmd = iotype;
 	bp->b_rcred = crhold(curthread->td_ucred);
 	bp->b_wcred = crhold(curthread->td_ucred);
-	bp->b_bcount = bp->b_bufsize = bp->b_runningbufspace = bytecount;
+	/* We do not have an associated buffer, we are more akin to a pager. */
+	bp->b_runningbufspace = 0;
 	atomic_add_long(&runningbufspace, bp->b_runningbufspace);
+	bp->b_bcount = bytecount;
+	bp->b_bufsize = bytecount;
 	bp->b_iodone = bdone;
 	bp->b_lblkno = task->startpage->pindex + SLOS_OBJOFF;
-	bp->b_flags = (B_MANAGED | B_VMIO);
+	bp->b_flags = B_MANAGED;
 	bp->b_vflags = 0;
 
 	KASSERT(bp->b_npages > 0, ("no pages in the IO"));
 
-	VOP_LOCK(task->vp, LK_EXCLUSIVE);
+	DEBUG3("(%p) Getting locks for vnode %p, object %p", curthread, task->vp, bp->b_bufobj);
 	/* Update the number of writes in progress if doing a write. */
+	VOP_LOCK(task->vp, LK_EXCLUSIVE);
 	if (bp->b_iocmd == BIO_WRITE)
 		bufobj_wref(bp->b_bufobj);
-
 
 	bstrategy(bp);
 	VOP_UNLOCK(task->vp, 0);
@@ -527,7 +552,7 @@ slsfs_performio(void *ctx, int pending)
 		    bp->b_pages[i], obj, bp->b_pages[i]->object));
 	}
 
-	/* Free the reference to the object taken at the beginning of the IO. */
+	/* Free the reference to the object taken when creating the task.  */
 	vm_object_deallocate(bp->b_pages[0]->object);
 
 	free(bp, M_SLSFSBUF);
@@ -950,6 +975,8 @@ slsfs_checkpoint(struct mount *mp, int closing)
 	int error;
 
 again:
+	DEBUG("Checkpointing vnodes");
+
 	/* Go throught the list of vnodes attached to the filesystem. */
 	MNT_VNODE_FOREACH_ACTIVE(vp, mp, mvp) {
 		/* If we can't get a reference, the vnode is probably dead. */
@@ -957,7 +984,7 @@ again:
 			VI_UNLOCK(vp);
 			continue;
 		}
-		
+
 		if (vp == slos.slsfs_inodes) {
 			VI_UNLOCK(vp);
 			continue;
@@ -999,14 +1026,15 @@ again:
 		vput(vp);
 	}
 
-	// Check if both the underlying Btree needs a sync or the inode itself 
-	// - should be a way to make it the same TODO
+	// Check if both the underlying Btree needs a sync or the inode itself - 
+	// should be a way to make it the same TODO
 	// Just a hack for now to get this thing working XXX Why is it a hack?
 	/* Sync the inode root itself. */
 	if (slos.slos_sb->sb_data_synced) {
 		error = slos_blkalloc(&slos, BLKSIZE(&slos), &ptr);
 		MPASS(error == 0);
 
+		DEBUG("Checkpointing the inodes btree");
 		/* 3 Sync Root Inodes and btree */
 		error = vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
 		if (error) {
@@ -1026,6 +1054,7 @@ again:
 		 * to the superblock
 		 */
 		// Write out the root inode
+		DEBUG("Creating the new superblock");
 		ino->ino_blk = ptr.offset;
 
 		slos.slos_sb->sb_root.offset = ino->ino_blk;
@@ -1035,6 +1064,7 @@ again:
 		memcpy(bp->b_data, ino, sizeof(struct slos_inode));
 		bawrite(bp);
 
+		DEBUG("Checkpointing the checksum tree");
 		// Write out the checksum tree;
 		error = slos_blkalloc(&slos, BLKSIZE(&slos), &ptr);
 		if (error) {
@@ -1045,7 +1075,8 @@ again:
 		ino = &slos.slos_cktree->sn_ino;
 		MPASS(slos.slos_cktree != SLSVP(slos.slsfs_inodes));
 		ino->ino_blk = ptr.offset;
-		fbtree_sync(&slos.slos_cktree->sn_tree);
+		if (checksum_enabled)
+			fbtree_sync(&slos.slos_cktree->sn_tree);
 		bp = getblk(svp->sn_fdev, ptr.offset, BLKSIZE(&slos), 0, 0, 0);
 		MPASS(bp);
 		memcpy(bp->b_data, ino, sizeof(struct slos_inode));
@@ -1062,6 +1093,7 @@ again:
 		slos.slos_sb->sb_index = (slos.slos_sb->sb_epoch) % 100;
 
 		/* 4 Sync the allocator */
+		DEBUG("Syncing the allocator");
 		slos_allocator_sync(&slos, slos.slos_sb);
 		DEBUG2("Epoch %lu done at superblock index %u", slos.slos_sb->sb_epoch, 
 			slos.slos_sb->sb_index);
@@ -1071,7 +1103,9 @@ again:
 		MPASS(bp);
 		memcpy(bp->b_data, slos.slos_sb, sizeof(struct slos_sb));
 
-		fbtree_sync(&slos.slos_cktree->sn_tree);
+		DEBUG("Flushing the checksum tree again");
+		if (checksum_enabled)
+			fbtree_sync(&slos.slos_cktree->sn_tree);
 
 		nanotime(&te);
 		slos.slos_sb->sb_time = te.tv_sec;
@@ -1091,6 +1125,7 @@ again:
 	} else {
 		slos.slos_sb->sb_attempted_checkpoints++;
 	}
+	DEBUG("Checkpoint done");
 
 }
 
@@ -1428,13 +1463,28 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	int error;
 	int flags = 0;
 
-	DEBUG("UNMOUNTING");
 	smp = mp->mnt_data;
 	sdev = smp->sp_sdev;
 	slos = smp->sp_slos;
+
+	/*
+	 * XXX This shouldn't really be here, but the SLOS and the FS are not two discrete
+	 * components yet. The right way to do this is get a reference to the SLOS from the
+	 * filesystem, and allow the SLOS to be destroyed only after the filesystem has been
+	 * unmounted.
+	 *
+	 * Disallow unmounting the FS while the SLS is still active. If we
+	 * want to honor MNT_FORCE we can sleep, but we definitely can't remove
+	 * the mount point from below the SLS.
+	 */
+	if (slos->slos_usecnt > 0)
+		return (EBUSY);
+
 	if (mntflags & MNT_FORCE) {
 		flags |= FORCECLOSE;
 	}
+
+	DEBUG("UNMOUNTING");
 
 	/* Free the slos taskqueue */
 	taskqueue_free(slos->slos_tq);

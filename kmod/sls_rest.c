@@ -63,6 +63,7 @@
 #include "sls_vm.h"
 #include "sls_vmobject.h"
 #include "sls_vmspace.h"
+#include "sls_internal.h"
 #include "debug.h"
 
 #include "imported_sls.h"
@@ -402,8 +403,8 @@ struct slsrest_metadata_args {
 /*
  * Restore a process' local data (threads, VM map, file descriptor table).
  */
-static void 
-slsrest_metadata(void *args)	
+static void
+slsrest_metadata(void *args)
 {
 	struct slsrest_data *restdata;
 	uint64_t daemon;
@@ -413,9 +414,9 @@ slsrest_metadata(void *args)
 	int error;
 	char *buf;
 
-	/* 
-	 * Transfer the arguments to the stack and free the 
-	 * struct we used to carry them to the new process. 
+	/*
+	 * Transfer the arguments to the stack and free the
+	 * struct we used to carry them to the new process.
 	 */
 
 	buf = ((struct slsrest_metadata_args *) args)->buf;
@@ -435,7 +436,7 @@ slsrest_metadata(void *args)
 	 * state, parsing the buffer at each step. 
 	 */
 	DEBUG("SLS Restore Proc");
-	error = slsrest_doproc(p, daemon, &buf, &buflen, restdata); 
+	error = slsrest_doproc(p, daemon, &buf, &buflen, restdata);
 
 	/*
 	 * Make sure everything is stopped at the boundary, otherwise we might
@@ -466,13 +467,13 @@ slsrest_metadata(void *args)
 	 * last restoree, notify the parent. 
 	 */
 	mtx_lock(&slsm.slsm_mtx);
-	slsm.slsm_restoring -= 1;
-	if (slsm.slsm_restoring == 0)
+	sls_resttds -= 1;
+	if (sls_resttds == 0)
 		cv_signal(&slsm.slsm_proccv);
 
 
 	/* Sleep until all sessions and controlling terminals are restored. */
-	while (slsm.slsm_restoring >= 0) 
+	while (sls_resttds >= 0) 
 		cv_wait(&slsm.slsm_donecv, &slsm.slsm_mtx);
 
 	/* 
@@ -516,8 +517,8 @@ error:
 
 	printf("Error %d while restoring process\n", error);
 	mtx_lock(&slsm.slsm_mtx);
-	slsm.slsm_restoring -= 1;
-	if (slsm.slsm_restoring == 0)
+	sls_resttds -= 1;
+	if (sls_resttds == 0)
 		cv_signal(&slsm.slsm_proccv);
 	mtx_unlock(&slsm.slsm_mtx);
 
@@ -574,7 +575,7 @@ slsrest_fork(uint64_t daemon, uint64_t rest_stopped, char *buf, size_t buflen,
 
 	/* Note down the fact that one more process is being restored. */
 	mtx_lock(&slsm.slsm_mtx);
-	slsm.slsm_restoring += 1;
+	sls_resttds += 1;
 	mtx_unlock(&slsm.slsm_mtx);
 
 	return (0);
@@ -608,7 +609,7 @@ slsrest_shadow(vm_object_t shadow, vm_object_t source, vm_ooffset_t offset)
 	VM_OBJECT_WUNLOCK(source);
 }
 
-static int 
+static int
 slsrest_dovmobjects(struct slskv_table *metatable, struct slskv_table *objtable)
 {
 	struct slsvmobject slsvmobject, *slsvmobjectp;
@@ -843,6 +844,7 @@ slsrest_rectable_to_metatable(struct slskv_table *rectable, struct slskv_table *
 		if (error != 0) {
 			free(st, M_SLSMM);
 			KV_ABORT(iter);
+			slskv_destroy(*metatablep);
 			return (error);
 		}
 	}
@@ -859,13 +861,11 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 	struct slskv_table *objtable = NULL;
 	struct slsrest_data *restdata;
 	vm_object_t obj, shadow;
-	struct sls_record *rec;
 	struct slskv_iter iter;
 	struct slos_rstat *st;
 	struct slspart *slsp;
 	struct sbuf *record;
 	int slsstate_changed;
-	uint64_t slsid;
 	size_t buflen;
 	char *buf;
 	int error;
@@ -888,9 +888,14 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 		pause_sbt("slsrs", SBT_1MS, 0, C_HARDCLOCK);
 	}
 
-	/* XXX Very messy because we're transitioning from the 
+	/* 
+	 * XXX Very messy because we're transitioning from the 
 	 * metatable/datatable thingy into slsckpt_data even in restores. We'll 
 	 * do away from the table juggling soon enough.
+	 *
+	 * XXX The rectable to metatable operation is complex in terms of memory 
+	 * management because the tables are using the same sbufs. When we free 
+	 * then, we have to make sure we free the sbufs exactly once.
 	 */
 	switch (slsp->slsp_attr.attr_target) {
 	case SLS_OSD:
@@ -906,18 +911,16 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 		/* Again, bandaid until we remove extraneous state. */
 		slskv_destroy(restdata->objtable);
 		restdata->objtable = objtable;
+		objtable = NULL;
 
 		error = slsrest_rectable_to_metatable(rectable, &metatable);
 		if (error != 0)
 			goto out;
 
-		/* Destroy the record table, since we moved the data. */
-		slskv_destroy(rectable);
-		rectable = NULL;
-
 		break;
 
 	case SLS_MEM:
+		KASSERT(slsp->slsp_sckpt != NULL, ("Partition %ld has no associated checkpoint", oid));
 		error = slsrest_rectable_to_metatable(slsp->slsp_sckpt->sckpt_rectable, &metatable);
 		if (error != 0)
 			goto out;
@@ -946,6 +949,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 	default:
 		panic("Invalid target %d\n", slsp->slsp_attr.attr_target);
 	}
+
 
 	/* 
 	 * Recreate the VM object tree. When restoring from the SLOS we recreate everything, while
@@ -1021,13 +1025,14 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 		}
 	}
 
+out:
 	/* Wait until all processes are done restoring. */
 	mtx_lock(&slsm.slsm_mtx);
-	while (slsm.slsm_restoring > 0)
+	while (sls_resttds > 0)
 		cv_wait(&slsm.slsm_proccv, &slsm.slsm_mtx);
 
 	/* We push the counter below 0 and restore all sessions. */
-	slsm.slsm_restoring -= 1;
+	sls_resttds -= 1;
 
 	/* 
 	 * The tables in restdata only hold key-value pairs, cleanup is easy. 
@@ -1046,32 +1051,28 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 
 	SLS_DBG("Done\n");
 
-out:
 	slsstate_changed = atomic_cmpset_int(&slsp->slsp_status, SLSPART_RESTORING,
 	    SLSPART_AVAILABLE);
 	KASSERT(slsstate_changed != 0, ("invalid state transition"));
 
 cleanup:
 
-	/* Cleanup the tables used for bringing the data in memory. */
-	if ((metatable != NULL) && (slsp->slsp_attr.attr_target != SLS_MEM)) {
-		KV_FOREACH_POP(metatable, record, st) {
+	/*
+	 * Cleanup the tables used for bringing the data in memory. The buffers
+	 * for the metatable are sbufs, so we cannot free them.
+	 */
+	if (metatable != NULL) {
+		KV_FOREACH_POP(metatable, buf, st)
 			free(st, M_SLSMM);
-			free(record, M_SLSMM);
-		}
 
 		slskv_destroy(metatable);
-	}
-
-	if (rectable != NULL) {
-		KV_FOREACH_POP(rectable, slsid, rec)
-		    sls_record_destroy(rec);
-		slskv_destroy(rectable);
 	}
 
 	/* Leave the reference we got when searching for the partition. */
 	if (slsp != NULL)
 		slsp_deref(slsp);
+
+	sls_free_rectable(rectable);
 
 	/* Clean up the restore data if coming here from an error. */
 	if (restdata != NULL)
@@ -1085,14 +1086,33 @@ sls_restored(struct sls_restored_args *args)
 {
 	int error;
 
-	slsm.slsm_restoring = 0;
+	/*
+	 * If the number of threads being restored is >= 0, there is another partition
+	 * being restored. Do not allow for partitions to be restored 
+	 * concurrently.
+	 */
+	mtx_lock(&sls_restmtx);
+	if (sls_resttds >= 0) {
+		mtx_unlock(&sls_restmtx);
+		printf("Error: Concurrent restores not supported\n");
+		goto out;
+	}
+
+	sls_resttds = 0;
+	mtx_unlock(&sls_restmtx);
+
+	sls_resttds = 0;
 	/* Restore the old process. */
 	error = sls_rest(curproc, args->oid, args->daemon, args->rest_stopped);
 	if (error != 0)
 		printf("Error: sls_rest failed with %d\n", error);
 
+out:
 	/* Free the arguments */
 	free(args, M_SLSMM);
+
+	/* Release the reference to the module. */
+	sls_modderef();
 
 	return;
 }

@@ -74,7 +74,8 @@ slsmount
 export MDDISK=$MDDISK
 run_tests
 
+unloadsls
 slsunmount
 destroymd $MDDISK
-unloadmod
+unloadslos
 

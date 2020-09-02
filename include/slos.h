@@ -96,6 +96,7 @@ struct slos {
 
 	struct lock		slos_lock;	/* Sleepable lock */
 	struct taskqueue	*slos_tq;	/* Slos taskqueue */
+	int			slos_usecnt;	/* Number of SLS users of the SLOS */
 };
 
 /* Identifier allocator */

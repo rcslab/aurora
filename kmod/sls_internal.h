@@ -39,8 +39,10 @@ struct sls_metadata {
     /* OSD Related members */
     struct vnode	    *slsm_osdvp;	/* The device that holds the SLOS */
 
-    int		    slsm_restoring;	/* Number of threads currently being restored */
     struct mtx	    slsm_mtx;		/* Structure mutex. */
+    struct cv	    slsm_exitcv;	/* CV for waiting on users to exit. */
+    int		    slsm_users;		/* Number of users of the module */
+    /* XXX Move these outside, we can only restore one partition at a time.  */
     struct cv	    slsm_proccv;	/* Condition variable for when all processes are restored */
     struct cv	    slsm_donecv;	/* Condition variable to signal that processes can execute */
 };
@@ -68,18 +70,15 @@ struct slsrest_data {
     struct slskv_table  *mbuftable;	/* Holds the mbufs used by processes */
     struct cv	    proccv;	/* Used as a barrier while creating pgroups */
     struct mtx	    procmtx;	/* Used alongside the cv above */
+    struct cv	    cv;		/* Global restore cv */
+    struct mtx	    mtx;	/* Global restore mutex */
+    int		    restoring;	/* Number of processes currently being restored */
 };
 
 extern struct sls_metadata slsm;
 
 struct sls_record *sls_getrecord(struct sbuf *sb, uint64_t slsid, uint64_t type);
 #define FDTOFP(p, fd) (p->p_fd->fd_files->fdt_ofiles[fd].fde_file)
-
-    inline int
-sls_module_exiting(void)
-{
-    return slsm.slsm_exiting;
-}
 
 /* The number of buckets for the hashtable used for the processes */
 #define SLSP_BUCKETS (64)
@@ -163,6 +162,43 @@ SDT_PROVIDER_DECLARE(sls);
 	printf("%s: %s in line %d (%s) failed with %d\n",   \
 	    __FILE__, #func, __LINE__, __func__, error);	    \
     } while (0)
+
+/*
+ * Reference the module, signaling it is in use.
+ */
+static inline int 
+sls_modref(void)
+{
+	mtx_lock(&slsm.slsm_mtx);
+	if  (slsm.slsm_exiting != 0) {
+	    mtx_unlock(&slsm.slsm_mtx);
+	    return (EINVAL);
+	}
+
+	slsm.slsm_users += 1;
+	mtx_unlock(&slsm.slsm_mtx);
+
+	return (0);
+}
+
+/*
+ * Dererefence the module, possibly allowing it to unload.
+ */
+static inline void
+sls_modderef(void)
+{
+	mtx_lock(&slsm.slsm_mtx);
+	KASSERT(slsm.slsm_users > 0, ("module has no references left"));
+	slsm.slsm_users -= 1;
+	cv_broadcast(&slsm.slsm_exitcv);
+	mtx_unlock(&slsm.slsm_mtx);
+
+}
+
+/* Global mutexes for restoring. */
+extern struct mtx sls_restmtx;
+extern struct cv sls_restcv;
+extern int sls_resttds;
 
 #endif /* _SLS_H_ */
 

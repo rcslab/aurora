@@ -383,7 +383,8 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 
 	if (slsp->slsp_attr.attr_target == SLS_OSD)
 		taskqueue_drain_all(slos.slos_tq);
-	VFS_SYNC(slos.slsfs_mount, (sls_sync != 0 ) ? MNT_WAIT : MNT_NOWAIT);
+	/* XXX Using MNT_WAIT is causing a deadlock right now. */
+	//VFS_SYNC(slos.slsfs_mount, (sls_sync != 0 ) ? MNT_WAIT : MNT_NOWAIT);
 
 	/*
 	 * XXX Advance the epoch of the SLOS, and associate the SLS epoch with
@@ -539,6 +540,10 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	}
 
 	for (;;) {
+		/* See if we're destroying the module. */
+		if (slsm.slsm_exiting != 0)
+			break;
+
 		sls_ckpt_attempted += 1;
 		DEBUG1("Attempting checkpoint %d", sls_ckpt_attempted);
 		/* Check if the partition got detached from the SLS. */
@@ -627,6 +632,9 @@ out:
 
 	/* Free the arguments passed to the kthread. */
 	free(args, M_SLSMM);
+
+	/* Release the reference we had to the module. */
+	sls_modderef();
 
 	kthread_exit();
 }

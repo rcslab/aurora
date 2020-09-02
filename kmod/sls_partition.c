@@ -36,6 +36,7 @@
 #include "sls_internal.h"
 #include "sls_mm.h"
 #include "sls_partition.h"
+#include "sls_table.h"
 #include "debug.h"
 
 int
@@ -73,9 +74,6 @@ error:
 void
 slsckpt_destroy(struct slsckpt_data *sckpt_data)
 {
-	struct sls_record *rec;
-	uint64_t slsid;
-
 	if (sckpt_data == NULL)
 		return;
 
@@ -84,14 +82,7 @@ slsckpt_destroy(struct slsckpt_data *sckpt_data)
 		slskv_destroy(sckpt_data->sckpt_objtable);
 	}
 
-	if (sckpt_data->sckpt_objtable != NULL) {
-		KV_FOREACH_POP(sckpt_data->sckpt_rectable, slsid, rec) {
-			sbuf_delete(rec->srec_sb);
-			free(rec, M_SLSMM);
-		}
-
-		slskv_destroy(sckpt_data->sckpt_rectable);
-	}
+	sls_free_rectable(sckpt_data->sckpt_rectable);
 
 	free(sckpt_data, M_SLSMM);
 }

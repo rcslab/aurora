@@ -49,10 +49,22 @@
 #include "sls_mm.h"
 #include "sls_table.h"
 
-MALLOC_DEFINE(M_SLSMM, "slsmm", "SLSMM");
+/* XXX Rename to M_SLS. */
+MALLOC_DEFINE(M_SLSMM, "sls", "SLS");
+MALLOC_DEFINE(M_SLSREC, "slsrec", "SLSREC");
 
 struct sls_metadata slsm;
 struct sysctl_ctx_list aurora_ctx;
+
+/*
+ * This mutex/condition variable would need more work to be turned into per
+ * process entities, so we just dump them in here and sacrifice parallelism when
+ * restoring multiple partitions at the same time (NOTE: partitions, not
+ * processes. Multiple processes in the same partition are fine.)
+ */
+struct mtx sls_restmtx;
+struct cv sls_restcv;
+int sls_resttds = -1;
 
 /*
  * Start checkpointing a partition. If a checkpointing period
@@ -66,10 +78,14 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	struct slspart *slsp;
 	int error = 0;
 
+	/* Try to get a reference to the module. */
+	if (sls_modref() != 0)
+		return (EINVAL);
+
 	/* Get the partition to be checkpointed. */
 	slsp = slsp_find(args->oid);
 	if (slsp == NULL)
-		return (EINVAL);
+		goto error;
 
 	/* Set up the arguments. */
 	ckptd_args = malloc(sizeof(*ckptd_args), M_SLSMM, M_WAITOK);
@@ -82,15 +98,26 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	if (error != 0) {
 		free(ckptd_args, M_SLSMM);
 		slsp_deref(slsp);
+		goto error;
 	}
 
+
 	return (0);
+
+error:
+
+	sls_modderef();
+	return (EINVAL);
 }
 
 static int
 sls_restore(struct sls_restore_args *args)
 {
 	struct sls_restored_args *restd_args = NULL;
+
+	/* Try to get a reference to the module. */
+	if (sls_modref() != 0)
+		return (EINVAL);
 
 	/* Set up the arguments for the restore. */
 	restd_args = malloc(sizeof(*restd_args), M_SLSMM, M_WAITOK);
@@ -356,15 +383,17 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 
 	switch (inEvent) {
 	case MOD_LOAD:
+		mtx_init(&sls_restmtx, "SLS restore mutex", NULL, MTX_DEF);
+		cv_init(&sls_restcv, "SLS restore lock");
+
 		bzero(&slsm, sizeof(slsm));
 
 		error = sls_setup_blackholefp();
 		if (error != 0)
 			return (error);
 
-		mtx_init(&slsm.slsm_mtx, "SLS main mutex", NULL, MTX_DEF);
-		cv_init(&slsm.slsm_proccv, "SLS process restore lock");
-		cv_init(&slsm.slsm_donecv, "SLS general restore lock");
+		mtx_init(&slsm.slsm_mtx, "SLS module mutex", NULL, MTX_DEF);
+		cv_init(&slsm.slsm_exitcv, "SLS module lock");
 
 		error = slskv_init();
 		if (error)
@@ -417,20 +446,31 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		if (error != 0)
 			return (error);
 
+		/* Notify the SLOS we're using it. */
+		/* XXX Check if the SLOS is being destroyed, if so abort. */
+		atomic_add_int(&slos.slos_usecnt, 1);
+
+
 #endif /* SLS_TEST */
 		break;
 
 	case MOD_UNLOAD:
 
+
+		/* Signal that we're exiting and wait for threads to finish. */
+		mtx_lock(&slsm.slsm_mtx);
 		slsm.slsm_exiting = 1;
+		while (slsm.slsm_users > 0)
+			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
+		mtx_unlock(&slsm.slsm_mtx);
+
+		/* XXX Destroy all partitions */
 
 		if (slsm.slsm_cdev != NULL)
 			destroy_dev(slsm.slsm_cdev);
 
-		if (sysctl_ctx_free(&aurora_ctx)) {
-			printf("Failed\n");
-
-		}
+		if (sysctl_ctx_free(&aurora_ctx))
+			printf("Failed to destroy sysctl\n");
 
 		slsp_delall();
 
@@ -439,12 +479,17 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 
 		slskv_fini();
 
-		cv_destroy(&slsm.slsm_donecv);
-		cv_destroy(&slsm.slsm_proccv);
+		cv_destroy(&slsm.slsm_exitcv);
 		mtx_destroy(&slsm.slsm_mtx);
 
 		if (sls_blackholefp != NULL)
 			fdrop(sls_blackholefp, curthread);
+
+		/* Allow the SLOS to unmount/destroy itself. */
+		atomic_add_int(&slos.slos_usecnt, -1);
+
+		cv_destroy(&sls_restcv);
+		mtx_destroy(&sls_restmtx);
 
 		break;
 	default:

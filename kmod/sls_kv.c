@@ -139,6 +139,11 @@ slskv_create(struct slskv_table **tablep)
 void
 slskv_destroy(struct slskv_table *table)
 {
+	uint64_t key;
+	uintptr_t value;
+	/* Pop all elements from the table */
+
+	KV_FOREACH_POP(table, key, value);
 	uma_zfree(slskv_zone, table);
 }
 

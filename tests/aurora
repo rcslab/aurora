@@ -9,9 +9,14 @@ loadmod()
     kldload ../kmod/sls.ko
 }
 
-unloadmod()
+# Unload the SLS. Necessary for unmounting/unloading the SLOS
+unloadsls()
 {
     kldunload sls
+}
+
+unloadslos()
+{
     kldunload slos
 }
 

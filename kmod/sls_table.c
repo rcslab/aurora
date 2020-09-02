@@ -114,6 +114,8 @@ sls_doio(struct vnode *vp, struct uio *auio)
 	uint64_t back = 0;
 	char *base;
 
+	ASSERT_VOP_LOCKED(vp, ("vnode %p is unlocked", vp));
+
 	/* If we don't want to do anything just return. */
 	if (sls_drop_io) {
 		auio->uio_resid = 0;
@@ -203,6 +205,7 @@ slsio_obj_slos(struct vnode *vp, vm_object_t obj, vm_page_t m,
 		return (slsfs_io_async(vp, obj, m, len, bio_cmd, NULL));
 	else
 		return (slsfs_io(vp, obj, m, len, bio_cmd));
+	return (0);
 }
 
 /* Creates an in-memory Aurora record. */
@@ -211,7 +214,7 @@ sls_getrecord(struct sbuf *sb, uint64_t slsid, uint64_t type)
 {
 	struct sls_record *rec;
 
-	rec = malloc(sizeof(*rec), M_SLSMM, M_WAITOK);
+	rec = malloc(sizeof(*rec), M_SLSREC, M_WAITOK);
 	rec->srec_id = slsid;
 	rec->srec_sb = sb;
 	rec->srec_type = type;
@@ -223,7 +226,7 @@ void
 sls_record_destroy(struct sls_record *rec)
 {
 	sbuf_delete(rec->srec_sb);
-	free(rec, M_SLSMM);
+	free(rec, M_SLSREC);
 }
 
 static int
@@ -627,11 +630,14 @@ error:
 	return (error);
 }
 
-static void
+void
 sls_free_rectable(struct slskv_table *rectable)
 {
 	struct sls_record *rec;
 	uint64_t slsid;
+
+	if (rectable == NULL)
+		return;
 
 	KV_FOREACH_POP(rectable, slsid, rec)
 		sls_record_destroy(rec);
@@ -1780,7 +1786,7 @@ out:
 	if (sckpt_tmpdata != NULL)
 		slsckpt_destroy(sckpt_tmpdata);
 
-	if (rectable!= NULL)
+	if (rectable != NULL)
 		sls_free_rectable(rectable);
 
 	/* XXX Clean up on disk after we're done when we have removes. */

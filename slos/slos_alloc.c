@@ -318,7 +318,6 @@ slos_allocator_sync(struct slos *slos, struct slos_sb *newsb)
 	slos->slos_sb->sb_allocsize = ptr;
 	memcpy(bp->b_data, ino, sizeof(struct slos_inode));
 	bwrite(bp);
-	
 
 	//XXX Check how much is left and free them - but since we dont have free 
 	//yet leave this for later.  
