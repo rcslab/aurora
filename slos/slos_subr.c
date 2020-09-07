@@ -73,6 +73,7 @@ slos_new_node(struct slos *slos, mode_t mode, uint64_t *slsidp)
 	 *
 	 */
 	slsid_requested = OIDTOSLSID(*slsidp);
+retry_create:
 	if (slsid_requested == 0) {
 		/* If any ID will do, we need to get one. */
 		slsid = alloc_unr(slsid_unr);
@@ -80,16 +81,17 @@ slos_new_node(struct slos *slos, mode_t mode, uint64_t *slsidp)
 			return (EINVAL);
 	} else {
 		/* If we're going for a specific inode, it's fine if it's already there. */
-		slsid = alloc_unr_specific(slsid_unr, slsid_requested);
-		if (slsid < 0) {
-			*slsidp = slsid_requested;
-			return (0);
-		}
+		slsid = slsid_requested;
 	}
 
 	/* Create the inode. */
 	error = slos_icreate(slos, (uint64_t) slsid, mode);
 	if (error != 0) {
+		// If they requested nothing then we should retry
+		if(slsid_requested == 0) {
+			goto retry_create;
+		}
+
 		*slsidp = 0;
 		return (error);
 	}

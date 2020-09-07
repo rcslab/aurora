@@ -1162,13 +1162,17 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 			error = sls_writedata_slos(rec, sckpt_data->sckpt_objtable);
 		else
 			error = sls_writemeta_slos(rec, NULL, true);
-		if (error != 0)
+		if (error != 0) {
+			KV_ABORT(iter);
 			goto error;
+		}
 
 		/* Attach the new record to the checkpoint manifest. */
 		error = sbuf_bcat(sb_manifest, &rec->srec_id, sizeof(rec->srec_id));
-		if (error != 0)
+		if (error != 0) {
+			KV_ABORT(iter);
 			goto error;
+		}
 	}
 
 	error = sls_write_slos_manifest(oid, sb_manifest);

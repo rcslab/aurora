@@ -85,8 +85,8 @@ slos_init(void)
 	(void) SYSCTL_ADD_INT(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "checksum_enabled",
 	    CTLFLAG_RW, &checksum_enabled, 0, "Checksum enabled");
 
-	(void) SYSCTL_ADD_U64(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "checkps",
-	    CTLFLAG_RW, &checkpointsps, 0, "Checkpoints per second");
+	(void) SYSCTL_ADD_U64(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "checkpointtime",
+	    CTLFLAG_RW, &checkpointtime, 0, "Checkpoint every X ms");
 
 
 	return (0);

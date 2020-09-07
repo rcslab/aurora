@@ -387,7 +387,7 @@ slsfs_nullio(void *ctx, int pending)
 	KASSERT(task->iotype == BIO_READ || task->iotype == BIO_WRITE,
 		("invalid IO type %d", task->iotype));
 	ASSERT_VOP_UNLOCKED(task->vp, ("vnode %p is locked", vp));
-	KASSERT(IOSIZE(svp) == PAGE_SIZE,  ("IOs are not page-sized (size %d)", IOSIZE(svp)));
+	KASSERT(IOSIZE(SLSVP(task->vp)) == PAGE_SIZE,  ("IOs are not page-sized (size %lu)", IOSIZE(SLSVP(task->vp))));
 
 	/* Just drop the reference and finish up with the task.*/
 	vm_object_deallocate(task->obj);
@@ -418,7 +418,7 @@ slsfs_performio(void *ctx, int pending)
 
 	KASSERT(iotype == BIO_READ || iotype == BIO_WRITE, ("invalid IO type %d", iotype));
 	ASSERT_VOP_UNLOCKED(task->vp, ("vnode %p is locked", vp));
-	KASSERT(IOSIZE(svp) == PAGE_SIZE,  ("IOs are not page-sized (size %d)", IOSIZE(svp)));
+	KASSERT(IOSIZE(svp) == PAGE_SIZE,  ("IOs are not page-sized (size %lu)", IOSIZE(svp)));
 
 	bp = malloc(sizeof(*bp), M_SLSFSBUF, M_WAITOK | M_ZERO);
 	m = task->startpage;
@@ -1129,7 +1129,7 @@ again:
 
 }
 
-uint64_t checkpointsps = 1;
+uint64_t checkpointtime = 100;
 /*
  * Daemon that flushes dirty buffers to the device.
  *
@@ -1159,7 +1159,7 @@ slsfs_syncer(struct slos *slos)
 
 		elapsed = (1000000000ULL * (te.tv_sec - ts.tv_sec)) + (te.tv_nsec - ts.tv_nsec);
 
-		period = 1000000000ULL / checkpointsps;
+		period = checkpointtime * 1000000ULL;
 
 		te.tv_sec = 0;
 		if (elapsed < period) {

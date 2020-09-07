@@ -69,7 +69,7 @@ struct slsfs_blkalloc {
 typedef void (*slsfs_callback)(void *context);
 
 extern uint64_t checkpoints;
-extern uint64_t checkpointsps;
+extern uint64_t checkpointtime;
 
 struct slos {
 	SLIST_ENTRY(slos)	next_slos;
