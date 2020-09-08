@@ -79,3 +79,5 @@ sls.sh
 unload.sh
 out
 index*
+*.rdb
+*.aof

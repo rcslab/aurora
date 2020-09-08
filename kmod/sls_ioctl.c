@@ -446,12 +446,8 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		if (error != 0)
 			return (error);
 
-		/* Notify the SLOS we're using it. */
-		/* XXX Check if the SLOS is being destroyed, if so abort. */
-		atomic_add_int(&slos.slos_usecnt, 1);
-
-
 #endif /* SLS_TEST */
+
 		break;
 
 	case MOD_UNLOAD:
@@ -484,9 +480,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 
 		if (sls_blackholefp != NULL)
 			fdrop(sls_blackholefp, curthread);
-
-		/* Allow the SLOS to unmount/destroy itself. */
-		atomic_add_int(&slos.slos_usecnt, -1);
 
 		cv_destroy(&sls_restcv);
 		mtx_destroy(&sls_restmtx);

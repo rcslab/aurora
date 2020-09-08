@@ -115,7 +115,7 @@ MEMCACHEDNAME="memcached"
 # Full path of the benchmark
 MEMCACHEDPATH="/$SLSBENCHDIR/memcached/$MEMCACHEDNAME"
 # Address of the memcached server
-MUTILATEADDR="$IPADDR:11211"
+MUTILATEADDR="127.0.0.1:11211"
 # Path to the mutilate benchmark
 MUTILATEPATH="$SLSBENCHDIR/mutilate/mutilate"
 MUTILATETIME="60"

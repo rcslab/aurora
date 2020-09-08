@@ -97,8 +97,7 @@ slos_uninit(void)
 {
 	sysctl_ctx_free(&slos_ctx);
 	uma_zdestroy(slos_node_zone);
-    
-	return (0);;
+	return (0);
 }
 
 static int

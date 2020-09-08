@@ -1486,8 +1486,9 @@ slsfs_unmount(struct mount *mp, int mntflags)
 
 	DEBUG("UNMOUNTING");
 
-	/* Free the slos taskqueue */
-	taskqueue_free(slos->slos_tq);
+	/* Free the slos taskqueue, if we have not already done so. */
+	if (slos->slos_tq != NULL)
+		taskqueue_free(slos->slos_tq);
 	slos->slos_tq = NULL;
 
 	/*

@@ -146,11 +146,11 @@ slsrest_thread(struct proc *p, struct slsthread *slsthread)
 	PROC_UNLOCK(p);
 	DEBUG1("Trying to restore thread with tid %lu", slsthread->tid);
 	/* XXX Temporary work around kernel regression. */
+	/*
 	error = thread_create(curthread, slsthread->tid, NULL, sls_thread_create,
 	    (void *) slsthread);
-	/*
-	error = thread_create(curthread, NULL, sls_thread_create, (void *) slsthread);
 	*/
+	error = thread_create(curthread, NULL, sls_thread_create, (void *) slsthread);
 	PROC_LOCK(p);
 
 	return error;

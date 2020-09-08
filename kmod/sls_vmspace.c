@@ -159,8 +159,8 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 	 */
 	vm_map_lock(map);
 	/* XXX Temporary fix around the kernel regression. */
-	//guard = 0;
-	guard = MAP_NO_MERGE;
+	guard = 0;
+	//guard = MAP_NO_MERGE;
 	if (info->eflags & MAP_ENTRY_GUARD) {
 		guard |= MAP_CREATE_GUARD;
 	}

@@ -384,7 +384,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	if (slsp->slsp_attr.attr_target == SLS_OSD)
 		taskqueue_drain_all(slos.slos_tq);
 	/* XXX Using MNT_WAIT is causing a deadlock right now. */
-	//VFS_SYNC(slos.slsfs_mount, (sls_sync != 0 ) ? MNT_WAIT : MNT_NOWAIT);
+	VFS_SYNC(slos.slsfs_mount, (sls_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
 
 	/*
 	 * XXX Advance the epoch of the SLOS, and associate the SLS epoch with
