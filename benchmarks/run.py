@@ -64,14 +64,6 @@ def set_defaults_sls(p):
         help="SLS checkpoints all descendants of processes")
     p.add('--slsctl',required=True, metavar='slsctl',
             help='Path to the slsctl tool')
-    p.add('--user',required=True, metavar='user',
-            help='Remote user name for sshing into for benchmarks')
-    p.add('--remote', required=True, metavar='remote',
-            help='Remote user IP for sshing into for benchmarks')
-    p.add('--port', required=True, metavar='port',
-            help='Remote user IP for sshing for benchmarks')
-    p.add('--sshkey', required=True, metavar='sshkey',
-        help='Key used for sshing into remotes')
 
 # Set the defaults for the SLOS module
 def set_defaults_slos(p):
@@ -83,6 +75,15 @@ def set_defaults_slos(p):
         help="Capture gstat")
     p.add('--checkpointtime', required=True, metavar='checkpointtime',
         help="Number of ms between SLOS checkpoints")
+
+def set_defaults_bench(p):
+    p.add('--benchaddr', required=False, metavar='benchaddr', help="Address on which the benchmark server runs")
+    p.add('--benchport', required=False, metavar='benchport', help="Address on which the benchmark port runs")
+    p.add('--sshaddr', required=False, metavar='sshaddr', help="Address of benchmarking client")
+    p.add('--sshport', required=False, metavar='sshport', help="Port of benchmarking client")
+    p.add('--sshkey', required=True, metavar='sshkey', help='Key used for sshing into remotes')
+    p.add('--user',required=True, metavar='user',
+            help='Remote user name for sshing into for benchmarks')
 
 def set_defaults(p):
     p.add('-c', '--config', required=False, is_config_file=True,
@@ -96,6 +97,7 @@ def set_defaults(p):
     set_defaults_mount(p)
     set_defaults_sls(p)
     set_defaults_slos(p)
+    set_defaults_bench(p)
 
 # Wrapper for print_help() that drops all arguments
 def help_msg(options):
@@ -126,7 +128,7 @@ def Command(captureOut=CapturedOut.NONE, required=[], help="", add_args=[]):
             h = "No extra arguments required"
 
         # New parser just for this command
-        p = subparser.add_parser(name, help=h, 
+        p = subparser.add_parser(name, help=h,
                 default_config_files=['benchmarks/sls.conf'])
         set_defaults(p)
 
@@ -136,9 +138,7 @@ def Command(captureOut=CapturedOut.NONE, required=[], help="", add_args=[]):
         elif captureOut == CapturedOut.MULTI:
             p.add('-o', required=False, metavar='dirout', help='Directory to capture command output')
 
-        # XXX What is this? Seems like they're extra BSD style flags which call
-        # specific functions, but I'm not sure how it's done. Are we using the
-        # argument as a function or passing it to bashcmd somewhere?
+        # Add any more configuration options needed.
         for x in required:
             p.add_argument(x)
         for x in add_args:
@@ -152,6 +152,11 @@ def Command(captureOut=CapturedOut.NONE, required=[], help="", add_args=[]):
 
 # ====== BASIC BASH COMMANDS ======
 
+# Construct an SSH command for logging into a remote.
+def sshcmd(options):
+    return ["ssh", "-i", options.sshkey, "-p", options.sshport,
+        "{}@{}".format(options.user, options.sshaddr)]
+
 # Run a bash command
 def bashcmd(lst, fail_okay=False):
     if fail_okay:
@@ -162,6 +167,13 @@ def bashcmd(lst, fail_okay=False):
         # Throw an exception if there was an error
         subprocess.run(lst).check_returncode()
         return 0
+
+def ycsbcmd(options, cmd, dbname):
+    return ["{}/{}".format(options.ycsb, "bin/ycsb.sh"), cmd, "basic", "-P",
+            "{}/workloads/{}".format(options.ycsb, options.workload), "-p",
+            "{}.host={}".format(dbname, options.benchaddr),
+            "-p", "{}.port={}".format(dbname, options.benchport),
+            "-p", "recordcount={}".format(options.recordcount)]
 
 # Do a sysctl into the system
 def sysctl(module, key, value):
@@ -471,10 +483,78 @@ def allseries(options):
 
 # ===== SLS BENCHMARKS =====
 
+def parse_wrkoutput(wrkoutput):
+    # The patterns we are looking for
+    cols = lambda l : l[1:]
+    last = lambda l : [l[-1]]
+    reqtime = lambda l: [l[0], l[3][:-1], l[4]]
+
+    match = {
+            "Latency" : (cols, ["lavg", "lstdev", "lmax", "lstdev-pm"]),
+            "Req/Sec" : (cols, ["ravg", "rstdev", "rmax", "rstdev-pm"]),
+            "requests in": (reqtime, ["requests", "time", "read"]),
+            # XXX This is going to break if we actually serve files.
+            "Non-2xx": (last, ["non2xx"]),
+            "Requests/sec": (last, ["requestps"]),
+            "Transfer/sec": (last, ["transferps"]),
+    }
+
+    output = []
+    for k,v in match.items():
+        output.extend(v[1])
+
+    print(",".join(output) + "\n")
+
+    output = []
+    for line in wrkoutput.splitlines():
+        for k,v in match.items():
+            if k in line:
+                vals = [x.strip() for x in line.split()]
+                output.extend(v[0](vals))
+    print(",".join(output))
+
+
+
+# Get the PID of the main process we're checkpointing. Benchmarks often have
+# multiple processes, so we need to get the root of its process tree, assuming
+# it exists. Note that we can only do this if we assume non-random PIDs, and
+# even then PID allocation must not wrap around.
+def pid_main(benchname):
+    cmd = ["pidof", benchname]
+    output = subprocess.run(cmd, check=True,
+            stdout=subprocess.PIPE).stdout.decode('UTF-8')
+    pids = list(map(int, output.strip().split()))
+    pids.sort()
+    return pids[0]
+
+
+# Create directories in the SLOS to be used by the benchmarks. By appropriately
+# modifying the configuration files, and building a directory tree similar to
+# that present at the root, we can ensure benchmarks only create files in the
+# SLOS, and are therefore definitely checkpointable.
+def make_slsdirs(options, benchmark):
+    folders = ["data", "log", "log/" + benchmark, "logs",
+        "tmp", "var", "var/cache", "var/cache/" + benchmark,
+        "var/run", "var/run/" + benchmark, benchmark]
+    for folder in folders:
+        path = "{}/{}".format(options.mountdir, folder)
+        try:
+            Path(path).mkdir(exist_ok=True)
+        except OSError as err:
+            # It's fine if the file already exists
+            if err.errno != errno.EEXIST:
+                print("Error {} creating folder {}".format(err, folder))
+                raise
+
+
 # Insert a series of PIDs into a partition and start checkpointing them.
 def slsckpt(options, pidlist):
 
     print("Starting Aurora Checkpointer on {}".format(str(pidlist)))
+
+    # If period is 0 we do not put the PIDs in the SLS.
+    if options.slsperiod == 0:
+        return
 
     if not (options.type in ["slos", "memory"]):
         raise Exception("Invalid SLS backend {}".format(options.type))
@@ -499,22 +579,19 @@ def slsckpt(options, pidlist):
     print("Started Aurora Checkpointer on {}".format(str(pidlist)))
 
 # Generate a configuration from a template
-def generate_config(options):
-    # Get the address we'll be listening to.
-    address = [ x.strip() for x in options.url.split(':') ]
+def generate_conf(options, inputconf, outputconfig):
     # The templated variables.
     replace_list = [
             ["SLS_MOUNT", options.mountdir],
-            ["SLS_SERVER_URL", address[0]],
-            ["SLS_SERVER_PORT", address[1]]
+            ["SLS_SERVER_URL", options.benchaddr],
+            ["SLS_SERVER_PORT", options.benchport]
     ]
 
     # Search and replace all template strings in the files. The way we specify
     # the path makes it necessary for us to be in the base SLS directory when
     # running the script, we need to change it in the future.
-    print("output file is {}".format(options.outputconfig))
-    with open(options.inputconfig, 'r') as templatefile:
-        with open(options.outputconfig, 'w+') as conffile:
+    with open(inputconf, 'r') as templatefile:
+        with open(outputconfig, 'w+') as conffile:
             for line in templatefile:
                 for x in replace_list:
                     line = line.replace(x[0], x[1])
@@ -522,68 +599,51 @@ def generate_config(options):
 
 # Create a configuration file for the web server so that it only uses files in
 # the SLS. This is needed to be able to checkpoint filesystem state.
-def webserver_createconf(options):
+def webserver_createconf(options, inputconf, outputconf, srvconf):
 
     # Link the original directory used by the server into the SLOS. Done so we
     # can control the working directory of the server.
-    print("Server is {}".format(options.server))
-    os.symlink(options.srvconfigdir, "{}/{}".format(options.mountdir,
-        options.server))
+    os.symlink(srvconf, "{}/{}".format(options.mountdir, options.server))
 
     # Create the folders the web server expects to find at specific places.
     # We create the lighttpd/nginx configuration from a template we have
     # already constructed, so the file already includes the modified folder
     # paths we are creating here.
-    folders = ["data", "log", "log/" + options.server, "logs",
-        "tmp", "var", "var/cache", "var/cache/" + options.server,
-        "var/run","var/run/" + options.server, options.server]
-    for folder in folders:
-        path = "{}/{}".format(options.mountdir, folder)
-        try:
-            Path(path).mkdir(exist_ok=True)
-        except OSError as err:
-            # It's fine if the file already exists
-            if err.errno != errno.EEXIST:
-                print("Error {} creating folder {}".format(err, folder))
-                raise
+    make_slsdirs(options, options.server)
 
     # Generate the configuration file
-    generate_config(options)
+    generate_conf(options, inputconf, outputconf)
 
 
 # Start the lighttpd server
-def lighttpd_setup(options):
+def lighttpd_setup(options, inputconf, outputconf, srvconf):
     # Get the current difrectory, so that we can switch back to it later.
     pwd = os.getcwd()
 
     # Create the configuration
-    webserver_createconf(options)
+    webserver_createconf(options, inputconf, outputconf, srvconf)
     os.chdir(options.mountdir)
 
     # Start lighttpd using the new config file.
-    cmd = [options.lighttpd, '-f', options.outputconfig]
+    cmd = [options.lighttpd, '-f', outputconf]
     bashcmd(cmd)
 
     os.chdir(pwd)
 
     # Get the PID of the newly created server.
-    cmd = ["pidof", "lighttpd"]
-    pid = int(subprocess.run(cmd, check=True,
-            stdout=subprocess.PIPE).stdout.decode('UTF-8'))
-
-    return pid
+    return pid_main("lighttpd")
 
 # Start the lighttpd server
-def nginx_setup(options):
+def nginx_setup(options, inputconf, outputconf, srvconf):
     # Get the current difrectory, so that we can switch back to it later.
     pwd = os.getcwd()
 
     # Create the configuration
-    webserver_createconf(options)
+    webserver_createconf(options, inputconf, outputconf, srvconf)
     os.chdir(options.mountdir)
 
-    # Start lighttpd using the new config file.
-    cmd = [options.nginx, '-c', options.outputconfig]
+    # Start nginx using the new config file.
+    cmd = [options.nginx, '-c', outputconf]
     bashcmd(cmd)
 
     os.chdir(pwd)
@@ -592,13 +652,7 @@ def nginx_setup(options):
     # and a set of worker processes. Assuming non-random PIDs, the smallest PID
     # is the original process, so we get the output of pidof and parse it to
     # select the smallest possible process.
-    cmd = ["pidof", "nginx"]
-    output = subprocess.run(cmd, 
-            check=True,stdout=subprocess.PIPE).stdout.decode('UTF-8')
-    pids = list(map(int, output.strip().split()))
-    pids.sort()
-
-    return pids[0]
+    return pid_main("nginx")
 
 def webserver_setup(options):
     # Apart from selecting the right setup function to call, set the path of
@@ -606,25 +660,25 @@ def webserver_setup(options):
     # special OS path join methods, since we can only possibly run on FreeBSD
     # anyway.
     if options.server == "nginx":
-    # XXX Make them defaults with the webserver command somehow
-        options.srvconfigdir = options.nginxconfdir
-        options.inputconfig = "benchmarks/nginx.conf"
-        options.outputconfig = "{}/{}".format(options.mountdir,
-                "nginx/nginx.conf")
-        return nginx_setup(options)
+        return nginx_setup(options,
+                inputconf="benchmarks/nginx.conf",
+                outputconf="{}/{}".format(options.mountdir,
+                "nginx/nginx.conf"),
+                srvconf=options.nginxconfdir
+                )
     elif options.server == "lighttpd":
-        options.srvconfigdir = options.lighttpdconfdir
-        options.inputconfig = "benchmarks/lighttpd.conf"
-        options.outputconfig = "{}/{}".format(options.mountdir,
-                "lighttpd/lighttpd.conf")
-        return lighttpd_setup(options)
+        return lighttpd_setup(options,
+                inputconf="benchmarks/lighttpd.conf",
+                outputconf="{}/{}".format(options.mountdir,
+                "lighttpd/lighttpd.conf"),
+                srvconf=options.lighttpdconfdir
+                )
     else:
         raise Exception("Invalid server {}".format(options.server))
 
 
 # Command for spinning up a webserver and taking numbers
-@Command(required=["--time", "--threads", "--connections", "--url",
-    "--server"],
+@Command(required=[],
     captureOut=CapturedOut.MULTI,
     add_args=[
             [
@@ -660,6 +714,38 @@ def webserver_setup(options):
                     "help" : "Location of nginx config dir",
                 }
             ],
+            [
+                ['--server'],
+                {
+                    "action" : "store",
+                    "default" : "nginx",
+                    "help" : "Standard web server to use",
+                }
+            ],
+            [
+                ['--threads'],
+                {
+                    "action" : "store",
+                    "default" : "10",
+                    "help" : "Number of client threads to use"
+                }
+            ],
+            [
+                ['--connections'],
+                {
+                    "action" : "store",
+                    "default" : "50",
+                    "help" : "Number of connections used by wrk",
+                }
+            ],
+            [
+                ['--time'],
+                {
+                    "action" : "store",
+                    "default" : "10",
+                    "help" : "Duration of the benchmark in seconds",
+                }
+            ],
         ],
         help="Run a web server sls workload")
 def webserver(options):
@@ -668,23 +754,23 @@ def webserver(options):
 
     # Start lighttpd
     pid = webserver_setup(options)
-    print("Web server {} started at PID : {}".format(options.server, str(pid)))
 
     # Begin the SLS
     if (options.type in ["slos", "memory"]):
         slsckpt(options, [pid])
 
     # Run the benchmark.
-    ssh = ["ssh", "-i", options.sshkey, "-p", options.port,
-        "{}@{}".format(options.user, options.remote)]
+    ssh = sshcmd(options)
     wrk = ["wrk", "-d", str(options.time), "-t", str(options.threads), \
-            "-c", str(options.connections), "http://" + options.url]
-    bashcmd(ssh + wrk)
+            "-c", str(options.connections),
+            "http://{}:{}".format(options.benchaddr, options.benchport)]
+    wrkoutput = subprocess.run(ssh + wrk,
+            stdout=subprocess.PIPE).stdout.decode('UTF-8')
+    parse_wrkoutput(wrkoutput)
 
     # Kill the server
     cmd = ['pkill', '-9', options.server]
     bashcmd(cmd)
-    print("Lighttpd(%s) killed" % str(pid))
     print("{} checkpoints (expected around {})".format(
         sysctl_sls("ckpt_done"),
         (1000 / int(options.slsperiod)) * int(options.time)))
@@ -692,36 +778,23 @@ def webserver(options):
     # XXX Replace with module_fini?
     unload(options)
 
-# XXX Roll this into the Redis server
 def redis_setup(options):
     # Get the current directory, so that we can switch back to it later.
     pwd = os.getcwd()
 
     # XXX Make them defaults with the Redis command somehow
-    options.inputconfig = "benchmarks/redis.conf"
-    options.outputconfig = "{}/{}".format(options.mountdir,
-            "redis.conf")
-    generate_config(options)
+    inputconfig = "benchmarks/redis.conf"
+    outputconfig = "{}/{}".format(options.mountdir, "redis.conf")
+    generate_conf(options, inputconfig, outputconfig)
 
     # Create the configuration
     os.chdir(options.mountdir)
 
-    folders = ["data", "log", "log/redis", "logs",
-        "tmp", "var", "var/cache", "var/cache/redis", 
-        "var/run", "var/run/redis", "redis"]
-    for folder in folders:
-        path = "{}/{}".format(options.mountdir, folder)
-        try:
-            Path(path).mkdir(exist_ok=True)
-        except OSError as err:
-            # It's fine if the file already exists
-            if err.errno != errno.EEXIST:
-                print("Error {} creating folder {}".format(err, folder))
-                raise
+    make_slsdirs(options, "redis")
 
     # Start lighttpd using the new config file.
-    cmd = [options.redis, options.outputconfig] 
-    subprocess.run(cmd)
+    cmd = [options.redis, outputconfig]
+    bashcmd(cmd)
 
     os.chdir(pwd)
 
@@ -729,17 +802,27 @@ def redis_setup(options):
     # and a set of worker processes. Assuming non-random PIDs, the smallest PID
     # is the original process, so we get the output of pidof and parse it to
     # select the smallest possible process.
-    cmd = ["pidof", "redis-server"]
-    output = subprocess.run(cmd, 
-            check=True,stdout=subprocess.PIPE).stdout.decode('UTF-8')
-    pids = list(map(int, output.strip().split()))
-    pids.sort()
+    return pid_main("redis-server")
 
-    return pids[0]
+def memcached_setup(options):
+    # Get the current directory, so that we can switch back to it later.
+    pwd = os.getcwd()
 
+    make_slsdirs(options, "memcached")
+
+    # Create the directory for the PID file
+    cmd = ["memcached", "-u", options.user, "-l", options.benchaddr,
+            "-p", options.benchport, "-P", "{}/{}".format(options.mountdir,
+            "memcached.pid"), "-d"]
+    bashcmd(cmd)
+
+    # Switch back to the original directory.
+    os.chdir(pwd)
+ 
+    return pid_main("memcached")
 
 # Command for spinning up a webserver and taking numbers
-@Command(required=["--url"],
+@Command(required=[],
     captureOut=CapturedOut.MULTI,
     add_args=[
             [
@@ -751,85 +834,41 @@ def redis_setup(options):
                     "help" : "Location of the Redis server"
                 }
             ],
-        ],
-        help="Run the Redis server")
-def redis(options):
-    # XXX Replace with module_init?
-    load(options)
-
-    # Start lighttpd
-    pid = redis_setup(options)
-
-    # Begin the SLS
-    if (options.type in ["slos", "memory"]):
-        slsckpt(options, [pid])
-
-
-    sleeptime=15
-    time.sleep(sleeptime)
-    # Run the benchmark.
-    #ssh = ["ssh", "-i", options.sshkey, "-p", options.port,
-    #    "{}@{}".format(options.user, options.remote)]
-    #bashcmd(ssh)
-
-    # Kill the server
-    cmd = ['pkill', '-9', 'redis-server']
-    bashcmd(cmd)
-
-    # XXX Statistics message with the config
-    print("Redis(%s) killed" % str(pid))
-    print("{} checkpoints (expected around {})".format(
-        sysctl_sls("ckpt_done"),
-        (1000 / int(options.slsperiod)) * sleeptime))
-
-
-    time.sleep(3)
-    # XXX Replace with module_fini?
-    unload(options)
-
-
-def memcached_setup(options):
-
-    folders = ["data", "log", "log/memcached", "logs",
-        "tmp", "var", "var/cache", "var/cache/memcached", 
-        "var/run", "var/run/memcached", "memcached"]
-    for folder in folders:
-        path = "{}/{}".format(options.mountdir, folder)
-        try:
-            Path(path).mkdir(exist_ok=True)
-        except OSError as err:
-            # It's fine if the file already exists
-            if err.errno != errno.EEXIST:
-                print("Error {} creating folder {}".format(err, folder))
-                raise
-
-    # Get the address we'll be listening to.
-    address = [ x.strip() for x in options.url.split(':') ]
-
-    # Create the directory for the PID file
-    cmd = ["memcached", "-u", options.user, "-p", address[0],
-            "-l", address[1], "-P", "{}/{}".format(options.mountdir,
-            "memcached.pid"), "-d"]
-    bashcmd(cmd)
-
-    # Get the PID of the newly created server. There is a master nginx process
-    # and a set of worker processes. Assuming non-random PIDs, the smallest PID
-    # is the original process, so we get the output of pidof and parse it to
-    # select the smallest possible process.
-    cmd = ["pidof", "memcached"]
-    output = subprocess.run(cmd, 
-            check=True,stdout=subprocess.PIPE).stdout.decode('UTF-8')
-    pids = list(map(int, output.strip().split()))
-    pids.sort()
-
-    return pids[0]
-
-# Command for spinning up a webserver and taking numbers
-@Command(required=["--url"],
-    captureOut=CapturedOut.MULTI,
-    add_args=[
             [
                 # Default locations of the binaries and config files
+                ['--ycsb'],
+                {
+                    "action" : "store",
+                    "default" : "/home/etsal/ycsb/",
+                    "help" : "Location of the YCSB directory"
+                }
+            ],
+            [
+                ['--recordcount'],
+                {
+                    "action" : "store",
+                    "default" : str(100 * 1000),
+                    "help" : "Number of records to be loaded into the database"
+                }
+
+            ],
+            [
+                ['--workload'],
+                {
+                    "action" : "store",
+                    "default" : "workloada",
+                    "help" : "Workload profile to be used with YCSB" }
+
+            ],
+            [
+                ['--kvstore'],
+                {
+                    "action" : "store",
+                    "default" : "redis",
+                    "help" : "The key-value store to be benchmarked",
+                }
+            ],
+            [
                 ['--memcached'],
                 {
                     "action" : "store",
@@ -838,7 +877,6 @@ def memcached_setup(options):
                 }
             ],
             [
-                # Default locations of the binaries and config files
                 ['--memcacheduser'],
                 {
                     "action" : "store",
@@ -847,41 +885,54 @@ def memcached_setup(options):
                 }
             ],
         ],
-        help="Run the memcached server")
-def memcached(options):
+        help="Run the Redis server")
+def kvstore(options):
     # XXX Replace with module_init?
     load(options)
 
     # Start lighttpd
-    pid = memcached_setup(options)
+    if options.kvstore == "redis":
+        pid = redis_setup(options)
+    elif options.kvstore == "memcached":
+        pid = memcached_setup(options)
+    else:
+        raise Exception("Invalid options.kvstore {}".format(options.kvstore))
 
-    # Begin the SLS
+    if pid == None:
+        raise Exception("No PID for process")
+    print(pid)
+
+    time.sleep(10)
+
+    # Warm it up using YCSB. We can do this locally, but then we would need two
+    # version of YCSB - one collocated with the database, and one remote.
+    ssh = sshcmd(options)
+    cmd = ycsbcmd(options, "load", options.kvstore)
+    bashcmd(ssh + cmd)
+
+    # Insert the server into the SLS.
     if (options.type in ["slos", "memory"]):
         slsckpt(options, [pid])
 
-    # XXX Actually run YCSB
-    sleeptime=15
-    time.sleep(sleeptime)
-    # Run the benchmark.
-    #ssh = ["ssh", "-i", options.sshkey, "-p", options.port,
-    #    "{}@{}".format(options.user, options.remote)]
-    #bashcmd(ssh)
+    # SSH into the remote and start the benchmark.
+    # XXX Parse it into a form we can use for graphing.
+    cmd = ycsbcmd(options, "run", options.kvstore)
+    bashcmd(ssh + cmd)
 
     # Kill the server
-    cmd = ['pkill', '-9', 'memcached']
+    cmd = ['kill', '-9', str(pid)]
     bashcmd(cmd)
 
-    # XXX Statistics message with the config
-    print("Redis(%s) killed" % str(pid))
-    print("{} checkpoints (expected around {})".format(
-        sysctl_sls("ckpt_done"),
-        (1000 / int(options.slsperiod)) * sleeptime))
+    # XXX Measure time
+    #print("{} checkpoints (expected around {})".format(
+        #sysctl_sls("ckpt_done"),
+        #(1000 / int(options.slsperiod)) * sleeptime))
 
-    time.sleep(2)
+    # Wait for a bit to avoid races # XXX Necessary?
+    time.sleep(3)
 
     # XXX Replace with module_fini?
     unload(options)
-
 
 def firefox_benchmark(options):
     ffoptions = Options()
@@ -900,8 +951,9 @@ def firefox_benchmark(options):
             firefox_profile=profile, capabilities=cap)
     wait = WebDriverWait(driver, timeout=10000)
 
-    print("Driver started")
-    driver.get(options.url + options.firefoxdriver)
+    url = "http://{}:{}/{}".format(options.benchaddr, options.benchport, 
+            options.firefoxdriver)
+    driver.get(url)
 
     wait.until(lambda driver : "results" in driver.current_url)
     values = urllib.parse.unquote(driver.current_url.split('?')[1])
@@ -948,23 +1000,21 @@ def firefox(options):
     # Choose a random port every time. Created sockets linger, so if want to be
     # able to run the benchmark multiple times we need to use a different port
     # each time.
-    hostname="localhost"
-    port=random.randrange(8000, 16000)
-    options.url="http://{}:{}".format(hostname, str(port))
+    options.benchaddr="localhost"
+    options.benchport=str(random.randrange(8000, 16000))
 
-    # Create the server, serve forever
+    # Create the server, serve forever. This is the server that _serves_ the
+    # benchmarks, not the benchmark that executes the JS and gets checkpointed.
     serverpid = os.fork()
     if serverpid == 0:
-        # XXX Move the kraken benchmarks to the SLOS, move into the directory
         os.chdir("/root/sls-bench/firefox/hosted")
-        # XXX Change directory to run in the SLOS? Copy over the benchmark to
-        # the SLOS?
         handler = http.server.SimpleHTTPRequestHandler
-        httpd = socketserver.TCPServer(("", port), handler)
-        httpd.allow_reuse_address=True
+        httpd = socketserver.TCPServer((options.benchaddr,
+            int(options.benchport)), handler)
         httpd.serve_forever()
 
-    # Spawn the new process
+    # Spawn the new process. This is the process that ultimately spawns the
+    # benchmark driver that gets checkpointed.
     benchpid = os.fork()
     if benchpid == 0:
         os.chdir(options.mountdir)
@@ -973,7 +1023,7 @@ def firefox(options):
 
     time.sleep(3)
 
-    # Begin the SLS
+    # Begin the SLS.
     if (options.type in ["slos", "memory"]):
         slsckpt(options, [benchpid])
 
@@ -991,6 +1041,77 @@ def firefox(options):
 
     # XXX Replace with module_fini?
     unload(options)
+
+@Command(required=["--server"],
+        captureOut=CapturedOut.MULTI,
+        # XXX Find a way to not repeat these, is it possible though with the
+        # way we're using the parser and building a global object?
+        add_args=[
+            [
+                # Default locations of the binaries and config files
+                ['--lighttpd'],
+                {
+                    "action" : "store",
+                    "default" : "/usr/local/sbin/lighttpd",
+                    "help" : "Location of lighttpd"
+                }
+            ],
+            [
+                ['--nginx'],
+                {
+                    "action" : "store",
+                    "default" : "/usr/local/sbin/nginx",
+                    "help" : "Location of nginx"
+                }
+            ],
+            [
+                ['--lighttpdconfdir'],
+                {
+                    "action" : "store",
+                    "default" : "/usr/local/etc/lighttpd",
+                    "help" : "Location of lighttpd config dir",
+                }
+            ],
+            [
+                ['--nginxconfdir'],
+                {
+                    "action" : "store",
+                    "default" : "/usr/local/etc/nginx",
+                    "help" : "Location of nginx config dir",
+                }
+            ],
+            [
+                ['--threads'],
+                {
+                    "action" : "store",
+                    "default" : "10",
+                    "help" : "Number of client threads to use"
+                }
+            ],
+            [
+                ['--connections'],
+                {
+                    "action" : "store",
+                    "default" : "50",
+                    "help" : "Number of connections used by wrk",
+                }
+            ],
+            [
+                ['--time'],
+                {
+                    "action" : "store",
+                    "default" : "10",
+                    "help" : "Duration of the benchmark in seconds",
+                }
+            ],
+        ],
+        help="Run the webserver benchmark multiple times")
+def webbench(options):
+    for interval in [10, 100]:
+        for slsperiod in range(interval, interval * 10 + 1, interval):
+            options.slsperiod=slsperiod
+            # XXX How to call the decorator before the thing
+            webserver(options)
 
 def main():
     global parser
