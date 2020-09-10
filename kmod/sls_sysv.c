@@ -49,6 +49,8 @@ slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 		if (error != 0)
 			goto error;
 
+		obj = shmsegs[i].object;
+
 		/* If we have already shadowed, we can just mend the reference. */
 		error = slskv_find(objtable, (uint64_t) obj, (uintptr_t *) &shadow);
 		if (error == 0) {

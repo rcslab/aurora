@@ -387,7 +387,6 @@ slsrest_vmspace(struct proc *p, struct slsvmspace *info, struct shmmap_state *sh
 		if (error)
 			return (error);
 		vmspace = p->p_vmspace;
-		map = &vmspace->vm_map;
 	}
 
 	/* Refresh the value of vmspace in case it changed above */

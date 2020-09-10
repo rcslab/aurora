@@ -112,7 +112,6 @@ sls_doio(struct vnode *vp, struct uio *auio)
 	int error = 0;
 	size_t iosize = 0;
 	uint64_t back = 0;
-	char *base;
 
 	ASSERT_VOP_LOCKED(vp, ("vnode %p is unlocked", vp));
 
@@ -133,7 +132,7 @@ sls_doio(struct vnode *vp, struct uio *auio)
 
 	/* Do the IO itself. */
 	iosize = auio->uio_resid;
-	base = ((char *) auio->uio_iov[0].iov_base);
+
 	while (auio->uio_resid > 0) {
 		back = auio->uio_resid;
 		if (auio->uio_rw == UIO_WRITE) {
@@ -789,6 +788,8 @@ sls_read_slos(uint64_t oid, struct slskv_table **rectablep,
 
 	*rectablep = rectable;
 	*objtablep = objtable;
+
+	free(ids, M_SLSMM);
 
 	return (0);
 

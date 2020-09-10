@@ -113,7 +113,7 @@ slsload_kqueue(slsset **slsknsp, char **bufp, size_t *bufsizep)
 	/* Read in the kqueue itself. */
 	error = sls_info(kqinfo, sizeof(*kqinfo), bufp, bufsizep);
 	if (error != 0)
-		return (error);
+		goto error;
 
 	if (kqinfo->magic != SLSKQUEUE_ID) {
 		SLS_DBG("magic mismatch, %lu vs %d\n", kqinfo->magic, SLSKQUEUE_ID);
@@ -123,10 +123,8 @@ slsload_kqueue(slsset **slsknsp, char **bufp, size_t *bufsizep)
 
 	/* The rest of the buffer is the list of kevents. */
 	error = slsset_create(&slskns);
-	if (error != 0) {
-		error = EINVAL;
+	if (error != 0)
 		goto error;
-	}
 
 	/* Save the metadata in the set's private data field. */
 	slskns->data = kqinfo;

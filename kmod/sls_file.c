@@ -488,7 +488,6 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 {
 	struct slspipe *slspipe;
 	struct pipe *pipepeer;
-	struct slspts *pts;
 	struct kqueue *kq;
 	struct vnode *vp;
 	struct file *fp, *fppeer;
@@ -497,8 +496,6 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 	void *kqdata;
 	int error;
 	int fd;
-
-	slsid = info->slsid;
 
 	switch(info->type) {
 	case DTYPE_VNODE:
@@ -540,7 +537,6 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 		break;
 
 	case DTYPE_PIPE:
-
 		/*
 		 * Pipes are a special case, because restoring one end
 		 * also brings back the other. For this reason, we look
@@ -556,7 +552,6 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 		slsid = slspipe->slsid;
 		if (slskv_find(restdata->filetable, slsid, (uintptr_t *) &fppeer) == 0) {
 			pipepeer = (struct pipe *) fppeer->f_data;
-
 
 			/* Restore the buffer's state. */
 			pipepeer->pipe_buffer.cnt = slspipe->pipebuf.cnt;
@@ -597,7 +592,6 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 		slsid = ((struct slspts *) slsbacker)->slsid;
 		if (slskv_find(restdata->filetable, slsid, &peer) == 0) 
 			return (0);
-		pts = (struct slspts *) slsbacker;
 
 		error = slsrest_pts(restdata->filetable, (struct slspts *) slsbacker, &fd);
 		if (error != 0)
