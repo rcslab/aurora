@@ -64,6 +64,8 @@ def set_defaults_sls(p):
         help="SLS checkpoints all descendants of processes")
     p.add('--slsctl',required=True, metavar='slsctl',
             help='Path to the slsctl tool')
+    p.add('--clients', metavar='h1,h2,etc', required=True, action="append",
+        help='Comma seperated values of client hosts')
 
 # Set the defaults for the SLOS module
 def set_defaults_slos(p):
@@ -156,10 +158,16 @@ def Command(captureOut=CapturedOut.NONE, required=[], help="", add_args=[]):
         return wrapper
     return real
 
-# ====== BASIC BASH COMMANDS ======
+# ====== BASIC SHELL COMMANDS ======
+
+def numhosts(options):
+    return len(options.clients)
 
 # Construct an SSH command for logging into a remote.
-def sshcmd(options):
+def sshcmd(options, host=-1):
+    sshaddr = options.sshaddr
+    if host != -1:
+        sshaddr = options.clients[host]
     return ["ssh", "-i", options.sshkey, "-p", options.sshport,
         "{}@{}".format(options.sshuser, options.sshaddr)]
 
@@ -181,6 +189,11 @@ def ycsbcmd(options, cmd, dbname):
             "{}.host={}".format(dbname, options.benchaddr),
             "-p", "{}.port={}".format(dbname, options.benchport),
             "-p", "recordcount={}".format(options.recordcount)]
+
+def mutilatecmd(options, *args):
+    return ["{}".format(options.mutilate),
+            "-s",
+            "{}:{}".format(options.benchaddr, options.benchport)] + list(args)
 
 # Do a sysctl into the system
 def sysctl(module, key, value):
@@ -789,7 +802,7 @@ def memcached_setup(options):
     make_slsdirs(options, "memcached")
 
     # Create the directory for the PID file
-    cmd = ["memcached", "-u", options.sshuser, "-l", options.benchaddr,
+    cmd = ["memcached", "-u", options.memcacheduser, "-l", options.benchaddr,
             "-p", options.benchport, "-P", "{}/{}".format(options.mountdir,
             "memcached.pid"), "-d"]
     bashcmd(cmd)
@@ -915,6 +928,150 @@ def kvstore(options):
 
     # XXX Replace with module_fini?
     unload(options)
+
+# Command for spinning up a webserver and taking numbers
+@Command(required=[],
+    captureOut=CapturedOut.MULTI,
+    add_args=[
+            [
+                ['--memcached'],
+                {
+                    "action" : "store",
+                    "default" : "/usr/local/bin/memcached",
+                    "help" : "Location of the memcached server"
+                }
+            ],
+            [
+                ['--memcacheduser'],
+                {
+                    "action" : "store",
+                    "default" : "root",
+                    "help" : "User under which memcached runs"
+                }
+            ],
+            [
+                ['--mutilate'],
+                {
+                    "action" : "store",
+                    "default" : "/home/ali/working/mutilate/mutilate",
+                    "help" : "Location of mutilate"
+                }
+            ],
+            [
+                ['--mutilatethreads'],
+                {
+                    "action" : "store",
+                    "default" : "12",
+                    "help" : "Number of mutilate threads"
+                }
+            ]
+        ],
+        help="Run the memcached/mutilate")
+def mutilate(options):
+    load(options)
+
+    # Start mutilate
+    pid = memcached_setup(options)
+    if pid == None:
+        raise Exception("No PID for process")
+
+    time.sleep(1)
+
+    # Load database
+    ssh = sshcmd(options, host = 0)
+    cmd = mutilatecmd(options, "--loadonly")
+    bashcmd(ssh + cmd)
+
+    # Insert the server into the SLS.
+    if (options.type in ["slos", "memory"]):
+        slsckpt(options, [pid])
+
+    # SSH into the remote and start agents and main.
+    agents = []
+    for n in range(numhosts(options) - 1):
+        print("Spawning " + options.clients[n])
+        cmd = [ options.mutilate, "-T", "12", "-A"]
+        ssh = sshcmd(options, host = n + 1)
+        print(ssh + cmd)
+        proc = subprocess.Popen(ssh + cmd)
+        agents.append(proc)
+
+    time.sleep(10)
+
+    cmd = mutilatecmd(options, "--noload", "-B",
+            "-T", options.mutilatethreads,
+            "-Q", "1000",
+            "-D", "4",
+            "-C", "4")
+    for n in range(numhosts(options) - 1):
+        cmd = cmd + ["-a", options.clients[n]]
+    ssh = sshcmd(options, host = 0)
+    print(ssh + cmd)
+    p = subprocess.run(ssh + cmd, stdout=subprocess.PIPE)
+    out = p.stdout.decode('UTF-8')
+    with open("{}_{}_{}".format("memcached_mutilate",
+                                str(options.slsperiod),
+                                str(options.runno)), "w") as outfile:
+        outfile.write(out)
+
+    for c in agents:
+        c.kill()
+
+    # Kill the server
+    bashcmd(['kill', '-9', str(pid)])
+
+    # Wait for kill
+    # XXX: we should retry
+    time.sleep(3)
+
+    unload(options)
+
+# Command for spinning up a webserver and taking numbers
+@Command(required=[],
+    captureOut=CapturedOut.MULTI,
+    add_args=[
+            [
+                ['--memcached'],
+                {
+                    "action" : "store",
+                    "default" : "/usr/local/bin/memcached",
+                    "help" : "Location of the memcached server"
+                }
+            ],
+            [
+                ['--memcacheduser'],
+                {
+                    "action" : "store",
+                    "default" : "root",
+                    "help" : "User under which memcached runs"
+                }
+            ],
+            [
+                ['--mutilate'],
+                {
+                    "action" : "store",
+                    "default" : "/home/ali/working/mutilate/mutilate",
+                    "help" : "Location of mutilate"
+                }
+            ],
+            [
+                ['--mutilatethreads'],
+                {
+                    "action" : "store",
+                    "default" : "12",
+                    "help" : "Number of mutilate threads"
+                }
+            ]
+        ],
+        help="Run the memcached/mutilate multiple times")
+def mutilatebench(options):
+    for interval in [10, 100]:
+        for slsperiod in range(interval, interval * 10 + 1, interval):
+            for i in range(0,5):
+                options.slsperiod=slsperiod
+                options.runno = str(i + 1)
+                # XXX How to call the decorator before the thing
+                mutilate(options)
 
 def firefox_benchmark(options):
     ffoptions = Options()
