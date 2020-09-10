@@ -14,6 +14,7 @@ import http.server
 import socketserver
 import sys
 import random
+import datetime
 from enum import Enum
 from os import path
 from os import listdir
@@ -86,12 +87,19 @@ def set_defaults_bench(p):
     p.add('--sshkey', required=True, metavar='sshkey', help='Key used for sshing into remotes')
     p.add('--sshuser',required=True, metavar='sshuser',
             help='Remote user name for sshing into for benchmarks')
+
+def set_defaults_stats(p):
     p.add('--runno',required=False, metavar='runno', default='0',
             help='Run number')
     p.add('--runstart',required=False, metavar='runstart', default='0',
             help='Beginning of run')
     p.add('--runend',required=False, metavar='runend', default='0',
             help='End of run')
+    p.add('--ckpt_done',required=False, metavar='ckpt_done', default='0',
+            help='Checkpoints successfully done')
+    p.add('--ckpt_attempted',required=False, metavar='ckpt_attempted',
+            default='0',
+            help='Checkpoints attempted')
 
 def set_defaults(p):
     p.add('-c', '--config', required=False, is_config_file=True,
@@ -106,6 +114,7 @@ def set_defaults(p):
     set_defaults_sls(p)
     set_defaults_slos(p)
     set_defaults_bench(p)
+    set_defaults_stats(p)
 
 # Wrapper for print_help() that drops all arguments
 def help_msg(options):
@@ -173,7 +182,6 @@ def sshcmd(options, host=-1):
 
 # Run a bash command
 def bashcmd(lst, fail_okay=False):
-    print("Executing shell command {}".format(" ".join(lst)))
     if fail_okay:
         # Propagate the return code upwards
         ret = subprocess.run(lst)
@@ -184,11 +192,16 @@ def bashcmd(lst, fail_okay=False):
         return 0
 
 def ycsbcmd(options, cmd, dbname):
-    return ["{}/{}".format(options.ycsb, "bin/ycsb.sh"), cmd, "basic", "-P",
+    basecmd = ["{}/{}".format(options.ycsb, "bin/ycsb.sh"), cmd, dbname, "-P",
             "{}/workloads/{}".format(options.ycsb, options.workload), "-p",
             "{}.host={}".format(dbname, options.benchaddr),
             "-p", "{}.port={}".format(dbname, options.benchport),
             "-p", "recordcount={}".format(options.recordcount)]
+
+    if cmd == "run":
+        basecmd.extend(["-threads", options.ycsbthreads, "-p", "operationcount={}".format(options.operationcount)])
+
+    return basecmd
 
 def mutilatecmd(options, *args):
     return ["{}".format(options.mutilate),
@@ -538,7 +551,7 @@ def make_slsdirs(options, benchmark):
 # Insert a series of PIDs into a partition and start checkpointing them.
 def slsckpt(options, pidlist):
 
-    print("Starting Aurora Checkpointer on {}".format(str(pidlist)))
+    print("Starting Aurora Checkpointer on {} (period {})".format(str(pidlist), options.slsperiod))
 
     # If period is 0 we do not put the PIDs in the SLS.
     if options.slsperiod == 0:
@@ -747,6 +760,8 @@ def webserver(options):
     if (options.type in ["slos", "memory"]):
         slsckpt(options, [pid])
 
+    options.runstart = datetime.datetime.now()
+
     # Run the benchmark.
     ssh = sshcmd(options)
     wrk = ["wrk", "-d", str(options.time), "-t", str(options.threads), \
@@ -755,7 +770,12 @@ def webserver(options):
     wrkoutput = subprocess.run(ssh + wrk,
             stdout=subprocess.PIPE).stdout.decode('UTF-8')
     
-    with open("{}_{}_{}".format(str(options.server), str(options.slsperiod), str(options.runno)), "w") as outfile:
+    options.ckpt_done= int(sysctl_sls("ckpt_done"))
+    options.ckpt_attempted = int(sysctl_sls("ckpt_attempted"))
+    options.runend = datetime.datetime.now()
+
+    with open("{}_{}_{}".format(str(options.server), str(options.slsperiod), 
+        str(options.runno)), "w") as outfile:
         outfile.write(wrkoutput)
 
 
@@ -875,6 +895,22 @@ def memcached_setup(options):
                     "help" : "User under which memcached runs"
                 }
             ],
+            [
+                ["--ycsbthreads"],
+                {
+                    "action" : "store",
+                    "default" : "16",
+                    "help" : "Number of threads for the YCSB client"
+                }
+            ],
+            [
+                ["--operationcount"],
+                {
+                    "action" : "store",
+                    "default" : str(100* 1000),
+                    "help" : "Number of target operations from the YCSB client"
+                }
+            ],
         ],
         help="Run the Redis server")
 def kvstore(options):
@@ -904,15 +940,20 @@ def kvstore(options):
     if (options.type in ["slos", "memory"]):
         slsckpt(options, [pid])
 
+    options.runstart = datetime.datetime.now()
+
     # SSH into the remote and start the benchmark.
     # XXX Parse it into a form we can use for graphing.
     cmd = ycsbcmd(options, "run", options.kvstore)
     ycsboutput = subprocess.run(ssh + cmd,
             stdout=subprocess.PIPE).stdout.decode('UTF-8')
 
+    options.ckpt_done= int(sysctl_sls("ckpt_done"))
+    options.ckpt_attempted = int(sysctl_sls("ckpt_attempted"))
+    options.runend = datetime.datetime.now()
+
     with open("{}_{}_{}".format(str(options.kvstore), str(options.slsperiod), str(options.runno)), "w") as outfile:
         outfile.write(ycsboutput)
-
 
     # Kill the server
     cmd = ['kill', '-9', str(pid)]
@@ -1280,7 +1321,7 @@ def webbench(options):
                 ['--recordcount'],
                 {
                     "action" : "store",
-                    "default" : str(100 * 1000),
+                    "default" : str(1000 * 1000),
                     "help" : "Number of records to be loaded into the database"
                 }
 
@@ -1317,16 +1358,37 @@ def webbench(options):
                     "help" : "User under which memcached runs"
                 }
             ],
+            [
+                ["--ycsbthreads"],
+                {
+                    "action" : "store",
+                    "default" : "16",
+                    "help" : "Number of threads for the YCSB client"
+                }
+            ],
+            [
+                ["--operationcount"],
+                {
+                    "action" : "store",
+                    "default" : str(1000 * 1000),
+                    "help" : "Number of target operations from the YCSB client"
+                }
+            ],
         ],
         help="Run the Redis server")
 def kvbench(options):
     for interval in [10, 100]:
         for slsperiod in range(interval, interval * 10 + 1, interval):
             for i in range(0,5):
-                options.slsperiod=slsperiod
+                options.slsperiod = slsperiod
                 options.runno = str(i + 1)
                 # XXX How to call the decorator before the thing
                 kvstore(options)
+                time_elapsed = options.runend - options.runstart
+                ms_elapsed = (time_elapsed.seconds * 1000) + (time_elapsed.microseconds / 1000)
+                print("Did {} checkpoints in {}ms)".format(options.ckpts, ms_elapsed))
+                print("Period {}ms (target {}ms)".format(ms_elapsed / options.ckpts,
+                    str(options.slsperiod)))
 
 def main():
     global parser

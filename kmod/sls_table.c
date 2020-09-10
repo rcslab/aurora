@@ -1165,6 +1165,7 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 			error = sls_writemeta_slos(rec, NULL, true);
 		if (error != 0) {
 			KV_ABORT(iter);
+			printf("Writing to the SLOS failed with %d\n", error);
 			goto error;
 		}
 
@@ -1177,8 +1178,10 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 	}
 
 	error = sls_write_slos_manifest(oid, sb_manifest);
-	if (error != 0)
+	if (error != 0) {
+		printf("Writing the manifest to the SLOS failed with %d\n", error);
 		goto error;
+	}
 
 
 	sbuf_delete(sb_manifest);

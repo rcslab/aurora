@@ -36,14 +36,14 @@ STRIPENAME="st0"
 # Location of the striped disk
 STRIPEDRIVE="/dev/stripe/$STRIPENAME"
 # Disks that comprise the stripe
-STRIPEDISKS="vtbd0 vtbd1 vtbd2 vtbd3"
+STRIPEDISKS="nvd1"
 
 # Directory on which we mount the 
 MOUNTDIR="/testmnt"
 
 # Drive in which the SLOS resides. Equal to the stripe drive only if there
 # is one, otherwise $STRIPEDRIVE is invalid
-DRIVE="/dev/vtbd1"
+DRIVE="/dev/nvd1"
 
 # Delay in seconds, inserted to avoid certain races between operations
 SYNCHDELAY="2"

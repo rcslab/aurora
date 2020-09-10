@@ -92,8 +92,13 @@ retry_create:
 			goto retry_create;
 		}
 
-		*slsidp = 0;
-		return (error);
+		/* 
+		 * If it already exists and we asked for this specific ID, 
+		 * we're calling this from the SLS and we don't care. Just return
+		 * success.
+		 */
+		*slsidp = slsid;
+		return (0);
 	}
 
 	*slsidp = slsid;
