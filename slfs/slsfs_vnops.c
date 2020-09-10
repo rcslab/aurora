@@ -396,8 +396,6 @@ slsfs_rmdir(struct vop_rmdir_args *args)
 
 	struct slos_node *svp = SLSVP(vp);
 
-	MPASS(svp->sn_ino.ino_nlink == 2);
-
 	if (svp->sn_ino.ino_nlink < 2) {
 		return (EINVAL);
 	}
@@ -415,6 +413,9 @@ slsfs_rmdir(struct vop_rmdir_args *args)
 	if (vp->v_mountedhere != NULL) {
 		return (EPERM);
 	}
+
+	/* Assert self and parent reference */
+	MPASS(svp->sn_ino.ino_nlink == 2);
 
 	error = slos_remove_node(dvp, vp, cnp);
 	if (error) {
@@ -765,11 +766,12 @@ slsfs_check_cksum(struct buf *bp)
 	size_t cksize;
 	uint32_t cksum, check;
 	int error;
-
 	struct fbtree *tree = &slos.slos_cktree->sn_tree;
 	uint64_t blk = bp->b_blkno;
 	size_t size = 0;
+
 	MPASS((bp->b_bcount % BLKSIZE(&slos)) == 0);
+
 	while (size < bp->b_bcount) {
 		cksize = min(PAGE_SIZE, bp->b_bcount - size);
 		cksum = calculate_crc32c(~0, bp->b_data + size, cksize);

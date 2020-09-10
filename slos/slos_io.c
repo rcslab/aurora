@@ -135,13 +135,15 @@ slos_sbread(struct slos * slos)
 	slos->slos_sb = sb;
 	sb->sb_bsize = st.st_blksize;
 
-
 	/* Find the largest epoch superblock in the NUMSBS array.
 	 * This is starts at 0  offset of every device
 	 */
 	for (int i = 0; i < NUMSBS; i++) {
 		error = slos_sbat(slos, i, sb);
-		MPASS(error == 0);
+		if (error != 0) {
+			free(sb, M_SLOS);
+			return (error);
+		}
 		if (sb->sb_epoch == EPOCH_INVAL && i != 0) {
 			break;
 		}
@@ -154,13 +156,16 @@ slos_sbread(struct slos * slos)
 	}
 
 	error = slos_sbat(slos, largestepoch_i, sb);
-	MPASS(error == 0);
+	if (error != 0) {
+		free(sb, M_SLOS);
+		return (error);
+	}
 
 	if (sb->sb_magic != SLOS_MAGIC) {
 		printf("ERROR: Magic for SLOS is %lx, should be %llx",
 		    sb->sb_magic, SLOS_MAGIC);
 		free(sb, M_SLOS);
-		return EINVAL;
+		return (EINVAL);
 	} 
 
 	DEBUG1("Largest superblock at %lu", largestepoch_i);
@@ -169,5 +174,5 @@ slos_sbread(struct slos * slos)
 
 	/* Make the superblock visible to the struct. */
 	MPASS(sb->sb_index == largestepoch_i);
-	return 0;
+	return (0);
 }

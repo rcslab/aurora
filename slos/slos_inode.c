@@ -205,14 +205,23 @@ slos_vpimport(struct slos *slos, uint64_t inoblk)
 
 	error = slos_setupfakedev(slos, vp);
 	if (error) {
-		panic("Issue creating fake device");
+		uma_zfree(slos_node_zone, vp);
+		return (NULL);
 	}
 	DEBUG1("Importing Inode from  %lu", inoblk);
 	int change =  vp->sn_fdev->v_bufobj.bo_bsize / slos->slos_vp->v_bufobj.bo_bsize;
 	error = bread(slos->slos_vp, inoblk * change, BLKSIZE(slos), curthread->td_ucred, &bp);
-	MPASS(error == 0);
+	if (error != 0) {
+		uma_zfree(slos_node_zone, vp);
+		return (NULL);
+	}
+
 	memcpy(ino, bp->b_data, sizeof(struct slos_inode));
-	MPASS(ino->ino_magic == SLOS_IMAGIC);
+	if (ino->ino_magic != SLOS_IMAGIC) {
+		brelse(bp);
+		uma_zfree(slos_node_zone, vp);
+		return (NULL);
+	}
 	brelse(bp);
 
 	/* Move each field separately, translating between the two. */
@@ -278,7 +287,7 @@ slos_icreate(struct slos *slos, uint64_t pid, mode_t mode)
 	} else {
 		ITER_RELEASE(iter);
 		DEBUG1("Failed to create inode %lu", pid);
-		return EINVAL;
+		return (EEXIST);
 	}
 
 	iov.iov_base = &ino;
