@@ -82,8 +82,14 @@ def set_defaults_bench(p):
     p.add('--sshaddr', required=False, metavar='sshaddr', help="Address of benchmarking client")
     p.add('--sshport', required=False, metavar='sshport', help="Port of benchmarking client")
     p.add('--sshkey', required=True, metavar='sshkey', help='Key used for sshing into remotes')
-    p.add('--user',required=True, metavar='user',
+    p.add('--sshuser',required=True, metavar='sshuser',
             help='Remote user name for sshing into for benchmarks')
+    p.add('--runno',required=False, metavar='runno', default='0',
+            help='Run number')
+    p.add('--runstart',required=False, metavar='runstart', default='0',
+            help='Beginning of run')
+    p.add('--runend',required=False, metavar='runend', default='0',
+            help='End of run')
 
 def set_defaults(p):
     p.add('-c', '--config', required=False, is_config_file=True,
@@ -155,10 +161,11 @@ def Command(captureOut=CapturedOut.NONE, required=[], help="", add_args=[]):
 # Construct an SSH command for logging into a remote.
 def sshcmd(options):
     return ["ssh", "-i", options.sshkey, "-p", options.sshport,
-        "{}@{}".format(options.user, options.sshaddr)]
+        "{}@{}".format(options.sshuser, options.sshaddr)]
 
 # Run a bash command
 def bashcmd(lst, fail_okay=False):
+    print("Executing shell command {}".format(" ".join(lst)))
     if fail_okay:
         # Propagate the return code upwards
         ret = subprocess.run(lst)
@@ -483,38 +490,6 @@ def allseries(options):
 
 # ===== SLS BENCHMARKS =====
 
-def parse_wrkoutput(wrkoutput):
-    # The patterns we are looking for
-    cols = lambda l : l[1:]
-    last = lambda l : [l[-1]]
-    reqtime = lambda l: [l[0], l[3][:-1], l[4]]
-
-    match = {
-            "Latency" : (cols, ["lavg", "lstdev", "lmax", "lstdev-pm"]),
-            "Req/Sec" : (cols, ["ravg", "rstdev", "rmax", "rstdev-pm"]),
-            "requests in": (reqtime, ["requests", "time", "read"]),
-            # XXX This is going to break if we actually serve files.
-            "Non-2xx": (last, ["non2xx"]),
-            "Requests/sec": (last, ["requestps"]),
-            "Transfer/sec": (last, ["transferps"]),
-    }
-
-    output = []
-    for k,v in match.items():
-        output.extend(v[1])
-
-    print(",".join(output) + "\n")
-
-    output = []
-    for line in wrkoutput.splitlines():
-        for k,v in match.items():
-            if k in line:
-                vals = [x.strip() for x in line.split()]
-                output.extend(v[0](vals))
-    print(",".join(output))
-
-
-
 # Get the PID of the main process we're checkpointing. Benchmarks often have
 # multiple processes, so we need to get the root of its process tree, assuming
 # it exists. Note that we can only do this if we assume non-random PIDs, and
@@ -766,7 +741,10 @@ def webserver(options):
             "http://{}:{}".format(options.benchaddr, options.benchport)]
     wrkoutput = subprocess.run(ssh + wrk,
             stdout=subprocess.PIPE).stdout.decode('UTF-8')
-    parse_wrkoutput(wrkoutput)
+    
+    with open("{}_{}_{}".format(str(options.server), str(options.slsperiod), str(options.runno)), "w") as outfile:
+        outfile.write(wrkoutput)
+
 
     # Kill the server
     cmd = ['pkill', '-9', options.server]
@@ -811,7 +789,7 @@ def memcached_setup(options):
     make_slsdirs(options, "memcached")
 
     # Create the directory for the PID file
-    cmd = ["memcached", "-u", options.user, "-l", options.benchaddr,
+    cmd = ["memcached", "-u", options.sshuser, "-l", options.benchaddr,
             "-p", options.benchport, "-P", "{}/{}".format(options.mountdir,
             "memcached.pid"), "-d"]
     bashcmd(cmd)
@@ -902,13 +880,12 @@ def kvstore(options):
         raise Exception("No PID for process")
     print(pid)
 
-    time.sleep(10)
-
     # Warm it up using YCSB. We can do this locally, but then we would need two
     # version of YCSB - one collocated with the database, and one remote.
     ssh = sshcmd(options)
     cmd = ycsbcmd(options, "load", options.kvstore)
-    bashcmd(ssh + cmd)
+    ycsboutput = subprocess.run(ssh + cmd,
+            stdout=subprocess.DEVNULL)
 
     # Insert the server into the SLS.
     if (options.type in ["slos", "memory"]):
@@ -917,7 +894,12 @@ def kvstore(options):
     # SSH into the remote and start the benchmark.
     # XXX Parse it into a form we can use for graphing.
     cmd = ycsbcmd(options, "run", options.kvstore)
-    bashcmd(ssh + cmd)
+    ycsboutput = subprocess.run(ssh + cmd,
+            stdout=subprocess.PIPE).stdout.decode('UTF-8')
+
+    with open("{}_{}_{}".format(str(options.kvstore), str(options.slsperiod), str(options.runno)), "w") as outfile:
+        outfile.write(ycsboutput)
+
 
     # Kill the server
     cmd = ['kill', '-9', str(pid)]
@@ -1109,9 +1091,85 @@ def firefox(options):
 def webbench(options):
     for interval in [10, 100]:
         for slsperiod in range(interval, interval * 10 + 1, interval):
-            options.slsperiod=slsperiod
-            # XXX How to call the decorator before the thing
-            webserver(options)
+            for i in range(0,5):
+                options.slsperiod=slsperiod
+                options.runno = str(i + 1)
+                # XXX How to call the decorator before the thing
+                webserver(options)
+
+# Command for benchmarking a web server with multiple configurations
+@Command(required=[],
+    captureOut=CapturedOut.MULTI,
+    add_args=[
+            [
+                # Default locations of the binaries and config files
+                ['--redis'],
+                {
+                    "action" : "store",
+                    "default" : "/usr/local/bin/redis-server",
+                    "help" : "Location of the Redis server"
+                }
+            ],
+            [
+                # Default locations of the binaries and config files
+                ['--ycsb'],
+                {
+                    "action" : "store",
+                    "default" : "/home/etsal/ycsb/",
+                    "help" : "Location of the YCSB directory"
+                }
+            ],
+            [
+                ['--recordcount'],
+                {
+                    "action" : "store",
+                    "default" : str(100 * 1000),
+                    "help" : "Number of records to be loaded into the database"
+                }
+
+            ],
+            [
+                ['--workload'],
+                {
+                    "action" : "store",
+                    "default" : "workloada",
+                    "help" : "Workload profile to be used with YCSB" }
+
+            ],
+            [
+                ['--kvstore'],
+                {
+                    "action" : "store",
+                    "default" : "redis",
+                    "help" : "The key-value store to be benchmarked",
+                }
+            ],
+            [
+                ['--memcached'],
+                {
+                    "action" : "store",
+                    "default" : "/usr/local/bin/memcached",
+                    "help" : "Location of the memcached server"
+                }
+            ],
+            [
+                ['--memcacheduser'],
+                {
+                    "action" : "store",
+                    "default" : "root",
+                    "help" : "User under which memcached runs"
+                }
+            ],
+        ],
+        help="Run the Redis server")
+def kvbench(options):
+    for interval in [10, 100]:
+        for slsperiod in range(interval, interval * 10 + 1, interval):
+            for i in range(0,5):
+                options.slsperiod=slsperiod
+                options.runno = str(i + 1)
+                # XXX How to call the decorator before the thing
+                kvstore(options)
 
 def main():
     global parser

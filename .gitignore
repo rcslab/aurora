@@ -81,3 +81,7 @@ out
 index*
 *.rdb
 *.aof
+redis_*
+nginx_*
+lighttpd_*
+memcached_*

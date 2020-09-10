@@ -65,8 +65,8 @@ size_t sls_data_sent = 0;
 size_t sls_data_received = 0;
 uint64_t sls_pages_grabbed = 0;
 uint64_t sls_io_initiated = 0;
-unsigned int sls_async_slos = 0;
-unsigned int sls_sync_slos = 1;
+unsigned int sls_async_slos = 1;
+unsigned int sls_sync_slos = 0;
 
 uma_zone_t slspagerun_zone = NULL;
 
