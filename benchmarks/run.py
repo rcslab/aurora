@@ -1040,10 +1040,12 @@ def mutilate(options):
     time.sleep(10)
 
     cmd = mutilatecmd(options, "--noload", "-B",
-            "-T", options.mutilatethreads,
-            "-Q", "1000",
-            "-D", "4",
-            "-C", "4")
+            "-T", options.mutilatethreads, # Threads (loadgen)
+            "-c", "12", # Connections Per Thread (loadgen)
+            "-Q", "1000", # Measurement QPS
+            "-C", "4", # Measurement Connections
+            "-w", "5", # Warmup
+            "-t", "10") # Duration
     for n in range(numhosts(options) - 1):
         cmd = cmd + ["-a", options.clients[n]]
     ssh = sshcmd(options, host = 0)
