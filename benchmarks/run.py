@@ -329,13 +329,15 @@ def module_init(options):
             raise Exception("SLOS module already loaded")
         if kldload(options.slsmodule):
             raise Exception("SLS module already loaded")
-        sysctl_slos("checkpointtime", options.checkpointtime)
+        sysctl_slos("checkpointtime", options.slsperiod)
 
     newfs(options)
     mount(options)
 
 # Clean up for the work done in module_init().
 def module_fini(options):
+    # Needed because some benchmarks keep dumping even after they're supposedly done.
+    time.sleep(5)
     umount(options)
     if (options.type in ["slos", "memory"]):
         kldunload("slos.ko")
@@ -1144,7 +1146,11 @@ def firefox_benchmark(options):
     for key, v in vals.items():
         if (key != "v"):
             runtime += sum(list(map(int, v)))
-    print("Time: {} ms".format(runtime))
+
+    with open("{}_{}_{}".format("/root/sls/firefox",
+                                str(options.slsperiod),
+                                str(options.runno)), "w") as outfile:
+        outfile.write("Time: {} ms".format(runtime))
 
     driver.close()
     driver.quit()
@@ -1205,12 +1211,18 @@ def firefox(options):
 
     time.sleep(3)
 
+    options.runstart = datetime.datetime.now()
+
     # Begin the SLS.
     if (options.type in ["slos", "memory"]):
-        slsckpt(options, [benchpid])
+        slsckpt(options, [benchpid, serverpid])
 
     # Wait for the benchmark to be done
     os.waitpid(benchpid, 0)
+
+    options.ckpt_done= int(sysctl_sls("ckpt_done"))
+    options.ckpt_attempted = int(sysctl_sls("ckpt_attempted"))
+    options.runend = datetime.datetime.now()
 
     # Kill the server and the driver
     cmd = ['kill', '-15', str(serverpid)]
@@ -1323,7 +1335,7 @@ def webbench(options):
                 ['--recordcount'],
                 {
                     "action" : "store",
-                    "default" : str(1000 * 1000),
+                    "default" : str(10 * 1000),
                     "help" : "Number of records to be loaded into the database"
                 }
 
@@ -1388,8 +1400,47 @@ def kvbench(options):
                 kvstore(options)
                 time_elapsed = options.runend - options.runstart
                 ms_elapsed = (time_elapsed.seconds * 1000) + (time_elapsed.microseconds / 1000)
-                print("Did {} checkpoints in {}ms)".format(options.ckpts, ms_elapsed))
-                print("Period {}ms (target {}ms)".format(ms_elapsed / options.ckpts,
+                print("Did {} checkpoints in {}ms)".format(options.ckpt_done, ms_elapsed))
+                print("Period {}ms (target {}ms)".format(ms_elapsed / options.ckpt_done,
+                    str(options.slsperiod)))
+
+
+# Command for spinning up a webserver and taking numbers
+@Command(required=[],
+    captureOut=CapturedOut.MULTI,
+    add_args=[
+            [
+                # Default locations of the binaries and config files
+                ['--firefox'],
+                {
+                    "action" : "store",
+                    "default" : "/usr/local/bin/firefox",
+                    "help" : "Location of the Firefox binary"
+                }
+            ],
+            [
+                # Default path of the benchmark in the server
+                ['--firefoxdriver'],
+                {
+                    "action" : "store",
+                    "default" : "/kraken-1.1/driver.html",
+                    "help" : "URL of the driver of the benchmark"
+                }
+            ],
+        ],
+        help="Run the Firefox JS benchmark on a loop")
+def ffbench(options):
+    for interval in [10, 100]:
+        for slsperiod in range(interval, interval * 10 + 1, interval):
+            for i in range(0,5):
+                options.slsperiod = slsperiod
+                options.runno = str(i + 1)
+                # XXX How to call the decorator before the thing
+                firefox(options)
+                time_elapsed = options.runend - options.runstart
+                ms_elapsed = (time_elapsed.seconds * 1000) + (time_elapsed.microseconds / 1000)
+                print("Did {} checkpoints in {}ms)".format(options.ckpt_done, ms_elapsed))
+                print("Period {}ms (target {}ms)".format(ms_elapsed / options.ckpt_done,
                     str(options.slsperiod)))
 
 def main():

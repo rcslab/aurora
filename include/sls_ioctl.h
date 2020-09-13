@@ -12,8 +12,9 @@ struct sls_attr {
 };
 
 struct sls_checkpoint_args {
-	uint64_t	    oid;	/* The OID of the partition to be checkpointed. */
-	uint64_t	    recurse;    /* Should we checkpoint all children of attached processes? */
+	uint64_t	oid;		/* The OID of the partition to be checkpointed. */
+	bool		recurse;    	/* Include all descendants of attached processes */
+	bool 		synchronous;    /* Wait for the checkpoint to be done */
 };
 
 struct sls_restore_args {

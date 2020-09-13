@@ -35,7 +35,7 @@ int main(void)
 		printf("%c\n", buf);
 	    }
 
-	} else { 
+	} else {
 	    for (;;) {
 		error = write(sv[0], "b", 1);
 		if (error == -1) {

@@ -75,6 +75,7 @@ static int
 sls_checkpoint(struct sls_checkpoint_args *args)
 {
 	struct sls_checkpointd_args *ckptd_args;
+	struct proc *p = curproc;
 	struct slspart *slsp;
 	int error = 0;
 
@@ -87,10 +88,33 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	if (slsp == NULL)
 		goto error;
 
+	/* Cannot do periodic checkpoints synchronously. */
+	if ((slsp->slsp_attr.attr_period != 0) &&
+		(args->synchronous != 0)) {
+		slsp_deref(slsp);
+		goto error;
+	}
+
 	/* Set up the arguments. */
 	ckptd_args = malloc(sizeof(*ckptd_args), M_SLSMM, M_WAITOK);
 	ckptd_args->slsp = slsp;
 	ckptd_args->recurse = args->recurse;
+	ckptd_args->synchronous = args->synchronous;
+	if (ckptd_args->synchronous) {
+		mtx_init(&ckptd_args->synch_mtx, "SLS synchronous mutex", NULL, MTX_DEF);
+		cv_init(&ckptd_args->synch_cv, "SLS synchronous CV");
+
+		mtx_lock(&ckptd_args->synch_mtx);
+
+		/*
+		 * We cannot induce single threading for this process if we are
+		 * waiting on the CV below. Turn this process into single
+		 * threading mode here.
+		 */
+		PROC_LOCK(p);
+		thread_single(p, SINGLE_BOUNDARY);
+		PROC_UNLOCK(p);
+	}
 
 	/* Create the daemon. */
 	error = kthread_add((void(*)(void *)) sls_checkpointd, 
@@ -101,6 +125,21 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 		goto error;
 	}
 
+	if (ckptd_args->synchronous) {
+		cv_wait(&ckptd_args->synch_cv, &ckptd_args->synch_mtx);
+		mtx_unlock(&ckptd_args->synch_mtx);
+
+		/* 
+		 * No need to get ourselves out of single threading mode, 
+		 * the daemon already did it for us.
+		 */
+
+		mtx_destroy(&ckptd_args->synch_mtx);
+		cv_destroy(&ckptd_args->synch_cv);
+
+		/* Free the arguments here.*/
+		free(ckptd_args, M_SLSMM);
+	}
 
 	return (0);
 

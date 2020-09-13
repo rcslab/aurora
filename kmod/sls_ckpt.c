@@ -630,8 +630,14 @@ out:
 		slskv_destroy(procset);
 	}
 
-	/* Free the arguments passed to the kthread. */
-	free(args, M_SLSMM);
+	/* Free the arguments passed to the kthread, unless synchronous. */
+	if (args->synchronous) {
+		mtx_lock(&args->synch_mtx);
+		cv_signal(&args->synch_cv);
+		mtx_unlock(&args->synch_mtx);
+	} else {
+		free(args, M_SLSMM);
+	}
 
 	/* Release the reference we had to the module. */
 	sls_modderef();

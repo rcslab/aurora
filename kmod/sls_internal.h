@@ -105,7 +105,10 @@ struct sls_record *sls_getrecord(struct sbuf *sb, uint64_t slsid, uint64_t type)
 
 struct sls_checkpointd_args {
     struct slspart *slsp;
-    uint64_t recurse;
+    bool recurse;
+    bool synchronous;
+    struct mtx synch_mtx;
+    struct cv synch_cv;
 };
 
 struct sls_restored_args {

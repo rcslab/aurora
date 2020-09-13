@@ -36,14 +36,14 @@ STRIPENAME="st0"
 # Location of the striped disk
 STRIPEDRIVE="/dev/stripe/$STRIPENAME"
 # Disks that comprise the stripe
-STRIPEDISKS="nvd1"
+STRIPEDISKS="vtbd1"
 
 # Directory on which we mount the 
 MOUNTDIR="/testmnt"
 
 # Drive in which the SLOS resides. Equal to the stripe drive only if there
 # is one, otherwise $STRIPEDRIVE is invalid
-DRIVE="/dev/nvd1"
+DRIVE="/dev/vtbd1"
 
 # Delay in seconds, inserted to avoid certain races between operations
 SYNCHDELAY="2"
@@ -140,7 +140,7 @@ CLIENTBIN="$REDISDIR/src/$CLIENT"
 REDISCONF="$REDISDIR/redis.conf"
 
 # CSV conf 
-REDISCSVCONF="$OUTPUT/redis.conf.csv"
+REDISCSVCONF="$OUTDIR/redis.conf.csv"
 
 # Binary used to dump the Redis config in a nice way
 CONFIGDUMPSCRIPT="$SCRIPTDIR/redisconf.py"

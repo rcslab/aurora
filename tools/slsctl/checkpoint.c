@@ -16,6 +16,7 @@
 static struct option checkpoint_longopts[] = {
 	{ "oid", required_argument, NULL, 'o' },
 	{ "recursive", no_argument, NULL, 'r' },
+	{ "synchronous", no_argument, NULL, 's' },
 	{ "help", no_argument, NULL, 'h' },
 	{ NULL,	no_argument, NULL, 0},
 };
@@ -32,8 +33,9 @@ checkpoint_main(int argc, char* argv[])
 	int opt;
 	uint64_t oid = SLS_DEFAULT_PARTITION;
 	bool recurse = false;
+	bool synchronous = false;
 
-	while ((opt = getopt_long(argc, argv, "mo:rh", checkpoint_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "mo:rsh", checkpoint_longopts, NULL)) != -1) {
 		switch (opt) {
 		case 'm':
 			if (oid == SLS_DEFAULT_PARTITION) {
@@ -45,6 +47,9 @@ checkpoint_main(int argc, char* argv[])
 			break;
 		case 'r':
 			recurse = true;
+			break;
+		case 's':
+			synchronous = true;
 			break;
 		case 'h':
 		default:
@@ -58,7 +63,7 @@ checkpoint_main(int argc, char* argv[])
 		return 0;
 	}
 
-	if (sls_checkpoint(oid, recurse) < 0)
+	if (sls_checkpoint(oid, recurse, synchronous) < 0)
 		return 1;
 
 	return 0;

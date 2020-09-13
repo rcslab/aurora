@@ -22,6 +22,7 @@ tests/mmap/mmap
 tests/multithread/multithread
 tests/pipes/pipes
 tests/posixshm/posixshm
+tests/posix/posix
 tests/print/print
 tests/register/register
 tests/sharemap/sharemap
@@ -33,6 +34,7 @@ tests/tcplisten/tcplisten
 tests/udplisten/udplisten
 tests/unixlisten/unixlisten
 tests/unlink/unlink
+tests/vmobject/vmobject
 tests/slsfs/file
 
 

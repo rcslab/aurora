@@ -24,12 +24,13 @@
  * zero to nonzero or vice versa.
  */
 int
-sls_checkpoint(uint64_t oid, bool recurse)
+sls_checkpoint(uint64_t oid, bool recurse, bool synchronous)
 {
 	struct sls_checkpoint_args args;
 
 	args.oid= oid;
 	args.recurse = recurse ? 1 : 0;
+	args.synchronous = synchronous;
 
 	if (sls_ioctl(SLS_CHECKPOINT, &args) < 0) {
 	    perror("sls_checkpoint");

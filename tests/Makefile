@@ -1,7 +1,7 @@
 SUBDIR = array compute fd fifo fork llist main memory mmap \
-	 multithread register pipes posixshm print sharemap \
+	 multithread register pipes posix posixshm print sharemap \
 	signal sleep slsfs socketpair sysvshm tcplisten udplisten \
-	unixlisten unlink
+	unixlisten vmobject unlink
 
 .include <bsd.subdir.mk>
 
