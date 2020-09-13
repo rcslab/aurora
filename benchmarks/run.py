@@ -98,8 +98,9 @@ def set_defaults_stats(p):
     p.add('--ckpt_done',required=False, metavar='ckpt_done', default='0',
             help='Checkpoints successfully done')
     p.add('--ckpt_attempted',required=False, metavar='ckpt_attempted',
-            default='0',
-            help='Checkpoints attempted')
+            default='0', help='Checkpoints attempted')
+    p.add('--slsfreq',required=False, metavar='slsfreq',
+            default='0', help='slsfreq')
 
 def set_defaults(p):
     p.add('-c', '--config', required=False, is_config_file=True,
@@ -776,7 +777,7 @@ def webserver(options):
     options.ckpt_attempted = int(sysctl_sls("ckpt_attempted"))
     options.runend = datetime.datetime.now()
 
-    with open("{}_{}_{}".format(str(options.server), str(options.slsperiod), 
+    with open("{}_{}_{}".format(str(options.server), str(options.slsfreq), 
         str(options.runno)), "w") as outfile:
         outfile.write(wrkoutput)
 
@@ -954,7 +955,8 @@ def kvstore(options):
     options.ckpt_attempted = int(sysctl_sls("ckpt_attempted"))
     options.runend = datetime.datetime.now()
 
-    with open("{}_{}_{}".format(str(options.kvstore), str(options.slsperiod), str(options.runno)), "w") as outfile:
+    with open("{}_{}_{}".format(str(options.kvstore), str(options.slsfreq), 
+        str(options.runno)), "w") as outfile:
         outfile.write(ycsboutput)
 
     # Kill the server
@@ -1055,7 +1057,7 @@ def mutilate(options):
     p = subprocess.run(ssh + cmd, stdout=subprocess.PIPE)
     out = p.stdout.decode('UTF-8')
     with open("{}_{}_{}".format("memcached_mutilate",
-                                str(options.slsperiod),
+                                str(options.slsfreq),
                                 str(options.runno)), "w") as outfile:
         outfile.write(out)
 
@@ -1110,13 +1112,16 @@ def mutilate(options):
         ],
         help="Run the memcached/mutilate multiple times")
 def mutilatebench(options):
-    for interval in [10, 100]:
-        for slsperiod in range(interval, interval * 10 + 1, interval):
-            for i in range(0,5):
-                options.slsperiod=slsperiod
-                options.runno = str(i + 1)
-                # XXX How to call the decorator before the thing
-                mutilate(options)
+    for slsfreq in [0, 1] + list(range(10, 101, 10)):
+        for i in range(0,5):
+            options.slsfreq = slsfreq
+            options.slsperiod = int((1000 / slsfreq)) if slsfreq != 0 else 0
+            options.runno = str(i + 1)
+            # XXX How to call the decorator before the thing
+            mutilate(options)
+            time_elapsed = options.runend - options.runstart
+            ms_elapsed = (time_elapsed.seconds * 1000) + (time_elapsed.microseconds / 1000)
+            print("Did {} checkpoints in {}ms)".format(options.ckpt_done, ms_elapsed))
 
 def firefox_benchmark(options):
     ffoptions = Options()
@@ -1148,7 +1153,7 @@ def firefox_benchmark(options):
             runtime += sum(list(map(int, v)))
 
     with open("{}_{}_{}".format("/root/sls/firefox",
-                                str(options.slsperiod),
+                                str(options.slsfreq),
                                 str(options.runno)), "w") as outfile:
         outfile.write("Time: {} ms".format(runtime))
 
@@ -1228,11 +1233,6 @@ def firefox(options):
     cmd = ['kill', '-15', str(serverpid)]
     bashcmd(cmd, fail_okay=True)
 
-    # XXX Statistics message with the config
-    #print("{} checkpoints (expected around {})".format(
-    #    sysctl_sls("ckpt_done"),
-    #    (1000 / int(options.slsperiod)) * sleeptime))
-
     # XXX Replace with module_fini?
     unload(options)
 
@@ -1301,13 +1301,16 @@ def firefox(options):
         ],
         help="Run the webserver benchmark multiple times")
 def webbench(options):
-    for interval in [10, 100]:
-        for slsperiod in range(interval, interval * 10 + 1, interval):
-            for i in range(0,5):
-                options.slsperiod=slsperiod
-                options.runno = str(i + 1)
-                # XXX How to call the decorator before the thing
-                webserver(options)
+    for slsfreq in [0, 1] + list(range(10, 101, 10)):
+        for i in range(0,5):
+            options.slsfreq = slsfreq
+            options.slsperiod = int((1000 / slsfreq)) if slsfreq != 0 else 0
+            options.runno = str(i + 1)
+            # XXX How to call the decorator before the thing
+            webserver(options)
+            time_elapsed = options.runend - options.runstart
+            ms_elapsed = (time_elapsed.seconds * 1000) + (time_elapsed.microseconds / 1000)
+            print("Did {} checkpoints in {}ms)".format(options.ckpt_done, ms_elapsed))
 
 # Command for benchmarking a web server with multiple configurations
 @Command(required=[],
@@ -1391,19 +1394,16 @@ def webbench(options):
         ],
         help="Run the Redis server")
 def kvbench(options):
-    for interval in [10, 100]:
-        for slsperiod in range(interval, interval * 10 + 1, interval):
-            for i in range(0,5):
-                options.slsperiod = slsperiod
-                options.runno = str(i + 1)
-                # XXX How to call the decorator before the thing
-                kvstore(options)
-                time_elapsed = options.runend - options.runstart
-                ms_elapsed = (time_elapsed.seconds * 1000) + (time_elapsed.microseconds / 1000)
-                print("Did {} checkpoints in {}ms)".format(options.ckpt_done, ms_elapsed))
-                print("Period {}ms (target {}ms)".format(ms_elapsed / options.ckpt_done,
-                    str(options.slsperiod)))
-
+    for slsfreq in [0, 1] + list(range(10, 101, 10)):
+        for i in range(0,5):
+            options.slsfreq = slsfreq
+            options.slsperiod = int((1000 / slsfreq)) if slsfreq != 0 else 0
+            options.runno = str(i + 1)
+            # XXX How to call the decorator before the thing
+            kvstore(options)
+            time_elapsed = options.runend - options.runstart
+            ms_elapsed = (time_elapsed.seconds * 1000) + (time_elapsed.microseconds / 1000)
+            print("Did {} checkpoints in {}ms)".format(options.ckpt_done, ms_elapsed))
 
 # Command for spinning up a webserver and taking numbers
 @Command(required=[],
@@ -1430,18 +1430,16 @@ def kvbench(options):
         ],
         help="Run the Firefox JS benchmark on a loop")
 def ffbench(options):
-    for interval in [10, 100]:
-        for slsperiod in range(interval, interval * 10 + 1, interval):
-            for i in range(0,5):
-                options.slsperiod = slsperiod
-                options.runno = str(i + 1)
-                # XXX How to call the decorator before the thing
-                firefox(options)
-                time_elapsed = options.runend - options.runstart
-                ms_elapsed = (time_elapsed.seconds * 1000) + (time_elapsed.microseconds / 1000)
-                print("Did {} checkpoints in {}ms)".format(options.ckpt_done, ms_elapsed))
-                print("Period {}ms (target {}ms)".format(ms_elapsed / options.ckpt_done,
-                    str(options.slsperiod)))
+    for slsfreq in [0, 1] + list(range(10, 101, 10)):
+        for i in range(0,1):
+            options.slsfreq = slsfreq
+            options.slsperiod = int((1000 / slsfreq)) if slsfreq != 0 else 0
+            options.runno = str(i + 1)
+            # XXX How to call the decorator before the thing
+            firefox(options)
+            time_elapsed = options.runend - options.runstart
+            ms_elapsed = (time_elapsed.seconds * 1000) + (time_elapsed.microseconds / 1000)
+            print("Did {} checkpoints in {}ms)".format(options.ckpt_done, ms_elapsed))
 
 def main():
     global parser
