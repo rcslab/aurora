@@ -81,8 +81,8 @@ uint64_t sls_ckpt_done;
 
 static void slsckpt_stop(slsset *procset);
 static int sls_checkpoint(slsset *procset, struct slspart *slsp);
-static int slsckpt_metadata(struct proc *p, struct slspart *slsp, 
-    slsset *procset, struct slsckpt_data *sckpt_data);
+static int slsckpt_metadata(struct proc *p,slsset *procset, 
+    struct slsckpt_data *sckpt_data);
 
 
 /*
@@ -123,7 +123,7 @@ slsckpt_cont(slsset *procset)
  * Get all the metadata of a process.
  */
 static int
-slsckpt_metadata(struct proc *p, struct slspart *slsp, slsset *procset, struct slsckpt_data *sckpt_data)
+slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_data)
 {
 	struct sls_record *rec;
 	struct sbuf *sb;
@@ -150,7 +150,7 @@ slsckpt_metadata(struct proc *p, struct slspart *slsp, slsset *procset, struct s
 	}
 	SDT_PROBE0(sls, , , proc);
 
-	error = slsckpt_vmspace(p, sb, sckpt_data, slsp->slsp_attr.attr_target);
+	error = slsckpt_vmspace(p, sb, sckpt_data);
 	if (error != 0) {
 		SLS_DBG("Error: slsckpt_vmspace failed with error code %d\n", error);
 		goto out;
@@ -217,7 +217,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	 * delta checkpoints, or b) a normal delta checkpoint. This
 	 * matters when choosing which and how many elements to shadow. 
 	 */
-	error = slsckpt_create(&sckpt_data);
+	error = slsckpt_create(&sckpt_data, &slsp->slsp_attr);
 	if (error != 0)
 		return (error);
 
@@ -240,7 +240,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 
 	/* Get the data from all processes in the partition. */
 	KVSET_FOREACH(procset, iter, p) {
-		error = slsckpt_metadata(p, slsp, procset, sckpt_data);
+		error = slsckpt_metadata(p, procset, sckpt_data);
 		if(error != 0) {
 			SLS_DBG("Checkpointing failed\n");
 			KV_ABORT(iter);

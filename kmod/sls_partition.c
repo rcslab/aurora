@@ -40,7 +40,7 @@
 #include "debug.h"
 
 int
-slsckpt_create(struct slsckpt_data **sckpt_datap)
+slsckpt_create(struct slsckpt_data **sckpt_datap, struct sls_attr *attr)
 {
 	struct slsckpt_data *sckpt_data = NULL;
 	int error;
@@ -54,6 +54,8 @@ slsckpt_create(struct slsckpt_data **sckpt_datap)
 	error = slskv_create(&sckpt_data->sckpt_objtable);
 	if (error != 0)
 		goto error;
+
+	memcpy(&sckpt_data->sckpt_attr, attr, sizeof(sckpt_data->sckpt_attr));
 
 	*sckpt_datap = sckpt_data;
 

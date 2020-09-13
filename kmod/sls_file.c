@@ -63,14 +63,15 @@
 #include "debug.h"
 
 static int
-slsckpt_getvnode(struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
+slsckpt_getvnode(struct proc *p, struct file *fp, struct slsfile *info,
+    struct sbuf *sb, int *name_missing)
 {
 	int error;
 
 	info->backer = (uint64_t) fp->f_vnode;
 
 	/* Get the location of the node in the VFS/SLSFS. */
-	error = slsckpt_vnode(p, fp->f_vnode, info, sb);
+	error = slsckpt_vnode(p, fp->f_vnode, info, sb, name_missing);
 	if (error != 0)
 		return (error);
 
@@ -78,9 +79,10 @@ slsckpt_getvnode(struct proc *p, struct file *fp, struct slsfile *info, struct s
 }
 
 static inline int
-slsckpt_getfifo(struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
+slsckpt_getfifo(struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb,
+    int *name_missing)
 {
-	return slsckpt_getvnode(p, fp, info, sb);
+	return slsckpt_getvnode(p, fp, info, sb, name_missing);
 }
 
 static int
@@ -264,6 +266,7 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slsckpt_da
 	struct sbuf *sb, *oldsb;
 	struct sls_record *rec;
 	struct slsfile info;
+	int name_missing;
 	uint64_t sockid;
 	int error;
 
@@ -307,7 +310,12 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slsckpt_da
 		    ((fp->f_vnode->v_type == VCHR) && 
 		    ((fp->f_vnode->v_rdev->si_devsw->d_flags & D_TTY) == 0))) {
 			/* If it's a regular file we go down the normal path. */
-			error = slsckpt_getvnode(p, fp, &info, sb);
+			name_missing = 0;
+			error = slsckpt_getvnode(p, fp, &info, sb, &name_missing);
+			if ((name_missing != 0) &&
+			    !(sckpt_data->sckpt_attr.attr_flags & SLSATTR_IGNUNLINKED))
+				panic("Found unlinked vnode not in the SLOS");
+
 			if (error != 0)
 				goto error;
 
@@ -336,7 +344,12 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slsckpt_da
 		/* Backed by a fifo - only get the name */
 	case DTYPE_FIFO:
 		/* Checkpoint as we would a vnode. */
-		error = slsckpt_getfifo(p, fp, &info, sb);
+		name_missing = 0;
+		error = slsckpt_getfifo(p, fp, &info, sb, &name_missing);
+		if ((name_missing != 0) &&
+			!(sckpt_data->sckpt_attr.attr_flags & SLSATTR_IGNUNLINKED))
+			panic("Found unlinked vnode not in the SLOS");
+
 		if (error != 0)
 			goto error;
 

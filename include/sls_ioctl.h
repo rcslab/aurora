@@ -9,6 +9,7 @@ struct sls_attr {
 	int		    attr_target;    /* Backend into which the process is checkpointed */
 	int		    attr_mode;	    /* Full checkpoints or one of the delta modes? */
 	int		    attr_period;    /* Checkpoint Period in ms */
+	int		    attr_flags;	    /* Control flags */
 };
 
 struct sls_checkpoint_args {
@@ -73,5 +74,8 @@ struct sls_partdel_args {
 #define SLS_MEM			1   /* Input/output is an in-memory dump */
 #define SLS_OSD			2   /* Input/output is a single-level store */
 #define SLS_TARGETS		3   /* Number of backends */
+
+/* Control flags for partitions */
+#define SLSATTR_IGNUNLINKED	0x1 /* Ignore unlinked files */
 
 #endif

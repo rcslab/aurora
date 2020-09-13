@@ -36,7 +36,7 @@
 #include "sls_vmobject.h"
 
 int
-slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_data, int target)
+slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_data)
 {
 	struct slsvmobject cur_obj;
 	struct sls_record *rec;
@@ -50,7 +50,7 @@ slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_dat
 		return (0);
 
 	/* We don't need the anonymous objects for in-memory checkpointing. */
-	if ((target == SLS_MEM) && OBJT_ISANONYMOUS(obj))
+	if ((sckpt_data->sckpt_attr.attr_target == SLS_MEM) && OBJT_ISANONYMOUS(obj))
 		return (0);
 
 	/* First time we come across it, create a buffer for the info struct. */

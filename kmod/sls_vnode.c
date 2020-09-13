@@ -62,12 +62,14 @@
 #include "debug.h"
 
 static int
-sls_vn_to_inode(struct vnode *vp, uint64_t *inop)
+sls_vn_to_inode(struct vnode *vp, uint64_t *inop, int *name_missing)
 {
 	/* Get the inode number of the file through the vnode. */
 
-	if (vp->v_mount != slos.slsfs_mount) 
-		panic("unlinked vnode %p not in the SLOS", vp);
+	if (vp->v_mount != slos.slsfs_mount) {
+		*name_missing = 1;
+		return (0);
+	}
 
 	DEBUG1("Got inum %lx from the SLOS", INUM(SLSVP(vp)));
 
@@ -179,7 +181,8 @@ error:
 }
 
 int
-slsckpt_vnode(struct proc *p, struct vnode *vp, struct slsfile *info, struct sbuf *sb)
+slsckpt_vnode(struct proc *p, struct vnode *vp, struct slsfile *info, 
+    struct sbuf *sb, int *name_missing)
 {
 	char *freepath = NULL;
 	char *fullpath = "";
@@ -187,6 +190,7 @@ slsckpt_vnode(struct proc *p, struct vnode *vp, struct slsfile *info, struct sbu
 	int error;
 
 	vref(vp);
+
 	error = vn_fullpath(curthread, vp, &fullpath, &freepath);
 	vrele(vp);
 	switch(error) {
@@ -198,7 +202,7 @@ slsckpt_vnode(struct proc *p, struct vnode *vp, struct slsfile *info, struct sbu
 		/* File not in the VFS, try to get its location in the SLOS. */
 		free(freepath, M_TEMP);
 
-		error = sls_vn_to_inode(vp, &info->ino);
+		error = sls_vn_to_inode(vp, &info->ino, name_missing);
 		if (error != 0)
 			return (error);
 
@@ -269,9 +273,10 @@ slsrest_vnode(struct sbuf *path, struct slsfile *info, int *fdp, int seekable)
 
 
 int
-slsckpt_fifo(struct proc *p, struct vnode *vp, struct slsfile *info, struct sbuf *sb)
+slsckpt_fifo(struct proc *p, struct vnode *vp, struct slsfile *info,
+    struct sbuf *sb, int *name_missing)
 {
-	return slsckpt_vnode(p, vp, info, sb);
+	return slsckpt_vnode(p, vp, info, sb, name_missing);
 }
 
 int

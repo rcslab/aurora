@@ -48,8 +48,9 @@ struct sls_metadata {
 };
 
 struct slsckpt_data {
-    struct slskv_table *sckpt_rectable;  /* In-memory records */
-    struct slskv_table *sckpt_objtable;  /* In-memory live VM Objects */
+    struct slskv_table *sckpt_rectable; /* In-memory records */
+    struct slskv_table *sckpt_objtable; /* In-memory live VM Objects */
+    struct sls_attr	sckpt_attr;	/* Attributes of the partition */
 };
 
 /* An in-memory version of an Aurora record. */
@@ -125,7 +126,7 @@ void slsvm_objtable_collapse(struct slskv_table *objtable);
 void sls_checkpointd(struct sls_checkpointd_args *args);
 void sls_restored(struct sls_restored_args *args);
 
-int slsckpt_create(struct slsckpt_data **sckpt_datap);
+int slsckpt_create(struct slsckpt_data **sckpt_datap, struct sls_attr *attr);
 void slsckpt_destroy(struct slsckpt_data *sckpt_data);
 
 void slsrest_kqattach_locked(struct proc *p, struct kqueue *kq);

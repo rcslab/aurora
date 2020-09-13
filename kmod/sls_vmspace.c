@@ -69,7 +69,7 @@ slsckpt_vmentry(struct vm_map_entry *entry, struct sbuf *sb)
 }
 
 int
-slsckpt_vmspace(struct proc *p, struct sbuf *sb, struct slsckpt_data *sckpt_data, long target)
+slsckpt_vmspace(struct proc *p, struct sbuf *sb, struct slsckpt_data *sckpt_data)
 {
 	vm_map_t vm_map;
 	struct vmspace *vmspace;
@@ -111,7 +111,7 @@ slsckpt_vmspace(struct proc *p, struct sbuf *sb, struct slsckpt_data *sckpt_data
 
 		for (obj = entry->object.vm_object; obj != NULL; obj = obj->backing_object) {
 
-			error = slsckpt_vmobject(p, obj, sckpt_data, target);
+			error = slsckpt_vmobject(p, obj, sckpt_data);
 			if (error != 0) 
 				return (error);
 		}
