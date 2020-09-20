@@ -194,6 +194,9 @@ slsp_init(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
 	if (error != 0)
 		goto error;
 
+	mtx_init(&slsp->slsp_syncmtx, "slssync", NULL, MTX_DEF);
+	cv_init(&slsp->slsp_synccv, "slssync");
+
 	*slspp = slsp;
 
 	return (0);
@@ -216,6 +219,11 @@ slsp_fini(struct slspart *slsp)
 {
 	/* Remove all processes currently in the partition from the SLS. */
 	slsp_detachall(slsp);
+
+	/* Destroy the synchronization mutexes/condition variables. */
+	mtx_assert(&slsp->slsp_syncmtx, MA_NOTOWNED);
+	cv_destroy(&slsp->slsp_synccv);
+	mtx_destroy(&slsp->slsp_syncmtx);
 
 	/* XXX TEMP Remove the partition from the SLOS. */
 	slos_iremove(&slos, slsp->slsp_oid);
@@ -339,4 +347,24 @@ void
 slsp_epoch_advance(struct slspart *slsp)
 {
 	slsp->slsp_epoch += 1;
+}
+
+void
+slsp_waitfor(struct slspart *slsp)
+{
+	mtx_assert(&slsp->slsp_syncmtx, MA_OWNED);
+
+	cv_wait(&slsp->slsp_synccv, &slsp->slsp_syncmtx);
+	mtx_unlock(&slsp->slsp_syncmtx);
+}
+
+void
+slsp_signal(struct slspart *slsp)
+{
+	mtx_assert(&slsp->slsp_syncmtx, MA_NOTOWNED);
+
+	mtx_lock(&slsp->slsp_syncmtx);
+	cv_signal(&slsp->slsp_synccv);
+	mtx_unlock(&slsp->slsp_syncmtx);
+
 }

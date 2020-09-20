@@ -13,14 +13,43 @@
 void
 usage(void)
 {
-	printf("Usage: ./vmobject <# of objects> <size in 4KB pages>\n");
+	printf("Usage: ./vmobject <# of objects> <size in bytes>\n");
 	exit(0);
+}
+
+void
+checkpoint_round(int round)
+{
+	struct timeval ckpt[2];
+	int error;
+
+	error = gettimeofday(&ckpt[0], NULL);
+	if (error != 0) {
+		perror("gettimeofday");
+		exit(0);
+	}
+
+	error = sls_checkpoint(OID, false, true);
+	if (error != 0) {
+		fprintf(stderr, "sls_checkpoint returned %d\n", error);
+		exit(0);
+	}
+
+	error = gettimeofday(&ckpt[1], NULL);
+	if (error != 0) {
+		perror("gettimeofday");
+		exit(0);
+	}
+
+	printf("Time elapsed (%d): %ldus\n", round, (1000 * 1000) * 
+			(ckpt[1].tv_sec - ckpt[0].tv_sec) + (ckpt[1].tv_usec - ckpt[0].tv_usec));
+
+	sleep(1);
 }
 
 int
 main(int argc, char *argv[])
 {
-	struct timeval ckptstart, ckptend;
 	size_t objcnt, objsize;
 	struct sls_attr attr;
 	size_t us_elapsed;
@@ -39,7 +68,10 @@ main(int argc, char *argv[])
 	objsize = strtol(argv[2], NULL, 10);
 	if (objsize == 0)
 		usage();
-	objsize *= 4096;
+
+	printf("Using %lu objects, %lu bytes (or %lu KB, or %lu MB, or %lu GB) each\n", 
+			objcnt, objsize, objsize / 1024, objsize / (1024 * 1024),
+			objsize / (1024 * 1024 *1024));
 
 	mappings = malloc(sizeof(*mappings) * objcnt);
 	if (mappings == NULL) {
@@ -67,6 +99,7 @@ main(int argc, char *argv[])
 		.attr_target = SLS_MEM,
 		.attr_mode = SLS_FULL,
 		.attr_period = 0,
+		.attr_flags = SLSATTR_IGNUNLINKED,
 	};
 	error = sls_partadd(OID, attr);
 	if (error != 0) {
@@ -80,26 +113,8 @@ main(int argc, char *argv[])
 		exit(0);
 	}
 
-	error = gettimeofday(&ckptstart, NULL);
-	if (error != 0) {
-		perror("gettimeofday");
-		exit(0);
-	}
-
-	error = sls_checkpoint(OID, false, true);
-	if (error != 0) {
-		fprintf(stderr, "sls_checkpoint returned %d\n", error);
-		exit(0);
-	}
-
-	error = gettimeofday(&ckptend, NULL);
-	if (error != 0) {
-		perror("gettimeofday");
-		exit(0);
-	}
-
-	printf("Time elapsed: %ldus\n", (1000 * 1000) * 
-			(ckptend.tv_sec - ckptstart.tv_sec) + (ckptend.tv_usec - ckptstart.tv_usec));
+	for (i = 0; i < 3; i++)
+		checkpoint_round(i);
 
 	/*
 	error = sls_partdel(OID);

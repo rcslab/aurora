@@ -61,15 +61,16 @@
 #include "imported_sls.h"
 #include "debug.h"
 
+SDT_PROBE_DEFINE(sls, , , namestart);
+SDT_PROBE_DEFINE(sls, , , nameend);
+SDT_PROBE_DEFINE(sls, , , nameerr);
+
 static int
-sls_vn_to_inode(struct vnode *vp, uint64_t *inop, int *name_missing)
+sls_vn_to_inode(struct vnode *vp, uint64_t *inop)
 {
 	/* Get the inode number of the file through the vnode. */
-
-	if (vp->v_mount != slos.slsfs_mount) {
-		*name_missing = 1;
-		return (0);
-	}
+	if (vp->v_mount != slos.slsfs_mount)
+		return (ENOENT);
 
 	DEBUG1("Got inum %lx from the SLOS", INUM(SLSVP(vp)));
 
@@ -94,12 +95,11 @@ slsrest_path(struct sbuf *path, struct slsfile *info, int *fdp)
 	error = kern_openat(curthread, AT_FDCWD, sbuf_data(path),
 	    UIO_SYSSPACE, O_RDWR, S_IRWXU);
 	if (error != 0) {
-		printf("ERR\n");
+		printf("Error %d reopening file %s\n", error, sbuf_data(path));
 		return (error);
 	}
 
 	fd = curthread->td_retval[0];
-
 
 	/* Export the fd to the caller. */
 	*fdp = fd;
@@ -182,59 +182,65 @@ error:
 
 int
 slsckpt_vnode(struct proc *p, struct vnode *vp, struct slsfile *info, 
-    struct sbuf *sb, int *name_missing)
+    struct sbuf *sb, int ign_unlink)
 {
 	char *freepath = NULL;
 	char *fullpath = "";
 	size_t len;
-	int error;
+	int error, unlink_error;
 
 	vref(vp);
 
+	SDT_PROBE0(sls, , , namestart);
 	error = vn_fullpath(curthread, vp, &fullpath, &freepath);
+	if (error == 0)
+		SDT_PROBE0(sls, , , nameend);
+	else 
+		SDT_PROBE0(sls, , , nameerr);
+
 	vrele(vp);
 	switch(error) {
 	case 0:
-		/* Successfully found a path, go on with . */
-		break;
+		/* Successfully found a path. */
+		info->has_path = 1;
+		/* Write out the struct file. */
+		error = sbuf_bcat(sb, (void *) info, sizeof(*info));
+		if (error != 0)
+			goto error;
+
+		len = strnlen(fullpath, PATH_MAX);
+		error = sls_path_append(fullpath, len, sb);
+		if (error != 0)
+			goto error;
+
+		free(freepath, M_TEMP);
+		return (0);
 
 	case ENOENT:
 		/* File not in the VFS, try to get its location in the SLOS. */
-		free(freepath, M_TEMP);
-
-		error = sls_vn_to_inode(vp, &info->ino, name_missing);
-		if (error != 0)
-			return (error);
-
 		info->has_path = 0;
+
+		unlink_error = sls_vn_to_inode(vp, &info->ino);
+		if ((unlink_error != 0)) {
+			if (ign_unlink == 0)
+				panic("Unlinked vnode %p not in the SLOS", vp);
+
+			free(freepath, M_TEMP);
+			return (0);
+		} 
 
 		/* Write out the struct file. */
 		error = sbuf_bcat(sb, (void *) info, sizeof(*info));
 		if (error != 0)
-			return (error);
+			goto error;
 
+		free(freepath, M_TEMP);
 		return (0);
 
 	default:
 		/* Miscellaneous error. */
 		goto error;
 	}
-
-	info->has_path = 1;
-	/* Write out the struct file. */
-	error = sbuf_bcat(sb, (void *) info, sizeof(*info));
-	if (error != 0)
-		goto error;
-
-
-	len = strnlen(fullpath, PATH_MAX);
-	error = sls_path_append(fullpath, len, sb);
-	if (error != 0)
-		goto error;
-
-	free(freepath, M_TEMP);
-
-	return (0);
 
 error:
 
@@ -274,9 +280,9 @@ slsrest_vnode(struct sbuf *path, struct slsfile *info, int *fdp, int seekable)
 
 int
 slsckpt_fifo(struct proc *p, struct vnode *vp, struct slsfile *info,
-    struct sbuf *sb, int *name_missing)
+    struct sbuf *sb, int ign_unlink)
 {
-	return slsckpt_vnode(p, vp, info, sb, name_missing);
+	return slsckpt_vnode(p, vp, info, sb, ign_unlink);
 }
 
 int

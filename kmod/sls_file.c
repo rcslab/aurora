@@ -62,16 +62,20 @@
 #include "imported_sls.h"
 #include "debug.h"
 
+SDT_PROBE_DEFINE1(sls, , , fileckptstart, "int");
+SDT_PROBE_DEFINE1(sls, , , fileckptend, "int");
+SDT_PROBE_DEFINE1(sls, , , fileckpterr, "int");
+
 static int
 slsckpt_getvnode(struct proc *p, struct file *fp, struct slsfile *info,
-    struct sbuf *sb, int *name_missing)
+    struct sbuf *sb, int ign_unlink)
 {
 	int error;
 
 	info->backer = (uint64_t) fp->f_vnode;
 
 	/* Get the location of the node in the VFS/SLSFS. */
-	error = slsckpt_vnode(p, fp->f_vnode, info, sb, name_missing);
+	error = slsckpt_vnode(p, fp->f_vnode, info, sb, ign_unlink);
 	if (error != 0)
 		return (error);
 
@@ -80,9 +84,9 @@ slsckpt_getvnode(struct proc *p, struct file *fp, struct slsfile *info,
 
 static inline int
 slsckpt_getfifo(struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb,
-    int *name_missing)
+    int ign_unlink)
 {
-	return slsckpt_getvnode(p, fp, info, sb, name_missing);
+	return slsckpt_getvnode(p, fp, info, sb, ign_unlink);
 }
 
 static int
@@ -266,7 +270,6 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slsckpt_da
 	struct sbuf *sb, *oldsb;
 	struct sls_record *rec;
 	struct slsfile info;
-	int name_missing;
 	uint64_t sockid;
 	int error;
 
@@ -279,6 +282,8 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slsckpt_da
 	 */
 	if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) fp, (uintptr_t *) &sb) == 0)
 		return (0);
+
+	SDT_PROBE1(sls, , , fileckptstart, fp->f_type);
 
 	info.type = fp->f_type;
 	info.flag = fp->f_flag;
@@ -310,18 +315,14 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slsckpt_da
 		    ((fp->f_vnode->v_type == VCHR) && 
 		    ((fp->f_vnode->v_rdev->si_devsw->d_flags & D_TTY) == 0))) {
 			/* If it's a regular file we go down the normal path. */
-			name_missing = 0;
-			error = slsckpt_getvnode(p, fp, &info, sb, &name_missing);
-			if ((name_missing != 0) &&
-			    !(sckpt_data->sckpt_attr.attr_flags & SLSATTR_IGNUNLINKED))
-				panic("Found unlinked vnode not in the SLOS");
-
+			error = slsckpt_getvnode(p, fp, &info, sb,
+			    sckpt_data->sckpt_attr.attr_flags & SLSATTR_IGNUNLINKED);
 			if (error != 0)
 				goto error;
 
 		} else {
-			/* 
-			 * We use the device pointer as our ID, because it's 
+			/*
+			 * We use the device pointer as our ID, because it's
 			 * accessible by the master side, while our fp isn't.
 			 */
 			*slsid = (uint64_t)fp->f_vnode->v_rdev;
@@ -330,6 +331,7 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slsckpt_da
 			/* Check again if we have actually checkpointed this pts before. */
 			if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) *slsid, (uintptr_t *) &oldsb) == 0) {
 				sbuf_delete(sb);
+				SDT_PROBE1(sls, , , fileckptend, fp->f_type);
 				return (0);
 			}
 
@@ -344,12 +346,8 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slsckpt_da
 		/* Backed by a fifo - only get the name */
 	case DTYPE_FIFO:
 		/* Checkpoint as we would a vnode. */
-		name_missing = 0;
-		error = slsckpt_getfifo(p, fp, &info, sb, &name_missing);
-		if ((name_missing != 0) &&
-			!(sckpt_data->sckpt_attr.attr_flags & SLSATTR_IGNUNLINKED))
-			panic("Found unlinked vnode not in the SLOS");
-
+		error = slsckpt_getfifo(p, fp, &info, sb,
+		    sckpt_data->sckpt_attr.attr_flags & SLSATTR_IGNUNLINKED);
 		if (error != 0)
 			goto error;
 
@@ -386,6 +384,7 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slsckpt_da
 		 */
 		if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) *slsid, (uintptr_t *) &oldsb) == 0) {
 			sbuf_delete(sb);
+			SDT_PROBE1(sls, , , fileckptend, fp->f_type);
 			return (0);
 		}
 
@@ -406,6 +405,7 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slsckpt_da
 			/* Recheck - again, same as with pipes. */
 			if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) *slsid, (uintptr_t *) &oldsb) == 0) {
 				sbuf_delete(sb);
+				SDT_PROBE1(sls, , , fileckptend, fp->f_type);
 				return (0);
 			}
 		}
@@ -457,6 +457,7 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slsckpt_da
 		/* Check again if we have actually checkpointed this pts before. */
 		if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) *slsid, (uintptr_t *) &oldsb) == 0) {
 			sbuf_delete(sb);
+			SDT_PROBE1(sls, , , fileckptend, fp->f_type);
 			return (0);
 		}
 
@@ -485,12 +486,14 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *slsid, struct slsckpt_da
 	/* Give the SLS ID we want to use for the file pointer to the caller. */
 	*slsid = info.slsid;
 
+	SDT_PROBE1(sls, , , fileckptend, fp->f_type);
 	return (0);
 
 error:
 	SLS_DBG("error %d", error);
 
 	sbuf_delete(sb);
+	SDT_PROBE1(sls, , , fileckpterr, fp->f_type);
 
 	return (error);
 

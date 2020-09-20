@@ -13,11 +13,17 @@
 #include "imported_sls.h"
 #include "sls_internal.h"
 #include "sls_sysv.h"
+
+SDT_PROBE_DEFINE(sls, , , sysvstart);
+SDT_PROBE_DEFINE(sls, , , sysvend);
+SDT_PROBE_DEFINE(sls, , , sysverror);
+
 /* 
  * Shadow and checkpoint all shared objects in the system. We assume all
  * shared objects are in use by workloads in the SLS, and so traverse the
  * whole space looking for valid segments.
  */
+
 int
 slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 {
@@ -27,6 +33,8 @@ slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 	struct sbuf *sb = NULL;
 	vm_ooffset_t offset;
 	int error, i;
+
+	SDT_PROBE0(sls, , , sysvstart);
 
 	for (i = 0; i < shmalloced; i++) {
 		if ((shmsegs[i].u.shm_perm.mode & SHMSEG_ALLOCATED) == 0)
@@ -73,8 +81,10 @@ slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 	}
 
 	/* If we have no SYSV segments, don't store any data at all. */
-	if (sb == NULL)
+	if (sb == NULL) {
+		SDT_PROBE0(sls, , , sysvend);
 		return (0);
+	}
 
 	error = sbuf_finish(sb);
 	if (error != 0)
@@ -87,11 +97,14 @@ slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 		goto error;
 	}
 
+	SDT_PROBE0(sls, , , sysvend);
+
 	return (0);
 error:
 	if (sb != NULL)
 		sbuf_delete(sb);
 
+	SDT_PROBE0(sls, , , sysverror);
 	return (error);
 }
 

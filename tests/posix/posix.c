@@ -6,6 +6,10 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <sys/types.h>
+#include <sys/lock.h>
+
+#include <sys/event.h>
 #include <sys/ipc.h>
 #include <sys/mman.h>
 #include <sys/shm.h>
@@ -17,12 +21,12 @@
 #include <sls.h>
 
 #define OID (1000)
-#define NUMFILES (16)
+#define NUMEVENTS (1024)
 #define SHM_SIZE (4096) 
-#define UNADDR ("/testmnt/localsocket")	
+#define UNADDR ("localsocket")	
 #define UNADDR_MAX (108)
-#define VNODETEST ("/testmnt/vnodetest")
-#define SYSVPATH ("/testmnt/slssysvshm")
+#define VNODETEST ("vnodetest")
+#define SYSVPATH ("slssysvshm")
 
 int shmid;
 void *shm;
@@ -35,6 +39,36 @@ usage(void)
 	exit(0);
 }
 
+
+void
+teardown_sysvshm(void)
+{
+	int error;
+
+	error = shmdt(shm);
+	if (error != 0)
+	    perror("shmdt");
+
+	error = shmctl(shmid, IPC_RMID, NULL);
+	if (error != 0)
+		perror("shmctl");
+}
+
+void
+teardown_unixsocket(void)
+{
+	close(unixfd);
+	remove(UNADDR);
+}
+
+void
+teardown_and_exit(void)
+{
+	teardown_sysvshm();
+	teardown_unixsocket();
+	exit(0);
+}
+
 void
 setup_vnode(void)
 {
@@ -43,7 +77,7 @@ setup_vnode(void)
 	fd = open(VNODETEST, O_RDWR | O_CREAT, 0666);
 	if (fd < 0) {
 	    perror("open");
-	    exit(0);
+	    teardown_and_exit();
 	}
 }
 
@@ -62,29 +96,22 @@ setup_unixsocket(void)
 	unixfd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (unixfd == -1) {
 	    perror("socket");
-	    exit(0);
+	    teardown_and_exit();
 	}
 
 	/* Bind it to the address given in sockaddr_in. */
 	error = bind(unixfd, (struct sockaddr *) &local, sizeof(local));
 	if (error == -1) {
 	    perror("bind");
-	    exit(0);
+	    teardown_and_exit();
 	}
 
 	error = listen(unixfd, 512);
 
 	if (error == -1) {
 	    perror("listen");
-	    exit(0);
+	    teardown_and_exit();
 	}
-}
-
-void
-teardown_unixsocket(void)
-{
-	close(unixfd);
-	remove(UNADDR);
 }
 
 void
@@ -94,7 +121,7 @@ setup_socketpair(void)
 
 	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == -1) {
 	    perror("socketpair");
-	    exit(0);
+	    teardown_and_exit();
 	}
 }
 
@@ -106,13 +133,13 @@ setup_sysvshm(void)
 	key = ftok("/root", 0);
 	if (key < 0) {
 	    perror("ftok");
-	    exit(0);
+	    teardown_and_exit();
 	}
 
 	shmid = shmget(key, SHM_SIZE, IPC_CREAT | 0666);
 	if (shmid < 0) {
 	    perror("shmget");
-	    exit(0);
+	    teardown_and_exit();
 	}
 
 	/* 
@@ -122,25 +149,7 @@ setup_sysvshm(void)
 	shm = (char *) shmat(shmid, 0, 0);
     	if (shm == (void *) -1) {
 	    perror("shmat");
-	    exit(0);
-	}
-}
-
-void
-teardown_sysvshm(void)
-{
-	int error;
-
-	error = shmdt(shm);
-	if (error != 0) {
-	    perror("shmdt");
-	    exit(0);
-	}
-
-	error = shmctl(shmid, IPC_RMID, NULL);
-	if (error != 0) {
-		perror("shmctl");
-		exit(0);
+	    teardown_and_exit();
 	}
 }
 
@@ -153,7 +162,7 @@ setup_pipe(void)
 	error = pipe((int *) &ppfd);
 	if (error != 0) {
 		perror("pipe");
-		exit(0);
+		teardown_and_exit();
 	}
 }
 
@@ -167,25 +176,57 @@ setup_posixshm(void)
 	fd = shm_open(SHM_ANON, O_RDWR | O_CREAT, 0666);
 	if (fd < 0) {
 	    perror("shm_open");
-	    exit(0);
+	    teardown_and_exit();
 	}
 
 	error = ftruncate(fd, getpagesize());
 	if (error != 0) {
 	    perror("ftruncate");
-	    exit(0);
+	    teardown_and_exit();
 	}
 
 	shm = (char *) mmap(NULL, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	if (shm == MAP_FAILED) {
 	    perror("mmap");
-	    exit(0);
+	    teardown_and_exit();
 	}
+}
+
+void
+setup_kqueue(void)
+{
+	struct kevent *kevs;
+	int fd;
+	int i;
+
+
+	fd = kqueue();
+	if (fd < 0)
+		teardown_and_exit();
+
+	kevs = malloc(NUMEVENTS * sizeof(*kevs));
+	if (kevs == NULL) {
+		perror("malloc");
+		teardown_and_exit();
+	}
+
+	for (int i = 0; i < NUMEVENTS; i++)
+		EV_SET(&kevs[i], i, EVFILT_USER, EV_ADD, 0, 0, 0);
+
+	kevent(fd, kevs, NUMEVENTS, NULL, 0, NULL);
+	free(kevs);
 }
 
 void
 setup_pty(void)
 {
+	int fd;
+
+	fd = posix_openpt(O_RDWR);
+	if (fd < 0) {
+		perror("posix_openpt");
+		teardown_and_exit();
+	}
 
 }
 
@@ -200,11 +241,17 @@ main(int argc, char *argv[])
 		usage();
 
 	mountpoint = argv[1];
+	error = chdir(mountpoint);
+	if (error != 0) {
+		perror("chdir");
+		teardown_and_exit();
+	}
 
 	setup_vnode();
 	setup_pipe();
 	setup_posixshm();
 	setup_pty();
+	setup_kqueue();
 	setup_unixsocket();
 	setup_socketpair();
 	setup_sysvshm();
@@ -217,29 +264,26 @@ main(int argc, char *argv[])
 	error = sls_partadd(OID, attr);
 	if (error != 0) {
 		fprintf(stderr, "sls_partadd returned %d\n", error);
-		exit(0);
+		teardown_and_exit();
 	}
 
 	error = sls_attach(OID, getpid());
 	if (error != 0) {
 		fprintf(stderr, "sls_attach returned %d\n", error);
-		exit(0);
+		teardown_and_exit();
 	}
 
 	error = sls_checkpoint(OID, false, true);
 	if (error != 0) {
 		fprintf(stderr, "sls_checkpoint returned %d\n", error);
-		exit(0);
+		teardown_and_exit();
 	}
 
 	error = sls_partdel(OID);
 	if (error != 0) {
 		fprintf(stderr, "sls_partdel returned %d\n", error);
-		exit(0);
+		teardown_and_exit();
 	}
-
-	teardown_sysvshm();
-	teardown_unixsocket();
 
 	return (0);
 }

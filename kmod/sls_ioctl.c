@@ -83,6 +83,12 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	if (sls_modref() != 0)
 		return (EINVAL);
 
+	/* Take another reference for the worker thread. */
+	if (sls_modref() != 0) {
+		sls_modderef();
+		return (EINVAL);
+	}
+
 	/* Get the partition to be checkpointed. */
 	slsp = slsp_find(args->oid);
 	if (slsp == NULL)
@@ -99,12 +105,9 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	ckptd_args = malloc(sizeof(*ckptd_args), M_SLSMM, M_WAITOK);
 	ckptd_args->slsp = slsp;
 	ckptd_args->recurse = args->recurse;
-	ckptd_args->synchronous = args->synchronous;
-	if (ckptd_args->synchronous) {
-		mtx_init(&ckptd_args->synch_mtx, "SLS synchronous mutex", NULL, MTX_DEF);
-		cv_init(&ckptd_args->synch_cv, "SLS synchronous CV");
-
-		mtx_lock(&ckptd_args->synch_mtx);
+	ckptd_args->sync = args->synchronous;
+	if (args->synchronous) {
+		mtx_lock(&slsp->slsp_syncmtx);
 
 		/*
 		 * We cannot induce single threading for this process if we are
@@ -117,35 +120,35 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	}
 
 	/* Create the daemon. */
-	error = kthread_add((void(*)(void *)) sls_checkpointd, 
+	error = kthread_add((void(*)(void *)) sls_checkpointd,
 	    ckptd_args, NULL, NULL, 0, 0, "sls_checkpointd");
 	if (error != 0) {
+		if (args->synchronous)
+			mtx_unlock(&slsp->slsp_syncmtx);
+
 		free(ckptd_args, M_SLSMM);
 		slsp_deref(slsp);
 		goto error;
 	}
 
-	if (ckptd_args->synchronous) {
-		cv_wait(&ckptd_args->synch_cv, &ckptd_args->synch_mtx);
-		mtx_unlock(&ckptd_args->synch_mtx);
+	if (args->synchronous) {
+		slsp_waitfor(slsp);
 
-		/* 
-		 * No need to get ourselves out of single threading mode, 
+		/*
+		 * No need to get ourselves out of single threading mode,
 		 * the daemon already did it for us.
 		 */
-
-		mtx_destroy(&ckptd_args->synch_mtx);
-		cv_destroy(&ckptd_args->synch_cv);
-
-		/* Free the arguments here.*/
-		free(ckptd_args, M_SLSMM);
 	}
 
+	sls_modderef();
 	return (0);
 
 error:
 
+	/* Release both references from here. */
 	sls_modderef();
+	sls_modderef();
+
 	return (EINVAL);
 }
 
@@ -255,19 +258,40 @@ sls_partdel(struct sls_partdel_args *args)
 	/* We got a reference to the process from slsp_find, free it. */
 	slsp_deref(slsp);
 
-	/* 
+	/*
 	 * Set the status of the partition as detached, notifying
 	 * processes currently checkpointing it to exit.
 	 */
 	atomic_set_int(&slsp->slsp_status, SLSPART_DETACHED);
 
-	/* 
+	/*
 	 * Dereference the partition. We can't just delete it,
 	 * since it might still be checkpointing.
 	 */
 	slsp_deref(slsp);
 
 	return (0);
+}
+
+static int
+sls_epoch(struct sls_epoch_args *args)
+{
+	struct slspart *slsp;
+	int error;
+
+	/* Try to find the process. */
+	slsp = slsp_find(args->oid);
+	if (slsp == NULL)
+		return (EINVAL);
+
+	/* Copy out the status of the process. */
+	error = copyout(&slsp->slsp_epoch, args->ret,
+		sizeof(slsp->slsp_epoch));
+
+	/* Free the reference given by slsp_find(). */
+	slsp_deref(slsp);
+	return (error);
+
 }
 
 static int
@@ -354,8 +378,6 @@ static int
 sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
     int flag __unused, struct thread *td)
 {
-	struct sls_epoch_args *eargs = NULL;
-	struct slspart *slsp;
 	int error = 0;
 
 	switch (cmd) {
@@ -385,20 +407,8 @@ sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		break;
 
 	case SLS_EPOCH:
-		eargs = (struct sls_epoch_args *) data;
-
-		/* Try to find the process. */
-		slsp = slsp_find(eargs->oid);
-		if (slsp == NULL)
-			return (EINVAL);
-
-		/* Copy out the status of the process. */
-		error = copyout(&slsp->slsp_epoch, eargs->ret,
-		    sizeof(slsp->slsp_epoch));
-
-		/* Free the reference given by slsp_find(). */
-		slsp_deref(slsp);
-		return (error);
+		error = sls_epoch((struct sls_epoch_args *) data);
+		break;
 
 	default:
 		return (EINVAL);
@@ -422,8 +432,8 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 
 	switch (inEvent) {
 	case MOD_LOAD:
-		mtx_init(&sls_restmtx, "SLS restore mutex", NULL, MTX_DEF);
-		cv_init(&sls_restcv, "SLS restore lock");
+		mtx_init(&sls_restmtx, "slsrest", NULL, MTX_DEF);
+		cv_init(&sls_restcv, "slsrest");
 
 		bzero(&slsm, sizeof(slsm));
 
@@ -431,8 +441,8 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		if (error != 0)
 			return (error);
 
-		mtx_init(&slsm.slsm_mtx, "SLS module mutex", NULL, MTX_DEF);
-		cv_init(&slsm.slsm_exitcv, "SLS module lock");
+		mtx_init(&slsm.slsm_mtx, "slsm", NULL, MTX_DEF);
+		cv_init(&slsm.slsm_exitcv, "slsm");
 
 		error = slskv_init();
 		if (error)

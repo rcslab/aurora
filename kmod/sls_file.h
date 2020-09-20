@@ -35,11 +35,11 @@ int slsckpt_pts_slv(struct proc *p, struct vnode *vp, struct sbuf *sb);
 int slsrest_pts(struct slskv_table *filetable,  struct slspts *slspts, int *fdp);
 
 int slsckpt_vnode(struct proc *p, struct vnode *vp, struct slsfile *info,
-	struct sbuf *sb, int *name_missing);
+	struct sbuf *sb, int ign_unlink);
 int slsrest_vnode(struct sbuf *path, struct slsfile *info, int *fdp, int seekable);
 
 int slsckpt_fifo(struct proc *p, struct vnode *vp, struct slsfile *info,
-	struct sbuf *sb, int *name_missing);
+	struct sbuf *sb, int ign_unlink);
 int slsrest_fifo(struct sbuf *path, struct slsfile *info, int *fdp);
 
 int slsckpt_filedesc(struct proc *p, struct slsckpt_data *sckpt_data, struct sbuf *sb);

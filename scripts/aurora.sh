@@ -1,5 +1,10 @@
 # Stripe the Aurora disk
 function aurstripe {
+    if [ "$STRIPING" = false ];
+    then
+	return
+    fi
+
     gstripe load
     gstripe stop "$STRIPENAME"
     gstripe create -s "$STRIPESIZE" -v "$STRIPENAME" $STRIPEDISKS

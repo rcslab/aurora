@@ -29,6 +29,8 @@ DTRACEFILE="$OUTDIR/stages.csv"
 
 # SLOS setup configuration
 
+# Are we even using striping?
+STRIPING=false
 # Size of the stripe 
 STRIPESIZE="65536"
 # Name of the striped disk
@@ -36,14 +38,14 @@ STRIPENAME="st0"
 # Location of the striped disk
 STRIPEDRIVE="/dev/stripe/$STRIPENAME"
 # Disks that comprise the stripe
-STRIPEDISKS="vtbd1"
+STRIPEDISKS="nvd0 nvd1 nvd2 nvd3"
 
 # Directory on which we mount the 
 MOUNTDIR="/testmnt"
 
 # Drive in which the SLOS resides. Equal to the stripe drive only if there
 # is one, otherwise $STRIPEDRIVE is invalid
-DRIVE="/dev/vtbd1"
+DRIVE="/dev/stripe/st0"
 
 # Delay in seconds, inserted to avoid certain races between operations
 SYNCHDELAY="2"

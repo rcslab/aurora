@@ -80,7 +80,7 @@ uint64_t sls_ckpt_attempted;
 uint64_t sls_ckpt_done;
 
 static void slsckpt_stop(slsset *procset);
-static int sls_checkpoint(slsset *procset, struct slspart *slsp);
+static int sls_checkpoint(slsset *procset, struct slspart *slsp, int sync);
 static int slsckpt_metadata(struct proc *p,slsset *procset, 
     struct slsckpt_data *sckpt_data);
 
@@ -192,7 +192,7 @@ out:
  * by the partition's processes.
  */
 static int __attribute__ ((noinline))
-sls_checkpoint(slsset *procset, struct slspart *slsp)
+sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 {
 	struct slsckpt_data *sckpt_data, *sckpt_old;
 	struct slskv_iter iter;
@@ -262,6 +262,11 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 		slsckpt_cont(procset);
 		goto error;
 	}
+
+
+	/* If synchronous, this is where we let the application execute. */
+	if (sync != 0)
+		slsp_signal(slsp);
 
 	SDT_PROBE0(sls, , , shadow);
 	/* Let the process execute ASAP */
@@ -529,6 +534,10 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		sls_ckpt_attempted += 1;
 		printf("Overlapping checkpoints\n");
 		SLS_DBG("Partition %ld in state %d\n", slsp->slsp_oid, slsp->slsp_status);
+
+		if (args->sync != 0)
+			slsp_signal(slsp);
+
 		goto out;
 	}
 
@@ -536,6 +545,9 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	error = slsset_create(&procset);
 	if (error != 0) {
 		sls_ckpt_attempted += 1;
+		if (args->sync != 0)
+			slsp_signal(slsp);
+
 		goto out;
 	}
 
@@ -560,7 +572,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		if (slsp_isempty(slsp))
 			break;
 
-		/* 
+		/*
 		 * If we recursively checkpoint, we don't actually enter the children
 		 * into the SLS permanently, but only checkpoint them in this iteration.
 		 * This only matters if the parent dies, in which case the children will
@@ -581,7 +593,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		SDT_PROBE0(sls, , , stopped);
 
 		/* Checkpoint the process once. */
-		sls_checkpoint(procset, slsp);
+		sls_checkpoint(procset, slsp, args->sync);
 		nanotime(&tend);
 
 		if (error != 0)
@@ -630,16 +642,8 @@ out:
 		slskv_destroy(procset);
 	}
 
-	/* Free the arguments passed to the kthread, unless synchronous. */
-	if (args->synchronous) {
-		mtx_lock(&args->synch_mtx);
-		cv_signal(&args->synch_cv);
-		mtx_unlock(&args->synch_mtx);
-	} else {
-		free(args, M_SLSMM);
-	}
-
-	/* Release the reference we had to the module. */
+	/* Free the arguments of the kthread, and the module reference.  */
+	free(args, M_SLSMM);
 	sls_modderef();
 
 	kthread_exit();

@@ -67,6 +67,8 @@ def set_defaults_sls(p):
             help='Path to the slsctl tool')
     p.add('--clients', metavar='h1,h2,etc', required=True, action="append",
         help='Comma seperated values of client hosts')
+    p.add('--ignore_unlinked', metavar='ignore_unlinked', required=False, default=True, action="store",
+        help='Ignore unlinked files when checkpointed')
 
 # Set the defaults for the SLOS module
 def set_defaults_slos(p):
@@ -568,6 +570,8 @@ def slsckpt(options, pidlist):
             "-t", str(options.slsperiod)]
     if options.delta:
         cmd.append("-d")
+    if options.ignore_unlinked:
+        cmd.append("-i")
 
     bashcmd(cmd)
 
@@ -658,6 +662,14 @@ def nginx_setup(options, inputconf, outputconf, srvconf):
     # select the smallest possible process.
     return pid_main("nginx")
 
+def tomcat_setup(options):
+    # Call the startup script
+    bashcmd("{}/{}".format(options.tomcat, "/bin/startup.sh"))
+    options.benchport="8080"
+    time.sleep(5)
+    return pid_main("java")
+
+
 def webserver_setup(options):
     # Apart from selecting the right setup function to call, set the path of
     # the configuration to be used and the output configuration. No need for
@@ -677,6 +689,8 @@ def webserver_setup(options):
                 "lighttpd/lighttpd.conf"),
                 srvconf=options.lighttpdconfdir
                 )
+    elif options.server == "tomcat":
+        return tomcat_setup(options)
     else:
         raise Exception("Invalid server {}".format(options.server))
 
@@ -700,6 +714,14 @@ def webserver_setup(options):
                     "action" : "store",
                     "default" : "/usr/local/sbin/nginx",
                     "help" : "Location of nginx"
+                }
+            ],
+            [
+                ['--tomcat'],
+                {
+                    "action" : "store",
+                    "default" : "/usr/local/apache-tomcat-9.0",
+                    "help" : "Location of Apache Tomcat directory"
                 }
             ],
             [
@@ -783,11 +805,8 @@ def webserver(options):
 
 
     # Kill the server
-    cmd = ['pkill', '-9', options.server]
+    cmd = ['kill', '-9', str(pid)]
     bashcmd(cmd)
-    print("{} checkpoints (expected around {})".format(
-        sysctl_sls("ckpt_done"),
-        (1000 / int(options.slsperiod)) * int(options.time)))
 
     # XXX Replace with module_fini?
     unload(options)
@@ -930,7 +949,6 @@ def kvstore(options):
 
     if pid == None:
         raise Exception("No PID for process")
-    print(pid)
 
     # Warm it up using YCSB. We can do this locally, but then we would need two
     # version of YCSB - one collocated with the database, and one remote.
@@ -1042,6 +1060,7 @@ def mutilate(options):
         agents.append(proc)
 
     time.sleep(10)
+    options.runstart = datetime.datetime.now()
 
     cmd = mutilatecmd(options, "--noload", "-B",
             "-T", options.mutilatethreads, # Threads (loadgen)
@@ -1063,6 +1082,10 @@ def mutilate(options):
 
     for c in agents:
         c.kill()
+
+    options.ckpt_done= int(sysctl_sls("ckpt_done"))
+    options.ckpt_attempted = int(sysctl_sls("ckpt_attempted"))
+    options.runend = datetime.datetime.now()
 
     # Kill the server
     bashcmd(['kill', '-9', str(pid)])
@@ -1160,7 +1183,7 @@ def firefox_benchmark(options):
     driver.close()
     driver.quit()
 
-# Command for spinning up a webserver and taking numbers
+# Command for spinning up a Firefox instance and taking numbers
 @Command(required=[],
     captureOut=CapturedOut.MULTI,
     add_args=[
@@ -1259,6 +1282,14 @@ def firefox(options):
                 }
             ],
             [
+                ['--tomcat'],
+                {
+                    "action" : "store",
+                    "default" : "/usr/local/apache-tomcat-9.0",
+                    "help" : "Location of Apache Tomcat directory"
+                }
+            ],
+            [
                 ['--lighttpdconfdir'],
                 {
                     "action" : "store",
@@ -1301,7 +1332,7 @@ def firefox(options):
         ],
         help="Run the webserver benchmark multiple times")
 def webbench(options):
-    for slsfreq in [0, 1] + list(range(10, 101, 10)):
+    for slsfreq in list(range(10, 101, 10)):
         for i in range(0,5):
             options.slsfreq = slsfreq
             options.slsperiod = int((1000 / slsfreq)) if slsfreq != 0 else 0

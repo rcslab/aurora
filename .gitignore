@@ -87,3 +87,4 @@ redis_*
 nginx_*
 lighttpd_*
 memcached_*
+vmobject-*

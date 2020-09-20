@@ -107,7 +107,7 @@ struct sls_record *sls_getrecord(struct sbuf *sb, uint64_t slsid, uint64_t type)
 struct sls_checkpointd_args {
     struct slspart *slsp;
     bool recurse;
-    bool synchronous;
+    bool sync;
     struct mtx synch_mtx;
     struct cv synch_cv;
 };
@@ -152,7 +152,6 @@ extern int sls_sync;
 extern int sls_drop_io;
 extern uint64_t sls_pages_grabbed;
 extern uint64_t sls_io_initiated;
-extern uint64_t sls_epoch;
 extern char *sls_basedir;
 
 extern uint64_t sls_ckpt_attempted;
