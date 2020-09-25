@@ -134,6 +134,9 @@ slscli(void)
 	for (;;) {
 		/* Get the line. */
 		const char *line = el_gets(el, &num);
+		if (line == NULL) {
+			break;
+		}
 
 		/* Tokenize the next line. */
 		Tokenizer *tok = tok_init(NULL);
