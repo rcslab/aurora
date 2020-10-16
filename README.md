@@ -1,5 +1,28 @@
-Usage
------
+OVERVIEW
+========
+
+This is the repository for the Aurora Single Level Store. The Single Level 
+Store transparently provides persistence to applications at a millisecond 
+granularity. Apps can call into Aurora to directly control the checkpointing 
+process.
+
+The file tree is the following:
+
+| Directories	| Contents						    |
+| :-----------: | :-------------------------------------------------------: |
+| benchmarks/	| Performance benchmarks				    |
+| dtrace/	| DTrace scripts for debugging and performance measurements |
+| include/	| Headers for userspace and the kernel			    |
+| kmod/		| Single Level Store in memory module			    |
+| libsls/	| Userspace library implementing the API		    |
+| scripts/	| Bash utilities for using Aurora and performance benchmarks|
+| slfs/		| VFS filesystem for using files with Aurora		    |
+| slos/		| Object Store backing Aurora				    |
+| tests/	| Correctness tests for Aurora				    |
+| tools/	| Userspace tools					    |
+
+USAGE
+=====
 
 The checkpoint restore cycle needs 4 commands, all from the slsctl utility:
 
@@ -18,7 +41,6 @@ Options:
 slsctl partadd -o <oid>  [-d] [-t <interval>] -b <backend>
 
 
-
 slsctl attach: Add a process to the partition. We only need the PID of the process and the OID of the partition.
 slsctl attach -o <oid> -p <pid>
 
@@ -35,26 +57,10 @@ detached from all terminals.
 slsctl restore -o <oid> [-d]
 
 An example: Suppose we have a process with PID 123 that we want to checkpoint to disk only once, then restore.
-We would have to run the following (randomly OID=3):
+We would have to run the following (example OID is 3):
 
 partadd -o 3 -b slos
 attach -o 3 -p 123
 checkpoint -o 3
 restore -o 3
 
-
-As a bonus, we can remove partitions from the SLOS using slsctl partdel:
-
-slsctl partdel -o <oid>
-
-
-Bugs:
-
-While doing macro varmail benchmark experienced a deadlock.
-
-DEPENDENCIES TO INSTALL FOR EVERYTHING
-VIRTUALENV with configargparse
-
-lighttpd
-wrk
-pidof
