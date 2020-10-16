@@ -325,6 +325,16 @@ slsfs_init(struct vfsconf *vfsp)
 static int
 slsfs_uninit(struct vfsconf *vfsp)
 {
+	int usecnt;
+
+	SLOS_LOCK(&slos);
+	usecnt = slos.slos_usecnt;
+	SLOS_UNLOCK(&slos);
+
+	KASSERT(usecnt > 0, ("invalid slos_usecnt %d", usecnt));
+	if (usecnt > 1)
+		return (EBUSY);
+
 	//Destroy the identifier generator. 
 	clean_unrhdr(slsid_unr);
 	clear_unrhdr(slsid_unr);
@@ -722,7 +732,6 @@ slsfs_create_slos(struct mount *mp, struct vnode *devvp)
 {
 	int error;
 
-	lockinit(&slos.slos_lock, PVFS, "sloslock", VLKTIMEOUT, LK_NOSHARE);
 	cv_init(&slos.slsfs_sync_cv, "SLSFS Syncer CV");
 	mtx_init(&slos.slsfs_sync_lk, "syncer lock",  NULL, MTX_DEF);
 	slos.slsfs_dirtybufcnt = 0;
@@ -1283,13 +1292,25 @@ slsfs_mount(struct mount *mp)
 
 	DEBUG("Mounting drive");
 
-	if (mp->mnt_data != NULL)  {
+	SLOS_LOCK(&slos);
+
+	/* Cannot mount twice. */
+	if ((slos.slsfs_mount != NULL) &&
+	    ((mp->mnt_flag & MNT_UPDATE) == 0)) {
+		SLOS_UNLOCK(&slos);
+		return (EBUSY);
+	}
+
+	/* We do nothing on updates. */
+	if (mp->mnt_flag & MNT_UPDATE) {
+		SLOS_UNLOCK(&slos);
 		return (0);
 	}
 
-	if (mp->mnt_flag & MNT_UPDATE) {
-		return (0);
-	} else if (mp->mnt_data != NULL) {
+	slos.slos_usecnt += 1;
+	SLOS_UNLOCK(&slos);
+
+	if (mp->mnt_data != NULL) {
 		slsfs_wakeup_syncer(1);
 		vflush(mp, 0, FORCECLOSE, curthread);
 		VOP_LOCK(slos.slsfs_inodes, LK_EXCLUSIVE);
@@ -1306,15 +1327,13 @@ slsfs_mount(struct mount *mp)
 		vfs_filteropt(opts, slsfs_opts);
 
 		from = vfs_getopts(opts, "from", &error);
-		if (error != 0) {
-			return (error);
-		}
+		if (error != 0)
+			goto error;
 
 		NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE, from, curthread);
 		error = namei(&nd);
-		if (error) {
-			return (error);
-		}
+		if (error)
+			goto error;
 		NDFREE(&nd, NDF_ONLY_PNBUF);
 
 		devvp = nd.ni_vp;
@@ -1322,7 +1341,7 @@ slsfs_mount(struct mount *mp)
 			/* XXX Can we make it so we can use a file? */
 			DEBUG("Is not a disk");
 			vput(devvp);
-			return (error);
+			goto error;
 		}
 
 		/* Get an ID for the new filesystem. */
@@ -1330,20 +1349,28 @@ slsfs_mount(struct mount *mp)
 		/* Actually mount the vnode as a filesyste and initialize its 
 		 * state. */
 		error = slsfs_mountfs(devvp, mp);
-		if (error) {
-			return (error);
-		}
+		if (error)
+			goto error;
 
 		error = slsfs_init_fs(mp);
 		if (error) {
 			/* XXX: This seems like a broken error path */
-			return (error);
+			goto error;
 		}
 
 		/* Get the path where we found the device. */
 		vfs_mountedfrom(mp, from);
 	}
+
 	return (0);
+
+error:
+	/* Remove the reference taken above. */
+	SLOS_LOCK(&slos);
+	slos.slos_usecnt -= 1;
+	SLOS_UNLOCK(&slos);
+
+	return (error);
 }
 
 /*
@@ -1411,12 +1438,11 @@ slsfs_unmount_device(struct slsfs_device *sdev)
 		g_topology_unlock();
 	}
 
+	slos.slos_usecnt -= 1;
+
 	SLOS_UNLOCK(&slos);
 
 	slos_allocator_uninit(&slos);
-
-	/* Destroy related in-memory locks. */
-	lockdestroy(&slos.slos_lock);
 
 	free(slos.slos_sb, M_SLOS_SB);
 
@@ -1467,19 +1493,6 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	sdev = smp->sp_sdev;
 	slos = smp->sp_slos;
 
-	/*
-	 * XXX This shouldn't really be here, but the SLOS and the FS are not two discrete
-	 * components yet. The right way to do this is get a reference to the SLOS from the
-	 * filesystem, and allow the SLOS to be destroyed only after the filesystem has been
-	 * unmounted.
-	 *
-	 * Disallow unmounting the FS while the SLS is still active. If we
-	 * want to honor MNT_FORCE we can sleep, but we definitely can't remove
-	 * the mount point from below the SLS.
-	 */
-	if (slos->slos_usecnt > 0)
-		return (EBUSY);
-
 	if (mntflags & MNT_FORCE) {
 		flags |= FORCECLOSE;
 	}
@@ -1526,6 +1539,7 @@ slsfs_unmount(struct mount *mp, int mntflags)
 
 	DEBUG("Freeing mount info");
 	mp->mnt_data = NULL;
+	slos->slsfs_mount = NULL;
 	DEBUG("Changing mount flags");
 
 

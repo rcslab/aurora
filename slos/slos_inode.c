@@ -78,6 +78,9 @@ slos_init(void)
 	    slos_node_init, slos_node_fini, 0, 0);
 
 	bzero(&slos, sizeof(struct slos));
+	lockinit(&slos.slos_lock, PVFS, "sloslock", VLKTIMEOUT, LK_NOSHARE);
+	slos.slos_usecnt = 1;
+
 	sysctl_ctx_init(&slos_ctx);
 	root = SYSCTL_ADD_ROOT_NODE(&slos_ctx, OID_AUTO, "aurora_slos", CTLFLAG_RW, 0,
 	    "Aurora object store statistics and configuration variables");
@@ -95,6 +98,9 @@ slos_init(void)
 int
 slos_uninit(void)
 {
+	/* Destroy the SLOS struct lock. */
+	lockdestroy(&slos.slos_lock);
+
 	sysctl_ctx_free(&slos_ctx);
 	uma_zdestroy(slos_node_zone);
 	return (0);

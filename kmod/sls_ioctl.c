@@ -453,7 +453,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		    NULL, UMA_ALIGNOF(struct slspagerun), 0);
 		if (slspagerun_zone == NULL) {
 			error = ENOMEM;
-			break;
+			return (error);
 		}
 
 		error = slskv_create(&slsm.slsm_procs);
@@ -503,7 +503,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 
 	case MOD_UNLOAD:
 
-
 		/* Signal that we're exiting and wait for threads to finish. */
 		mtx_lock(&slsm.slsm_mtx);
 		slsm.slsm_exiting = 1;
@@ -540,6 +539,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		error = EOPNOTSUPP;
 		break;
 	}
+
 	return (error);
 }
 

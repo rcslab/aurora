@@ -38,6 +38,14 @@ print_running()
     printf "$FORMAT" $1 "" "running"
 }
 
+cleanup_testbench()
+{
+	# For good measure, if something went really wrong.
+	aurteardown
+	destroymd $MDDISK
+	exit 0
+}
+
 run_test()
 {
     NAME=`basename $1`
@@ -48,6 +56,7 @@ run_test()
     else
 	print_fail $NAME
 	ktrdump >> $KTRLOG
+	cleanup_testbench
     fi
 }
 
@@ -60,22 +69,23 @@ run_tests()
     echo Test started: `date`
     printf "%-40s   %-9s   %-10s\n" "Test" "Status" "Time"
     echo "-----------------------------------------------------------"
-    for t in `find $SRCROOT/tests -name \*.sh | sort -n`; do
+    for t in `find $SRCROOT/tests -maxdepth 1 -name \*.sh | sort -n`; do
 	run_test $t
+	# Teardown here, can't do that before we ktrdump.
+	aurteardown 2> /dev/null
     done
 }
 
+# Cleanup any leftover Aurora state.
+aurteardown
 
-loadmod
 MDDISK=`createmd`
-slsnewfs > /dev/null
-slsmount
-
 export MDDISK=$MDDISK
-run_tests
 
-unloadsls
-slsunmount
-destroymd $MDDISK
-unloadslos
+if [ $# -eq 1 ]; then
+	run_test $1
+else
+	run_tests
+fi
 
+cleanup_testbench

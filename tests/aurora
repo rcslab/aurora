@@ -1,12 +1,21 @@
-
 NEWFS=$SRCROOT/tools/newfs_sls/newfs_sls
 SLSCTL=$SRCROOT/tools/slsctl/slsctl
 
 # Load and unload kernel modules
-loadmod()
+loadsls()
+{
+    kldload ../kmod/sls.ko
+}
+
+loadslos()
 {
     kldload ../slos/slos.ko
-    kldload ../kmod/sls.ko
+}
+
+loadmod()
+{
+    loadslos
+    loadsls
 }
 
 # Unload the SLS. Necessary for unmounting/unloading the SLOS
@@ -23,7 +32,7 @@ unloadslos()
 # Create and destroy memory device
 createmd()
 {
-MDDISK=`mdconfig -a -t malloc -s 1g`
+    MDDISK=`mdconfig -a -t malloc -s 1g`
     echo $MDDISK | cut -b3-
 }
 
@@ -45,6 +54,20 @@ slsmount()
 slsunmount()
 {
     umount /mnt
+}
+
+aursetup()
+{
+    loadmod
+    slsnewfs > /dev/null
+    slsmount
+}
+
+aurteardown()
+{
+    unloadsls
+    slsunmount
+    unloadslos
 }
 
 slscheckpoint()
@@ -75,3 +98,12 @@ killandwait()
     wait $1
 }
 
+# Run a command and make sure it fails
+checkfail()
+{
+    # Have to execute the command in the if statement because of the -e flag.
+    if $1 = 0; then
+	exit 1
+    fi
+    exit 0
+}

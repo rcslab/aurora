@@ -2,6 +2,7 @@
 
 . aurora
 
+aursetup
 echo foo > $MOUNTPT/foo
 rm $MOUNTPT/foo
 
@@ -13,5 +14,6 @@ rmdir $MOUNTPT/foo
 
 ln -s garbage_string:123 $MOUNTPT/bar
 rm $MOUNTPT/bar
+aurteardown
 
 exit 0

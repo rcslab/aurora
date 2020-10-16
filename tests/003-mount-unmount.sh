@@ -2,12 +2,12 @@
 
 . aurora
 
-for i in `seq 2`
+aursetup
+for i in `seq 3`
 do
 	slsunmount
-	sleep 1
 	slsmount
-	sleep 1
 done
+aurteardown
 
 exit 0

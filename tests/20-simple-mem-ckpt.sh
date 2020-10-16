@@ -2,6 +2,8 @@
 
 . aurora
 
+aursetup
+
 dd if=/dev/zero of=/dev/null bs=1m 1>&2 &
 
 slscheckpoint `jobid %1`
