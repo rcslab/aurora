@@ -27,6 +27,7 @@
 #include "sls_vm.h"
 #include "debug.h"
 
+int sls_objprotect = 1;
 SDT_PROBE_DEFINE(sls, , , procset_loop);
 
 /* 
@@ -66,18 +67,37 @@ slsvm_object_shadow(struct slskv_table *objtable, vm_object_t *objp)
 }
 
 void
-slsvm_objtable_collapse(struct slskv_table *objtable)
+slsvm_objtable_collapse(struct slskv_table *objtable, struct slskv_table *newtable)
 {
 	struct slskv_iter iter;
-	vm_object_t obj, shadow;
+	vm_object_t obj, shadow, child;
+	int error;
 
 	/* Remove the Aurora reference from the backing objects. */
 	KV_FOREACH(objtable, iter, obj, shadow) {
 		DEBUG4("Deallocating object %p (ID %lx), with %d references and %d shadows", obj, obj->objid, obj->ref_count, obj->shadow_count);
-		vm_object_deallocate(obj);
-	}
+		if (newtable == NULL) {
+			vm_object_deallocate(obj);
+			continue;
+		}
 
-	/* XXX Don't forget the SYSV shared memory table! */
+		/* Collapse the old checkpoint into the parent. */
+		error = slskv_find(newtable, (uint64_t) shadow, (uintptr_t *) &child);
+		if (error == 0) {
+			vm_object_deallocate(shadow);
+			/* The shadow is still in the checkpoint. */
+			slskv_del(newtable, (uint64_t) shadow);
+			error = slskv_add(newtable, (uint64_t) obj, (uintptr_t) child);
+			KASSERT(error == 0, 
+			    ("Object %p shadowed in consecutive checkpoints", obj));
+		} else {
+			/*
+			 * The shadow isn't in the checkpoint, destroy the
+			 * original object.
+			 */
+			vm_object_deallocate(obj);
+		}
+	}
 }
 
 /*
@@ -85,37 +105,14 @@ slsvm_objtable_collapse(struct slskv_table *objtable)
  * sense for writable entries, read-only entries are retained.
  */
 static void
-slsvm_entry_zap_partial(struct proc *p, struct vm_map_entry *entry, vm_object_t obj)
+slsvm_entry_protect_obj(struct proc *p, struct vm_map_entry *entry)
 {
 	if (((entry->eflags & MAP_ENTRY_NEEDS_COPY) == 0) &&
 	    ((entry->protection & VM_PROT_WRITE) != 0)) {
 		pmap_protect_pglist(&p->p_vmspace->vm_pmap,
 		    entry->start, entry->end, entry->start - entry->offset,
-		    &obj->memq, entry->protection & ~VM_PROT_WRITE, AURORA_PMAP_TEST_FULL);
-	}
-}
-
-static void __attribute__ ((noinline))
-slsvm_object_zap(vm_object_t obj)
-{
-	vm_page_t m;
-
-	/*
-	 * XXX Optimize for when the entries aren't writable? We want to protect, not remove.
-	 * We might need to check all entries in which the objects reside. For that we need
-	 * to do extra bookkeeping in the object.
-	 */
-	TAILQ_FOREACH(m, &obj->memq, listq)
-	    pmap_remove_all(m);
-}
-
-static void
-slsvm_entry_zap(struct proc *p, struct vm_map_entry *entry)
-{
-	KASSERT(entry->wired_count == 0, ("wired count is %d", entry->wired_count));
-	if (((entry->eflags & MAP_ENTRY_NEEDS_COPY) == 0) &&
-	    ((entry->protection & VM_PROT_WRITE) != 0)) {
-		pmap_remove(&p->p_vmspace->vm_pmap, entry->start, entry->end);
+		    &entry->object.vm_object->memq, entry->protection & ~VM_PROT_WRITE, 
+		    AURORA_PMAP_TEST_FULL);
 	}
 }
 
@@ -259,7 +256,10 @@ slsvm_proc_shadow(struct proc *p, struct slskv_table *table, int is_fullckpt)
 			 * There is no race with the process here for the
 			 * entry, so there is no need to lock the map.
 			 */
-			slsvm_entry_protect(p, entry);
+			if (sls_objprotect == 1)
+				slsvm_entry_protect_obj(p, entry);
+			else
+				slsvm_entry_protect(p, entry);
 			entry->object.vm_object = vmshadow;
 			VM_OBJECT_WLOCK(vmshadow);
 			vm_object_clear_flag(vmshadow, OBJ_ONEMAPPING);
@@ -269,7 +269,10 @@ slsvm_proc_shadow(struct proc *p, struct slskv_table *table, int is_fullckpt)
 		}
 
 		/* Shadow the object, retain it in Aurora. */
-		slsvm_entry_protect(p, entry);
+		if (sls_objprotect == 1)
+			slsvm_entry_protect_obj(p, entry);
+		else
+			slsvm_entry_protect(p, entry);
 		error = slsvm_object_shadow(table, &entry->object.vm_object);
 		if (error != 0)
 			goto error;

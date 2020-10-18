@@ -202,6 +202,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 	int error = 0;
 
 	DEBUG("Process stopped");
+	SDT_PROBE0(sls, , , stopped);
 #ifdef KTR
 	KVSET_FOREACH(procset, iter, p) {
 		slsvm_print_vmspace(p->p_vmspace);
@@ -234,9 +235,8 @@ sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 		slsckpt_cont(procset);
 		goto error;
 	}
-
-	SDT_PROBE0(sls, , , dump);
 	SDT_PROBE0(sls, , , sysv);
+
 
 	/* Get the data from all processes in the partition. */
 	KVSET_FOREACH(procset, iter, p) {
@@ -263,12 +263,12 @@ sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 		goto error;
 	}
 
+	SDT_PROBE0(sls, , , shadow);
 
 	/* If synchronous, this is where we let the application execute. */
 	if (sync != 0)
 		slsp_signal(slsp);
 
-	SDT_PROBE0(sls, , , shadow);
 	/* Let the process execute ASAP */
 	slsckpt_cont(procset);
 	SDT_PROBE0(sls, , ,cont);
@@ -292,7 +292,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 
 	case SLS_MEM:
 		/* Replace the old checkpoint in the partition. */
-		slsckpt_destroy(slsp->slsp_sckpt);
+		slsckpt_destroy(slsp->slsp_sckpt, sckpt_data);
 		slsp->slsp_sckpt = sckpt_data;
 		sckpt_data = NULL;
 		break;
@@ -301,12 +301,9 @@ sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 		panic("Invalid target %d\n", slsp->slsp_attr.attr_target);
 	}
 
-	SDT_PROBE0(sls, , , dump);
 
 	/* Advance the current epoch. */
 	slsp_epoch_advance(slsp);
-
-	SDT_PROBE0(sls, , , sync);
 
 	/* 
 	 *  If this is a delta checkpoint, and it is not the first
@@ -357,7 +354,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 	switch (slsp->slsp_attr.attr_mode) {
 	case SLS_FULL:
 		/* Destroy the shadows. We don't keep any between iterations. */
-		slsckpt_destroy(sckpt_data);
+		slsckpt_destroy(sckpt_data, NULL);
 		sckpt_data = NULL;
 		break;
 
@@ -367,7 +364,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 		/* Destroy the old shadows, now only the new ones remain. */
 		sckpt_old = slsp->slsp_sckpt;
 		if (sckpt_old != NULL)
-			slsckpt_destroy(sckpt_old);
+			slsckpt_destroy(sckpt_old, sckpt_data);
 		slsp->slsp_sckpt = sckpt_data;
 		break;
 
@@ -375,7 +372,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 		/* Destroy the new shadow, if we already have an old one. */
 		sckpt_old = slsp->slsp_sckpt;
 		if (sckpt_old != NULL)
-			slsckpt_destroy(sckpt_data);
+			slsckpt_destroy(sckpt_data, NULL);
 		else 
 			slsp->slsp_sckpt = sckpt_data;
 		break;
@@ -384,19 +381,21 @@ sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 		panic("invalid mode %d\n", slsp->slsp_attr.attr_mode);
 	}
 
+	SDT_PROBE0(sls, , , dedup);
 	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
 
-	if (slsp->slsp_attr.attr_target == SLS_OSD)
+	if (slsp->slsp_attr.attr_target == SLS_OSD) {
 		taskqueue_drain_all(slos.slos_tq);
-	/* XXX Using MNT_WAIT is causing a deadlock right now. */
-	VFS_SYNC(slos.slsfs_mount, (sls_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
+		/* XXX Using MNT_WAIT is causing a deadlock right now. */
+		VFS_SYNC(slos.slsfs_mount, (sls_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
+	}
 
 	/*
 	 * XXX Advance the epoch of the SLOS, and associate the SLS epoch with
 	 * that of the SLOS.
 	 */
 
-	SDT_PROBE0(sls, , , dedup);
+	SDT_PROBE0(sls, , , sync);
 
 	slsp->slsp_epoch += 1;
 	DEBUG("Checkpointed partition once");
@@ -406,7 +405,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 error:
 	/* Undo existing VM object tree modifications. */
 	if (sckpt_data != NULL)
-		slsckpt_destroy(sckpt_data);
+		slsckpt_destroy(sckpt_data, NULL);
 
 	return (error);
 }
@@ -590,7 +589,6 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 
 		SDT_PROBE0(sls, , , start);
 		slsckpt_stop(procset);
-		SDT_PROBE0(sls, , , stopped);
 
 		/* Checkpoint the process once. */
 		sls_checkpoint(procset, slsp, args->sync);

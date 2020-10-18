@@ -69,6 +69,7 @@
 #include "imported_sls.h"
 #include "debug.h"
 
+SDT_PROBE_DEFINE(sls, , , restdone);
 
 static int
 slsrest_dothread(struct proc *p, char **bufp, size_t *buflenp)
@@ -904,7 +905,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 			goto out;
 
 		/* Bring in the whole checkpoint in the form of SLOS records. */
-		error = sls_read_slos(oid, &rectable, &objtable);
+		error = sls_read_slos(slsp, &rectable, &objtable);
 		if (error != 0)
 			goto out;
 
@@ -1049,7 +1050,7 @@ out:
 
 	mtx_unlock(&slsm.slsm_mtx);
 
-	SLS_DBG("Done\n");
+	SDT_PROBE0(sls, , , restdone);
 
 	slsstate_changed = atomic_cmpset_int(&slsp->slsp_status, SLSPART_RESTORING,
 	    SLSPART_AVAILABLE);

@@ -37,6 +37,7 @@
 #include "sls_mm.h"
 #include "sls_partition.h"
 #include "sls_table.h"
+#include "sls_vm.h"
 #include "debug.h"
 
 int
@@ -74,13 +75,16 @@ error:
 }
 
 void
-slsckpt_destroy(struct slsckpt_data *sckpt_data)
+slsckpt_destroy(struct slsckpt_data *sckpt_data, struct slsckpt_data *sckpt_new)
 {
+	struct slskv_table *newtable;
+
 	if (sckpt_data == NULL)
 		return;
 
+	newtable = (sckpt_new != NULL) ? sckpt_new->sckpt_objtable : NULL;
 	if (sckpt_data->sckpt_objtable != NULL) {
-		slsvm_objtable_collapse(sckpt_data->sckpt_objtable);
+		slsvm_objtable_collapse(sckpt_data->sckpt_objtable, newtable);
 		slskv_destroy(sckpt_data->sckpt_objtable);
 	}
 
@@ -233,12 +237,12 @@ slsp_fini(struct slspart *slsp)
 
 	/* Remove any references to VM objects we may have. */
 	if (slsp->slsp_objects != NULL) {
-		slsvm_objtable_collapse(slsp->slsp_objects);
+		slsvm_objtable_collapse(slsp->slsp_objects, NULL);
 		slskv_destroy(slsp->slsp_objects);
 	}
 
 	if (slsp->slsp_sckpt != NULL)
-		slsckpt_destroy(slsp->slsp_sckpt);
+		slsckpt_destroy(slsp->slsp_sckpt, NULL);
 
 	free(slsp, M_SLSMM);
 }

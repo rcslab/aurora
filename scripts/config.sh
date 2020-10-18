@@ -30,7 +30,7 @@ DTRACEFILE="$OUTDIR/stages.csv"
 # SLOS setup configuration
 
 # Are we even using striping?
-STRIPING=false
+STRIPING=true
 # Size of the stripe 
 STRIPESIZE="65536"
 # Name of the striped disk

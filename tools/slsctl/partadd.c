@@ -19,13 +19,14 @@ static struct option partadd_longopts[] = {
 	{ "period", required_argument, NULL, 't' },
 	{ "backend", required_argument, NULL, 'b' },
 	{ "ignore_unlinked", required_argument, NULL, 'i' },
+	{ "lazy", required_argument, NULL, 'l' },
 	{ NULL, no_argument, NULL, 0 },
 };
 
 void
 partadd_usage(void)
 {
-	printf("Usage: slsctl partadd -o <id>  [-b <memory|slos>] [-t ms] [-d] [-i]\n");
+	printf("Usage: slsctl partadd -o <id>  [-b <memory|slos>] [-t ms] [-d] [-i] [-l]\n");
 }
 
 int
@@ -44,13 +45,17 @@ partadd_main(int argc, char* argv[])
 		    .attr_flags = 0,
 	};
 
-	while ((opt = getopt_long(argc, argv, "b:dio:p:t:", partadd_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "b:dilo:p:t:", partadd_longopts, NULL)) != -1) {
 		switch (opt) {
 		case 'd':
 			attr.attr_mode = SLS_DELTA;
 			break;
 		case 'i':
 			attr.attr_flags |= SLSATTR_IGNUNLINKED;
+			break;
+
+		case 'l':
+			attr.attr_flags |= SLSATTR_LAZYREST;
 			break;
 
 		case 'm':

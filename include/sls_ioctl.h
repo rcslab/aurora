@@ -77,5 +77,6 @@ struct sls_partdel_args {
 
 /* Control flags for partitions */
 #define SLSATTR_IGNUNLINKED	0x1 /* Ignore unlinked files */
+#define SLSATTR_LAZYREST	0x2 /* Restore lazily */
 
 #endif

@@ -93,7 +93,7 @@ slsrest_path(struct sbuf *path, struct slsfile *info, int *fdp)
 
 	/* XXX Permissions/flags. */
 	error = kern_openat(curthread, AT_FDCWD, sbuf_data(path),
-	    UIO_SYSSPACE, O_RDWR, S_IRWXU);
+	    UIO_SYSSPACE, O_RDWR | O_CREAT, S_IRWXU);
 	if (error != 0) {
 		printf("Error %d reopening file %s\n", error, sbuf_data(path));
 		return (error);

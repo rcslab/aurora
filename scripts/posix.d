@@ -18,12 +18,13 @@ sls:sls::fileckptstart
 
 sls:sls::fileckptend
 {
-	@time[ftype[arg0]] = avg(timestamp - self->tstart)
+	@time[ftype[arg0]] = avg(timestamp - self->tstart);
 }
 
-sls:sls::fileckptend
+sls:sls::fileckpterr
 {
-	@time["err"] = avg(timestamp - self->tstart)
+	@time["err"] = avg(timestamp - self->tstart);
+	@errcounts["err"] = count();
 }
 
 sls:sls::sysvstart
@@ -40,11 +41,7 @@ sls:sls::sysvend
 sls:sls::sysverror
 {
 	@time["err"] = avg(timestamp - self->tstart);
-}
-
-sls:sls::sysverror
-{
-	@time["err"] = avg(timestamp - self->tstart);
+	@errcounts["sysverr"] = count();
 }
 
 sls:sls::namestart
@@ -60,8 +57,13 @@ sls:sls::nameend
 sls:sls::nameerr
 {
 	@time["nameerr"] = avg(timestamp - self->nstart); 
+	@errcounts["nameerr"] = count();
 }
 
 END
 {
+	print("Checkpoint times (ns):");
+	printa(@time);
+	print("Error errcounts(ns):");
+	printa(@errcounts);
 }

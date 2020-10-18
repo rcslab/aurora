@@ -13,7 +13,6 @@ BEGIN
 	done = 0;
 
 	stoptime = 0;
-	sysvtime = 0;
 	proctime = 0;
 	vmtime = 0;
 	filetime = 0;
@@ -26,6 +25,7 @@ BEGIN
 	vptonamestart = 0;
 	vptonameend = 0;
 	vptopathtime = 0;
+	aurora_collapses = 0;
 
 	iters = 0;
 }
@@ -56,13 +56,13 @@ sls:sls::vptopathend
 sls:sls::sysv
 {
 	sysv = timestamp;
-	sysvtime += sysv - stopped;
+	proctime = sysv - stopped;
 }
 
 sls:sls::proc
 {
 	proc = timestamp;
-	proctime += proc - sysv;
+	proctime = proc - sysv;
 }
 
 sls:sls::vm
@@ -95,16 +95,21 @@ sls:sls::dump
 	dumptime += dump - cont;
 }
 
-sls:sls::sync
-{
-	sync = timestamp;
-	synctime += sync - dump;
-}
-
 sls:sls::dedup
 {
 	dedup = timestamp;
-	deduptime += dedup - sync;
+	deduptime += dedup - dump;
+}
+
+sls:sls::sync
+{
+	sync = timestamp;
+	synctime += sync - dedup;
+}
+
+fbt::vm_object_collapse_aurora:entry
+{
+	aurora_collapses += 1;	
 }
 
 END
@@ -118,7 +123,8 @@ END
 	printf("%s, %u\n", "shadow", shadowtime / iters);
 	printf("%s, %u\n", "cont", conttime / iters);
 	printf("%s, %u\n", "dump", dumptime / iters);
-	printf("%s, %u\n", "sync", synctime / iters);
 	printf("%s, %u\n", "dedup", deduptime / iters);
+	printf("%s, %u\n", "sync", synctime / iters);
 	printf("%s, %u\n", "vptopath", vptopathtime / iters);
+	printf("%s, %u\n", "aurora_collapses", aurora_collapses);
 }

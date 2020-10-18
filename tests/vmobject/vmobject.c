@@ -113,8 +113,10 @@ main(int argc, char *argv[])
 		exit(0);
 	}
 
-	for (i = 0; i < 3; i++)
+	for (i = 0; i < 2; i++) {
 		checkpoint_round(i);
+		sleep(3);
+	}
 
 	/*
 	error = sls_partdel(OID);

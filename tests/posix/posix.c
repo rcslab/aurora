@@ -285,5 +285,6 @@ main(int argc, char *argv[])
 		teardown_and_exit();
 	}
 
+	teardown_and_exit();
 	return (0);
 }

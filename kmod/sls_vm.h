@@ -25,7 +25,7 @@
       (obj->type == OBJT_SWAP)))
 
 int slsvm_object_shadow(struct slskv_table *objtable, vm_object_t *objp);
-void slsvm_objtable_collapse(struct slskv_table *objtable);
+void slsvm_objtable_collapse(struct slskv_table *objtable, struct slskv_table *newtable);
 int slsvm_proc_shadow(struct proc *p, struct slskv_table *table, int is_fullckpt);
 int slsvm_procset_shadow(slsset *procset, struct slskv_table *table, int is_fullckpt);
 void slsvm_object_reftransfer(vm_object_t src, vm_object_t dst);

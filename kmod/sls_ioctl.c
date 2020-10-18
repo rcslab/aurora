@@ -53,6 +53,8 @@
 MALLOC_DEFINE(M_SLSMM, "sls", "SLS");
 MALLOC_DEFINE(M_SLSREC, "slsrec", "SLSREC");
 
+extern int sls_objprotect;
+
 struct sls_metadata slsm;
 struct sysctl_ctx_list aurora_ctx;
 
@@ -349,6 +351,9 @@ sls_sysctl_init(void)
 	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "sync_slos",
 	    CTLFLAG_RW, &sls_sync_slos,
 	    0, "Synchronous writes go to the SLOS");
+	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "objprotect",
+	    CTLFLAG_RW, &sls_objprotect,
+	    0, "Traverse VM objects instead of entries when applying COW");
 
 	return (0);
 }

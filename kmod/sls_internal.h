@@ -122,12 +122,11 @@ struct sls_restored_args {
 #define TONANO(tv) ((1000UL * 1000 * 1000 * (tv).tv_sec) + (tv).tv_nsec)
 #define TOMICRO(tv) ((1000UL * 1000 * (tv).tv_sec) + (tv).tv_usec)
 
-void slsvm_objtable_collapse(struct slskv_table *objtable);
 void sls_checkpointd(struct sls_checkpointd_args *args);
 void sls_restored(struct sls_restored_args *args);
 
 int slsckpt_create(struct slsckpt_data **sckpt_datap, struct sls_attr *attr);
-void slsckpt_destroy(struct slsckpt_data *sckpt_data);
+void slsckpt_destroy(struct slsckpt_data *sckpt_data, struct slsckpt_data *sckpt_new);
 
 void slsrest_kqattach_locked(struct proc *p, struct kqueue *kq);
 void slsrest_kqattach(struct proc *p, struct kqueue *kq);

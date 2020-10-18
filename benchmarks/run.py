@@ -59,7 +59,7 @@ def set_defaults_sls(p):
         help="SLS checkpointing period in milliseconds (0 for one checkpoint)")
     p.add('--oid', required=True, metavar='oid',
         help="SLS partition OID")
-    p.add('--delta', default=False, required=False, metavar='delta',
+    p.add('--delta', default=True, required=False, metavar='delta',
         help="SLS delta checkpointing")
     p.add('--recursive', default=True, required=False, metavar='recursive',
         help="SLS checkpoints all descendants of processes")
@@ -340,6 +340,9 @@ def module_init(options):
 # Clean up for the work done in module_init().
 def module_fini(options):
     # Needed because some benchmarks keep dumping even after they're supposedly done.
+    cmd = ['pkill', '-SIGTERM', 'dtrace']
+    bashcmd(cmd, fail_okay=True)
+
     time.sleep(5)
     umount(options)
     if (options.type in ["slos", "memory"]):
@@ -808,6 +811,9 @@ def webserver(options):
     cmd = ['kill', '-9', str(pid)]
     bashcmd(cmd)
 
+    time_elapsed = options.runend - options.runstart
+    ms_elapsed = (time_elapsed.seconds * 1000) + (time_elapsed.microseconds / 1000)
+    print("Did {} checkpoints in {}ms)".format(options.ckpt_done, ms_elapsed))
     # XXX Replace with module_fini?
     unload(options)
 
@@ -880,7 +886,7 @@ def memcached_setup(options):
                 ['--recordcount'],
                 {
                     "action" : "store",
-                    "default" : str(100 * 1000),
+                    "default" : str(10 * 1000),
                     "help" : "Number of records to be loaded into the database"
                 }
 
@@ -988,6 +994,9 @@ def kvstore(options):
 
     # Wait for a bit to avoid races # XXX Necessary?
     time.sleep(3)
+    time_elapsed = options.runend - options.runstart
+    ms_elapsed = (time_elapsed.seconds * 1000) + (time_elapsed.microseconds / 1000)
+    print("Did {} checkpoints in {}ms)".format(options.ckpt_done, ms_elapsed))
 
     # XXX Replace with module_fini?
     unload(options)
@@ -1339,9 +1348,6 @@ def webbench(options):
             options.runno = str(i + 1)
             # XXX How to call the decorator before the thing
             webserver(options)
-            time_elapsed = options.runend - options.runstart
-            ms_elapsed = (time_elapsed.seconds * 1000) + (time_elapsed.microseconds / 1000)
-            print("Did {} checkpoints in {}ms)".format(options.ckpt_done, ms_elapsed))
 
 # Command for benchmarking a web server with multiple configurations
 @Command(required=[],
@@ -1432,9 +1438,6 @@ def kvbench(options):
             options.runno = str(i + 1)
             # XXX How to call the decorator before the thing
             kvstore(options)
-            time_elapsed = options.runend - options.runstart
-            ms_elapsed = (time_elapsed.seconds * 1000) + (time_elapsed.microseconds / 1000)
-            print("Did {} checkpoints in {}ms)".format(options.ckpt_done, ms_elapsed))
 
 # Command for spinning up a webserver and taking numbers
 @Command(required=[],

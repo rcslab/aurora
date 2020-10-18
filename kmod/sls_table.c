@@ -562,10 +562,10 @@ error:
  */
 static int
 sls_readdata(struct vnode *vp, uint64_t slsid, uint64_t type,
-    struct slskv_table *rectable, struct slskv_table *objtable)
+    struct slskv_table *rectable, struct slskv_table *objtable, int lazyrest)
 {
 	struct sls_record *rec;
-	vm_object_t obj;
+	vm_object_t obj = NULL;
 	struct sbuf *sb;
 	size_t len;
 	int error;
@@ -606,14 +606,16 @@ sls_readdata(struct vnode *vp, uint64_t slsid, uint64_t type,
 		return (0);
 
 	/* XXX Add VFS backend handling. */
-	KASSERT((sls_async_slos != 0) || (sls_sync_slos != 0),
-	    ("wrong flags set"));
-	VOP_UNLOCK(vp, 0);
-	error = sls_readdata_slos(vp, obj);
-	VOP_LOCK(vp, LK_EXCLUSIVE);
+	if (lazyrest == 0) {
+		KASSERT((sls_async_slos != 0) || (sls_sync_slos != 0),
+		    ("wrong flags set"));
+		VOP_UNLOCK(vp, 0);
+		error = sls_readdata_slos(vp, obj);
+		VOP_LOCK(vp, LK_EXCLUSIVE);
 
-	if (error != 0)
-		goto error;
+		if (error != 0)
+			goto error;
+	}
 
 
 	/* Add the object to the table. */
@@ -696,7 +698,8 @@ sls_read_slos_manifest(uint64_t oid, uint64_t **ids, size_t *idlen)
 }
 
 static int
-sls_read_slos_record(uint64_t oid, struct slskv_table *rectable, struct slskv_table *objtable)
+sls_read_slos_record(uint64_t oid, struct slskv_table *rectable,
+    struct slskv_table *objtable, int lazyrest)
 {
 	struct thread *td = curthread;
 	int close_error, error, ret;
@@ -731,7 +734,7 @@ sls_read_slos_record(uint64_t oid, struct slskv_table *rectable, struct slskv_ta
 	 * metadata. We will manually read the data later.
 	 */
 	if (sls_isdata(st.type)) {
-		ret = sls_readdata(vp, oid, st.type, rectable, objtable);
+		ret = sls_readdata(vp, oid, st.type, rectable, objtable, lazyrest);
 		if (ret != 0)
 			goto out;
 	} else {
@@ -752,7 +755,7 @@ out:
 
 /* Reads in a record from the SLOS and saves it in the record table. */
 int
-sls_read_slos(uint64_t oid, struct slskv_table **rectablep,
+sls_read_slos(struct slspart *slsp, struct slskv_table **rectablep,
     struct slskv_table **objtablep)
 {
 	struct slskv_table *rectable, *objtable = NULL;
@@ -775,12 +778,13 @@ sls_read_slos(uint64_t oid, struct slskv_table **rectablep,
 	 * Read the manifest, get the record number and vnode numbers for the 
 	 * checkpoint. 
 	 */
-	error = sls_read_slos_manifest(oid, &ids, &idlen);
+	error = sls_read_slos_manifest(slsp->slsp_oid, &ids, &idlen);
 	if (error != 0)
 		goto error;
 
 	for (i = 0; i < idlen; i++) {
-		error = sls_read_slos_record(ids[i], rectable, objtable);
+		error = sls_read_slos_record(ids[i], rectable, objtable, 
+		    slsp->slsp_attr.attr_flags & SLSATTR_LAZYREST);
 		if (error != 0)
 			goto error;
 
@@ -1707,7 +1711,7 @@ slstable_test(void)
 	taskqueue_drain_all(slos.slos_tq);
 	VFS_SYNC(slos.slsfs_mount, MNT_WAIT);
 
-	slsckpt_destroy(sckpt_tmpdata);
+	slsckpt_destroy(sckpt_tmpdata, NULL);
 	sckpt_tmpdata = NULL;
 
 	error = slstable_testobjtable_valid(sckpt_data->sckpt_objtable);
@@ -1787,12 +1791,12 @@ out:
 
 	if (sckpt_data != NULL) {
 		/* Pop and free. */
-		slsckpt_destroy(sckpt_data);
+		slsckpt_destroy(sckpt_data, NULL);
 	}
 
 	/* The backup table has the same data as the original - all sbufs have been destroyed. */
 	if (sckpt_tmpdata != NULL)
-		slsckpt_destroy(sckpt_tmpdata);
+		slsckpt_destroy(sckpt_tmpdata, NULL);
 
 	if (rectable != NULL)
 		sls_free_rectable(rectable);

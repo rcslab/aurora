@@ -30,7 +30,7 @@ LIST_HEAD(slsdata, slspagerun);
 /*
  * Read from and write to the SLOS. 
  */
-int sls_read_slos(uint64_t oid, struct slskv_table **metatablep,
+int sls_read_slos(struct slspart *slsp, struct slskv_table **metatablep,
 	struct slskv_table **datatablep);
 
 int sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data);
