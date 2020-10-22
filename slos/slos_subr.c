@@ -249,7 +249,7 @@ slos_bufstrategy(struct bufobj *bo, struct buf *bp)
 	struct vnode *vp;
 	int error;
 
-	vp = bp->b_vp;
+	vp = bo2vnode(bo);
 	// The device is a VCHR but we still want to use vop strategy on it
 	// This is to allow us to bypass using BMAP operations on the vnode
 	KASSERT(vp->v_type != VCHR || (vp->v_vflag & VV_SYSTEM), ("Wrong vnode in buf strategy %p", vp));

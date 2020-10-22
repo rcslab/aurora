@@ -448,6 +448,7 @@ slsrest_metadata(void *args)
 	if (error != 0)
 		goto error; 
 
+
 	DEBUG("SLS Restore VMSPACE");
 	error = slsrest_dovmspace(p, &buf, &buflen, restdata->objtable);
 	if (error != 0)
@@ -492,11 +493,12 @@ slsrest_metadata(void *args)
 	if (error != 0)
 		SLS_DBG("tty_fixup failed with %d\n", error);
 
+	thread_single_end(p, SINGLE_BOUNDARY);
+
 	/* Allow the process to continue if we want it to. */
 	if (rest_stopped == 1)
 		kern_psignal(p, SIGSTOP);
 
-	thread_single_end(p, SINGLE_BOUNDARY);
 	PROC_UNLOCK(p);
 
 	kthread_exit();

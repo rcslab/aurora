@@ -35,6 +35,8 @@ struct slos_diskptr {
 	uint64_t    epoch;
 };
 
+void slsfs_ptr_trimstart(uint64_t newbln, uint64_t bln, size_t fsbsize, diskptr_t *ptr);
+
 struct slsfs_blkalloc {
 	struct slos_node *a_offset;
 	struct slos_node *a_size;

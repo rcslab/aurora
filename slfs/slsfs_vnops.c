@@ -399,14 +399,13 @@ slsfs_rmdir(struct vop_rmdir_args *args)
 	if (svp->sn_ino.ino_nlink < 2) {
 		return (EINVAL);
 	}
-	
+
 	if (!slsfs_dirempty(vp)) {
 		return (ENOTEMPTY);
 	}
 
 	if ((svp->sn_ino.ino_flags & (IMMUTABLE | APPEND | NOUNLINK)) ||
 		(SLSVP(dvp)->sn_ino.ino_flags & APPEND)) {
-		
 		return (EPERM);
 	}
 
@@ -656,7 +655,7 @@ slsfs_read(struct vop_read_args *args)
 			DEBUG1("Problem getting buffer for write %d", error);
 			return (error);
 		}
-	
+
 		off = uio->uio_offset - (bp->b_lblkno * blksize);
 		toread = omin(resid, bp->b_bcount - off);
 
@@ -748,16 +747,30 @@ slsfs_print(struct vop_print_args *args)
 	return (0);
 }
 
-static void
-adjust_ptr(uint64_t lbln, uint64_t bln, diskptr_t *ptr) 
+/*
+ * Trim a new disk pointer that points to the physical blocks backing logical 
+ * block bln to start from the physical block pointing to newblkn instead.  
+ * Adjust its size accordingly.
+ */
+void
+slsfs_ptr_trimstart(uint64_t newbln, uint64_t bln, size_t blksize, diskptr_t *ptr) 
 {
-	if (bln == lbln) {
+	int off;
+
+	if (bln == newbln)
 		return;
-	}
+
+	off = newbln - bln;
 	
-	KASSERT(lbln > bln, ("Should be slightly larger %lu : %lu", lbln, bln));
-	uint64_t off = lbln - bln;
+	KASSERT(off > 0, ("Physical extent %lu of size %lu cannot move to %lu",
+	    bln, ptr->size, newbln));
+	KASSERT(off * blksize < ptr->size, ("Cannot trim %lu bytes off a "
+	    "%lu byte extent (blksize %lu)", off * blksize, ptr->size, blksize));
+	KASSERT(ptr->size % blksize == 0, ("Size of physical extent %lu bytes "
+	    "not aligned to block size %lu", ptr->size, blksize));
+
 	ptr->offset += off;
+	ptr->size -= off * blksize;
 }
 
 static int
@@ -859,68 +872,104 @@ slsfs_strategy(struct vop_strategy_args *args)
 {
 	int error;
 	struct slos_diskptr ptr;
-
 	struct buf *bp = args->a_bp;
 	struct vnode *vp = args->a_vp;
 	struct fnode_iter iter;
+	size_t fsbsize, devbsize;
+	daddr_t old_blkno;
+
 #ifdef VERBOSE
 	DEBUG2("vp=%p blkno=%x", vp, bp->b_lblkno);
 #endif
+	/* The FS and device block sizes are needed below. */
+	fsbsize = bp->b_bufobj->bo_bsize;
+	devbsize = slos.slos_vp->v_bufobj.bo_bsize;
+	KASSERT(fsbsize >= devbsize, ("FS bsize %lu > device bsize %lu", fsbsize, devbsize));
+	KASSERT((fsbsize % devbsize) == 0, ("FS bsize %lu not multiple of device bsize %lu", fsbsize, devbsize));
+
 	if (vp->v_type != VCHR) {
+		/* We are a regular vnode, so there are mappings. */
 		KASSERT(bp->b_lblkno != EPOCH_INVAL, 
 			("No logical block number should be -1 - vnode effect %lu", 
 			 SLSVP(vp)->sn_pid));
 
+		/* Get the physical segment for the buffer. */
 		error = BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_SHARED);
-		if (error) {
-			panic("Problem getting lock %d", error);
+		if (error != 0) {
+			bp->b_error = error;
+			bp->b_ioflags |= BIO_ERROR;
+			bufdone(bp);
+
+			return (0);
 		}
 
 		error = fbtree_keymin_iter(&SLSVP(vp)->sn_tree, &bp->b_lblkno, &iter);
-		if (error != 0) {
-			return (error);
-		}
+		if (error != 0)
+			goto error;
 
+		/*
+		 * Out of bounds.
+		 * XXX Why is this a problem? What if there is a hole?
+		 */
 		if (ITER_ISNULL(iter)) {
 			fnode_print(iter.it_node);
-			panic("Issue finding block vp(%p), lbn(%lu), fnode(%p) bp(%p)", vp, bp->b_lblkno, 
+			DEBUG4("Issue finding block vp(%p), lbn(%lu), fnode(%p) bp(%p)", vp, bp->b_lblkno,
 			    iter.it_node, bp);
+			goto error;
 		}
+
+		/* Make sure the segment includes the buffer's start. */
 		ptr = ITER_VAL_T(iter, diskptr_t);
 		if (ITER_KEY_T(iter, uint64_t) != bp->b_lblkno) {
 			if (!INTERSECT(iter, bp->b_lblkno, IOSIZE(SLSVP(vp)))) {
 				fnode_print(iter.it_node);
-				panic("Key not found %lu %lu %lu %lu", 
+				DEBUG4("Key %lu not found, got (%lu %lu) on block %lu instead",
 					ITER_KEY_T(iter, uint64_t), ptr.offset, ptr.size, bp->b_lblkno);
+				goto error;
 			}
 		}
 
 		if (bp->b_iocmd == BIO_WRITE) {
 			if (ptr.epoch == slos.slos_sb->sb_epoch && ptr.offset != 0) {
-				adjust_ptr(bp->b_lblkno, ITER_KEY_T(iter, uint64_t), &ptr);
+				/* The segment is current and exists on disk. */
+				slsfs_ptr_trimstart(bp->b_lblkno,
+				    ITER_KEY_T(iter, uint64_t), fsbsize, &ptr);
 			} else {
+				/* Otherwise we need to create it. */
 				error = BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_UPGRADE);
-				if (error) {
-					panic("Problem getting lock %d", error);
-				}
-				
-				error = slsfs_fbtree_rangeinsert(&SLSVP(vp)->sn_tree, 
+				if (error != 0)
+					goto error;
+
+				/*
+				 * Insert the range into the tree, possibly
+				 * overwriting or clipping existing ranges.
+				 * Actually allocate the block, then insert it
+				 * to actually back the new range.
+				 */
+				error = slsfs_fbtree_rangeinsert(&SLSVP(vp)->sn_tree,
 					bp->b_lblkno, bp->b_bcount);
-				MPASS(error == 0);
+				if (error != 0)
+					goto error;
 
 				error = slos_blkalloc(SLSVP(vp)->sn_slos, bp->b_bcount, &ptr);
-				MPASS(error == 0);
+				if (error != 0)
+					goto error;
 
 				error = fbtree_replace(&SLSVP(vp)->sn_tree, &bp->b_lblkno, &ptr);
-				MPASS(error == 0);
+				if (error != 0)
+					goto error;
 			}
+
 			bp->b_blkno = ptr.offset;
 			atomic_add_64(&slos.slos_sb->sb_data_synced, bp->b_bcount);
 		} else if (bp->b_iocmd == BIO_READ) {
-			if (ptr.offset != (0))  {
-				adjust_ptr(bp->b_lblkno, ITER_KEY_T(iter, uint64_t), &ptr);
+			if (ptr.offset != 0)  {
+				/* Find where we must start reading from. */
+				slsfs_ptr_trimstart(bp->b_lblkno, 
+				    ITER_KEY_T(iter, uint64_t), fsbsize, &ptr);
 				bp->b_blkno = ptr.offset;
 			} else {
+				/* The segment is unbacked, zero fill.  */
 				ITER_RELEASE(iter);
 				bp->b_blkno = (daddr_t) (-1);
 				vfs_bio_clrbuf(bp);
@@ -928,24 +977,30 @@ slsfs_strategy(struct vop_strategy_args *args)
 				return (0);
 			}
 		}
+
+		/* This unlocks the btree. */
 		ITER_RELEASE(iter);
 	} else {
+		/* Writing directly to disk, no logical mappings. */
 		bp->b_blkno = bp->b_lblkno;
-		int change =  bp->b_bufobj->bo_bsize / 
-		    slos.slos_vp->v_bufobj.bo_bsize;
-		SDT_PROBE3(slos, , , slsfs_deviceblk, bp->b_blkno, 
-		    bp->b_bufobj->bo_bsize, change);
+		SDT_PROBE3(slos, , , slsfs_deviceblk, bp->b_blkno,
+		    fsbsize, fsbsize / devbsize);
 		if (bp->b_iocmd == BIO_WRITE) {
 			atomic_add_64(&slos.slos_sb->sb_meta_synced, bp->b_bcount);
-		} 
-		
+		}
 	}
 
-	KASSERT(bp->b_blkno != 0, ("Cannot be 0 %p - %p", bp, vp));
-	daddr_t old_l = bp->b_lblkno;
-	daddr_t old_b = bp->b_blkno;
-	int change =  bp->b_bufobj->bo_bsize / slos.slos_vp->v_bufobj.bo_bsize;
-	bp->b_blkno = bp->b_blkno * change;
+	KASSERT(bp->b_resid <= ptr.size, ("Filling buffer %p with "
+	    "%lu bytes from region with %lu bytes", bp, bp->b_resid, ptr.size));
+	KASSERT(bp->b_blkno != 0, ("Vnode %p has buffer %p without a disk address", bp, vp));
+
+
+	/* Scale the block number from the filesystem's to the device's size. */
+	old_blkno = bp->b_blkno;
+	bp->b_blkno *= (fsbsize / devbsize);
+
+	/* The physical disk offset in bytes. */
+	KASSERT(devbsize == dbtob(1), ("Inconsistent device block size, %lu vs %lu", devbsize, dbtob(1)));
 	bp->b_iooffset = dbtob(bp->b_blkno);
 
 #ifdef VERBOSE
@@ -963,8 +1018,20 @@ slsfs_strategy(struct vop_strategy_args *args)
 		}
 	}
 
-	bp->b_blkno = old_b;
-	bp->b_lblkno = old_l;
+	/*
+	 * XXX g_vfs_strategy() isn't synchronous, we can't touch the buffer
+	 * after we send it out. The BIO created in GEOM accesses the bp. Have 
+	 * the resetting of the buffer number be a callback.
+	 */
+	bp->b_blkno = old_blkno;
+
+	return (0);
+
+error:
+	ITER_RELEASE(iter);
+	bp->b_error = error;
+	bp->b_ioflags |= BIO_ERROR;
+	bufdone(bp);
 
 	return (0);
 }

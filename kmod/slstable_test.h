@@ -5,7 +5,7 @@
 
 #define INFO_SIZE   (20)	/* Size of the data of the test structs. */
 #define VMOBJ_SIZE  (128)	/* Extent of the test's VM objects, in pages */
-#define VNODE_ID    (1000)	/* ID of the testing vnode in the SLOS */
+#define TEST_PARTID (1234)	/* ID of the testing vnode in the SLOS */
 #define DATA_INFOS  (8)	/* Number of data structs */
 #define META_INFOS  (128 )	/* Number of meta structs */
 #define DATA_SIZE   (32) /* Average number of resident pages per object */

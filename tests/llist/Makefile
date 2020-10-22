@@ -2,7 +2,7 @@ NAME=llist
 
 PROG= $(NAME)
 SRC= $(NAME).c
-CFLAGS += -pthread -static
+CFLAGS += -static
 MAN=
 
 .include <bsd.prog.mk>

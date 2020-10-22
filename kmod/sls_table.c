@@ -45,6 +45,7 @@
 #include "sls_internal.h"
 #include "sls_kv.h"
 #include "sls_mm.h"
+#include "sls_partition.h"
 #include "sls_table.h"
 #include "debug.h"
 
@@ -1625,7 +1626,9 @@ slstable_test(void)
 {
 	struct slskv_table *objtable= NULL, *rectable= NULL;
 	struct slsckpt_data *sckpt_data = NULL, *sckpt_tmpdata = NULL;
+	struct slspart *slsp = NULL;
 	struct sls_record *rec;
+	struct sls_attr attr;
 	vm_object_t obj = NULL;
 	uint64_t lost_elements;
 	struct slskv_iter iter;
@@ -1634,6 +1637,13 @@ slstable_test(void)
 	uint64_t slsid;
 	uint64_t type;
 	int error, i;
+
+	attr = (struct sls_attr) {
+		.attr_target = SLS_OSD,
+		.attr_mode = SLS_FULL,
+		.attr_period = 0,
+		.attr_flags = 0,
+	};
 
 	/*
 	 * Save the old sysctl values, set up our own.
@@ -1644,17 +1654,22 @@ slstable_test(void)
 	sls_async_slos = 1;
 	sls_sync_slos = 0;
 
+
+	error = slsp_add(TEST_PARTID, attr, &slsp);
+	if (error != 0)
+		goto out;
+
 	/*
 	 * We create two checkpoints, one of which will be consumed in the
 	 * writing process.
 	 */
-	error = slsckpt_create(&sckpt_data);
+	error = slsckpt_create(&sckpt_data, &attr);
 	if (error != 0) {
 		SLS_ERROR(slsckpt_create, error);
 		goto out;
 	}
 
-	error = slsckpt_create(&sckpt_tmpdata);
+	error = slsckpt_create(&sckpt_tmpdata, &attr);
 	if (error != 0) {
 		SLS_ERROR(slsckpt_create, error);
 		goto out;
@@ -1695,7 +1710,7 @@ slstable_test(void)
 
 
 	/* Write the data generated to the SLOS. */
-	error = sls_write_slos(VNODE_ID, sckpt_tmpdata);
+	error = sls_write_slos(TEST_PARTID, sckpt_tmpdata);
 	if (error != 0) {
 		SLS_ERROR(sls_write_slos, error);
 		goto out;
@@ -1722,7 +1737,7 @@ slstable_test(void)
 
 
 	/* Read the data back. */
-	error = sls_read_slos(VNODE_ID, &rectable, &objtable);
+	error = sls_read_slos(slsp, &rectable, &objtable);
 	if (error != 0) {
 		SLS_ERROR(sls_read_slos, error);
 		goto out;
@@ -1801,7 +1816,8 @@ out:
 	if (rectable != NULL)
 		sls_free_rectable(rectable);
 
-	/* XXX Clean up on disk after we're done when we have removes. */
+	if (slsp != NULL)
+		slsp_del(TEST_PARTID);
 
 	/* Restore the old sysctl values. */
 	sls_async_slos = old_async;
