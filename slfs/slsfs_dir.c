@@ -336,6 +336,6 @@ slsfs_declink(struct vnode *vp)
 	SLSVP(vp)->sn_ino.ino_nlink--;
 	SLSVP(vp)->sn_ino.ino_flags |= IN_CHANGE;
 	if ((SLSVP(vp)->sn_ino.ino_nlink) == 0) {
-		SLSVP(vp)->sn_status |= SLOS_DIRTY | SLOS_VDEAD;
+		SLSVP(vp)->sn_status |= SLOS_DIRTY | IN_DEAD;
 	}
 }

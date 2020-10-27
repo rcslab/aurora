@@ -2,8 +2,6 @@
 #include <machine/param.h>
 #include <machine/vmparam.h>
 
-#include <sys/systm.h>
-#include <sys/types.h>
 #include <sys/buf.h>
 #include <sys/dirent.h>
 #include <sys/vnode.h>
@@ -41,7 +39,6 @@
 #include <slos_inode.h>
 #include <slos_btree.h>
 #include <slos_io.h>
-#include <slosmm.h>
 #include <btree.h>
 #include <slsfs.h>
 
@@ -51,9 +48,7 @@
 #include "slsfs_buf.h"
 #include "debug.h"
 
-static MALLOC_DEFINE(M_SLSFSBUF, "slsfs_buf", "SLSFS buf");
-static MALLOC_DEFINE(M_SLSFSMNT, "slsfs_mount", "SLSFS mount structures");
-static MALLOC_DEFINE(M_SLSFSTSK, "slsfs_taskctx", "SLSFS task context");
+static MALLOC_DEFINE(M_SLSFS, "slsfs_mount", "SLSFS mount structures");
 
 static vfs_root_t	slsfs_root;
 static vfs_statfs_t	slsfs_statfs;
@@ -62,242 +57,10 @@ static vfs_sync_t	slsfs_sync;
 
 extern struct buf_ops bufops_slsfs;
 
-static int slsfs_pbufcnt = -1;
-
 static const char *slsfs_opts[] = { "from" };
-struct unrhdr *slsid_unr;
 
 // sysctl variables
 int checksum_enabled = 0;
-
-struct slsfs_taskctx {
-	struct task tk;
-	struct vnode *vp;
-	vm_object_t obj;
-	slsfs_callback cb;
-	vm_page_t startpage;
-	int iotype;
-	uint64_t size;
-};
-
-struct slsfs_taskbdctx {
-	struct task tk;
-	struct buf *bp;
-};
-
-struct extent {
-	uint64_t start;
-	uint64_t end;
-	uint64_t target;
-	uint64_t epoch;
-};
-
-static void
-extent_clip_head(struct extent *extent, uint64_t boundary)
-{
-	if (boundary < extent->start) {
-		extent->start = boundary;
-	}
-	if (boundary < extent->end) {
-		extent->end = boundary;
-	}
-}
-
-static void
-extent_clip_tail(struct extent *extent, uint64_t boundary)
-{
-	if (boundary > extent->start) {
-		if (extent->target != 0) {
-			extent->target += boundary - extent->start;
-		}
-		extent->start = boundary;
-	}
-
-	if (boundary > extent->end) {
-		extent->end = boundary;
-	}
-}
-
-static void
-set_extent(struct extent *extent, uint64_t lbn, uint64_t size, uint64_t target, uint64_t epoch)
-{
-	KASSERT(size % PAGE_SIZE == 0, ("Size %lu is not a multiple of the page size", size));
-
-	extent->start = lbn;
-	extent->end = lbn + (size / PAGE_SIZE);
-	extent->target = target;
-	extent->epoch = epoch;
-}
-
-static void
-diskptr_to_extent(struct extent *extent, uint64_t lbn, const diskptr_t *diskptr)
-{
-	set_extent(extent, lbn, diskptr->size, diskptr->offset, diskptr->epoch);
-}
-
-static void
-extent_to_diskptr(const struct extent *extent, uint64_t *lbn, diskptr_t *diskptr)
-{
-	*lbn = extent->start;
-	diskptr->offset = extent->target;
-	diskptr->size = (extent->end - extent->start) * PAGE_SIZE;
-	diskptr->epoch = extent->epoch;
-}
-
-/*
- * Insert an extent starting an logical block number lbn of size bytes into the
- * btree, potentially splitting existing extents to make room.
- */
-int
-slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
-{
-	/*
-	 * We are inserting an extent which may overlap with many other extents
-	 * in the tree.  There are many possible scenarios:
-	 *
-	 *           [----)
-	 *     [-------)[-------)
-	 *
-	 *           [----)
-	 *     [----------------)
-	 *
-	 *           [----)
-	 *     [--)          [--)
-	 *
-	 * etc.  We want to end up with
-	 *
-	 *            main
-	 *     [----)[----)[----)
-	 *      head        tail
-	 *
-	 * (with head and/or tail possibly empty).
-	 *
-	 * To do this, we iterate over every extent (current) that may possibly
-	 * intersect the new one (main).  For each of these, we clip that extent
-	 * into a possible new_head and new_tail.  There will be at most one
-	 * head and one tail that are non-empty.  We remove all the overlapping
-	 * extents, then insert the new head, main, and tail extents.
-	 */
-
-	struct extent main;
-	struct extent head = {0}, tail = {0};
-	struct extent current;
-	struct extent new_head, new_tail;
-	struct fnode_iter iter;
-	int error;
-	uint64_t key;
-	diskptr_t value;
-
-#ifdef VERBOSE
-	DEBUG5("%s:%d: %s with logical offset %u, len %u", __FILE__, __LINE__, __func__, lbn, size);
-#endif
-	set_extent(&main, lbn, size, 0, 0);
-#ifdef VERBOSE
-	DEBUG5("%s:%d: %s with extent [%u, %u)", __FILE__, __LINE__, __func__, main.start, main.end);
-#endif
-
-	key = main.start;
-	error = fbtree_keymin_iter(tree, &key, &iter);
-	if (error) {
-		panic("fbtree_keymin_iter() error %d in range insert", error);
-	}
-
-
-	if (ITER_ISNULL(iter)) {
-		// No extents are before the start, so start from the beginning
-		iter.it_index = 0;
-	}
-
-	KASSERT(key <= main.start, ("Got minimum %ld as an infimum for %ld\n", key, main.start));
-
-	while (!ITER_ISNULL(iter) && NODE_SIZE(iter.it_node) > 0 ) {
-		key = ITER_KEY_T(iter, uint64_t);
-		value = ITER_VAL_T(iter, diskptr_t);
-
-		diskptr_to_extent(&current, key, &value);
-#ifdef VERBOSE
-		DEBUG4("current [%d, %d), main [%d, %d)", current.start, current.end,
-		   main.start, main.end);
-#endif
-		if (current.start >= main.end) {
-#ifdef VERBOSE
-			DEBUG("BREAK");
-#endif
-			break;
-		}
-
-		new_head = current;
-		extent_clip_head(&new_head, main.start);
-		if (new_head.start != new_head.end) {
-			KASSERT(head.start == head.end, ("Found multiple heads [%lu, %lu) and [%lu, %lu)",
-			         head.start, head.end, new_head.start, new_head.end));
-			head = new_head;
-#ifdef VERBOSE
-			DEBUG2("Head clip [%d, %d)", head.start, head.end);
-#endif
-		}
-
-		new_tail = current;
-		extent_clip_tail(&new_tail, main.end);
-		if (new_tail.start != new_tail.end) {
-			if (tail.start != tail.end) {
-				fnode_print(iter.it_node);
-			        panic("Found multiple tails [%lu, %lu) and [%lu, %lu) %lu, %lu",
-			         tail.start, tail.end, new_tail.start, new_tail.end, main.start, main.end);
-			}
-			tail = new_tail;
-#ifdef VERBOSE
-			DEBUG3("Tail clip [%d, %d), current.start vs main.end %d",
-			    tail.start, tail.end, current.start == main.end);
-#endif
-		}
-
-		error = fiter_remove(&iter);
-		if (error) {
-			panic("Error %d removing current", error);
-		}
-	}
-
-	if (head.start != head.end) {
-		extent_to_diskptr(&head, &key, &value);
-#ifdef VERBOSE
-		DEBUG5("(%p, %d): Inserting (%ld, %ld, %ld)", curthread, __LINE__,
-			(uint64_t) key, value.offset, value.size);
-#endif
-		error = fbtree_insert(tree, &key, &value);
-		if (error) {
-			panic("Error %d inserting head", error);
-		}
-	}
-
-	extent_to_diskptr(&main, &key, &value);
-#ifdef VERBOSE
-	DEBUG5("(%p, %d): Inserting (%ld, %ld, %ld)", curthread, __LINE__,
-		(uint64_t) key, value.offset, value.size);
-#endif
-	error = fbtree_insert(tree, &key, &value);
-	if (error) {
-		panic("Error %d inserting main", error);
-	}
-	size -= value.size;
-
-	if (tail.start != tail.end) {
-		extent_to_diskptr(&tail, &key, &value);
-#ifdef VERBOSE
-		DEBUG5("(%p, %d): Inserting (%ld, %ld, %ld)", curthread, __LINE__,
-		    (uint64_t) key, value.offset, value.size);
-#endif
-		error = fbtree_insert(tree, &key, &value);
-		if (error) {
-			fnode_print(iter.it_node);
-			panic("Error %d inserting  - %lu : %lu-%lu - %lu-%lu %lu-%lu %lu-%lu", 
-				error, key, value.offset, value.size, lbn, size, tail.start, 
-				tail.end, head.start, head.end);
-		}
-	}
-
-	return (0);
-}
 
 /*
  * Register the Aurora filesystem type with the kernel.
@@ -308,16 +71,11 @@ slsfs_init(struct vfsconf *vfsp)
 	/* Setup slos structures */
 	slos_init();
 
-	/* Get a new unique identifier generator. */
-	slsid_unr = new_unrhdr(SLOS_SYSTEM_MAX, INT_MAX, NULL);
-
 	fnode_zone = uma_zcreate("Btree Fnode Slabs", sizeof(struct fnode),
 		&fnode_construct, &fnode_deconstruct, NULL, NULL, UMA_ALIGN_PTR, 0);
 	fnode_trie_zone = uma_zcreate("Btree Fnode Trie Slabs", pctrie_node_size(),
 		NULL, NULL, pctrie_zone_init, NULL, UMA_ALIGN_PTR, UMA_ZONE_NOFREE);
 
-	/* The constructor never fails. */
-	KASSERT(slsid_unr != NULL, ("slsid unr creation failed"));
 
 	return (0);
 }
@@ -338,11 +96,6 @@ slsfs_uninit(struct vfsconf *vfsp)
 	if (usecnt > 1)
 		return (EBUSY);
 
-	//Destroy the identifier generator. 
-	clean_unrhdr(slsid_unr);
-	clear_unrhdr(slsid_unr);
-	delete_unrhdr(slsid_unr);
-	slsid_unr = NULL;
 	uma_zdestroy(fnode_zone);
 	uma_zdestroy(fnode_trie_zone);
 	slos_uninit();
@@ -389,381 +142,6 @@ slsfs_inodes_init(struct mount *mp, struct slos *slos)
 	return (0);
 }
 
-/*
- * Function that turns the IO into a no-op. Cleans up like performio().
- */
-static void
-slsfs_nullio(void *ctx, int pending)
-{
-	struct slsfs_taskctx *task = (struct slsfs_taskctx *)ctx;
-
-	KASSERT(task->iotype == BIO_READ || task->iotype == BIO_WRITE,
-		("invalid IO type %d", task->iotype));
-	ASSERT_VOP_UNLOCKED(task->vp, ("vnode %p is locked", vp));
-	KASSERT(IOSIZE(SLSVP(task->vp)) == PAGE_SIZE,  ("IOs are not page-sized (size %lu)", IOSIZE(SLSVP(task->vp))));
-
-	/* Just drop the reference and finish up with the task.*/
-	vm_object_deallocate(task->obj);
-
-	free(task, M_SLSFSTSK);
-	return;
-
-}
-
-/*
- * Attach the pages to be read in or out into the buffer.
- */
-static void
-slsfs_performio_pgattach(vm_object_t obj, vm_page_t startm, int targetsize, struct buf *bp)
-{
-	vm_page_t m;
-	size_t size = 0;
-	int npages = 0;
-
-	VM_OBJECT_RLOCK(obj);
-	m = startm;
-	TAILQ_FOREACH_FROM(m, &obj->memq, listq) {
-		KASSERT(npages < btoc(MAXPHYS), ("overran b_pages[] array"));
-		KASSERT(obj->ref_count >= obj->shadow_count + 1,
-		    ("object has %d references and %d shadows",
-		    obj->ref_count, obj->shadow_count));
-		KASSERT(m->object == obj, ("page %p in object %p "
-		    "associated with object %p",
-		    m, obj, m->object));
-		KASSERT(startm->pindex + npages == m->pindex,
-		    ("pages in the buffer are not consecutive "
-		    "(pindex should be %ld, is %ld)",
-		    startm->pindex + npages, m->pindex));
-
-		bp->b_pages[npages++] = m;
-		KASSERT(pagesizes[m->psind] <= PAGE_SIZE,
-		    ("dumping page %p with size %ld", m, pagesizes[m->psind]));
-		size += pagesizes[m->psind];
-		/*  We are done grabbing pages. */
-		if (size == targetsize)
-			break;
-	}
-	VM_OBJECT_RUNLOCK(obj);
-	KASSERT((targetsize / PAGE_SIZE) < btoc(MAXPHYS), ("IO too large"));
-
-	/* Update the buffer to point to the pages. */
-	bp->b_npages = npages;
-	KASSERT(bp->b_npages > 0, ("no pages in the IO"));
-
-	/*
-	 * XXX Check if doing runningbufspace accounting causes performance
-	 * problems. If so, increase it.
-	 */
-	bp->b_bcount = bp->b_bufsize = bp->b_runningbufspace = targetsize;
-	bp->b_resid = targetsize;
-	atomic_add_long(&runningbufspace, bp->b_runningbufspace);
-}
-
-/* Do the necessary btree manipulations before initiating an IO. */
-static int
-slsfs_performio_setdaddr(struct vnode *vp, size_t size, struct buf *bp)
-{
-	struct slos_node *svp = SLSVP(vp);
-	struct fbtree *tree = &svp->sn_tree;
-	struct slos_inode *sivp = &SLSINO(svp);
-	struct slos_diskptr ptr;
-	size_t offset;
-	size_t end;
-	int error;
-
-	BTREE_LOCK(tree, LK_EXCLUSIVE);
-	VOP_LOCK(tree->bt_backend, LK_EXCLUSIVE);
-
-	error = slsfs_fbtree_rangeinsert(tree, bp->b_lblkno, size);
-	if (error != 0)
-		goto error;
-
-	end = (bp->b_lblkno * IOSIZE(svp)) + size;
-	if (svp->sn_ino.ino_size < end) {
-		svp->sn_ino.ino_size = end;
-		svp->sn_status |= SLOS_DIRTY;
-	}
-
-	error = slos_blkalloc(svp->sn_slos, size, &ptr);
-	if (error != 0)
-		goto error;
-
-	KASSERT(ptr.size == size, ("requested %lu bytes on disk, got %lu", 
-	    ptr.size, size));
-
-	/* No need to free the block if we fail, it'll get GCed. */
-	error = fbtree_replace(&svp->sn_tree, &bp->b_lblkno, &ptr);
-	if (error != 0)
-		goto error;
-
-	/* Allocate physical space and back the segment. */
-
-	VOP_UNLOCK(tree->bt_backend, 0);
-	BTREE_UNLOCK(tree, 0);
-
-	/* Possibly update the size of the file in the VM subsystem. */
-	offset = IDX_TO_OFF(bp->b_lblkno);
-	DEBUG3("%s:%d: Setting the size of vnode %p", __FILE__, __LINE__, vp);
-	if (offset + size > sivp->ino_size) {
-		sivp->ino_size = offset + size;
-		vnode_pager_setsize(vp, sivp->ino_size);
-	}
-
-	/* Set the buffer to point to the physical block. */
-	bp->b_blkno = ptr.offset;
-	KASSERT(bp->b_resid == ptr.size, ("Doing %lu bytes of IO in a %lu segment",
-	    bp->b_resid, ptr.size));
-
-	return (0);
-
-error:
-	bp->b_flags |= B_INVAL;
-	bp->b_error = error;
-
-	VOP_UNLOCK(tree->bt_backend, 0);
-	BTREE_UNLOCK(tree, 0);
-	return (error);
-
-}
-
-static int
-slsfs_performio_getdaddr(struct vnode *vp, size_t size, struct buf *bp)
-{
-	struct slos_node *svp = SLSVP(vp);
-	struct slos_diskptr ptr;
-	struct fnode_iter iter;
-	struct fbtree *tree = &svp->sn_tree;
-	daddr_t lblkno = bp->b_lblkno;
-	int error;
-
-	VOP_LOCK(tree->bt_backend, LK_EXCLUSIVE);
-	BTREE_LOCK(&svp->sn_tree, LK_SHARED);
-
-	/* Get the physical segment from where we will read. */
-	error = fbtree_keymin_iter(&svp->sn_tree, &bp->b_lblkno, &iter);
-	if (error != 0)
-		goto error;
-
-	/* Adjust the physical pointer to start where the buffer points. */
-	lblkno = ITER_KEY_T(iter, uint64_t);
-	KASSERT(!ITER_ISNULL(iter), ("could not find logical offset %lu on disk", lblkno));
-	ptr = ITER_VAL_T(iter, diskptr_t);
-	slsfs_ptr_trimstart(bp->b_lblkno, lblkno, vp->v_bufobj.bo_bsize, &ptr);
-
-	KASSERT(bp->b_bcount <= ptr.size, ("Reading %lu bytes from a physical "
-	    "segment with %lu bytes", bp->b_bcount, ptr.size));
-
-	bp->b_blkno = ptr.offset;
-
-	VOP_UNLOCK(tree->bt_backend, 0);
-	BTREE_UNLOCK(tree, 0);
-
-	return (0);
-
-error:
-	bp->b_flags |= B_INVAL;
-	bp->b_error = error;
-
-	VOP_UNLOCK(tree->bt_backend, 0);
-	BTREE_UNLOCK(tree, 0);
-	return (error);
-}
-
-/* Perform an IO without copying from the VM objects to the buffer. */
-static void
-slsfs_performio(void *ctx, int pending)
-{
-	struct buf *bp;
-	struct slsfs_taskctx *task = (struct slsfs_taskctx *)ctx;
-	struct vnode *vp = task->vp;
-	struct slos_node *svp = SLSVP(vp);
-	int iotype = task->iotype;
-	vm_object_t obj = task->obj;
-	size_t fsbsize, devbsize;
-	vm_page_t startm = task->startpage;
-	daddr_t lblkno;
-	int error, i;
-
-	KASSERT(iotype == BIO_READ || iotype == BIO_WRITE, ("invalid IO type %d", iotype));
-	ASSERT_VOP_UNLOCKED(vp, ("vnode %p is locked", vp));
-
-	if (task->tk.ta_func == NULL)
-		DEBUG1("Warning: %s called synchronously", __func__);
-	KASSERT(IOSIZE(svp) == PAGE_SIZE,  ("IOs are not page-sized (size %lu)", IOSIZE(svp)));
-
-
-	/* The FS and device block sizes are needed below. */
-	fsbsize = vp->v_bufobj.bo_bsize;
-	devbsize = slos.slos_vp->v_bufobj.bo_bsize;
-	KASSERT(fsbsize >= devbsize, ("FS bsize %lu > device bsize %lu", fsbsize, devbsize));
-	KASSERT((fsbsize % devbsize) == 0, ("FS bsize %lu not multiple of device bsize %lu", fsbsize, devbsize));
-
-	/* If the IO would be empty, this function is a no-op.*/
-	if (task->size == 0) {
-		vm_object_deallocate(obj);
-		free(task, M_SLSFSTSK);
-		return;
-	}
-
-	/* Set the logical block address of the buffer. */
-	lblkno = startm->pindex + SLOS_OBJOFF;
-	bp = getpbuf(&slsfs_pbufcnt);
-	bp->b_lblkno = lblkno;
-
-	DEBUG4("%s:%d: iotype %d for bp %p", __FILE__, __LINE__, iotype, bp);
-
-	/* Attach the pages to the buffer, set the size accordingly. */
-	slsfs_performio_pgattach(obj, startm, task->size, bp);
-
-	if (iotype == BIO_WRITE) {
-		/* Create the physical segment backing the write. */
-		error = slsfs_performio_setdaddr(vp, task->size, bp);
-		if (error != 0) {
-			printf("ERROR: IO failed with %d\n", error);
-			goto out;
-		}
-	} else if (iotype == BIO_READ) {
-		/* Retrieve the physical segment backing the read. */
-		error = slsfs_performio_getdaddr(vp, task->size, bp);
-		if (error != 0) {
-			printf("ERROR: IO failed with %d\n", error);
-			goto out;
-		}
-	} else {
-		panic("Invalid iotype %d", iotype);
-	}
-
-	/* We only map the buffer if we need to read. */
-	DEBUG4("%s:%d: buf %p has %d pages", __FILE__, __LINE__, bp, bp->b_npages);
-
-	/*
-	 * XXX The object doesn't back the vnode OR the buffer object; look into
-	 * whether that's possible. There must be a way to do CoW for files at
-	 * the VM object level.
-	 */
-
-	bp->b_iocmd = iotype;
-	bp->b_iodone = bdone;
-
-	bp->b_flags &= ~B_INVAL;
-
-	bp->b_rcred = crhold(curthread->td_ucred);
-	bp->b_wcred = crhold(curthread->td_ucred);
-
-	/*
-	 * XXX Do we need to lock the device vnode for the write? That doesn't
-	 * seem sensible.
-	 */
-
-	/* Scale the block number into device blocks. */
-	bp->b_blkno = bp->b_blkno * (fsbsize / devbsize);
-	bp->b_iooffset = dbtob(bp->b_blkno);
-
-	bp->b_data = unmapped_buf;
-	bp->b_offset = 0;
-
-	g_vfs_strategy(&slos.slos_vp->v_bufobj, bp);
-
-	/*
-	 * Wait for the buffer to be done. Because the task calling
-	 * slsfs_performio() only exits after bwait() returns, waiting for the
-	 * taskqueue to be drained is equivalent to waiting until all data has
-	 * hit the disk.
-	 */
-	bwait(bp, PRIBIO, "slsrw");
-	KASSERT(bp->b_resid == 0, ("Still have %lu bytes of IO left", bp->b_resid));
-
-	/* Scale the block number back to filesystem blocks.*/
-	bp->b_blkno = bp->b_blkno / (fsbsize / devbsize);
-
-out:
-	/*
-	 * Make sure the buffer is still in a sane state after the IO has
-	 * completed. Remove all pages from the buffer.
-	 */
-	KASSERT(bp->b_npages != 0, ("buffer has no pages"));
-	for (i = 0; i < bp->b_npages; i++) {
-		KASSERT(bp->b_pages[i]->object != 0, ("page without an associated object found"));
-		KASSERT(bp->b_pages[i]->object == obj, ("page %p in object %p "
-		    "associated with object %p",
-		    bp->b_pages[i], obj, bp->b_pages[i]->object));
-		bp->b_pages[i] = bogus_page;
-	}
-	bp->b_npages = 0;
-	bp->b_bcount = bp->b_bufsize = 0;
-
-	/* Free the reference to the object taken when creating the task.  */
-	vm_object_deallocate(obj);
-	relpbuf(bp, &slsfs_pbufcnt);
-	free(task, M_SLSFSTSK);
-}
-
-static struct slsfs_taskctx *
-slsfs_createtask(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int iotype, slsfs_callback cb)
-{
-	struct slsfs_taskctx *ctx;
-
-	ctx = malloc(sizeof(*ctx), M_SLSFSTSK, M_WAITOK | M_ZERO);
-	*ctx = (struct slsfs_taskctx) {
-		.vp = vp,
-		.obj = obj,
-		.startpage = m,
-		.size = len,
-		.iotype = iotype,
-		.cb = cb,
-	};
-
-	return (ctx);
-}
-
-int
-slsfs_io_async(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int iotype, slsfs_callback cb)
-{
-	struct slos *slos = SLSVP(vp)->sn_slos;
-	struct slsfs_taskctx *ctx;
-
-	/* Ignore IOs of size 0. */
-	if (len == 0)
-		return (0);
-
-	/*
-	 * Get a reference to the object, freed when the buffer is done. We have
-	 * to do this here, if we do it in the task the page might be dead by
-	 * then.
-	 */
-	vm_object_reference(obj);
-
-	ctx = slsfs_createtask(vp, obj, m, len, iotype, cb);
-	TASK_INIT(&ctx->tk, 0, &slsfs_performio, ctx);
-	DEBUG3("Creating task for vnode %p: page index %lu, size %lu", vp, m->pindex, len);
-	taskqueue_enqueue(slos->slos_tq, &ctx->tk);
-
-	return (0);
-}
-
-int
-slsfs_io(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int iotype)
-{
-	struct slsfs_taskctx *ctx;
-
-	/* Ignore IOs of size 0. */
-	if (len == 0)
-		return (0);
-
-	/*
-	 * Get a reference to the object, freed when the buffer is done. We have
-	 * to do this here, if we do it in the task the page might be dead by
-	 * then.
-	 */
-	vm_object_reference(obj);
-
-	ctx = slsfs_createtask(vp, obj, m, len, iotype, NULL);
-	KASSERT(len != 0, ("IO of size 0"));
-	slsfs_performio(ctx, 0);
-
-	return (0);
-}
-
 static int
 slsfs_checksumtree_init(struct slos *slos)
 {
@@ -773,7 +151,7 @@ slsfs_checksumtree_init(struct slos *slos)
 	size_t offset = ((NUMSBS * slos->slos_sb->sb_ssize) / slos->slos_sb->sb_bsize) + 1;
 	if (slos->slos_sb->sb_epoch == EPOCH_INVAL) {
 		MPASS(error == 0);
-		error = initialize_btree(slos, offset, &ptr);
+		error = fbtree_sysinit(slos, offset, &ptr);
 		DEBUG1("Initializing checksum tree %lu", ptr.offset);
 		MPASS(error == 0);
 	} else {
@@ -786,12 +164,14 @@ slsfs_checksumtree_init(struct slos *slos)
 	}
 
 	DEBUG1("Loading Checksum tree %lu", ptr.offset);
-	slos->slos_cktree = slos_vpimport(slos, ptr.offset);
+	error = slos_svpimport(slos, ptr.offset, true, &slos->slos_cktree);
+	KASSERT(error == 0, ("importing checksum tree failed with %d", error));
+
 	fbtree_init(slos->slos_cktree->sn_fdev, slos->slos_cktree->sn_tree.bt_root, sizeof(uint64_t),
 		sizeof(uint32_t), &uint64_t_comp, "Checksum tree", 0, &slos->slos_cktree->sn_tree);
+	KASSERT(slos->slos_cktree != NULL, ("could not initialize checksum tree"));
 
 	fbtree_reg_rootchange(&slos->slos_cktree->sn_tree, &slsfs_root_rc, slos->slos_cktree);
-	MPASS(slos->slos_cktree != NULL);
 	if (slos->slos_sb->sb_epoch == EPOCH_INVAL) {
 		MPASS(fbtree_size(&slos->slos_cktree->sn_tree) == 0);
 	}
@@ -916,7 +296,7 @@ slsfs_mount_device(struct vnode *devvp, struct mount *mp, struct slsfs_device **
 	 * N to M corresponding between SLOSes and devices? Why isn't the information
 	 * in the SLOS enough?
 	 */
-	sdev = malloc(sizeof(struct slsfs_device), M_SLSFSMNT, M_WAITOK | M_ZERO);
+	sdev = malloc(sizeof(struct slsfs_device), M_SLSFS, M_WAITOK | M_ZERO);
 	sdev->refcnt = 1;
 	sdev->devvp = slos.slos_vp;
 	sdev->gprovider = slos.slos_pp;
@@ -949,7 +329,7 @@ slsfs_valloc(struct vnode *dvp, mode_t mode, struct ucred *creds, struct vnode *
 	struct vnode *vp;
 
 	/* Create the new inode in the filesystem. */
-	error = slos_new_node(VPSLOS(dvp), mode, &pid);
+	error = slos_svpalloc(VPSLOS(dvp), mode, &pid);
 	if (error) {
 		return (error);
 	}
@@ -997,7 +377,7 @@ slsfs_mountfs(struct vnode *devvp, struct mount *mp)
 			goto error;
 
 		/* Create the in-memory data for the filesystem instance. */
-		smp = (struct slsfsmount *)malloc(sizeof(struct slsfsmount), M_SLSFSMNT, M_WAITOK | M_ZERO);
+		smp = (struct slsfsmount *)malloc(sizeof(struct slsfsmount), M_SLSFS, M_WAITOK | M_ZERO);
 
 		smp->sp_index = -1;
 		smp->sp_vfs_mount = mp;
@@ -1047,12 +427,12 @@ slsfs_mountfs(struct vnode *devvp, struct mount *mp)
 	return (0);
 error:
 	if (smp != NULL) {
-		free(smp, M_SLSFSMNT);
+		free(smp, M_SLSFS);
 		mp->mnt_data = NULL;
 	}
 
 	if (slsfsdev != NULL) {
-		free(slsfsdev, M_SLSFSMNT);
+		free(slsfsdev, M_SLSFS);
 	}
 
 	printf("Error mounting");
@@ -1581,7 +961,7 @@ slsfs_unmount_device(struct slsfs_device *sdev)
 	/* Restore the node's private data. */
 	sdev->devvp->v_data = sdev->vdata;
 
-	free(sdev, M_SLSFSMNT);
+	free(sdev, M_SLSFS);
 
 	DEBUG("Device Unmounted");
 
@@ -1600,7 +980,7 @@ slsfs_freemntinfo(struct mount *mp)
 	if (mp == NULL)
 		return;
 
-	free(smp, M_SLSFSMNT);
+	free(smp, M_SLSFS);
 	DEBUG("Destroyed slsmount info");
 }
 
@@ -1736,7 +1116,7 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	}
 
 	/* Bring the inode in memory. */
-	error = slos_get_node(&slos, ino, &svnode);
+	error = slos_iopen(&slos, ino, &svnode);
 	if (error) {
 		*vpp = NULL;
 		return (error);

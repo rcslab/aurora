@@ -28,6 +28,7 @@
 #include <slsfs.h>
 
 #include "slos_alloc.h"
+#include "slos_io.h"
 #include "slos_subr.h"
 #include "slsfs_dir.h"
 #include "slsfs_buf.h"
@@ -45,7 +46,7 @@ slsfs_inactive(struct vop_inactive_args *args)
 	struct vnode *vp = args->a_vp;
 	struct slos_node *svp = SLSVP(vp);
 
-	if (svp->sn_status == SLOS_VDEAD) {
+	if (svp->sn_status == IN_DEAD) {
 		/* XXX Do not destroy the file,  we need it for the SLS. */
 		/*
 		error = slos_truncate(vp, 0);
@@ -437,7 +438,7 @@ slsfs_rmdir(struct vop_rmdir_args *args)
 
 	svp->sn_ino.ino_nlink -= 2; 
 	svp->sn_ino.ino_flags |= IN_CHANGE;
-	svp->sn_status |= SLOS_DIRTY | SLOS_VDEAD;
+	svp->sn_status |= SLOS_DIRTY | IN_DEAD;
 	KASSERT(svp->sn_ino.ino_nlink == 0, ("Problem with ino links - %lu", svp->sn_ino.ino_nlink));
 	DEBUG("Removing directory done");
 
@@ -741,36 +742,9 @@ slsfs_print(struct vop_print_args *args)
 		printf("\tsn_gid = %ld", slsvp->sn_gid);
 		printf("\tsn_blk = %ld", slsvp->sn_blk);
 		printf("\tsn_status = %lx", slsvp->sn_status);
-		printf("\tsn_refcnt = %ld", slsvp->sn_refcnt);
 	}
 
 	return (0);
-}
-
-/*
- * Trim a new disk pointer that points to the physical blocks backing logical 
- * block bln to start from the physical block pointing to newblkn instead.  
- * Adjust its size accordingly.
- */
-void
-slsfs_ptr_trimstart(uint64_t newbln, uint64_t bln, size_t blksize, diskptr_t *ptr) 
-{
-	int off;
-
-	if (bln == newbln)
-		return;
-
-	off = newbln - bln;
-	
-	KASSERT(off > 0, ("Physical extent %lu of size %lu cannot move to %lu",
-	    bln, ptr->size, newbln));
-	KASSERT(off * blksize < ptr->size, ("Cannot trim %lu bytes off a "
-	    "%lu byte extent (blksize %lu)", off * blksize, ptr->size, blksize));
-	KASSERT(ptr->size % blksize == 0, ("Size of physical extent %lu bytes "
-	    "not aligned to block size %lu", ptr->size, blksize));
-
-	ptr->offset += off;
-	ptr->size -= off * blksize;
 }
 
 static int
@@ -932,7 +906,7 @@ slsfs_strategy(struct vop_strategy_args *args)
 		if (bp->b_iocmd == BIO_WRITE) {
 			if (ptr.epoch == slos.slos_sb->sb_epoch && ptr.offset != 0) {
 				/* The segment is current and exists on disk. */
-				slsfs_ptr_trimstart(bp->b_lblkno,
+				slos_ptr_trimstart(bp->b_lblkno,
 				    ITER_KEY_T(iter, uint64_t), fsbsize, &ptr);
 			} else {
 				/* Otherwise we need to create it. */
@@ -946,7 +920,7 @@ slsfs_strategy(struct vop_strategy_args *args)
 				 * Actually allocate the block, then insert it
 				 * to actually back the new range.
 				 */
-				error = slsfs_fbtree_rangeinsert(&SLSVP(vp)->sn_tree,
+				error = fbtree_rangeinsert(&SLSVP(vp)->sn_tree,
 					bp->b_lblkno, bp->b_bcount);
 				if (error != 0)
 					goto error;
@@ -965,7 +939,7 @@ slsfs_strategy(struct vop_strategy_args *args)
 		} else if (bp->b_iocmd == BIO_READ) {
 			if (ptr.offset != 0)  {
 				/* Find where we must start reading from. */
-				slsfs_ptr_trimstart(bp->b_lblkno, 
+				slos_ptr_trimstart(bp->b_lblkno, 
 				    ITER_KEY_T(iter, uint64_t), fsbsize, &ptr);
 				bp->b_blkno = ptr.offset;
 			} else {

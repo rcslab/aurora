@@ -19,12 +19,11 @@
 #include <machine/atomic.h>
 
 #include <slos.h>
-#include <slos_inode.h>
 #include <slos_btree.h>
+#include <slos_inode.h>
 #include <slsfs.h>
 
 #include "slos_alloc.h"
-#include "slosmm.h"
 #include "btree.h"
 #include "slsfs_buf.h"
 #include "debug.h"
@@ -2137,8 +2136,11 @@ fnode_init(struct fbtree *tree, bnode_ptr ptr, struct fnode **fn)
 	return (0);
 }
 
+/*
+ * Initialize a global SLOS btree. Used by the allocator and checksum btrees.
+ */
 int
-initialize_btree(struct slos *slos, size_t offset, diskptr_t *ptr)
+fbtree_sysinit(struct slos *slos, size_t offset, diskptr_t *ptr)
 {
 	struct buf *bp;
 	struct slos_inode ino = {};
@@ -2255,6 +2257,220 @@ fbtree_test(struct fbtree *tree)
 	return (0);
 }
 
+struct extent {
+	uint64_t start;
+	uint64_t end;
+	uint64_t target;
+	uint64_t epoch;
+};
+
+static void
+extent_clip_head(struct extent *extent, uint64_t boundary)
+{
+	if (boundary < extent->start) {
+		extent->start = boundary;
+	}
+	if (boundary < extent->end) {
+		extent->end = boundary;
+	}
+}
+
+static void
+extent_clip_tail(struct extent *extent, uint64_t boundary)
+{
+	if (boundary > extent->start) {
+		if (extent->target != 0) {
+			extent->target += boundary - extent->start;
+		}
+		extent->start = boundary;
+	}
+
+	if (boundary > extent->end) {
+		extent->end = boundary;
+	}
+}
+
+static void
+set_extent(struct extent *extent, uint64_t lbn, uint64_t size, uint64_t target, uint64_t epoch)
+{
+	KASSERT(size % PAGE_SIZE == 0, ("Size %lu is not a multiple of the page size", size));
+
+	extent->start = lbn;
+	extent->end = lbn + (size / PAGE_SIZE);
+	extent->target = target;
+	extent->epoch = epoch;
+}
+
+static void
+diskptr_to_extent(struct extent *extent, uint64_t lbn, const diskptr_t *diskptr)
+{
+	set_extent(extent, lbn, diskptr->size, diskptr->offset, diskptr->epoch);
+}
+
+static void
+extent_to_diskptr(const struct extent *extent, uint64_t *lbn, diskptr_t *diskptr)
+{
+	*lbn = extent->start;
+	diskptr->offset = extent->target;
+	diskptr->size = (extent->end - extent->start) * PAGE_SIZE;
+	diskptr->epoch = extent->epoch;
+}
+
+/*
+ * Insert an extent starting an logical block number lbn of size bytes into the
+ * btree, potentially splitting existing extents to make room.
+ */
+int
+fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size)
+{
+	/*
+	 * We are inserting an extent which may overlap with many other extents
+	 * in the tree.  There are many possible scenarios:
+	 *
+	 *           [----)
+	 *     [-------)[-------)
+	 *
+	 *           [----)
+	 *     [----------------)
+	 *
+	 *           [----)
+	 *     [--)          [--)
+	 *
+	 * etc.  We want to end up with
+	 *
+	 *            main
+	 *     [----)[----)[----)
+	 *      head        tail
+	 *
+	 * (with head and/or tail possibly empty).
+	 *
+	 * To do this, we iterate over every extent (current) that may possibly
+	 * intersect the new one (main).  For each of these, we clip that extent
+	 * into a possible new_head and new_tail.  There will be at most one
+	 * head and one tail that are non-empty.  We remove all the overlapping
+	 * extents, then insert the new head, main, and tail extents.
+	 */
+
+	struct extent main;
+	struct extent head = {0}, tail = {0};
+	struct extent current;
+	struct extent new_head, new_tail;
+	struct fnode_iter iter;
+	int error;
+	uint64_t key;
+	diskptr_t value;
+
+#ifdef VERBOSE
+	DEBUG5("%s:%d: %s with logical offset %u, len %u", __FILE__, __LINE__, __func__, lbn, size);
+#endif
+	set_extent(&main, lbn, size, 0, 0);
+#ifdef VERBOSE
+	DEBUG5("%s:%d: %s with extent [%u, %u)", __FILE__, __LINE__, __func__, main.start, main.end);
+#endif
+
+	key = main.start;
+	error = fbtree_keymin_iter(tree, &key, &iter);
+	if (error) {
+		panic("fbtree_keymin_iter() error %d in range insert", error);
+	}
+
+
+	if (ITER_ISNULL(iter)) {
+		// No extents are before the start, so start from the beginning
+		iter.it_index = 0;
+	}
+
+	KASSERT(key <= main.start, ("Got minimum %ld as an infimum for %ld\n", key, main.start));
+
+	while (!ITER_ISNULL(iter) && NODE_SIZE(iter.it_node) > 0 ) {
+		key = ITER_KEY_T(iter, uint64_t);
+		value = ITER_VAL_T(iter, diskptr_t);
+
+		diskptr_to_extent(&current, key, &value);
+#ifdef VERBOSE
+		DEBUG4("current [%d, %d), main [%d, %d)", current.start, current.end,
+		   main.start, main.end);
+#endif
+		if (current.start >= main.end) {
+#ifdef VERBOSE
+			DEBUG("BREAK");
+#endif
+			break;
+		}
+
+		new_head = current;
+		extent_clip_head(&new_head, main.start);
+		if (new_head.start != new_head.end) {
+			KASSERT(head.start == head.end, ("Found multiple heads [%lu, %lu) and [%lu, %lu)",
+			         head.start, head.end, new_head.start, new_head.end));
+			head = new_head;
+#ifdef VERBOSE
+			DEBUG2("Head clip [%d, %d)", head.start, head.end);
+#endif
+		}
+
+		new_tail = current;
+		extent_clip_tail(&new_tail, main.end);
+		if (new_tail.start != new_tail.end) {
+			if (tail.start != tail.end) {
+				fnode_print(iter.it_node);
+			        panic("Found multiple tails [%lu, %lu) and [%lu, %lu) %lu, %lu",
+			         tail.start, tail.end, new_tail.start, new_tail.end, main.start, main.end);
+			}
+			tail = new_tail;
+#ifdef VERBOSE
+			DEBUG3("Tail clip [%d, %d), current.start vs main.end %d",
+			    tail.start, tail.end, current.start == main.end);
+#endif
+		}
+
+		error = fiter_remove(&iter);
+		if (error) {
+			panic("Error %d removing current", error);
+		}
+	}
+
+	if (head.start != head.end) {
+		extent_to_diskptr(&head, &key, &value);
+#ifdef VERBOSE
+		DEBUG5("(%p, %d): Inserting (%ld, %ld, %ld)", curthread, __LINE__,
+			(uint64_t) key, value.offset, value.size);
+#endif
+		error = fbtree_insert(tree, &key, &value);
+		if (error) {
+			panic("Error %d inserting head", error);
+		}
+	}
+
+	extent_to_diskptr(&main, &key, &value);
+#ifdef VERBOSE
+	DEBUG5("(%p, %d): Inserting (%ld, %ld, %ld)", curthread, __LINE__,
+		(uint64_t) key, value.offset, value.size);
+#endif
+	error = fbtree_insert(tree, &key, &value);
+	if (error) {
+		panic("Error %d inserting main", error);
+	}
+	size -= value.size;
+
+	if (tail.start != tail.end) {
+		extent_to_diskptr(&tail, &key, &value);
+#ifdef VERBOSE
+		DEBUG5("(%p, %d): Inserting (%ld, %ld, %ld)", curthread, __LINE__,
+		    (uint64_t) key, value.offset, value.size);
+#endif
+		error = fbtree_insert(tree, &key, &value);
+		if (error) {
+			fnode_print(iter.it_node);
+			panic("Error %d inserting  - %lu : %lu-%lu - %lu-%lu %lu-%lu %lu-%lu", 
+				error, key, value.offset, value.size, lbn, size, tail.start, 
+				tail.end, head.start, head.end);
+		}
+	}
+
+	return (0);
+}
+
 #ifdef SLOS_TEST
 
 /* Constants for the testing function. */
@@ -2302,9 +2518,9 @@ slos_fbtree_test(void)
 	uint64_t oid;
 
 	oid = FBTEST_ID;
-	error = slos_new_node(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
+	error = slos_svpalloc(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
 	if (error != 0) {
-		printf("slos_new_node() failed with %d", error);
+		printf("slos_svpalloc() failed with %d", error);
 		return (error);
 	}
 

@@ -67,7 +67,7 @@ size_t sls_data_received = 0;
 uint64_t sls_pages_grabbed = 0;
 uint64_t sls_io_initiated = 0;
 unsigned int sls_async_slos = 1;
-unsigned int sls_sync_slos = 0;
+unsigned int sls_use_slos = 1;
 
 uma_zone_t slspagerun_zone = NULL;
 
@@ -201,11 +201,7 @@ slsio_obj_slos(struct vnode *vp, vm_object_t obj, vm_page_t m,
 	ASSERT_VOP_UNLOCKED(vp, ("Trying to do IO on locked vnode %p", vp));
 	VM_OBJECT_ASSERT_UNLOCKED(obj);
 
-	if (async)
-		return (slsfs_io_async(vp, obj, m, len, bio_cmd, NULL));
-	else
-		return (slsfs_io(vp, obj, m, len, bio_cmd));
-	return (0);
+	return (slos_iotask_create(SLSVP(vp), obj, m, len, bio_cmd, NULL, async));
 }
 
 /* Creates an in-memory Aurora record. */
@@ -608,8 +604,7 @@ sls_readdata(struct vnode *vp, uint64_t slsid, uint64_t type,
 
 	/* XXX Add VFS backend handling. */
 	if (lazyrest == 0) {
-		KASSERT((sls_async_slos != 0) || (sls_sync_slos != 0),
-		    ("wrong flags set"));
+		KASSERT(sls_use_slos != 0, ("cannot use SLOS"));
 		VOP_UNLOCK(vp, 0);
 		error = sls_readdata_slos(vp, obj);
 		VOP_LOCK(vp, LK_EXCLUSIVE);
@@ -904,14 +899,9 @@ slsio_writeobj_data(struct vnode *vp, vm_object_t obj)
 		contig_len = sls_contig_pages(obj, &m);
 		KASSERT(contig_len <= sls_contig_limit, ("writing %lx bytes, limit %lx", contig_len, sls_contig_limit));
 
-		if (sls_async_slos) {
-			/* Spawn kernel tasks for each IO. */
-			error = slsio_obj_slos(vp, obj, startm, contig_len, BIO_WRITE, true);
-		} else if (sls_sync_slos) {
-			/* Synchronously do the SLOS IOs. */
-			VOP_UNLOCK(vp, 0);
-			error = slsio_obj_slos(vp, obj, startm, contig_len, BIO_WRITE, false);
-			VOP_LOCK(vp, LK_EXCLUSIVE);
+		if (sls_use_slos) {
+			error = slsio_obj_slos(vp, obj, startm, contig_len, BIO_WRITE, 
+			    (bool) (sls_async_slos != 0));
 		} else {
 			/* Use generic vnode methods for the IOs. */
 			/* XXX This should be only for non-SLOS backends. */
@@ -961,7 +951,7 @@ sls_writemeta_slos(struct sls_record *rec, struct vnode **vpp, bool overwrite)
 
 	/* Try to create the node, if not already there, wrap it in a vnode. */
 	oid = rec->srec_id;
-	error = slos_new_node(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
+	error = slos_svpalloc(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
 	if (error != 0)
 		return (error);
 
@@ -1632,7 +1622,7 @@ slstable_test(void)
 	vm_object_t obj = NULL;
 	uint64_t lost_elements;
 	struct slskv_iter iter;
-	uint64_t old_async, old_sync;
+	uint64_t old_async, old_use_slos;
 	struct sbuf *sb;
 	uint64_t slsid;
 	uint64_t type;
@@ -1649,10 +1639,10 @@ slstable_test(void)
 	 * Save the old sysctl values, set up our own.
 	 */
 	old_async = sls_async_slos;
-	old_sync = sls_sync_slos;
+	old_use_slos = sls_use_slos;
 
 	sls_async_slos = 1;
-	sls_sync_slos = 0;
+	sls_use_slos = 1;
 
 
 	error = slsp_add(TEST_PARTID, attr, &slsp);
@@ -1821,7 +1811,7 @@ out:
 
 	/* Restore the old sysctl values. */
 	sls_async_slos = old_async;
-	sls_sync_slos = old_sync;
+	sls_use_slos = old_use_slos;
 
 	return (error);
 }

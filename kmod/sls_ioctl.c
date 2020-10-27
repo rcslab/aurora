@@ -348,9 +348,9 @@ sls_sysctl_init(void)
 	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "async_slos",
 	    CTLFLAG_RW, &sls_async_slos,
 	    0, "Asynchronous SLOS writes");
-	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "sync_slos",
-	    CTLFLAG_RW, &sls_sync_slos,
-	    0, "Synchronous writes go to the SLOS");
+	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "use_slos",
+	    CTLFLAG_RW, &sls_use_slos,
+	    0, "Use the SLOS as a backend");
 	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "objprotect",
 	    CTLFLAG_RW, &sls_objprotect,
 	    0, "Traverse VM objects instead of entries when applying COW");

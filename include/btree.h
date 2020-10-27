@@ -55,12 +55,6 @@ extern uma_zone_t fnodes_zone;
 #define BUCKET_HASNEXT(node) ((*(bnode_ptr *)fnode_getval(node, NODE_MAX(node))) != 0)
 #define BUCKET_GETNEXT(node, next) (fnode_fetch(node, NODE_MAX(node), next))
 
-struct alloc_d {
-	bnode_ptr	    a_root_ptr;
-	size_t	    a_numEntries;
-	bnode_ptr 	    data[];
-};
-
 #define FNODE_PTRSIZE (300)
 
 /*
@@ -72,7 +66,6 @@ struct fbtree_rcentry {
 	rootchange_t		    rc_fn;
 	void			    *rc_ctx;
 };
-
 
 /* 
  * File Backed Btree
@@ -206,6 +199,7 @@ int fbtree_remove(struct fbtree *tree, void *key, void *value);
 int fbtree_replace(struct fbtree *tree, void *key, void *value);
 int fbtree_sync(struct fbtree *tree);
 int fbtree_sync_withalloc(struct fbtree *tree, diskptr_t *pre);
+int fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size);
 int fnode_create_bucket(struct fnode *node, int at, void *key, struct fnode **fin);
 
 /* Debug functions */
@@ -214,5 +208,8 @@ void fnode_print(struct fnode *node);
 void fnode_print_internal(struct fnode *node);
 void fnode_print_level(struct fnode *node);
 int slsfs_fbtree_test(void);
+
+/* Internal system btree initialization */
+int fbtree_sysinit(struct slos *slos, size_t offset, diskptr_t *ptr);
 
 #endif /* _BTREE_H_ */

@@ -15,7 +15,6 @@
 #include <slos_btree.h>
 #include <slos_bnode.h>
 #include <slos_inode.h>
-#include <slosmm.h>
 #include <slsfs.h>
 
 #include "slsfs_buf.h"

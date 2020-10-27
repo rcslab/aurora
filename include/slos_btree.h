@@ -80,7 +80,7 @@ void btree_addelem(struct btree *btree, struct bnode *bnode);
 void btree_discardelem(struct btree *btree);
 void btree_keepelem(struct btree *btree);
 
-int initialize_btree(struct slos *slos, size_t offset, diskptr_t *ptr);
+int slosalloc_fbtree_init(struct slos *slos, size_t offset, diskptr_t *ptr);
 #endif
 
 #endif /* _BTREE_H_ */

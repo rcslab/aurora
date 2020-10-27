@@ -1,6 +1,7 @@
 #include <sys/param.h>
 #include <sys/types.h>
 #include <sys/buf.h>
+#include <sys/mount.h>
 #include <sys/uio.h>
 #include <sys/vnode.h>
 
@@ -38,7 +39,7 @@ static int
 fast_path(struct slos *slos, uint64_t blocks, diskptr_t *ptr)
 {
 	uint64_t blksize = BLKSIZE(slos);
-	diskptr_t *chunk = &slos->slsfs_alloc.chunk;
+	diskptr_t *chunk = &slos->slos_alloc.chunk;
 	if (chunk->size >=  blocks * blksize) {
 		ptr->offset = chunk->offset;
 		ptr->size = blocks * blksize;
@@ -116,7 +117,7 @@ slos_blkalloc(struct slos *slos, size_t bytes, diskptr_t *ptr)
 {
 	uint64_t asked;
 	uint64_t blksize = BLKSIZE(slos);
-	diskptr_t *chunk = &slos->slsfs_alloc.chunk;
+	diskptr_t *chunk = &slos->slos_alloc.chunk;
 	int error;
 
 	/* Get an extent large enough to cover the allocation. */
@@ -133,7 +134,7 @@ slos_blkalloc(struct slos *slos, size_t bytes, diskptr_t *ptr)
 			BTREE_UNLOCK(OTREE(slos), 0);
 			continue;
 		}
-		error = allocate_chunk(slos, &slos->slsfs_alloc.chunk);
+		error = allocate_chunk(slos, &slos->slos_alloc.chunk);
 		if (error) {
 			panic("Problem allocating\n");
 		}
@@ -153,6 +154,8 @@ slos_allocator_init(struct slos *slos)
 	diskptr_t ptr;
 	uint64_t off;
 	uint64_t total;
+	int error;
+
 	/*
 	 * If epoch is -1 then this is the first time we mounted this device,  
 	 * this means we have to manually allocate, since we know how much space 
@@ -171,9 +174,9 @@ slos_allocator_init(struct slos *slos)
 		 * each tree by two, one for the inode itself, and the second 
 		 * for the root of the tree.
 		 */
-		initialize_btree(slos, offset, &slos->slos_sb->sb_allocoffset);
+		fbtree_sysinit(slos, offset, &slos->slos_sb->sb_allocoffset);
 		offset += 2;
-		initialize_btree(slos, offset, &slos->slos_sb->sb_allocsize);
+		fbtree_sysinit(slos, offset, &slos->slos_sb->sb_allocsize);
 		offset += 2;
 	}
 
@@ -182,24 +185,26 @@ slos_allocator_init(struct slos *slos)
 
 	DEBUG("Initing Allocator");
 	/* Create the in-memory vnodes from the on-disk state. */
-	offt = slos_vpimport(slos, offbl);
-	sizet = slos_vpimport(slos, sizebl);
+	error = slos_svpimport(slos, offbl, true, &offt);
+	KASSERT(error == 0, ("importing allocator offset tree failed with %d", error));
+	error = slos_svpimport(slos, sizebl, true, &sizet);
+	KASSERT(error == 0, ("importing allocator size tree failed with %d", error));
 
 	// This is a remount so we must free the allocator slos_nodes as they 
 	// are not cleaned up in the vflush as they have no associated vnode to 
 	// them.
-	if (slos->slsfs_alloc.a_offset != NULL) {
-		slos_vpfree(slos, slos->slsfs_alloc.a_offset);
+	if (slos->slos_alloc.a_offset != NULL) {
+		slos_vpfree(slos, slos->slos_alloc.a_offset);
 	}
-	slos->slsfs_alloc.a_offset = offt;
+	slos->slos_alloc.a_offset = offt;
 
-	if (slos->slsfs_alloc.a_size != NULL) {
-		slos_vpfree(slos, slos->slsfs_alloc.a_size);
+	if (slos->slos_alloc.a_size != NULL) {
+		slos_vpfree(slos, slos->slos_alloc.a_size);
 	}
-	slos->slsfs_alloc.a_size = sizet;
+	slos->slos_alloc.a_size = sizet;
 
-	slos->slsfs_alloc.chunk.offset = 0;
-	slos->slsfs_alloc.chunk.size = 0;
+	slos->slos_alloc.chunk.offset = 0;
+	slos->slos_alloc.chunk.size = 0;
 
 	// We just have to readjust the elements in the btree since we are not
 	// using them for the same purpose of keeping track of data
@@ -256,10 +261,10 @@ slos_allocator_init(struct slos *slos)
 int
 slos_allocator_uninit(struct slos *slos)
 {
-    slos_vpfree(slos, slos->slsfs_alloc.a_offset);
-    slos->slsfs_alloc.a_offset = NULL;
-    slos_vpfree(slos, slos->slsfs_alloc.a_size);
-    slos->slsfs_alloc.a_size = NULL;
+    slos_vpfree(slos, slos->slos_alloc.a_offset);
+    slos->slos_alloc.a_offset = NULL;
+    slos_vpfree(slos, slos->slos_alloc.a_size);
+    slos->slos_alloc.a_size = NULL;
 
     return (0);
 }
@@ -298,11 +303,11 @@ slos_allocator_sync(struct slos *slos, struct slos_sb *newsb)
 	error = fbtree_sync_withalloc(STREE(slos), &ptr);
 	MPASS(error == 0);
 
-	DEBUG2("off(%p), size(%p)", slos->slsfs_alloc.a_offset->sn_fdev,slos->slsfs_alloc.a_size->sn_fdev);
+	DEBUG2("off(%p), size(%p)", slos->slos_alloc.a_offset->sn_fdev,slos->slos_alloc.a_size->sn_fdev);
 	// Update the inodes and dirty them as well
-	bp = getblk(slos->slsfs_alloc.a_offset->sn_fdev, ptr.offset, BLKSIZE(slos), 0, 0, 0);
+	bp = getblk(slos->slos_alloc.a_offset->sn_fdev, ptr.offset, BLKSIZE(slos), 0, 0, 0);
 	MPASS(bp);
-	struct slos_inode *ino = &slos->slsfs_alloc.a_offset->sn_ino;
+	struct slos_inode *ino = &slos->slos_alloc.a_offset->sn_ino;
 	ino->ino_blk = ptr.offset;
 	slos->slos_sb->sb_allocoffset = ptr;
 	ino->ino_btree = (diskptr_t) { OTREE(slos)->bt_root, BLKSIZE(slos) };
@@ -310,9 +315,9 @@ slos_allocator_sync(struct slos *slos, struct slos_sb *newsb)
 	bwrite(bp);
 	ptr.offset += 1;
 
-	bp = getblk(slos->slsfs_alloc.a_size->sn_fdev, ptr.offset, BLKSIZE(slos), 0, 0, 0);
+	bp = getblk(slos->slos_alloc.a_size->sn_fdev, ptr.offset, BLKSIZE(slos), 0, 0, 0);
 	MPASS(bp);
-	ino = &slos->slsfs_alloc.a_size->sn_ino;
+	ino = &slos->slos_alloc.a_size->sn_ino;
 	ino->ino_blk = ptr.offset;
 	ino->ino_btree = (diskptr_t) { STREE(slos)->bt_root, BLKSIZE(slos) };
 	slos->slos_sb->sb_allocsize = ptr;

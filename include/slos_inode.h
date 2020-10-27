@@ -1,6 +1,7 @@
 #ifndef _SLOS_INODE_H_
 #define _SLOS_INODE_H_
 
+#include <slos.h>
 #include "btree.h"
 
 /* Record types */
@@ -24,13 +25,12 @@ struct slos_rstat {
 	uint64_t len;	/* The length of the record */
 };
 
-#define SLOS_VALIVE	(0x1)
-#define SLOS_VDEAD	(0x10)
 #define SLOS_DIRTY	(0x1000)
 
 #define IN_ACCESS	(0x2)
 #define IN_UPDATE	(0x4)
 #define IN_CHANGE	(0x8)
+#define IN_DEAD		(0x10)
 #define IN_MODIFIED	(0x20)
 #define IN_CREATE	(0x40)
 #define IN_RENAME	(0x80)
@@ -46,12 +46,7 @@ struct slos_rstat {
 #define INUM(node) (node->sn_ino.ino_pid)
 #define RECORDDATASIZ(vp) ((vp->sn_slos->slos_sb->sb_bsize) - (sizeof(struct slos_record)))
 
-/*
- * SLSOSD Inode
- *
- * Each inode represents a single object in our store.  Each object contains 
- * one or more records that contain the actual file data.
- */
+/* On-disk SLOS inode. */
 struct slos_inode {
 	int64_t			ino_pid;		/* process id */
 	int64_t			ino_uid;		/* user id */
@@ -69,7 +64,6 @@ struct slos_inode {
 	uint64_t		ino_birthtime_nsec;		
 
 	uint64_t		ino_blk;		/* on-disk position */
-	struct slos_diskptr	ino_records;		/* btree of records */
 	struct slos_diskptr	ino_btree;		/* btree for data */
 
 	uint64_t		ino_flags;		/* inode flags */
@@ -84,18 +78,18 @@ struct slos_inode {
 };
 
 
+/* In-memory SLOS inode. */
 struct slos_node {
-	int64_t			sn_pid;			/* process id */
-	int64_t			sn_uid;			/* user id */
-	int64_t			sn_gid;			/* group id */
-	u_char			sn_procname[64];	/* process name */
-	uint64_t		sn_blk;			/* on-disk position */
+	struct slos_inode	sn_ino;			/* On disk representation of the slos */
+#define sn_pid		sn_ino.ino_pid
+#define sn_uid		sn_ino.ino_uid
+#define sn_gid		sn_ino.ino_gid
+#define sn_procname	sn_ino.ino_procname
+#define sn_blk		sn_ino.ino_blk
 	uint64_t		sn_status;		/* status of vnode */
-	uint64_t		sn_refcnt;		/* reference count */
 	LIST_ENTRY(slos_node)	sn_entries;		/* link for in-memory vnodes */
 	struct fbtree		sn_tree;		/* Data btree */
 	struct mtx		sn_mtx;			/* vnode mutex */
-	struct slos_inode	sn_ino;			/* On disk representation of the slos */
 	struct slos		*sn_slos;		/* Slos the node belong to */
 
 	struct vnode		*sn_fdev;		/* Fake vnode for btree back */
@@ -122,19 +116,18 @@ int slos_iremove(struct slos *slos, uint64_t pid);
 int slos_updatetime(struct slos_inode *ino);
 int slos_update(struct slos_node *svp);
 
-struct slos_node *slos_iopen(struct slos *slos, uint64_t pid);
+int slos_iopen(struct slos *slos, uint64_t slsid, struct slos_node **svpp);
 
 struct slos_node *slos_istat(struct slos *slos, uint64_t inoblk);
 
-struct slos_node *slos_vpimport(struct slos *slos, uint64_t inoblk);
+int slos_svpimport(struct slos *slos, uint64_t svpid,
+    bool system, struct slos_node **svpp);
 int slos_vpexport(struct slos *slos, struct slos_node *vp);
 void slos_vpfree(struct slos *slos, struct slos_node *vp);
 int slos_test_inode(void);
 void slsfs_root_rc(void *ctx, bnode_ptr p);
 
-// This is nuts
-int slos_newnode(struct slos *slos, uint64_t pid, struct slos_node **vp);
-int slos_new_node(struct slos *slos, mode_t mode, uint64_t *slsidp);
+int slos_svpalloc(struct slos *slos, mode_t mode, uint64_t *slsidp);
 
 int initialize_inode(struct slos *slos, uint64_t pid, diskptr_t *p);
 #endif

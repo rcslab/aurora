@@ -66,13 +66,6 @@ extern uma_zone_t fnode_zone;
 extern uma_zone_t fnode_trie_zone;
 extern struct buf_ops bufops_slsfs;
 
-/* Needed by the SLS to create nodes with specific IDs. */
-int slsfs_fbtree_rangeinsert(struct fbtree *tree, uint64_t lbn, uint64_t size);
-int vmobjecttest(struct slos *slos);
-int slsfs_io_async(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len,
-    int iotype, slsfs_callback cb);
-int slsfs_io(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, int iotype);
-
 struct buf;
 int slsfs_cksum(struct buf *bp);
 

@@ -25,7 +25,6 @@
 #include <slos.h>
 #include <slos_io.h>
 #include <slos_inode.h>
-#include <slosmm.h>
 #include <slsfs.h>
 #include <btree.h>
 
@@ -58,7 +57,7 @@ slos_generic_rc(void *ctx, bnode_ptr p)
  * Allocate a new SLOS inode.
  */
 int
-slos_new_node(struct slos *slos, mode_t mode, uint64_t *slsidp)
+slos_svpalloc(struct slos *slos, mode_t mode, uint64_t *slsidp)
 {
 	int slsid;
 	int slsid_requested;
@@ -152,25 +151,8 @@ slos_remove_node(struct vnode *dvp, struct vnode *vp, struct componentname *name
 int
 slos_destroy_node(struct slos_node *vp)
 {
-	KASSERT(vp->sn_status == SLOS_VDEAD, ("destroying still active node"));
+	KASSERT(vp->sn_status == IN_DEAD, ("destroying still active node"));
 	return (0);
-}
-
-/*
- * Retrieve an in-memory SLOS inode, or create one from disk if not present.
- */
-int
-slos_get_node(struct slos *slos, uint64_t slsid, struct slos_node **spp)
-{
-	struct slos_node *sp;
-
-	sp = slos_iopen(slos, OIDTOSLSID(slsid));
-	if (sp != NULL) {
-		*spp = sp;
-		return (0);
-	}
-
-	return (EINVAL);
 }
 
 /*

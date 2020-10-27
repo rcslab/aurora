@@ -1,8 +1,8 @@
 #ifndef _SLOS_ALLOC_H_
 #define _SLOS_ALLOC_H_
 
-#define OTREE(slos) (&((slos)->slsfs_alloc.a_offset->sn_tree))
-#define STREE(slos) (&((slos)->slsfs_alloc.a_size->sn_tree))
+#define OTREE(slos) (&((slos)->slos_alloc.a_offset->sn_tree))
+#define STREE(slos) (&((slos)->slos_alloc.a_size->sn_tree))
 
 int slos_allocator_init(struct slos *slos);
 int uint64_t_comp(const void *k1, const void *k2);
