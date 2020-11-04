@@ -27,13 +27,13 @@
 
 #include <slos.h>
 
-#include "imported_sls.h"
 #include "sls_internal.h"
 #include "sls_kv.h"
 #include "sls_path.h"
 #include "sls_table.h"
 #include "sls_vmobject.h"
 #include "sls_vmspace.h"
+#include "sysv_internal.h"
 
 static int
 slsckpt_vmentry(struct vm_map_entry *entry, struct sbuf *sb)

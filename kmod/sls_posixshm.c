@@ -56,7 +56,6 @@
 #include "sls_file.h"
 #include "sls_internal.h"
 #include "sls_path.h"
-#include "imported_sls.h"
 #include "debug.h"
 
 int

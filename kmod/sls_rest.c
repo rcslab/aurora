@@ -63,9 +63,7 @@
 #include "sls_vmobject.h"
 #include "sls_vmspace.h"
 #include "sls_internal.h"
-#include "debug.h"
-
-#include "imported_sls.h"
+#include "sysv_internal.h"
 #include "debug.h"
 
 SDT_PROBE_DEFINE(sls, , , restdone);

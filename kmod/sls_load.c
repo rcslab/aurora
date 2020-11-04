@@ -34,11 +34,11 @@
 #include <slos.h>
 #include <slos_inode.h>
 
-#include "imported_sls.h"
 #include "sls_data.h"
 #include "sls_ioctl.h"
 #include "sls_load.h"
 #include "sls_vmspace.h"
+#include "sysv_internal.h"
 #include "debug.h"
 
 

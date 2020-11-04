@@ -58,7 +58,6 @@
 #include "sls_path.h"
 #include "sls_vm.h"
 
-#include "imported_sls.h"
 #include "debug.h"
 
 SDT_PROBE_DEFINE1(sls, , , fileckptstart, "int");

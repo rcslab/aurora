@@ -3,7 +3,6 @@
 
 #include <sls_data.h>
 
-#include "imported_sls.h"
 #include "sls_kv.h"
 
 int slsload_thread(struct slsthread *thread_info, char **bufp, size_t *bufsizep);

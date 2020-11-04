@@ -57,7 +57,6 @@
 #include "sls_internal.h"
 #include "sls_path.h"
 
-#include "imported_sls.h"
 #include "debug.h"
 
 SDT_PROBE_DEFINE(sls, , , namestart);

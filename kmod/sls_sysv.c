@@ -10,7 +10,7 @@
 #include <slos_inode.h>
 #include <sls_data.h>
 
-#include "imported_sls.h"
+#include "sysv_internal.h"
 #include "sls_internal.h"
 #include "sls_sysv.h"
 

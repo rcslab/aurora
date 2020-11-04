@@ -53,11 +53,10 @@
 #include <slos.h>
 #include <sls_data.h>
 
+#include "pts_internal.h"
 #include "sls_file.h"
 #include "sls_internal.h"
 #include "sls_path.h"
-
-#include "imported_sls.h"
 
 /* 
  * Variant of ttyoutq_read() that nondestructively reads all data from

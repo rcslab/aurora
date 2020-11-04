@@ -56,8 +56,6 @@
 #include "sls_internal.h"
 #include "sls_path.h"
 
-#include "imported_sls.h"
-
 /* 
  * XXX Sendfile doesn't work, because there might be pageins in progress that
  * cannot be tracked across restarts. We could fix this by monitoring pageins
