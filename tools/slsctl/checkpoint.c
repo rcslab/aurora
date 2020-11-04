@@ -14,6 +14,7 @@
 #include <sls.h>
 
 static struct option checkpoint_longopts[] = {
+	{ "memory", no_argument, NULL, 'm' },
 	{ "oid", required_argument, NULL, 'o' },
 	{ "recursive", no_argument, NULL, 'r' },
 	{ "synchronous", no_argument, NULL, 's' },
@@ -60,7 +61,7 @@ checkpoint_main(int argc, char* argv[])
 
 	if (optind != argc) {
 		checkpoint_usage();
-		return 0;
+		return (0);
 	}
 
 	if (sls_checkpoint(oid, recurse, synchronous) < 0)

@@ -1,8 +1,13 @@
-#!/bin/sh -e
+#!/bin/sh
 
 . aurora
 
 aursetup
+if [ $? -ne 0 ]; then
+    echo "Failed to set up Aurora"
+    exit 1
+fi
+
 echo foo > $MOUNTPT/foo
 rm $MOUNTPT/foo
 
@@ -15,5 +20,9 @@ rmdir $MOUNTPT/foo
 ln -s garbage_string:123 $MOUNTPT/bar
 rm $MOUNTPT/bar
 aurteardown
+if [ $? -ne 0 ]; then
+    echo "Failed to tear down Aurora"
+    exit 1
+fi
 
 exit 0

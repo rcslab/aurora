@@ -165,15 +165,18 @@ slscli(void)
 int
 main(int argc, const char *argv[])
 {
+	int error;
+
 	/* Drop into the CLI if not arguments. */
 	if (argc == 1) {
 		slscli();
 		return (0);
 	}
 
-	if (slscommand(argc - 1, (char **) argv + 1) != 0)
+	error = slscommand(argc - 1, (char **) argv + 1);
+	if (error != 0)
 		usage();
 
-	return (0);
+	exit(error);
 }
 

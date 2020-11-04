@@ -459,3 +459,31 @@ slsvm_print_crc32_object(vm_object_t obj)
 			* ((uint64_t *) PHYS_TO_DMAP(m->phys_addr) + 1));
 	}
 }
+
+void
+slsvm_object_scan(void)
+{
+	vm_object_t obj;
+
+	mtx_lock(&vm_object_list_mtx);
+	TAILQ_FOREACH(obj,  &vm_object_list, object_list) {
+		if ((obj->flags & OBJ_AURORA) == 0)
+			continue;
+
+		mtx_unlock(&vm_object_list_mtx);
+		VM_OBJECT_WLOCK(obj);
+		if ((obj->flags & OBJ_DEAD) != 0)
+			goto next_object;
+
+		atomic_thread_fence_acq();
+		if ((obj->flags & OBJ_AURORA) == 0)
+			goto next_object;
+
+		printf("Object %p has %d refs\n", obj, obj->ref_count);
+next_object:
+		VM_OBJECT_WUNLOCK(obj);
+		mtx_lock(&vm_object_list_mtx);
+	}
+	mtx_unlock(&vm_object_list_mtx);
+	printf("---------\n");
+}

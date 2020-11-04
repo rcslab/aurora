@@ -34,7 +34,6 @@
 
 #include "sls_data.h"
 #include "sls_internal.h"
-#include "sls_mm.h"
 #include "sls_partition.h"
 #include "sls_table.h"
 #include "sls_vm.h"
@@ -316,7 +315,15 @@ slsp_delall(void)
 		slsp_fini(slsp);
 
 	/* Remove all processes from the global table.  */
-	slskv_destroy(slsm.slsm_procs);
+	if (slsm.slsm_procs != NULL) {
+		slskv_destroy(slsm.slsm_procs);
+		slsm.slsm_procs = NULL;
+	}
+
+	if (slsm.slsm_parts != NULL) {
+		slskv_destroy(slsm.slsm_parts);
+		slsm.slsm_parts = NULL;
+	}
 }
 
 void

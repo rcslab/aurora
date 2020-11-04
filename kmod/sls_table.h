@@ -43,7 +43,6 @@ void sls_record_destroy(struct sls_record *rec);
 void sls_free_rectable(struct slskv_table *rectable);
 
 extern unsigned int sls_async_slos;
-extern unsigned int sls_use_slos;
 
 #ifdef SLS_TEST
 int slstable_test(void);

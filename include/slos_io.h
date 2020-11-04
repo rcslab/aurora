@@ -9,6 +9,8 @@
 #error "No serviceable parts inside"
 #endif /* _KERNEL */
 
+struct buf;
+
 /* XXX We won't need this here when we use direct buffer IOs from the SLS.  */
 void slos_uioinit(struct uio *auio, uint64_t off, enum uio_rw rwflag, 
 	struct iovec *aiovs, size_t iovcnt);
@@ -17,8 +19,9 @@ int slos_sbread(struct slos *slos);
 int slos_sbat(struct slos *slos, int index, struct slos_sb *sb);
 
 /* Direct SLOS IO. */
-typedef void (*slos_callback)(void *context);
-int slos_iotask_create(struct slos_node *svp, vm_object_t obj, vm_page_t m, 
-	size_t len, int iotype, slos_callback cb, bool async);
+int slos_iotask_create(struct vnode *vp, struct buf *bp, bool sync);
+boolean_t slos_hasblock(struct vnode *vp, uint64_t lblkno_req, int *rbehind, int *rahead);
+
+extern int slos_pbufcnt;
 
 #endif /* _SLOS_IO_H_ */

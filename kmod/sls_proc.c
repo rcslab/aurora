@@ -17,7 +17,6 @@
 #include <machine/sysarch.h>
 
 #include "sls_kv.h"
-#include "sls_mm.h"
 #include "sls_proc.h"
 #include "sls_path.h"
 #include "debug.h"
@@ -79,6 +78,8 @@ sls_thread_create(struct thread *td, void *thunk)
 	int error = 0;
 	struct slsthread *slsthread = (struct slsthread *) thunk;
 	struct image_params img;
+
+	DEBUG1("Created thread %p", td);
 
 	PROC_LOCK(td->td_proc);
 

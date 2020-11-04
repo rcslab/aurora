@@ -29,7 +29,6 @@
 
 #include "sls_internal.h"
 #include "sls_kv.h"
-#include "sls_mm.h"
 #include "sls_path.h"
 #include "sls_table.h"
 #include "sls_vm.h"
@@ -132,16 +131,13 @@ slsrest_vmobject(struct slsvmobject *info, struct slskv_table *objtable)
 
 	switch (info->type) {
 	case OBJT_DEFAULT:
-		/* 
-		 * OBJT_SWAP is just a default object which has swapped, or is SYSV_SHM. 
-		 * Until we create our custom swapper, treat it as a clean object.
-		 */
 		/* FALLTHROUGH */
 	case OBJT_SWAP:
-		/* XXX Bandaid until we don't have anonymous vmobj records */
+		/*
+		 * OBJT_SWAP is just a default object which has swapped, or is 
+		 * SYSV_SHM. It is already restored and set up.
+		 */
 		return (0);
-		panic("object of type %d should have already been restored", info->type);
-		break;
 
 	case OBJT_VNODE:
 		/* 

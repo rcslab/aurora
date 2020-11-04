@@ -46,7 +46,6 @@
 #include "sls_internal.h"
 #include "sls_file.h"
 #include "sls_ioctl.h"
-#include "sls_mm.h"
 #include "sls_proc.h"
 #include "sls_sysv.h"
 #include "sls_table.h"
@@ -642,7 +641,7 @@ out:
 
 	/* Free the arguments of the kthread, and the module reference.  */
 	free(args, M_SLSMM);
-	sls_modderef();
+	sls_finishop();
 
 	kthread_exit();
 }

@@ -25,7 +25,6 @@
 #include <sls_data.h>
 
 #include "sls_internal.h"
-#include "sls_mm.h"
 #include "sls_path.h"
 
 SDT_PROBE_DEFINE(sls, , , vptopathstart);

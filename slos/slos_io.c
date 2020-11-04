@@ -29,6 +29,7 @@
 
 #include <vm/vm.h>
 #include <vm/pmap.h>
+#include <vm/vm_extern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
@@ -51,24 +52,20 @@ struct slos slos;
 #define SLOS_FILEBLKSIZE (64 * 1024)
 
 /* The SLOS can use as many physical buffers as it needs to. */
-static int slos_pbufcnt = -1;
+int slos_pbufcnt = -1;
 
 static MALLOC_DEFINE(M_SLOS_IO, "slos_io", "SLOS IO context");
 MALLOC_DEFINE(M_SLOS_SB, "slos_superblock", "SLOS superblock");
 
 struct slos_taskctx {
 	struct task tk;
-	struct slos_node *svp;
-	vm_object_t obj;
-	slos_callback cb;
-	vm_page_t startm;
-	int iotype;
-	uint64_t size;
+	struct vnode *vp;
+	struct buf *bp;
 };
 
-/* 
+/*
  * Initialize a UIO for operation rwflag at offset off,
- * and asssign an IO vector to the given UIO. 
+ * and asssign an IO vector to the given UIO.
  */
 void
 slos_uioinit(struct uio *auio, uint64_t off, enum uio_rw rwflag,
@@ -232,55 +229,6 @@ slos_ptr_trimstart(uint64_t newbln, uint64_t bln, size_t blksize, diskptr_t *ptr
 	ptr->size -= off * blksize;
 }
 
-/*
- * Attach the pages to be read in or out into the buffer.
- */
-static void
-slos_io_pgattach(vm_object_t obj, vm_page_t startm, int targetsize, struct buf *bp)
-{
-	vm_page_t m;
-	size_t size = 0;
-	int npages = 0;
-
-	VM_OBJECT_RLOCK(obj);
-	m = startm;
-	TAILQ_FOREACH_FROM(m, &obj->memq, listq) {
-		KASSERT(npages < btoc(MAXPHYS), ("overran b_pages[] array"));
-		KASSERT(obj->ref_count >= obj->shadow_count + 1,
-		    ("object has %d references and %d shadows",
-		    obj->ref_count, obj->shadow_count));
-		KASSERT(m->object == obj, ("page %p in object %p "
-		    "associated with object %p",
-		    m, obj, m->object));
-		KASSERT(startm->pindex + npages == m->pindex,
-		    ("pages in the buffer are not consecutive "
-		    "(pindex should be %ld, is %ld)",
-		    startm->pindex + npages, m->pindex));
-
-		bp->b_pages[npages++] = m;
-		KASSERT(pagesizes[m->psind] <= PAGE_SIZE,
-		    ("dumping page %p with size %ld", m, pagesizes[m->psind]));
-		size += pagesizes[m->psind];
-		/*  We are done grabbing pages. */
-		if (size == targetsize)
-			break;
-	}
-	VM_OBJECT_RUNLOCK(obj);
-	KASSERT((targetsize / PAGE_SIZE) < btoc(MAXPHYS), ("IO too large"));
-
-	/* Update the buffer to point to the pages. */
-	bp->b_npages = npages;
-	KASSERT(bp->b_npages > 0, ("no pages in the IO"));
-
-	/*
-	 * XXX Check if doing runningbufspace accounting causes performance
-	 * problems. If so, increase it.
-	 */
-	bp->b_bcount = bp->b_bufsize = bp->b_runningbufspace = targetsize;
-	bp->b_resid = targetsize;
-	atomic_add_long(&runningbufspace, bp->b_runningbufspace);
-}
-
 /* Do the necessary btree manipulations before initiating an IO. */
 static int
 slos_io_setdaddr(struct slos_node *svp, size_t size, struct buf *bp)
@@ -307,7 +255,7 @@ slos_io_setdaddr(struct slos_node *svp, size_t size, struct buf *bp)
 	if (error != 0)
 		goto error;
 
-	KASSERT(ptr.size == size, ("requested %lu bytes on disk, got %lu", 
+	KASSERT(ptr.size == size, ("requested %lu bytes on disk, got %lu",
 	    ptr.size, size));
 
 	/* No need to free the block if we fail, it'll get GCed. */
@@ -320,7 +268,7 @@ slos_io_setdaddr(struct slos_node *svp, size_t size, struct buf *bp)
 
 	/* Set the buffer to point to the physical block. */
 	bp->b_blkno = ptr.offset;
-	KASSERT(bp->b_resid == ptr.size, ("Doing %lu bytes of IO in a %lu segment",
+	KASSERT(bp->b_resid <= ptr.size, ("Doing %lu bytes of IO in a %lu segment",
 	    bp->b_resid, ptr.size));
 
 	return (0);
@@ -336,7 +284,7 @@ error:
 }
 
 static int
-slos_io_getdaddr(struct slos_node *svp, size_t size, struct buf *bp)
+slos_io_getdaddr(struct slos_node *svp, struct buf *bp)
 {
 	struct slos_diskptr ptr;
 	struct fnode_iter iter;
@@ -377,92 +325,68 @@ error:
 	return (error);
 }
 
-/* Perform an IO without copying from the VM objects to the buffer. */
+
+/*
+ * Set up the physical on-disk address for the IO.
+ */
 static void
-slos_io(void *ctx, int pending)
+slos_io_physaddr(struct buf *bp, struct slos *slos)
 {
-	struct buf *bp;
-	struct slos_taskctx *task = (struct slos_taskctx *)ctx;
-	struct slos_node *svp = task->svp;
-	int iotype = task->iotype;
-	vm_object_t obj = task->obj;
-	vm_page_t startm = task->startm;
-	daddr_t lblkno;
-	int error, i;
-
-	KASSERT(iotype == BIO_READ || iotype == BIO_WRITE, ("invalid IO type %d", iotype));
-	ASSERT_VOP_UNLOCKED(vp, ("vnode %p is locked", vp));
-
-	if (task->tk.ta_func == NULL)
-		DEBUG1("Warning: %s called synchronously", __func__);
-	KASSERT(IOSIZE(svp) == PAGE_SIZE,  ("IOs are not page-sized (size %lu)", IOSIZE(svp)));
-
-
-	/* The FS and device block sizes are needed below. */
-	KASSERT(SLOS_BSIZE(slos) >= SLOS_DEVBSIZE(slos), ("FS bsize %lu > device bsize %lu",
-	    SLOS_BSIZE(slos), SLOS_DEVBSIZE(slos)));
-	KASSERT((SLOS_BSIZE(slos) % SLOS_DEVBSIZE(slos)) == 0,
-	    ("FS bsize %lu not multiple of device bsize %lu",
-	    SLOS_BSIZE(slos), SLOS_DEVBSIZE(slos)));
-
-	/* If the IO would be empty, this function is a no-op.*/
-	if (task->size == 0) {
-		vm_object_deallocate(obj);
-		free(task, M_SLOS_IO);
-		return;
-	}
-
-	/* Set the logical block address of the buffer. */
-	lblkno = startm->pindex + SLOS_OBJOFF;
-	bp = getpbuf(&slos_pbufcnt);
-	bp->b_lblkno = lblkno;
-
-	DEBUG4("%s:%d: iotype %d for bp %p", __FILE__, __LINE__, iotype, bp);
-
-	/* Attach the pages to the buffer, set the size accordingly. */
-	slos_io_pgattach(obj, startm, task->size, bp);
-
-	if (iotype == BIO_WRITE) {
-		/* Create the physical segment backing the write. */
-		error = slos_io_setdaddr(svp, task->size, bp);
-		if (error != 0) {
-			printf("ERROR: IO failed with %d\n", error);
-			goto out;
-		}
-	} else if (iotype == BIO_READ) {
-		/* Retrieve the physical segment backing the read. */
-		error = slos_io_getdaddr(svp, task->size, bp);
-		if (error != 0) {
-			printf("ERROR: IO failed with %d\n", error);
-			goto out;
-		}
-	} else {
-		panic("Invalid iotype %d", iotype);
-	}
-
-	/* We only map the buffer if we need to read. */
-	DEBUG4("%s:%d: buf %p has %d pages", __FILE__, __LINE__, bp, bp->b_npages);
-
-	bp->b_iocmd = iotype;
-	bp->b_iodone = bdone;
-
 	bp->b_flags &= ~B_INVAL;
 
 	bp->b_rcred = crhold(curthread->td_ucred);
 	bp->b_wcred = crhold(curthread->td_ucred);
 
-	/*
-	 * XXX Do we need to lock the device vnode for the write? That doesn't
-	 * seem sensible.
-	 */
-
 	/* Scale the block number into device blocks. */
-	bp->b_blkno = bp->b_blkno * (SLOS_BSIZE(slos) / SLOS_DEVBSIZE(slos));
+	bp->b_blkno = bp->b_blkno * (SLOS_BSIZE(*slos) / SLOS_DEVBSIZE(*slos));
 	bp->b_iooffset = dbtob(bp->b_blkno);
+}
 
-	bp->b_data = unmapped_buf;
-	bp->b_offset = 0;
+/* Perform an IO without copying from the VM objects to the buffer. */
+static void
+slos_io(void *ctx, int pending)
+{
+	struct slos_taskctx *task = (struct slos_taskctx *)ctx;
+	struct vnode *vp = task->vp;
+	struct slos_node *svp = SLSVP(task->vp);
+	struct buf *bp = task->bp;
+	size_t iosize = bp->b_resid;
+	int iocmd = bp->b_iocmd;
+	int error;
 
+	KASSERT(iocmd == BIO_READ || iocmd == BIO_WRITE, ("invalid IO type %d", iocmd));
+	KASSERT(IOSIZE(svp) == PAGE_SIZE,  ("IOs are not page-sized (size %lu)", IOSIZE(svp)));
+	KASSERT(SLOS_BSIZE(slos) >= SLOS_DEVBSIZE(slos), ("FS bsize %lu > device bsize %lu",
+	    SLOS_BSIZE(slos), SLOS_DEVBSIZE(slos)));
+	KASSERT((SLOS_BSIZE(slos) % SLOS_DEVBSIZE(slos)) == 0,
+	    ("FS bsize %lu not multiple of device bsize %lu",
+	    SLOS_BSIZE(slos), SLOS_DEVBSIZE(slos)));
+	KASSERT(bp->b_bcount > 0, ("IO of size 0"));
+
+	if (iocmd == BIO_WRITE) {
+		/* Create the physical segment backing the write. */
+		error = slos_io_setdaddr(svp, bp->b_resid, bp);
+		if (error != 0) {
+			printf("ERROR: IO failed with %d\n", error);
+			goto out;
+		}
+
+		/* Update the size at the vnode and inode layers. */
+		if (IDX_TO_OFF(bp->b_lblkno) + iosize > SLSINO(svp).ino_size) {
+			SLSINO(svp).ino_size = IDX_TO_OFF(bp->b_lblkno) + iosize;
+			vnode_pager_setsize(vp, SLSINO(svp).ino_size);
+		}
+	} else if (iocmd == BIO_READ) {
+		/* Retrieve the physical segment backing the read. */
+		error = slos_io_getdaddr(svp, bp);
+		if (error != 0) {
+			printf("ERROR: IO failed with %d\n", error);
+			goto out;
+		}
+
+	}
+
+	slos_io_physaddr(bp, &slos);
 	g_vfs_strategy(&slos.slos_vp->v_bufobj, bp);
 
 	/*
@@ -472,79 +396,99 @@ slos_io(void *ctx, int pending)
 	 * hit the disk.
 	 */
 	bwait(bp, PRIBIO, "slsrw");
-	KASSERT(bp->b_resid == 0, ("Still have %lu bytes of IO left", bp->b_resid));
-
-	/* Scale the block number back to filesystem blocks.*/
-	bp->b_blkno = bp->b_blkno / (SLOS_BSIZE(slos) / SLOS_DEVBSIZE(slos));
-
 out:
-	/*
-	 * Make sure the buffer is still in a sane state after the IO has
-	 * completed. Remove all pages from the buffer.
-	 */
-	KASSERT(bp->b_npages != 0, ("buffer has no pages"));
-	for (i = 0; i < bp->b_npages; i++) {
-		KASSERT(bp->b_pages[i]->object != 0, ("page without an associated object found"));
-		KASSERT(bp->b_pages[i]->object == obj, ("page %p in object %p "
-		    "associated with object %p",
-		    bp->b_pages[i], obj, bp->b_pages[i]->object));
-		bp->b_pages[i] = bogus_page;
-	}
-	bp->b_npages = 0;
-	bp->b_bcount = bp->b_bufsize = 0;
-
-	/*
-	 * Free the reference to the object taken when creating the task. VM 
-	 * object deallocation may sleep, so we cannot do it from the buffer's 
-	 * callback routine.
-	 */
-	vm_object_deallocate(obj);
 	relpbuf(bp, &slos_pbufcnt);
+
 	free(task, M_SLOS_IO);
 }
 
 static struct slos_taskctx *
-slos_iotask(struct slos_node *svp,  vm_object_t obj, vm_page_t m, size_t len, int iotype, slos_callback cb)
+slos_iotask_init(struct vnode *vp, struct buf *bp)
 {
 	struct slos_taskctx *ctx;
 
 	ctx = malloc(sizeof(*ctx), M_SLOS_IO, M_WAITOK | M_ZERO);
 	*ctx = (struct slos_taskctx) {
-		.svp = svp,
-		.obj = obj,
-		.startm = m,
-		.size = len,
-		.iotype = iotype,
-		.cb = cb,
+		.vp = vp,
+		.bp = bp,
 	};
 
 	return (ctx);
 }
 
 int
-slos_iotask_create(struct slos_node *svp, vm_object_t obj, vm_page_t m,
-    size_t len, int iotype, slos_callback cb, bool async)
+slos_iotask_create(struct vnode *vp, struct buf *bp, bool sync)
 {
 	struct slos_taskctx *ctx;
 
-	/* Ignore IOs of size 0. */
-	if (len == 0)
-		return (0);
+	KASSERT(bp->b_resid > 0, ("IO of size 0"));
+	ctx = slos_iotask_init(vp, bp);
 
-	/*
-	 * Get a reference to the object, freed when the buffer is done. We have
-	 * to do this here, if we do it in the task the page might be dead by
-	 * then.
-	 */
-	vm_object_reference(obj);
-	ctx = slos_iotask(svp, obj, m, len, iotype, cb);
-
-	if (async) {
+	if (sync) {
+		slos_io(ctx, 0);
+	} else {
 		TASK_INIT(&ctx->tk, 0, &slos_io, ctx);
 		taskqueue_enqueue(slos.slos_tq, &ctx->tk);
-	} else {
-		slos_io(ctx, 0);
 	}
 
 	return (0);
+}
+
+boolean_t
+slos_hasblock(struct vnode *vp, uint64_t lblkno_req, int *rbehind, int *rahead)
+{
+	struct fbtree *tree = &SLSVP(vp)->sn_tree;
+	struct fnode_iter iter;
+	struct slos_diskptr ptr;
+	uint64_t lblkstart;
+	uint64_t lblkno;
+	boolean_t ret;
+	int error;
+
+	if (rbehind != NULL)
+		*rbehind = 0;
+	if (rahead != NULL)
+		*rahead = 0;
+
+	VOP_LOCK(tree->bt_backend, LK_EXCLUSIVE);
+	BTREE_LOCK(tree, LK_SHARED);
+
+	/* Get the physical segment from where we will read. */
+	lblkstart = lblkno_req;
+	error = fbtree_keymin_iter(tree, &lblkstart, &iter);
+	if (error != 0) {
+		printf("WARNING: Failed to look up swapped out page\n");
+		ret = FALSE;
+		goto out;
+	}
+
+	/* We do not have an infimum. */
+	if (ITER_ISNULL(iter)) {
+		ret = FALSE;
+		goto out;
+	}
+
+	lblkno = ITER_KEY_T(iter, uint64_t);
+	ptr = ITER_VAL_T(iter, diskptr_t);
+	KASSERT(ptr.size > 0, ("found extent of size 0"));
+	KASSERT(lblkno <= lblkstart, ("keymin returned start %lu for lblkstart %lu",
+	    lblkno, lblkstart));
+
+	/* Check if our infimum includes us. */
+	if (lblkno + (ptr.size / PAGE_SIZE) <= lblkno_req) {
+		ret = FALSE;
+		goto out;
+	}
+
+	ret = TRUE;
+	if (rbehind != NULL)
+		*rbehind = imax((lblkno_req - lblkno), 0);
+	if (rahead != NULL)
+		*rahead = imax((lblkno + (ptr.size / PAGE_SIZE) - 1 - lblkno_req), 0);
+
+out:
+	BTREE_UNLOCK(tree, 0);
+	VOP_UNLOCK(tree->bt_backend, 0);
+
+	return (ret);
 }

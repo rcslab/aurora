@@ -23,7 +23,6 @@
 #include <slsfs.h>
 
 #include "sls_kv.h"
-#include "sls_mm.h"
 #include "sls_partition.h"
 
 SDT_PROVIDER_DECLARE(sls);
@@ -40,11 +39,11 @@ struct sls_metadata {
     struct vnode	    *slsm_osdvp;	/* The device that holds the SLOS */
 
     struct mtx	    slsm_mtx;		/* Structure mutex. */
-    struct cv	    slsm_exitcv;	/* CV for waiting on users to exit. */
-    int		    slsm_users;		/* Number of users of the module */
+    struct cv	    slsm_exitcv;	/* CV for waiting on users to exit */
+    int		    slsm_swapobjs;	/* Number of Aurora swap objects */
+    int		    slsm_inprog;	/* Operations in progress */
     /* XXX Move these outside, we can only restore one partition at a time.  */
     struct cv	    slsm_proccv;	/* Condition variable for when all processes are restored */
-    struct cv	    slsm_donecv;	/* Condition variable to signal that processes can execute */
 };
 
 struct slsckpt_data {
@@ -165,42 +164,81 @@ SDT_PROVIDER_DECLARE(sls);
 	    __FILE__, #func, __LINE__, __func__, error);	    \
     } while (0)
 
+#define SLS_ASSERT_LOCKED() (mtx_assert(&slsm.slsm_mtx, MA_OWNED))
+#define SLS_ASSERT_UNLOCKED() (mtx_assert(&slsm.slsm_mtx, MA_NOTOWNED))
+#define SLS_LOCK() (mtx_lock(&slsm.slsm_mtx))
+#define SLS_UNLOCK() (mtx_unlock(&slsm.slsm_mtx))
+#define SLS_EXITING() (slsm.slsm_exiting != 0)
+
+/* Start an SLS ioctl operation. */
+static inline int
+sls_startop(bool allow_concurrent)
+{
+	SLS_LOCK();
+	if ((SLS_EXITING() != 0) || 
+	    (!allow_concurrent && (slsm.slsm_inprog > 0))) {
+	    SLS_UNLOCK();
+	    return (EBUSY);
+	}
+
+	slsm.slsm_inprog += 1;
+	SLS_UNLOCK();
+	return (0);
+}
+
+/* Mark an SLS ioctl operation as done. */
+static inline void
+sls_finishop(void)
+{
+	SLS_LOCK();
+	slsm.slsm_inprog -= 1;
+	cv_broadcast(&slsm.slsm_exitcv);
+	SLS_UNLOCK();
+}
+
 /*
  * Reference the module, signaling it is in use.
  */
-static inline int 
-sls_modref(void)
+static inline int
+sls_swapref(void)
 {
-	mtx_lock(&slsm.slsm_mtx);
-	if  (slsm.slsm_exiting != 0) {
-	    mtx_unlock(&slsm.slsm_mtx);
-	    return (EINVAL);
+	SLS_LOCK();
+	if (SLS_EXITING() != 0) {
+	    SLS_UNLOCK();
+	    return (EBUSY);
 	}
-
-	slsm.slsm_users += 1;
-	mtx_unlock(&slsm.slsm_mtx);
+	slsm.slsm_swapobjs += 1;
+	SLS_UNLOCK();
 
 	return (0);
 }
 
 /*
- * Dererefence the module, possibly allowing it to unload.
+ * Remove a reference to the module owned by a swap object.
  */
 static inline void
-sls_modderef(void)
+sls_swapderef_unlocked(void)
 {
-	mtx_lock(&slsm.slsm_mtx);
-	KASSERT(slsm.slsm_users > 0, ("module has no references left"));
-	slsm.slsm_users -= 1;
+	SLS_ASSERT_LOCKED();
+	KASSERT(slsm.slsm_swapobjs > 0, ("module has no references left"));
+	slsm.slsm_swapobjs -= 1;
 	cv_broadcast(&slsm.slsm_exitcv);
-	mtx_unlock(&slsm.slsm_mtx);
-
 }
 
+static inline void
+sls_swapderef(void)
+{
+	SLS_LOCK();
+	sls_swapderef_unlocked();
+	SLS_UNLOCK();
+}
 /* Global mutexes for restoring. */
 extern struct mtx sls_restmtx;
 extern struct cv sls_restcv;
 extern int sls_resttds;
+
+MALLOC_DECLARE(M_SLSMM);
+MALLOC_DECLARE(M_SLSREC);
 
 #endif /* _SLS_H_ */
 

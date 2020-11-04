@@ -71,8 +71,6 @@ run_tests()
     echo "-----------------------------------------------------------"
     for t in `find $SRCROOT/tests -maxdepth 1 -name \*.sh | sort -n`; do
 	run_test $t
-	# Teardown here, can't do that before we ktrdump.
-	aurteardown 2> /dev/null
     done
 }
 
@@ -88,4 +86,4 @@ else
 	run_tests
 fi
 
-cleanup_testbench
+cleanup_testbench > /dev/null 2> /dev/null

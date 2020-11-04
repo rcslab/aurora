@@ -8,30 +8,30 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-dd if=/dev/zero of=/dev/null bs=1m 1>&2 &
+./print/print > /dev/null 2> /dev/null &
+PID=$!
+sleep 1
 
-slsosdcheckpoint `jobid %1`
+slscheckpoint $PID
 if [ $? -ne 0 ];
 then
-    echo "Checkpoint failed with $?"
-    aurteardown
+    echo Checkpoint failed
     exit 1
 fi
 
-killandwait %1
+sleep 1
+killandwait $PID
 
-slsosdrestore
-if [ $? -ne 0 ] && [ $? -ne 3 ];
+slsrestore
+if [ $? -ne 0 ];
 then
-    echo "Restore failed with $?"
-    aurteardown
+    echo Restore failed
     exit 1
 fi
 
 sleep 1
 killandwait $!
-pkill dd
-sleep 1
+pkill print
 
 aurteardown
 if [ $? -ne 0 ]; then
@@ -39,4 +39,4 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-exit 0
+exit $?

@@ -38,7 +38,6 @@
 #include "sls_data.h"
 #include "sls_ioctl.h"
 #include "sls_load.h"
-#include "sls_mm.h"
 #include "sls_vmspace.h"
 #include "debug.h"
 

@@ -2,6 +2,7 @@
 #define _SLOS_INODE_H_
 
 #include <slos.h>
+
 #include "btree.h"
 
 /* Record types */

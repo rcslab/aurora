@@ -39,6 +39,13 @@
 #define INDEX_INVAL (-1)
 #define NODE_ISROOT(node) ((node)->fn_location == (node)->fn_tree->bt_root)
 
+struct extent {
+	uint64_t start;
+	uint64_t end;
+	uint64_t target;
+	uint64_t epoch;
+};
+
 /*
  * TODO: We probably dont even need our own PCTRIE we can hook into the 
  * gbincore on the bufobj of the tree->bt_backend, I thin we just have to 
@@ -275,7 +282,6 @@ fnode_getbufptr(struct fbtree *tree, bnode_ptr ptr, struct buf **bp)
 		return (EIO);
 	}
 
-	buf->b_fsprivate2 = NULL;
 	buf->b_fsprivate3 = 0;
 	buf->b_flags |= B_MANAGED | B_CLUSTEROK;
 	bqrelse(buf);
@@ -978,9 +984,6 @@ fbtree_destroy(struct fbtree *tree)
 		} else {
 			bremfree(bp);
 		}
-		if (bp->b_fsprivate2) {
-			bp->b_fsprivate2 = NULL;
-		}
 		brelse(bp);
 	}
 
@@ -992,9 +995,6 @@ fbtree_destroy(struct fbtree *tree)
 			bremfree(bp);
 		}
 
-		if (bp->b_fsprivate2) {
-			bp->b_fsprivate2 = NULL;
-		}
 		brelse(bp);
 	}
 
@@ -2256,13 +2256,6 @@ fbtree_test(struct fbtree *tree)
 
 	return (0);
 }
-
-struct extent {
-	uint64_t start;
-	uint64_t end;
-	uint64_t target;
-	uint64_t epoch;
-};
 
 static void
 extent_clip_head(struct extent *extent, uint64_t boundary)

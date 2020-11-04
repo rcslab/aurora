@@ -92,7 +92,7 @@ function slsckpt {
     fi
 
     # Start checkpointing.
-    "$SLSCTL" partadd -o "$OID" -b "$BACKEND" -t "$CKPTPERIOD" -i
+    "$SLSCTL" partadd -o "$OID" -b "$BACKEND" -t "$CKPTPERIOD" -i -l
     "$SLSCTL" attach -o "$OID" -p "$1"
     "$SLSCTL" checkpoint -o "$OID"
 }

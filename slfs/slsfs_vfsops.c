@@ -1018,17 +1018,15 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	 * vnodes, so this is going to be the last flush we need.
 	 */
 	slsfs_wakeup_syncer(1);
-	/* 
-	 * Seems like we don't call reclaim on a reference count drop so I 
-	 * manually call slos_vpfree to release the memory.
-	 */
-	vrele(slos->slsfs_inodes);
 
 	error = vflush(mp, 0, flags, curthread);
-	if (error) {
+	if (error)
 		return (error);
-	}
 
+	/*
+	 * Seems like we don't call reclaim on a reference count drop so I
+	 * manually call slos_vpfree to release the memory.
+	 */
 	slos->slsfs_inodes = NULL;
 	// Free the checksum tree
 	svp = slos->slos_cktree;
@@ -1060,9 +1058,6 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	return (0);
 }
 
-/*
- *
- */
 static void
 slsfs_init_vnode(struct vnode *vp, uint64_t ino)
 {

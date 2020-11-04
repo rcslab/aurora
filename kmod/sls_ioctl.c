@@ -46,8 +46,9 @@
 #include "sls_internal.h"
 #include "sls_ioctl.h"
 #include "sls_kv.h"
-#include "sls_mm.h"
+#include "sls_pager.h"
 #include "sls_table.h"
+#include "sls_vm.h"
 
 /* XXX Rename to M_SLS. */
 MALLOC_DEFINE(M_SLSMM, "sls", "SLS");
@@ -81,15 +82,9 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	struct slspart *slsp;
 	int error = 0;
 
-	/* Try to get a reference to the module. */
-	if (sls_modref() != 0)
-		return (EINVAL);
-
 	/* Take another reference for the worker thread. */
-	if (sls_modref() != 0) {
-		sls_modderef();
-		return (EINVAL);
-	}
+	if (sls_startop(true) != 0)
+		return (EBUSY);
 
 	/* Get the partition to be checkpointed. */
 	slsp = slsp_find(args->oid);
@@ -142,14 +137,12 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 		 */
 	}
 
-	sls_modderef();
 	return (0);
 
 error:
 
 	/* Release both references from here. */
-	sls_modderef();
-	sls_modderef();
+	sls_finishop();
 
 	return (EINVAL);
 }
@@ -160,8 +153,8 @@ sls_restore(struct sls_restore_args *args)
 	struct sls_restored_args *restd_args = NULL;
 
 	/* Try to get a reference to the module. */
-	if (sls_modref() != 0)
-		return (EINVAL);
+	if (sls_startop(true) != 0)
+		return (EBUSY);
 
 	/* Set up the arguments for the restore. */
 	restd_args = malloc(sizeof(*restd_args), M_SLSMM, M_WAITOK);
@@ -196,7 +189,7 @@ sls_attach(struct sls_attach_args *args)
 	error = slsp_attach(args->oid, args->pid);
 	if (error != 0) {
 		PRELE(p);
-		return (error); 
+		return (error);
 	}
 
 	PRELE(p);
@@ -348,9 +341,6 @@ sls_sysctl_init(void)
 	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "async_slos",
 	    CTLFLAG_RW, &sls_async_slos,
 	    0, "Asynchronous SLOS writes");
-	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "use_slos",
-	    CTLFLAG_RW, &sls_use_slos,
-	    0, "Use the SLOS as a backend");
 	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "objprotect",
 	    CTLFLAG_RW, &sls_objprotect,
 	    0, "Traverse VM objects instead of entries when applying COW");
@@ -385,6 +375,9 @@ sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 {
 	int error = 0;
 
+	if (sls_startop(false))
+		return (EBUSY);
+
 	switch (cmd) {
 		/* Attach a process into an SLS partition. */
 	case SLS_ATTACH:
@@ -416,8 +409,11 @@ sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		break;
 
 	default:
-		return (EINVAL);
+		error = EINVAL;
+		break;
 	}
+
+	sls_finishop();
 
 	return (error);
 }
@@ -442,12 +438,12 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 
 		bzero(&slsm, sizeof(slsm));
 
+		mtx_init(&slsm.slsm_mtx, "slsm", NULL, MTX_DEF);
+		cv_init(&slsm.slsm_exitcv, "slsm");
+
 		error = sls_setup_blackholefp();
 		if (error != 0)
 			return (error);
-
-		mtx_init(&slsm.slsm_mtx, "slsm", NULL, MTX_DEF);
-		cv_init(&slsm.slsm_exitcv, "slsm");
 
 		error = slskv_init();
 		if (error)
@@ -476,7 +472,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		partadd_args.oid = SLS_DEFAULT_PARTITION;
 		partadd_args.attr.attr_mode = SLS_DELTA;
 		partadd_args.attr.attr_target = SLS_OSD;
-		partadd_args.attr.attr_period = 1000;
+		partadd_args.attr.attr_period = 0;
 		partadd_args.attr.attr_flags = 0;
 		error = sls_partadd(&partadd_args);
 		if (error) {
@@ -493,6 +489,10 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 			printf("Problem creating default in-memory partition\n");
 		}
 
+		/* Commandeer the swap pager. */
+		sls_pager_register();
+
+		/* Make the SLS available to userspace. */
 		slsm.slsm_cdev = make_dev(&slsmm_cdevsw, 0,
 		    UID_ROOT, GID_WHEEL, 0666, "sls");
 
@@ -508,25 +508,38 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 
 	case MOD_UNLOAD:
 
+		SLS_LOCK();
+
 		/* Signal that we're exiting and wait for threads to finish. */
-		mtx_lock(&slsm.slsm_mtx);
 		slsm.slsm_exiting = 1;
-		while (slsm.slsm_users > 0)
-			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
-		mtx_unlock(&slsm.slsm_mtx);
 
-		/* XXX Destroy all partitions */
-
+		/* Destroy the device, wait for all ioctls in progress. */
 		if (slsm.slsm_cdev != NULL)
 			destroy_dev(slsm.slsm_cdev);
 
-		if (sysctl_ctx_free(&aurora_ctx))
-			printf("Failed to destroy sysctl\n");
+		while (slsm.slsm_inprog > 0)
+			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
 
+		/* Destroy all partitions. */
 		slsp_delall();
 
-		if (slsm.slsm_parts != NULL)
-			slskv_destroy(slsm.slsm_parts);
+		/* Remove the Aurora swapper, bring all objects back in. */
+		/*
+		 * XXX Make sure swapping is impossible while we are swapping
+		 * off, normally swapoff works by marking the device as 
+		 * unavaliable, but we want the functions themselves to be 
+		 * unavailable at this point. 
+		 */
+		sls_pager_swapoff();
+		sls_pager_unregister();
+
+		/* Wait for all swap objects to be detached.  */
+		while (slsm.slsm_swapobjs > 0)
+			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
+		SLS_UNLOCK();
+
+		if (sysctl_ctx_free(&aurora_ctx))
+			printf("Failed to destroy sysctl\n");
 
 		slskv_fini();
 

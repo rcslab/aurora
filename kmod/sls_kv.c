@@ -11,7 +11,6 @@
 
 #include "sls_internal.h"
 #include "sls_kv.h"
-#include "sls_mm.h"
 
 /* Hash function from keys to buckets. */
 #define SLSKV_BUCKETNO(table, key) (((u_long) key & table->mask))

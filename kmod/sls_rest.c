@@ -55,7 +55,6 @@
 #include "sls_ioctl.h"
 #include "sls_kv.h"
 #include "sls_load.h"
-#include "sls_mm.h"
 #include "sls_partition.h"
 #include "sls_proc.h"
 #include "sls_sysv.h"
@@ -468,7 +467,7 @@ slsrest_metadata(void *args)
 	 * We're done restoring. If we were the 
 	 * last restoree, notify the parent. 
 	 */
-	mtx_lock(&slsm.slsm_mtx);
+	mtx_lock(&sls_restmtx);
 	sls_resttds -= 1;
 	if (sls_resttds == 0)
 		cv_signal(&slsm.slsm_proccv);
@@ -476,7 +475,7 @@ slsrest_metadata(void *args)
 
 	/* Sleep until all sessions and controlling terminals are restored. */
 	while (sls_resttds >= 0) 
-		cv_wait(&slsm.slsm_donecv, &slsm.slsm_mtx);
+		cv_wait(&sls_restcv, &sls_restmtx);
 
 	/* 
 	 * If the original applications are running on a terminal,
@@ -485,7 +484,7 @@ slsrest_metadata(void *args)
 	 * we instead pass the original restore process' terminal as an
 	 * argument.
 	 */
-	mtx_unlock(&slsm.slsm_mtx);
+	mtx_unlock(&sls_restmtx);
 
 	PROC_LOCK(p);
 	DEBUG("SLS Restore ttyfixup");
@@ -493,12 +492,11 @@ slsrest_metadata(void *args)
 	if (error != 0)
 		SLS_DBG("tty_fixup failed with %d\n", error);
 
-	thread_single_end(p, SINGLE_BOUNDARY);
-
 	/* Allow the process to continue if we want it to. */
 	if (rest_stopped == 1)
 		kern_psignal(p, SIGSTOP);
 
+	thread_single_end(p, SINGLE_BOUNDARY);
 	PROC_UNLOCK(p);
 
 	kthread_exit();
@@ -519,11 +517,11 @@ error:
 	PROC_UNLOCK(p);
 
 	printf("Error %d while restoring process\n", error);
-	mtx_lock(&slsm.slsm_mtx);
+	mtx_lock(&sls_restmtx);
 	sls_resttds -= 1;
 	if (sls_resttds == 0)
-		cv_signal(&slsm.slsm_proccv);
-	mtx_unlock(&slsm.slsm_mtx);
+		cv_signal(&sls_restcv);
+	mtx_unlock(&sls_restmtx);
 
 	exit1(curthread, error, 0);
 }
@@ -577,9 +575,9 @@ slsrest_fork(uint64_t daemon, uint64_t rest_stopped, char *buf, size_t buflen,
 	thread_unlock(td);
 
 	/* Note down the fact that one more process is being restored. */
-	mtx_lock(&slsm.slsm_mtx);
+	mtx_lock(&sls_restmtx);
 	sls_resttds += 1;
-	mtx_unlock(&slsm.slsm_mtx);
+	mtx_unlock(&sls_restmtx);
 
 	return (0);
 }
@@ -712,6 +710,7 @@ slsrest_fini(struct slsrest_data *restdata)
 	struct kqueue *kq;
 	struct file *fp;
 	struct mbuf *m, *headm;
+	vm_object_t obj;
 
 	cv_destroy(&restdata->proccv);
 	mtx_destroy(&restdata->procmtx);
@@ -734,8 +733,13 @@ slsrest_fini(struct slsrest_data *restdata)
 	if (restdata->pgidtable != NULL)
 		slskv_destroy(restdata->pgidtable);
 
-	if (restdata->objtable != NULL)
+	if (restdata->objtable != NULL) {
+		KV_FOREACH_POP(restdata->objtable, slsid, obj) {
+			if (obj != NULL && OBJT_ISANONYMOUS(obj))
+				vm_object_deallocate(obj);
+		}
 		slskv_destroy(restdata->objtable);
+	}
 
 	if (restdata->proctable != NULL)
 		slskv_destroy(restdata->proctable);
@@ -954,7 +958,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 	}
 
 
-	/* 
+	/*
 	 * Recreate the VM object tree. When restoring from the SLOS we recreate everything, while
 	 * when restoring from memory all anonymous objects are already there.
 	 */
@@ -962,7 +966,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 	if (error != 0)
 		goto out;
 
-	/* 
+	/*
 	 * Iterate through the metadata; each entry represents either 
 	 * a process, complete with threads, FDs, and a VM map, a VM
 	 * object together with its data, or a vnode/kqueue pipe or
@@ -1010,8 +1014,8 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 	}
 
 
-	/* 
-	 * Fourth pass; restore processes. These depend on the objects 
+	/*
+	 * Fourth pass; restore processes. These depend on the objects
 	 * restored above, which we pass through the object table.
 	 */
 	KV_FOREACH(metatable, iter, record, st) {
@@ -1030,27 +1034,27 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 
 out:
 	/* Wait until all processes are done restoring. */
-	mtx_lock(&slsm.slsm_mtx);
+	mtx_lock(&sls_restmtx);
 	while (sls_resttds > 0)
-		cv_wait(&slsm.slsm_proccv, &slsm.slsm_mtx);
+		cv_wait(&slsm.slsm_proccv, &sls_restmtx);
 
 	/* We push the counter below 0 and restore all sessions. */
 	sls_resttds -= 1;
 
-	/* 
-	 * The tables in restdata only hold key-value pairs, cleanup is easy. 
+	/*
+	 * The tables in restdata only hold key-value pairs, cleanup is easy.
 	 * Note that we have to cleanup the filetable before we let the
 	 * processes keep executing, since by doing so we mark all master
-	 * terminals that weren't actually used as gone, and we need 
+	 * terminals that weren't actually used as gone, and we need
 	 * that for slsrest_ttyfixup().
 	 */
 	slsrest_fini(restdata);
 	restdata = NULL;
 
 	/* Restore all sessions. */
-	cv_broadcast(&slsm.slsm_donecv);
+	cv_broadcast(&sls_restcv);
 
-	mtx_unlock(&slsm.slsm_mtx);
+	mtx_unlock(&sls_restmtx);
 
 	SDT_PROBE0(sls, , , restdone);
 
@@ -1115,7 +1119,7 @@ out:
 	free(args, M_SLSMM);
 
 	/* Release the reference to the module. */
-	sls_modderef();
+	sls_finishop();
 
 	return;
 }

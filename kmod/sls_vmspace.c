@@ -30,7 +30,6 @@
 #include "imported_sls.h"
 #include "sls_internal.h"
 #include "sls_kv.h"
-#include "sls_mm.h"
 #include "sls_path.h"
 #include "sls_table.h"
 #include "sls_vmobject.h"
@@ -108,9 +107,7 @@ slsckpt_vmspace(struct proc *p, struct sbuf *sb, struct slsckpt_data *sckpt_data
 	/* Checkpoint all objects, including their ancestors. */
 	for (entry = vm_map->header.next; entry != &vm_map->header; 
 	    entry = entry->next) {
-
 		for (obj = entry->object.vm_object; obj != NULL; obj = obj->backing_object) {
-
 			error = slsckpt_vmobject(p, obj, sckpt_data);
 			if (error != 0) 
 				return (error);
@@ -134,10 +131,7 @@ slsckpt_vmspace(struct proc *p, struct sbuf *sb, struct slsckpt_data *sckpt_data
 static int
 slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_table *objtable)
 {
-	vm_map_entry_t entry; 
-	vm_page_t page;
-	vm_offset_t vaddr;
-	boolean_t contained;
+	vm_map_entry_t entry;
 	vm_object_t object;
 	int guard;
 	int error;
@@ -148,19 +142,12 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 	else
 		vm_object_reference(object);
 
-	/* 
-	 * Unfortunately, vm_map_entry_create is static, and so is
-	 * the zone from which it allocates the entry. That means
-	 * that we can only create entries using the API provided.
-	 * The workaround until we are able to modify the kernel
-	 * is to create a dummy map entry using vm_map_insert, and
-	 * then manually set the fields we can't set by using the 
-	 * proper arguments (mainly flags).
+	/*
+	 * Create a map entry using and manually set the fields we can't set by
+	 * using the proper arguments (mainly flags).
 	 */
 	vm_map_lock(map);
-	/* XXX Temporary fix around the kernel regression. */
-	guard = 0;
-	//guard = MAP_NO_MERGE;
+	guard = MAP_NO_MERGE;
 	if (info->eflags & MAP_ENTRY_GUARD) {
 		guard |= MAP_CREATE_GUARD;
 	}
@@ -170,9 +157,9 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 	if (error != 0)
 		goto out;
 
-
+#ifdef INVARIANTS
 	/* Get the entry from the map. */
-	contained = vm_map_lookup_entry(map, info->start, &entry);
+	boolean_t contained = vm_map_lookup_entry(map, info->start, &entry);
 	KASSERT(contained == TRUE, ("lost inserted vm_map_entry"));
 	KASSERT(entry->start == info->start,
 		("vm_map_entry start doesn't match: %lx vs. %lx", entry->start,
@@ -180,34 +167,10 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 	KASSERT(entry->end == info->end,
 		("vm_map_entry end doesn't match: %lx vs. %lx", entry->end,
 		 info->end));
+#endif /* INVARIANTS */
 
 	entry->eflags = info->eflags;
 	entry->inheritance = info->inheritance;
-
-	if (object != NULL) {
-		/* Enter the object's pages to the map's pmap. */
-		TAILQ_FOREACH(page, &object->memq, listq) {
-
-			/* Compute the virtual address for the page. */
-			vaddr = IDX_TO_VADDR(page->pindex, entry->start, entry->offset);
-
-			vm_page_sbusy(page);
-
-			/* If the page is within the entry's bounds, add it to the map. */
-			VM_OBJECT_WLOCK(object);
-			KASSERT(vaddr < VM_MAXUSER_ADDRESS, 
-			    ("entering invalid address %lx (pindex 0x%lx "
-			    "start 0x%lx, offset 0x%lx\n", vaddr, page->pindex,
-			    entry->start, entry->offset));
-			error = pmap_enter(vm_map_pmap(map), vaddr, page, 
-			    entry->protection, VM_PROT_READ, page->psind);
-			VM_OBJECT_WUNLOCK(object);
-			if (error != 0)
-				printf("Error: pmap_enter_failed\n");
-
-			vm_page_sunbusy(page);
-		}
-	}
 
 	/* Set the entry as text if it is backed by a vnode or an object shadowing a vnode. */
 	if (entry->eflags & MAP_ENTRY_VN_EXEC)
@@ -303,7 +266,6 @@ slsrest_vmentry(struct vm_map *map, struct slsvmentry *entry, struct slskv_table
 	/* If it's a guard page use the code for anonymous/empty/physical entries. */
 	if (entry->obj == 0) 
 		return slsrest_vmentry_anon(map, entry, objtable);
-
 
 	/* Jump table for restoring the entries. */
 	switch (entry->type) {

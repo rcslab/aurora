@@ -2,6 +2,7 @@
 #include <sys/queue.h>
 
 #include <sys/bio.h>
+#include <sys/buf.h>
 #include <sys/conf.h>
 #include <sys/filio.h>
 #include <sys/kernel.h>
@@ -33,6 +34,7 @@
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
+#include <vm/vm_pager.h>
 #include <vm/vm_radix.h>
 #include <vm/uma.h>
 
@@ -44,8 +46,8 @@
 
 #include "sls_internal.h"
 #include "sls_kv.h"
-#include "sls_mm.h"
 #include "sls_partition.h"
+#include "sls_pager.h"
 #include "sls_table.h"
 #include "debug.h"
 
@@ -67,13 +69,12 @@ size_t sls_data_received = 0;
 uint64_t sls_pages_grabbed = 0;
 uint64_t sls_io_initiated = 0;
 unsigned int sls_async_slos = 1;
-unsigned int sls_use_slos = 1;
 
 uma_zone_t slspagerun_zone = NULL;
 
-/* 
- * A list of info structs which can hold data, 
- * along with the size of their metadata. 
+/*
+ * A list of info structs which can hold data,
+ * along with the size of their metadata.
  */
 static uint64_t sls_datastructs[] =  { 
 	SLOSREC_VMOBJ, 
@@ -157,51 +158,6 @@ out:
 		SLS_ERROR(sls_doio, error);
 
 	return (error);
-}
-
-/*
- * Send len bytes of data, starting from physical page m, to vnode vp representing obj.
- * Use VFS methods to transfer the data.
- */
-static int
-slsio_obj_vfs(struct vnode *vp, vm_object_t obj, vm_page_t m, size_t len, enum uio_rw ioflag)
-{
-	struct iovec aiov;
-	struct uio auio;
-	int error;
-
-	if ((ioflag != UIO_READ) && (ioflag != UIO_WRITE))
-	    return (EINVAL);
-
-	/*
-	 * XXX Getting the kva this way only works on amd64.
-	 * Create the UIO for the disk.
-	 */
-	aiov.iov_base = (void *) PHYS_TO_DMAP(m->phys_addr);
-	aiov.iov_len = len;
-
-	/*
-	 * The offset of the write adjusted because the first
-	 * page-sized chunk holds the metadata of the VM object.
-	 */
-	slos_uioinit(&auio, IDX_TO_OFF(m->pindex + 1), ioflag, &aiov, 1);
-
-	/* The write itself. */
-	error = sls_doio(vp, &auio);
-	if (error != 0)
-		return (error);
-
-	return (0);
-}
-
-static int
-slsio_obj_slos(struct vnode *vp, vm_object_t obj, vm_page_t m,
-    size_t len, int bio_cmd, bool async)
-{
-	ASSERT_VOP_UNLOCKED(vp, ("Trying to do IO on locked vnode %p", vp));
-	VM_OBJECT_ASSERT_UNLOCKED(obj);
-
-	return (slos_iotask_create(SLSVP(vp), obj, m, len, bio_cmd, NULL, async));
 }
 
 /* Creates an in-memory Aurora record. */
@@ -447,7 +403,8 @@ sls_readdata_slos_vmobj(struct slskv_table *table, uint64_t slsid,
 
 #else
 
-	KASSERT(rec->srec_type == SLOSREC_VMOBJ, ("invalid record type %lx", rec->srec_type));
+	KASSERT(rec->srec_type == SLOSREC_VMOBJ, ("invalid record type %lx",
+	    rec->srec_type));
 	info = (struct slsvmobject *) sbuf_data(rec->srec_sb);
 	type = info->type;
 	size = info->size;
@@ -461,56 +418,76 @@ sls_readdata_slos_vmobj(struct slskv_table *table, uint64_t slsid,
 	}
 
 	/* Allocate a new object. */
-	*objp = vm_object_allocate(OBJT_DEFAULT, size);
+	*objp = vm_pager_allocate(OBJT_SWAP, (void *) slsid, IDX_TO_OFF(size),
+	    VM_PROT_DEFAULT, 0, NULL);
 
 	return (0);
 }
 
 /* Read data from the SLOS into a VM object. */
 static int
-sls_readpages_slos(struct vnode *vp, vm_object_t obj, struct slos_extent extent)
+sls_readpages_slos(struct vnode *vp, vm_object_t obj, struct slos_extent sxt)
 {
 	vm_pindex_t pindex;
-	vm_page_t m;
-	size_t cnt;
-	int error;
-	int i;
+	vm_page_t msucc;
+	struct buf *bp;
+	vm_page_t *ma;
+	size_t pgleft;
+	int error, i;
+	int npages;
 
-	KASSERT(extent.sxt_lblkno >= SLOS_OBJOFF,
-	    ("Invalid start of extent %ld", extent.sxt_lblkno));
+	ma = malloc(sizeof(*ma) * btoc(MAXPHYS), M_SLSMM, M_WAITOK);
+
+	KASSERT(sxt.sxt_lblkno >= SLOS_OBJOFF,
+	    ("Invalid start of extent %ld", sxt.sxt_lblkno));
 	KASSERT(obj->ref_count == 1, ("object under reconstruction is in use"));
+	VM_OBJECT_WLOCK(obj);
 
-	/* Find indices and number of the pages needed to read in the data. */
-	pindex = extent.sxt_lblkno - SLOS_OBJOFF;
-	cnt = extent.sxt_cnt;
+	/* 
+	 * Some of the pages we are trying to read might already be in the 
+	 * process of being paged in. Make all necessary IOs to bring in any 
+	 * pages not currently being paged in.
+	 */
+	pindex = sxt.sxt_lblkno - SLOS_OBJOFF;
+	for (pgleft = sxt.sxt_cnt; pgleft > 0; pgleft -= npages) {
+		msucc = vm_page_find_least(obj, pindex);
+		npages = (msucc != NULL) ? msucc->pindex - pindex : pgleft;
+		if (npages == 0)  {
+			pindex += 1;
+			continue;
+		}
+		npages = imin(pgleft, npages);
 
-	/* Read the pages one at a time. */
-	for (i = 0; i < cnt; i++) {
-		KASSERT(pindex + i < obj->size,
-		    ("Trying to get page for object %p "
-		    "with pindex %lx, max size %lx", obj,
-		    pindex + i, obj->size));
-		/* Get a page in the object to read in the data.  */
-		VM_OBJECT_WLOCK(obj);
-		m = vm_page_grab(obj, pindex + i, VM_ALLOC_NORMAL);
+		bp = sls_pager_readbuf(obj, pindex, npages);
+		/*
+		 * The pages to be paged in are returned busied from the SLOS.
+		 * This is because the task is created from the pager, which
+		 * expects the pages to be returned busied. The SLS manually
+		 * unbusies them.
+		 */
+		memcpy(ma, bp->b_pages, sizeof(*ma) * npages);
 		VM_OBJECT_WUNLOCK(obj);
-		if (m == NULL)
-			return (ENOMEM);
-
-		KASSERT(pagesizes[m->psind] == PAGE_SIZE,
-			("got page with size %lu", pagesizes[m->psind]));
-
-		/* The read itself. */
-		error =  slsio_obj_slos(vp, obj, m, PAGE_SIZE, BIO_READ, false);
-		if (error != 0)
+		error = slos_iotask_create(vp, bp, true);
+		if (error != 0) {
+			free(ma, M_SLSMM);
 			return (error);
+		}
+		VM_OBJECT_WLOCK(obj);
 
-		/* Update the pages read counter. */
-		sls_data_received += PAGE_SIZE;
+		for (i = 0; i < npages; i++) {
+			KASSERT(ma[i]->object == obj, ("page belongs to wrong"
+			    "object"));
+			vm_page_xunbusy(ma[i]);
+		}
 
-		m->valid = VM_PAGE_BITS_ALL;
-		vm_page_xunbusy(m);
+		pindex += npages;
 	}
+
+	/* Update the pages read counter. */
+	sls_data_received += bp->b_resid;
+	VM_OBJECT_WUNLOCK(obj);
+
+	free(ma, M_SLSMM);
 
 	return (0);
 }
@@ -594,7 +571,9 @@ sls_readdata(struct vnode *vp, uint64_t slsid, uint64_t type,
 	rec = sls_getrecord(sb, slsid, type);
 
 	/* Store the record for later and possibly make a new object.  */
+	VOP_UNLOCK(vp, 0);
 	error = sls_readdata_slos_vmobj(rectable, slsid, rec, &obj);
+	VOP_LOCK(vp, LK_EXCLUSIVE);
 	if (error != 0)
 		return (error);
 
@@ -604,7 +583,6 @@ sls_readdata(struct vnode *vp, uint64_t slsid, uint64_t type,
 
 	/* XXX Add VFS backend handling. */
 	if (lazyrest == 0) {
-		KASSERT(sls_use_slos != 0, ("cannot use SLOS"));
 		VOP_UNLOCK(vp, 0);
 		error = sls_readdata_slos(vp, obj);
 		VOP_LOCK(vp, LK_EXCLUSIVE);
@@ -637,7 +615,7 @@ sls_free_rectable(struct slskv_table *rectable)
 		return;
 
 	KV_FOREACH_POP(rectable, slsid, rec)
-		sls_record_destroy(rec);
+	    sls_record_destroy(rec);
 
 	slskv_destroy(rectable);
 }
@@ -801,75 +779,6 @@ error:
 	return error;
 }
 
-/* 
- * Traverse an object's resident pages, returning the maximum
- * length of data that is contiguous both in the object space
- * and in physical memory. We need both properties because the
- * data is contiguous on the disk if it is contiguous in the
- * object, and it does not need coalescing by the IO layer
- * if it is physically contiguous.
- */
-static size_t
-sls_contig_pages(vm_object_t obj, vm_page_t *page)
-{
-	vm_page_t prev, cur;
-	size_t contig_len;
-	size_t page_len;
-
-	/*
-	 * At each step we have a pair of pages whose indices
-	 * the object and physical addresses are checked.
-	 */
-	prev = *page;
-	cur = TAILQ_NEXT(prev, listq);
-
-	/* See below why pagesizes[prev->psind] might be 0. */
-	contig_len = max(PAGE_SIZE, pagesizes[prev->psind]);
-
-	KASSERT(contig_len <= sls_contig_limit, ("page %lx is larger than sls_contig_limit %lx",
-	    contig_len, sls_contig_limit));
-
-	TAILQ_FOREACH_FROM(cur, &obj->memq, listq) {
-		/* Pages need to be only logically contiguous. */
-		if (prev->pindex + OFF_TO_IDX(pagesizes[prev->psind]) != cur->pindex)
-			break;
-
-		/*
-		 * (XXX Add support for superpages)
-		 * The kernel sometimes plays fast and loose with its usage of
-		 * the psind field of pages, leading to pages with index one
-		 * more than the maximum valid index. In this case, there might
-		 * be pages whose length according to the pagesizes array is 0.  
-		 * In that case we manually change the length of the area to be
-		 * sent to disk.
-		 */
-		page_len = max(PAGE_SIZE, pagesizes[cur->psind]);
-
-		/*
-		 * XXX Not sure we need this. Even if the run is gigantic, we do
-		 * no copies, and the IO layer surely has a way of coping with
-		 * massive IOs.
-		 */
-		if (contig_len + page_len > sls_contig_limit)
-			break;
-
-		/*
-		 * Add the size of the "right" page to the total, since it's
-		 * contiguous.
-		 */
-		contig_len += page_len ;
-		prev = cur;
-	}
-
-	/* Pass the new index into the page list to the caller. */
-	*page = cur;
-
-	/* Update stats. */
-	sls_pages_grabbed += contig_len;
-
-	return (contig_len);
-}
-
 /*
  * Get the pages of an object in the form of a
  * linked list of contiguous memory areas.
@@ -877,48 +786,37 @@ sls_contig_pages(vm_object_t obj, vm_page_t *page)
  * This function is not inlined in order to be able to use DTrace on it.
  */
 static int __attribute__ ((noinline))
-slsio_writeobj_data(struct vnode *vp, vm_object_t obj)
+sls_writeobj_data(struct vnode *vp, vm_object_t obj)
 {
-	vm_page_t startm, m;
-	size_t contig_len;
+	vm_pindex_t pindex;
+	struct buf *bp;
 	int error;
 
-	/* Traverse the object's resident pages. */
-	m = TAILQ_FIRST(&obj->memq);
-	while (m != NULL) {
+	pindex = 0;
+	for (;;) {
 		/*
-		 * Split the memory into contiguous chunks.
-		 * By doing so, we can efficiently dump the
-		 * data to the backend. The alternative
-		 * would be sending out the data one page
-		 * at a time, which would fragment the IOs
-		 * and kill performance. The list of resident
-		 * pages is being iterated in the call below.
+		 * Split the object into contiguous chunks, send it to the disk.
+		 * Every logically contiguous chunk is physically contiguous in
+		 * backing storage.
 		 */
-		startm = m;
-		contig_len = sls_contig_pages(obj, &m);
-		KASSERT(contig_len <= sls_contig_limit, ("writing %lx bytes, limit %lx", contig_len, sls_contig_limit));
-
-		if (sls_use_slos) {
-			error = slsio_obj_slos(vp, obj, startm, contig_len, BIO_WRITE, 
-			    (bool) (sls_async_slos != 0));
-		} else {
-			/* Use generic vnode methods for the IOs. */
-			/* XXX This should be only for non-SLOS backends. */
-			error = slsio_obj_vfs(vp, obj, startm, contig_len, UIO_WRITE);
-		}
-		if (error != 0)
-			return (error);
+		bp = sls_pager_writebuf(obj, pindex, sls_contig_limit);
+		if (bp == NULL)
+			break;
+		/*
+		 * The pindex from which we're going to search for the next run
+		 * of pages.
+		 */
+		pindex = bp->b_pages[bp->b_npages - 1]->pindex + 1;
 
 		/* Update the counter. */
-		sls_data_sent += contig_len;
-
-		/* Have we fully traversed the list, or looped around? */
-		if (m == NULL || startm->pindex >= m->pindex)
-			break;
+		sls_data_sent += bp->b_resid;
+		error = slos_iotask_create(vp, bp, sls_async_slos);
+		if (error != 0) {
+			return (error);
+		}
 	}
 
-	return 0;
+	return (0);
 }
 
 /*
@@ -1092,7 +990,7 @@ sls_writedata_slos(struct sls_record *rec, struct slskv_table *objtable)
 		goto out;
 
 	/* Send out the object's data. */
-	ret = slsio_writeobj_data(vp, obj);
+	ret = sls_writeobj_data(vp, obj);
 	if (ret != 0)
 		goto out;
 
@@ -1407,8 +1305,8 @@ slstable_mkdata_populate(vm_object_t obj, vm_pindex_t pindex)
 
 	/* Map it into the kernel, fill it with data. */
 	data = (char *) pmap_map(NULL, m->phys_addr,
-		m->phys_addr + PAGE_SIZE,
-		VM_PROT_READ | VM_PROT_WRITE);
+	    m->phys_addr + PAGE_SIZE,
+	    VM_PROT_READ | VM_PROT_WRITE);
 
 	for (i = 0; i < PAGE_SIZE; i++)
 		data[i] = 'a' + (random() % ('z' - 'a'));
@@ -1466,7 +1364,6 @@ slstable_mkdata(struct slsckpt_data *sckpt_data, struct slsckpt_data *sckpt_tmpd
 	if (error != 0)
 		return (error);
 
-	vm_object_reference(obj);
 	error = slskv_add(sckpt_data->sckpt_objtable, (uint64_t) obj, (uintptr_t) obj);
 	if (error != 0) {
 		vm_object_deallocate(obj);
@@ -1484,29 +1381,40 @@ slstable_mkdata(struct slsckpt_data *sckpt_data, struct slsckpt_data *sckpt_tmpd
 	return (0);
 }
 
+static int
+slstable_testpage_valid(vm_page_t m)
+{
+	char *buf;
+	char c;
+	int i;
+
+	buf = (char *) PHYS_TO_DMAP(m->phys_addr);
+	for (i = 0; i < PAGE_SIZE; i++) {
+		c = buf[i];
+		if (c < 'a' || c > 'z') {
+			printf("Object illegal value 0x%x "
+				"in page with pindex %ld, offset %d\n",
+				c, m->pindex, i);
+			return (EINVAL);
+		}
+	}
+
+	return (0);
+}
+
 /* Make sure the object has the data we added to it. */
 static int
 slstable_testobj_valid(vm_object_t obj)
 {
 	vm_page_t m;
-	char *buf;
-	char c;
-	int i;
 
-	KASSERT(obj->type == OBJT_DEFAULT, ("object %p has illegal type %d",
+	KASSERT(obj->type == OBJT_SWAP || 
+	    obj->type == OBJT_DEFAULT, ("object %p has illegal type %d",
 	    obj, obj->type));
 	KASSERT(obj->ref_count > 0, ("object %p has no references", obj));
 	TAILQ_FOREACH(m, &obj->memq, listq) {
-		buf = (char *) PHYS_TO_DMAP(m->phys_addr);
-		for (i = 0; i < PAGE_SIZE; i++) {
-			c = buf[i];
-			if (c < 'a' || c > 'z') {
-				printf("Object illegal value 0x%x "
-				    "in page with pindex %ld, offset %d\n",
-				    c, m->pindex, i);
-				return (EINVAL);
-			}
-		}
+		if (slstable_testpage_valid(m) != 0)
+			return (EINVAL);
 	}
 
 	return (0);
@@ -1605,9 +1513,6 @@ slstable_testdata(struct slskv_table *objtable, uint64_t slsid, vm_object_t oldo
 
 out:
 
-	vm_object_deallocate(obj);
-	vm_object_deallocate(oldobj);
-
 	return (error);
 }
 
@@ -1622,7 +1527,7 @@ slstable_test(void)
 	vm_object_t obj = NULL;
 	uint64_t lost_elements;
 	struct slskv_iter iter;
-	uint64_t old_async, old_use_slos;
+	uint64_t old_async;
 	struct sbuf *sb;
 	uint64_t slsid;
 	uint64_t type;
@@ -1630,19 +1535,17 @@ slstable_test(void)
 
 	attr = (struct sls_attr) {
 		.attr_target = SLS_OSD,
-		.attr_mode = SLS_FULL,
-		.attr_period = 0,
-		.attr_flags = 0,
+		    .attr_mode = SLS_FULL,
+		    .attr_period = 0,
+		    .attr_flags = 0,
 	};
 
 	/*
 	 * Save the old sysctl values, set up our own.
 	 */
 	old_async = sls_async_slos;
-	old_use_slos = sls_use_slos;
 
 	sls_async_slos = 1;
-	sls_use_slos = 1;
 
 
 	error = slsp_add(TEST_PARTID, attr, &slsp);
@@ -1811,7 +1714,6 @@ out:
 
 	/* Restore the old sysctl values. */
 	sls_async_slos = old_async;
-	sls_use_slos = old_use_slos;
 
 	return (error);
 }
