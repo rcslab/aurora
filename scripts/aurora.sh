@@ -21,7 +21,7 @@ function aurload {
     mount -rw -t slsfs $DRIVE $MOUNTDIR
 
     # Load and configure the SLS>
-    kldload "$SLSDIR"/kmod/sls.ko
+    kldload "$SLSDIR"/sls/sls.ko
 
     # Set the sysctls, including SLOS checkpoints per second
     # and setting the SLS to dump asynchronously to disk.

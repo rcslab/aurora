@@ -13,7 +13,7 @@ The file tree is the following:
 | benchmarks/	| Performance benchmarks				    |
 | dtrace/	| DTrace scripts for debugging and performance measurements |
 | include/	| Headers for userspace and the kernel			    |
-| kmod/		| Single Level Store in memory module			    |
+| sls/		| Single Level Store in memory module			    |
 | libsls/	| Userspace library implementing the API		    |
 | scripts/	| Bash utilities for using Aurora and performance benchmarks|
 | slfs/		| VFS filesystem for using files with Aurora		    |

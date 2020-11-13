@@ -1,4 +1,4 @@
-SUBDIR=libsls kmod slos tests tools
+SUBDIR=libsls sls slos tests tools
 
 IDENT=${:!sysctl -n kern.ident!}
 .if (${IDENT} == "FASTDBG")

@@ -5,7 +5,7 @@ MNT=/testmnt
 # Load and unload kernel modules
 loadsls()
 {
-    kldload ../kmod/sls.ko
+    kldload ../sls/sls.ko
 }
 
 loadslos()
