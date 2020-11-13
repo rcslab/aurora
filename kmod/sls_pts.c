@@ -56,7 +56,6 @@
 #include "pts_internal.h"
 #include "sls_file.h"
 #include "sls_internal.h"
-#include "sls_path.h"
 
 /* 
  * Variant of ttyoutq_read() that nondestructively reads all data from

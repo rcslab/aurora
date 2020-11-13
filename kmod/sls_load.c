@@ -79,7 +79,7 @@ slsload_thread(struct slsthread *slsthread, char **bufp, size_t *bufsizep)
 
 /* Functions that load parts of the state. */
 int 
-slsload_proc(struct slsproc *slsproc, struct sbuf **namep, char **bufp, size_t *bufsizep)
+slsload_proc(struct slsproc *slsproc, char **bufp, size_t *bufsizep)
 {
 	int error;
 
@@ -91,10 +91,6 @@ slsload_proc(struct slsproc *slsproc, struct sbuf **namep, char **bufp, size_t *
 		SLS_DBG("magic mismatch, %lx vs %x\n", slsproc->magic, SLSPROC_ID);
 		return (EINVAL);
 	}
-
-	error = slsload_path(namep, bufp, bufsizep);
-	if (error != 0)
-		return (error);
 
 	return (0);
 }
@@ -252,31 +248,19 @@ slsload_pts(struct slspts *slspts, char **bufp, size_t *bufsizep)
 	return (0);
 }
 
-static int
-slsload_vnode(struct sbuf **path, char **bufp, size_t *bufsizep)
+int
+slsload_vnode(struct slsvnode *slsvnode, char **bufp, size_t *bufsizep)
 {
 	int error;
 
-	error = slsload_path(path, bufp, bufsizep);
-	if (error != 0) {
-		DEBUG("No path found");
-		/* If there's no path, add an empty buffer. */
-		*path = sbuf_new_auto();
-		sbuf_finish(*path);
-		return (0);
-	}
-
-	return (0);
-}
-
-static int
-slsload_fifo(struct sbuf **path, char **bufp, size_t *bufsizep)
-{
-	int error;
-
-	error = slsload_path(path, bufp, bufsizep);
+	error = sls_info(slsvnode, sizeof(*slsvnode), bufp, bufsizep);
 	if (error != 0)
 		return (error);
+
+	if (slsvnode->magic != SLSVNODE_ID) {
+		SLS_DBG("magic mismatch, %lx vs %x\n", slsvnode->magic, SLSVNODE_ID);
+		return (EINVAL);
+	}
 
 	return (0);
 }
@@ -297,7 +281,6 @@ slsload_socket(struct slssock *slssock, char **bufp, size_t *bufsizep)
 static int
 slsload_posixshm(struct slsposixshm *slsposixshm, char **bufp, size_t *bufsizep)
 {
-	struct sbuf *sb;
 	int error;
 
 	error = sls_info(slsposixshm, sizeof(*slsposixshm), bufp, bufsizep);
@@ -308,17 +291,6 @@ slsload_posixshm(struct slsposixshm *slsposixshm, char **bufp, size_t *bufsizep)
 		SLS_DBG("magic mismatch, %lx vs %x\n", slsposixshm->magic, SLSPOSIXSHM_ID);
 		return (EINVAL);
 	}
-
-	/* Initialize the pointer to the sb, and check if we actually have a path. */
-	slsposixshm->sb = NULL;
-	if (slsposixshm->is_anon != 0)
-		return (0);
-
-	error = slsload_path(&sb, bufp, bufsizep);
-	if (error != 0)
-		return (error);
-
-	slsposixshm->sb = sb;
 
 	return (0);
 }
@@ -339,17 +311,13 @@ slsload_file(struct slsfile *slsfile, void **data, char **bufp, size_t *bufsizep
 
 	switch (slsfile->type) {
 	case DTYPE_VNODE:
-		error = slsload_vnode((struct sbuf **) data, bufp, bufsizep);
-		break;
-
 	case DTYPE_FIFO:
-		error = slsload_fifo((struct sbuf **) data, bufp, bufsizep);
+		/* Nothing to do, the vnode is already restored. */
 		break;
 
 	case DTYPE_KQUEUE:
-		/* 
-		 * The data for the kqueue is both 
-		 * the core metadata and a set of kevents.
+		/*
+		 * The data for the kqueue the kqueue metadata and kevents.
 		 */
 		error = slsload_kqueue((slsset **) data, bufp, bufsizep);
 		break;
@@ -398,17 +366,6 @@ slsload_filedesc(struct slsfiledesc *filedesc, char **bufp, size_t *bufsizep, st
 	if (filedesc->magic != SLSFILEDESC_ID) {
 		SLS_DBG("magic mismatch, %lx vs %x\n", filedesc->magic, SLSFILEDESC_ID);
 		return (EINVAL);
-	}
-
-	/* Current and root directories */
-	error = slsload_path(&filedesc->cdir, bufp, bufsizep);
-	if (error != 0)
-		return (error);
-
-	error = slsload_path(&filedesc->rdir, bufp, bufsizep);
-	if (error != 0) {
-		sbuf_delete(filedesc->cdir);
-		return (error);
 	}
 
 	error = slskv_deserial(*bufp, *bufsizep, fdtable);
@@ -575,65 +532,4 @@ slsload_sockbuf(struct mbuf **mp, uint64_t *sbid , char **bufp, size_t *bufsizep
 	*mp = headm;
 
 	return (0);
-}
-
-int
-slsload_path(struct sbuf **sbp, char **bufp, size_t *bufsizep) 
-{
-	int error;
-	size_t sblen;
-	char *path = NULL;
-	uint64_t magic;
-	struct sbuf *sb = NULL;
-
-	error = sls_info(&magic, sizeof(magic), bufp, bufsizep);
-	if (error != 0)
-		return (error);
-
-	if (magic != SLSSTRING_ID)
-		return (EINVAL);
-
-	error = sls_info(&sblen, sizeof(sblen), bufp, bufsizep);
-	if (error != 0)
-		return (error);
-
-	/* First copy the data into a temporary raw buffer */
-	path = malloc(sblen + 1, M_SLSMM, M_NOWAIT);
-	if (path == NULL) {
-		error = ENOMEM;
-		goto error;
-	}
-
-	error = sls_info(path, sblen, bufp, bufsizep);
-	if (error != 0)
-		goto error;
-	path[sblen++] = '\0';
-
-	sb = sbuf_new_auto();
-	if (sb == NULL)
-		goto error;
-
-	/* Then move it over to the sbuf */
-	error = sbuf_bcpy(sb, path, sblen);
-	if (error != 0)
-		goto error;
-
-	error = sbuf_finish(sb);
-	if (error != 0)
-		goto error;
-
-	*sbp = sb;
-	free(path, M_SLSMM);
-
-	return (0);
-
-error:
-
-	if (sb != NULL)
-		sbuf_delete(sb);
-
-	free(path, M_SLSMM);
-	*sbp = NULL;
-	return (error);
-
 }

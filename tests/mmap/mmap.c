@@ -1,18 +1,15 @@
 #include <assert.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+#include <sys/param.h>
 #include <sys/mman.h>
 
-#define min(a, b) ((a < b) ? (a) : (b))
-
-#define PAGE_SIZE (4096)
 #define FILE_SIZE (PAGE_SIZE * 64)
 
-
-const char value[] = "0xdeadbeef";
 
 int
 main(int argc, char **argv)
@@ -22,17 +19,14 @@ main(int argc, char **argv)
 	int i;
 	int fd;
 
-	if (argc != 2) {
-		printf("Usage: ./mmap <file>\n");
-		return 0;
-	}
-
-	fd = open(argv[1], O_RDWR | O_TRUNC | O_CREAT);
+	/* This file is unlinked, so this test should be called in the SLOS. */
+	fd = open("testfile", O_RDWR | O_TRUNC | O_CREAT, 0666);
 	if (fd < 0) {
 		printf("Error: open failed\n");
 		return -1;
 	}
 
+	/* Make sure the file is large enough*/
 	error = lseek(fd, FILE_SIZE - 1, SEEK_SET);
 	assert(error > 0);
 
@@ -46,18 +40,20 @@ main(int argc, char **argv)
 		return -1;
 	}
 
-	printf("Mapping received: %p\n", file_mapping);
+	memset(file_mapping, 'a', FILE_SIZE);
 
-	printf("Press any key to copy...\n");
-	getchar();
-	sleep(10);
-	
-	for (i = 0; i < FILE_SIZE; i += sizeof(value)) {
-		memcpy(&file_mapping[i], value, min(FILE_SIZE - i, sizeof(value)));
+	sleep(200);
+
+	for (i = 0; i < FILE_SIZE; i++) {
+		if (((char *) file_mapping)[i] != 'a') {
+			printf("Error\n");
+			exit(1);
+		}
+
 	}
 
-	printf("Press any key to exit...\n");
-	getchar();
-	
-	return 0;
+	sleep(5);
+	printf("Success\n");
+
+	return (0);
 }

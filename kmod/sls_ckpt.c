@@ -142,7 +142,7 @@ slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_dat
 
 	sb = sbuf_new_auto();
 
-	error = slsckpt_proc(p, sb, procset);
+	error = slsckpt_proc(p, sb, procset, sckpt_data);
 	if (error != 0) {
 		SLS_DBG("Error: slsckpt_proc failed with error code %d\n", error);
 		goto out;
@@ -171,7 +171,7 @@ slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_dat
 	rec = sls_getrecord(sb, (uint64_t) p, SLOSREC_PROC);
 	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) p, (uintptr_t) rec);
 	if (error != 0) {
-		free(rec, M_SLSMM);
+		free(rec, M_SLSREC);
 		goto out;
 	}
 
@@ -299,7 +299,6 @@ sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 	default:
 		panic("Invalid target %d\n", slsp->slsp_attr.attr_target);
 	}
-
 
 	/* Advance the current epoch. */
 	slsp_epoch_advance(slsp);

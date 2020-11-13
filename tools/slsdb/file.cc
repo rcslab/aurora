@@ -89,8 +89,6 @@ rec_to_string(uint64_t type)
 		return "SysV Shared Memory";
 	case SLOSREC_SOCKBUF:
 		return "Sockbuf";
-	case SLOSREC_DIR:
-		return "Directory";
 	case SLOSREC_DATA:
 		return "Data";
 	case SLOSREC_MANIFEST:

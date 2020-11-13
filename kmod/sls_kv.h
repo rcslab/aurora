@@ -125,6 +125,7 @@ for (iter = slskv_iterstart(settable); slskv_itercont(&iter, (uint64_t *) &setva
 
 /* Zone for the key value tables. */
 extern uma_zone_t slskv_zone;
+extern int slskv_count;
 
 
 #endif /* _SLSKV_H_ */

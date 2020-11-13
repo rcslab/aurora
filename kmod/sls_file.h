@@ -1,8 +1,6 @@
 #ifndef _SLS_FD_H_
 #define _SLS_FD_H_
 
-#include <sys/types.h>
-
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/mman.h>
@@ -34,17 +32,9 @@ int slsckpt_pts_mst(struct proc *p, struct tty *pts, struct sbuf *sb);
 int slsckpt_pts_slv(struct proc *p, struct vnode *vp, struct sbuf *sb);
 int slsrest_pts(struct slskv_table *filetable,  struct slspts *slspts, int *fdp);
 
-int slsckpt_vnode(struct proc *p, struct vnode *vp, struct slsfile *info,
-	struct sbuf *sb, int ign_unlink);
-int slsrest_vnode(struct sbuf *path, struct slsfile *info, int *fdp, int seekable);
-
-int slsckpt_fifo(struct proc *p, struct vnode *vp, struct slsfile *info,
-	struct sbuf *sb, int ign_unlink);
-int slsrest_fifo(struct sbuf *path, struct slsfile *info, int *fdp);
-
 int slsckpt_filedesc(struct proc *p, struct slsckpt_data *sckpt_data, struct sbuf *sb);
-int slsrest_filedesc(struct proc *p, struct slsfiledesc info, 
-	struct slskv_table *fdtable, struct slskv_table *filetable);
+int slsrest_filedesc(struct proc *p, struct slsfiledesc *slsfiledesc, 
+	struct slskv_table *fdtable, struct slsrest_data *restdata);
 
 int slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdata);
 int slsrest_knotes(int fd, slsset *slskns);

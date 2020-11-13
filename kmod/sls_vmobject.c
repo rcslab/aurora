@@ -4,6 +4,7 @@
 
 #include <sys/conf.h>
 #include <sys/fcntl.h>
+#include <sys/file.h>
 #include <sys/limits.h>
 #include <sys/mman.h>
 #include <sys/namei.h>
@@ -29,10 +30,12 @@
 
 #include "sls_internal.h"
 #include "sls_kv.h"
-#include "sls_path.h"
 #include "sls_table.h"
 #include "sls_vm.h"
 #include "sls_vmobject.h"
+#include "sls_vnode.h"
+
+#include "debug.h"
 
 int
 slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_data)
@@ -41,7 +44,6 @@ slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_dat
 	struct sls_record *rec;
 	vm_object_t curobj, backer;
 	struct sbuf *sb;
-	char *buf;
 	int error;
 
 	/* Find if we have already checkpointed the object. */
@@ -57,7 +59,7 @@ slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_dat
 
 	cur_obj.size = obj->size;
 	cur_obj.type = obj->type;
-	cur_obj.id = obj;
+	cur_obj.objptr = obj;
 
 	/*
 	 * If the backer has the same ID as we do, we're an Aurora shadow. Find
@@ -70,31 +72,15 @@ slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_dat
 		backer = backer->backing_object;
 	}
 
-	if (backer != NULL) {
-		cur_obj.backer = backer->objid;
-		cur_obj.backer_off = obj->backing_object_offset;
-	} else {
-		cur_obj.backer = 0UL;
-		cur_obj.backer_off = 0;
-	}
+	cur_obj.backer = (backer != NULL) ? backer->objid : 0UL;
+	cur_obj.backer_off = (backer != NULL) ? obj->backing_object_offset : 0;
 	cur_obj.magic = SLSVMOBJECT_ID;
 	cur_obj.slsid = obj->objid;
-	/*
-	 * Used for mmap'd files - we are using the filename
-	 * to find out how to map.
-	 */
-
-	buf = cur_obj.path;
-	memset(buf, '\0', PATH_MAX);
 	if (obj->type == OBJT_VNODE) {
-		error = sls_vn_to_path_raw((struct vnode *) obj->handle, buf);
-		if (error == ENOENT) {
-			SLS_DBG("(BUG) Unlinked file found, ignoring for now\n");
-			return (0);
-		}
-
+		error = slsckpt_vnode((struct vnode *) obj->handle, sckpt_data);
 		if (error != 0)
 			goto error;
+		cur_obj.vnode = (uint64_t) obj->handle;
 	}
 
 	error = sbuf_bcat(sb, (void *) &cur_obj, sizeof(cur_obj));
@@ -109,7 +95,7 @@ slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_dat
 
 	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) cur_obj.slsid, (uintptr_t) rec);
 	if (error != 0) {
-		free(rec, M_SLSMM);
+		free(rec, M_SLSREC);
 		goto error;
 	}
 
@@ -123,12 +109,13 @@ error:
 }
 
 int
-slsrest_vmobject(struct slsvmobject *info, struct slskv_table *objtable)
+slsrest_vmobject(struct slsvmobject *info, struct slsrest_data *restdata)
 {
 	vm_object_t object;
 	struct vnode *vp;
 	int error;
 
+	DEBUG2("(Object 0x%lx) type %d", info->slsid, info->type);
 	switch (info->type) {
 	case OBJT_DEFAULT:
 		/* FALLTHROUGH */
@@ -140,28 +127,27 @@ slsrest_vmobject(struct slsvmobject *info, struct slskv_table *objtable)
 		return (0);
 
 	case OBJT_VNODE:
-		/* 
+		/*
 		 * Just grab the object directly, so that we can find it 
 		 * and shadow it. We deal with objects that are directly mapped 
 		 * into the address space, as in the case of executables, 
 		 * in vmentry_rest.
 		 */
 
-		error = sls_path_to_vn_raw(info->path, &vp);
-		if (error != 0)  {
-			return error;
-		}
+		error = slskv_find(restdata->vnodetable, info->vnode, (uintptr_t *) &vp);
+		if (error != 0)
+			return (error);
 
-		/* 
+		/*
 		 * Get a reference for the vnode, since we're going to use it. 
 		 * Do the same for the underlying object.
 		 */
-		vref(vp);
 		object = vp->v_object;
+		KASSERT(object != NULL, ("vnode is backed by NULL object"));
 		vm_object_reference(object);
 		break;
 
-		/* 
+		/*
 		 * Device files either can't be mmap()'d, or have an mmap
 		 * that maps anonymous objects, if they have the D_MMAP_ANON
 		 * flag. In any case, we will never shadow an OBJT_DEVICE
@@ -186,7 +172,7 @@ slsrest_vmobject(struct slsvmobject *info, struct slskv_table *objtable)
 	}
 
 	/* Export the newly created/found object to the table. */
-	error = slskv_add(objtable, info->slsid, (uintptr_t) object);
+	error = slskv_add(restdata->objtable, info->slsid, (uintptr_t) object);
 	if (error != 0)
 		return error;
 

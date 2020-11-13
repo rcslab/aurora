@@ -5,6 +5,7 @@
 #include <sys/conf.h>
 #include <sys/exec.h>
 #include <sys/fcntl.h>
+#include <sys/file.h>
 #include <sys/limits.h>
 #include <sys/mman.h>
 #include <sys/namei.h>
@@ -29,11 +30,15 @@
 
 #include "sls_internal.h"
 #include "sls_kv.h"
-#include "sls_path.h"
 #include "sls_table.h"
+#include "sls_vm.h"
 #include "sls_vmobject.h"
 #include "sls_vmspace.h"
 #include "sysv_internal.h"
+
+#include "debug.h"
+
+fo_mmap_t vn_mmap;
 
 static int
 slsckpt_vmentry(struct vm_map_entry *entry, struct sbuf *sb)
@@ -53,8 +58,10 @@ slsckpt_vmentry(struct vm_map_entry *entry, struct sbuf *sb)
 	cur_entry.inheritance = entry->inheritance;
 	cur_entry.slsid = (uint64_t) entry;
 	if (entry->object.vm_object != NULL) {
-		cur_entry.obj = (OBJID_START & (~OBJID_MASK)) | (OBJID_MASK & ((uint64_t) entry->object.vm_object->objid));
+		cur_entry.obj =  entry->object.vm_object->objid;
 		cur_entry.type = entry->object.vm_object->type; 
+		if (cur_entry.type == OBJT_VNODE)
+			cur_entry.vp = (uint64_t) entry->object.vm_object->handle;
 	} else {
 		cur_entry.obj = 0;
 		cur_entry.type = OBJT_DEAD;
@@ -172,7 +179,10 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 	entry->eflags = info->eflags;
 	entry->inheritance = info->inheritance;
 
-	/* Set the entry as text if it is backed by a vnode or an object shadowing a vnode. */
+	/*
+	 * Set the entry as text if it is backed by a vnode or an object
+	 * shadowing a vnode.
+	 */
 	if (entry->eflags & MAP_ENTRY_VN_EXEC)
 		vm_map_entry_set_vnode_text(entry, true);
 
@@ -185,47 +195,41 @@ out:
 }
 
 static int
-slsrest_vmentry_file(struct vm_map *map, struct slsvmentry *entry, struct slskv_table *objtable)
+slsrest_vmentry_file(struct vm_map *map, struct slsvmentry *entry,
+    struct slsrest_data *restdata)
 {
-	vm_object_t object; 
+	struct thread *td = curthread;
+	vm_offset_t start;
 	struct vnode *vp;
-	struct sbuf *sb = NULL;
-	int fd = -1;
+	struct file *fp;
+	int protection;
 	int flags;
-	int rprot;
 	int error;
 
-	/* If we have an object, it has to have been restored. */
-	error = slskv_find(objtable, (uint64_t) entry->obj, (uintptr_t *) &object);
+	DEBUG2("Restoring file backed entry 0x%lx, (flags 0x%lx)", entry->start, entry->eflags);
+	if (entry->protection == VM_PROT_NONE)
+		return (EPERM);
+
+	/* Retrieve the restored vnode pointer. */
+	error = slskv_find(restdata->vnodetable, (uint64_t) entry->vp, (uintptr_t *) &vp);
 	if (error != 0)
 		return (error);
 
-	vp = (struct vnode *) object->handle;
-	error = sls_vn_to_path(vp, &sb);
+	/* Create a dummy fp, through which to pass the vp to vn_mmap(). */
+	error = falloc_noinstall(td, &fp);
 	if (error != 0)
-		return (EINVAL);
+		return (error);
 
-	if (entry->protection == VM_PROT_NONE) {
-		error = EPERM;
-		goto done;
-	}
+	fp->f_vnode = vp;
+	fp->f_flag = 0;
+	if (entry->protection & VM_PROT_READ)
+		fp->f_flag |= FREAD;
+	if (entry->protection & VM_PROT_WRITE)
+		fp->f_flag |= FWRITE;
 
-	rprot = entry->protection & (VM_PROT_READ | VM_PROT_WRITE);
-	if (rprot == VM_PROT_WRITE)
-		flags = O_WRONLY;
-	else if (rprot == VM_PROT_READ)
-		flags = O_RDONLY;
-	else
-		flags = O_RDWR;
+	protection = entry->protection & VM_PROT_ALL;
 
-	error = kern_openat(curthread, AT_FDCWD, sbuf_data(sb), 
-	    UIO_SYSSPACE, flags, S_IRWXU);
-	if (error != 0)
-		goto done;
-
-	fd = curthread->td_retval[0];
-
-	/* 
+	/*
 	 * These are the only flags that matter, the rest are about alignment. 
 	 * MAP_SHARED is always on because otherwise we would have an 
 	 * anonymous object mapping a vnode or device. We put MAP_FIXED 
@@ -237,47 +241,55 @@ slsrest_vmentry_file(struct vm_map *map, struct slsvmentry *entry, struct slskv_
 	if (entry->eflags & MAP_ENTRY_NOCOREDUMP)
 		flags |= MAP_NOCORE;
 
-	error = kern_mmap(curthread, entry->start, entry->end - entry->start, 
-	    entry->protection, flags, fd, entry->offset);
+	start = entry->start;
 
-	vref(vp);
+	KASSERT(vp->v_object->handle == vp, ("vnode object is backed by another vnode"));
+	error = vn_mmap(fp, map, &start, entry->end - entry->start,
+	    entry->protection, entry->max_protection, flags, entry->offset, td);
+	KASSERT(start == entry->start, ("vn_mmap did not return requested address"));
+
+	/*
+	 * Modify the file ops so that that fo_close() is a no-op.
+	 */
+	fp->f_vnode = NULL;
+	fp->f_flag = 0;
+	fp->f_ops = &badfileops;
+	fdrop(fp, td);
+
+	/* Now that the fp is cleaned up, check if vn_mmap() succeeded. */
+	if (error != 0)
+		return (error);
 
 	if (entry->eflags & MAP_ENTRY_VN_EXEC)
 		VOP_SET_TEXT(vp);
-
-done:
-
-	if (fd >= 0)
-		kern_close(curthread, fd);
-
-	if (sb != NULL)
-		sbuf_delete(sb);
 
 	return (error);
 }
 
 
 int
-slsrest_vmentry(struct vm_map *map, struct slsvmentry *entry, struct slskv_table *objtable)
+slsrest_vmentry(struct vm_map *map, struct slsvmentry *entry, struct slsrest_data *restdata)
 {
 	int error;
 	int fd;
 
+	DEBUG2("Restoring entry 0x%lx (type %d)", entry->start, entry->type);
+
 	/* If it's a guard page use the code for anonymous/empty/physical entries. */
-	if (entry->obj == 0) 
-		return slsrest_vmentry_anon(map, entry, objtable);
+	if (entry->obj == 0)
+		return slsrest_vmentry_anon(map, entry, restdata->objtable);
 
 	/* Jump table for restoring the entries. */
 	switch (entry->type) {
 	case OBJT_DEFAULT:
 	case OBJT_SWAP:
-		return slsrest_vmentry_anon(map, entry, objtable);
+		return slsrest_vmentry_anon(map, entry, restdata->objtable);
 
 	case OBJT_PHYS:
-		return slsrest_vmentry_anon(map, entry, objtable);
+		return slsrest_vmentry_anon(map, entry, restdata->objtable);
 
 	case OBJT_VNODE:
-		return slsrest_vmentry_file(map, entry, objtable);
+		return slsrest_vmentry_file(map, entry, restdata);
 
 		/* 
 		 * Right now we only support the HPET counter. If we 

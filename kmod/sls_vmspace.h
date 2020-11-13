@@ -16,5 +16,5 @@
 int slsckpt_vmspace(struct proc *p, struct sbuf *sb, struct slsckpt_data *sckpt_data);
 
 int slsrest_vmspace(struct proc *p, struct slsvmspace *slsvmspace, struct shmmap_state *shmstate);
-int slsrest_vmentry(struct vm_map *map, struct slsvmentry *slsvmentry, struct slskv_table *objtable);
+int slsrest_vmentry(struct vm_map *map, struct slsvmentry *slsvmentry, struct slsrest_data *restdata);
 #endif /* _SLS_MEM_H_ */

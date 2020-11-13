@@ -62,6 +62,7 @@
 #include "sls_vm.h"
 #include "sls_vmobject.h"
 #include "sls_vmspace.h"
+#include "sls_vnode.h"
 #include "sls_internal.h"
 #include "sysv_internal.h"
 #include "debug.h"
@@ -94,10 +95,9 @@ slsrest_doproc(struct proc *p, uint64_t daemon, char **bufp,
     size_t *buflenp, struct slsrest_data *restdata)
 {
 	struct slsproc slsproc; 
-	struct sbuf *name;
 	int error, i;
 
-	error = slsload_proc(&slsproc, &name, bufp, buflenp);
+	error = slsload_proc(&slsproc, bufp, buflenp);
 	if (error != 0)
 		return (error);
 
@@ -110,7 +110,7 @@ slsrest_doproc(struct proc *p, uint64_t daemon, char **bufp,
 		SLS_DBG("Error: Could not add process %p to table\n", p);
 
 	DEBUG("Attempting restore of proc");
-	error = slsrest_proc(p, name, daemon, &slsproc, restdata);
+	error = slsrest_proc(p, daemon, &slsproc, restdata);
 	if (error != 0)
 		return (error);
 
@@ -125,10 +125,30 @@ slsrest_doproc(struct proc *p, uint64_t daemon, char **bufp,
 }
 
 static int
+slsrest_dovnode(struct slsrest_data *restdata, char **bufp, size_t *buflenp)
+{
+	struct slsvnode slsvnode;
+	int error;
+
+	error = slsload_vnode(&slsvnode, bufp, buflenp);
+	if (error != 0) {
+		DEBUG1("Error in slsload_vnode %d", error);
+		return (error);
+	}
+
+	error = slsrest_vnode(&slsvnode, restdata);
+	if (error != 0) {
+		DEBUG1("Error in slsrest_vnode %d", error);
+		return (error);
+	}
+
+	return (0);
+}
+
+static int
 slsrest_dofile(struct slsrest_data *restdata, char **bufp, size_t *buflenp)
 {
 	struct slsfile slsfile;
-	struct sbuf *sb;
 	void *data;
 	int error;
 
@@ -137,20 +157,12 @@ slsrest_dofile(struct slsrest_data *restdata, char **bufp, size_t *buflenp)
 		return (error);
 
 	error = slsrest_file(data, &slsfile, restdata);
-	if (error != 0)
-		return error;
 
 	switch (slsfile.type) {
 	case DTYPE_KQUEUE:
-		/* Nothing to clean up. */
-		break;
-
 	case DTYPE_VNODE:
-		sbuf_delete((struct sbuf *) data);
-		break;
-
-	case DTYPE_FIFO:
-		sbuf_delete((struct sbuf *) data);
+	case DTYPE_SHM:
+		/* Nothing to clean up. */
 		break;
 
 	case DTYPE_PIPE:
@@ -159,26 +171,17 @@ slsrest_dofile(struct slsrest_data *restdata, char **bufp, size_t *buflenp)
 		free(data, M_SLSMM);
 		break;
 
-	case DTYPE_SHM:
-		/* XXX Refactor the sb member somehow. */
-		sb = ((struct slsposixshm *) data)->sb;
-		if (sb != NULL)
-			sbuf_delete(sb);
-
-		free(data, M_SLSMM);
-		break;
-
 	default:
-		return EINVAL;
+		panic("Tried to restore file type %d", slsfile.type);
 
 	}
 
-	return (0);
+	return (error);
 }
 
 static int
 slsrest_dofiledesc(struct proc *p, char **bufp, size_t *buflenp, 
-    struct slskv_table *filetable)
+    struct slsrest_data *restdata)
 {
 	int error = 0;
 	struct slsfiledesc slsfiledesc;
@@ -188,20 +191,15 @@ slsrest_dofiledesc(struct proc *p, char **bufp, size_t *buflenp,
 	if (error != 0)
 		return (error);
 
-	error = slsrest_filedesc(p, slsfiledesc, fdtable, filetable);
+	error = slsrest_filedesc(p, &slsfiledesc, fdtable, restdata);
 	slskv_destroy(fdtable);
-	sbuf_delete(slsfiledesc.cdir);
-	sbuf_delete(slsfiledesc.rdir);
-	if (error != 0) {
-		return (error);
-	}
 
 	return (error);
 }
 
 static int
 slsrest_dovmspace(struct proc *p, char **bufp, size_t *buflenp, 
-    struct slskv_table *objtable)
+    struct slsrest_data *restdata)
 {
 	struct slsvmentry slsvmentry;
 	struct slsvmspace slsvmspace;
@@ -226,7 +224,7 @@ slsrest_dovmspace(struct proc *p, char **bufp, size_t *buflenp,
 		if (error != 0)
 			goto out;
 
-		error = slsrest_vmentry(map, &slsvmentry, objtable);
+		error = slsrest_vmentry(map, &slsvmentry, restdata);
 		if (error != 0)
 			goto out;
 	}
@@ -331,23 +329,40 @@ slsrest_doknotes(struct proc *p, struct slskv_table *kevtable)
 static int
 slsrest_ttyfixup(struct proc *p)
 {
+	struct thread *td = curthread;
 	struct file *fp, *pttyfp;
+	char *ttyname, *path;
 	struct tty *tp;
-	int error;
+	int error, ret;
 	int fd;
 
-	/* 
-	 * Get the terminal on top of which the restore process is running. 
-	 * CAREFUL: We assume that the parent is the restore process, and it
-	 * therefore has a file at fd 0 that can be used as a terminal.
-	 */
-	FILEDESC_XLOCK(p->p_pptr->p_fd);
-	pttyfp = FDTOFP(p->p_pptr, 0);
-	error = fhold(pttyfp);
-	FILEDESC_XUNLOCK(p->p_pptr->p_fd);
-	if (error == 0) {
+	/* Construct the controlling terminal's name. */
+	ttyname = __DECONST(char *, tty_devname(p->p_session->s_ttyp));
+	path = malloc(2 * PATH_MAX, M_SLSMM, M_WAITOK);
+	strlcpy(path, "/dev/", sizeof("/dev/"));
+	strlcat(path, ttyname, PATH_MAX);
+
+	/* Open the device and grab the file. */
+	error = kern_openat(td, AT_FDCWD, path, UIO_SYSSPACE,
+	    O_RDWR, S_IRWXU);
+	free(path, M_SLSMM);
+	if (error != 0)
+		return (error);
+
+	fd = curthread->td_retval[0];
+	pttyfp = FDTOFP(p, fd);
+	ret = fhold(pttyfp);
+	error = kern_close(td, fd);
+	if (error != 0)
+		printf("Error %d when closing TTY\n", error); 
+	if (ret == 0)
 		return (EBADF);
-	}
+
+	/* 
+	 * CAREFUL: We are using our controlling terminal, so we assume we have
+	 * one.
+	 */
+	/* open, take a reference, close */
 
 	FILEDESC_XLOCK(p->p_fd);
 	for (fd = 0; fd <= p->p_fd->fd_lastfile; fd++) {
@@ -447,12 +462,12 @@ slsrest_metadata(void *args)
 
 
 	DEBUG("SLS Restore VMSPACE");
-	error = slsrest_dovmspace(p, &buf, &buflen, restdata->objtable);
+	error = slsrest_dovmspace(p, &buf, &buflen, restdata);
 	if (error != 0)
 		goto error; 
 
 	DEBUG("SLS Restore filedesc");
-	error = slsrest_dofiledesc(p, &buf, &buflen, restdata->filetable);
+	error = slsrest_dofiledesc(p, &buf, &buflen, restdata);
 	if (error != 0)
 		goto error; 
 
@@ -609,7 +624,7 @@ slsrest_shadow(vm_object_t shadow, vm_object_t source, vm_ooffset_t offset)
 }
 
 static int
-slsrest_dovmobjects(struct slskv_table *metatable, struct slskv_table *objtable)
+slsrest_dovmobjects(struct slskv_table *metatable, struct slsrest_data *restdata)
 {
 	struct slsvmobject slsvmobject, *slsvmobjectp;
 	vm_object_t parent, object;
@@ -636,7 +651,7 @@ slsrest_dovmobjects(struct slskv_table *metatable, struct slskv_table *objtable)
 		}
 
 		/* Restore the object. */
-		error = slsrest_vmobject(&slsvmobject, objtable);
+		error = slsrest_vmobject(&slsvmobject, restdata);
 		if (error != 0) {
 			KV_ABORT(iter);
 			return (error);
@@ -650,25 +665,27 @@ slsrest_dovmobjects(struct slskv_table *metatable, struct slskv_table *objtable)
 		if (st->type != SLOSREC_VMOBJ)
 			continue;
 
-		/* 
-		 * Get the object restored for the given info struct. 
+		/*
+		 * Get the object restored for the given info struct.
 		 * We take advantage of the fact that the VM object info
 		 * struct is the first thing in the record to typecast
 		 * the latter into the former, skipping the parse function.
 		 */
-		slsvmobjectp = (struct slsvmobject *) record; 
-		error = slskv_find(objtable, slsvmobjectp->slsid, (uintptr_t *) &object);
+		slsvmobjectp = (struct slsvmobject *) record;
+		error = slskv_find(restdata->objtable, slsvmobjectp->slsid,
+		    (uintptr_t *) &object);
 		if (error != 0) {
 			KV_ABORT(iter);
 			return (error);
 		}
 
 		/* Try to find a parent for the restored object, if it exists. */
-		error = slskv_find(objtable, (uint64_t) slsvmobjectp->backer, (uintptr_t *) &parent);
-		if (error != 0) {
+		error = slskv_find(restdata->objtable, (uint64_t) slsvmobjectp->backer,
+		    (uintptr_t *) &parent);
+		if (error != 0)
 			continue;
-		}
 
+		vm_object_reference(parent);
 		slsrest_shadow(object, parent, slsvmobjectp->backer_off);
 	}
 	SLS_DBG("Restoration of VM Objects\n");
@@ -698,7 +715,7 @@ slsrest_dofiles(struct slskv_table *metatable, struct slsrest_data *restdata)
 	return (0);
 }
 
-static void 
+static void
 slsrest_fini(struct slsrest_data *restdata)
 {
 	uint64_t slskn;
@@ -708,10 +725,17 @@ slsrest_fini(struct slsrest_data *restdata)
 	struct kqueue *kq;
 	struct file *fp;
 	struct mbuf *m, *headm;
+	struct vnode *vp;
 	vm_object_t obj;
 
 	cv_destroy(&restdata->proccv);
 	mtx_destroy(&restdata->procmtx);
+
+	if (restdata->vnodetable != NULL) {
+		KV_FOREACH_POP(restdata->vnodetable, slsid, vp)
+			vrele(vp);
+		slskv_destroy(restdata->vnodetable);
+	}
 
 	if (restdata->mbuftable != NULL) {
 		KV_FOREACH_POP(restdata->mbuftable, slsid, headm) {
@@ -733,7 +757,7 @@ slsrest_fini(struct slsrest_data *restdata)
 
 	if (restdata->objtable != NULL) {
 		KV_FOREACH_POP(restdata->objtable, slsid, obj) {
-			if (obj != NULL && OBJT_ISANONYMOUS(obj))
+			if (obj != NULL)
 				vm_object_deallocate(obj);
 		}
 		slskv_destroy(restdata->objtable);
@@ -814,6 +838,10 @@ slsrest_init(struct slsrest_data **restdatap)
 	if (error != 0)
 		goto error;
 
+	error = slskv_create(&restdata->vnodetable);
+	if (error != 0)
+		goto error;
+
 	mtx_init(&restdata->procmtx, "SLS proc mutex", NULL, MTX_DEF);
 	cv_init(&restdata->proccv, "SLS proc cv");
 
@@ -887,6 +915,12 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 	if (slsp == NULL)
 		goto cleanup;
 
+	if ((slsp->slsp_attr.attr_target == SLS_MEM) &&
+	   (slsp->slsp_sckpt == NULL)) {
+		slsp_deref(slsp);
+		goto cleanup;
+	}
+
 	/* Can't restore if we're still in the middle of checkpointing. */
 	while (atomic_cmpset_int(&slsp->slsp_status, SLSPART_AVAILABLE,
 	    SLSPART_RESTORING) == 0) {
@@ -904,10 +938,6 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 	 */
 	switch (slsp->slsp_attr.attr_target) {
 	case SLS_OSD:
-		error = slskv_create(&rectable);
-		if (error != 0)
-			goto out;
-
 		/* Bring in the whole checkpoint in the form of SLOS records. */
 		error = sls_read_slos(slsp, &rectable, &objtable);
 		if (error != 0)
@@ -925,7 +955,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 		break;
 
 	case SLS_MEM:
-		KASSERT(slsp->slsp_sckpt != NULL, ("Partition %ld has no associated checkpoint", oid));
+
 		error = slsrest_rectable_to_metatable(slsp->slsp_sckpt->sckpt_rectable, &metatable);
 		if (error != 0)
 			goto out;
@@ -955,12 +985,26 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 		panic("Invalid target %d\n", slsp->slsp_attr.attr_target);
 	}
 
+	/* Bring in the vnodes, we need them when restoring VM objects. */
+	KV_FOREACH(metatable, iter, record, st) {
+		if (st->type != SLOSREC_VNODE)
+			continue;
+
+		buf = (char *) record;
+		buflen = st->len;
+
+		error = slsrest_dovnode(restdata, &buf, &buflen);
+		if (error != 0) {
+			KV_ABORT(iter);
+			goto out;
+		}
+	}
 
 	/*
 	 * Recreate the VM object tree. When restoring from the SLOS we recreate everything, while
 	 * when restoring from memory all anonymous objects are already there.
 	 */
-	error = slsrest_dovmobjects(metatable, restdata->objtable);
+	error = slsrest_dovmobjects(metatable, restdata);
 	if (error != 0)
 		goto out;
 

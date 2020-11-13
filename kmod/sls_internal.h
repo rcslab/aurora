@@ -68,6 +68,7 @@ struct slsrest_data {
     struct slskv_table  *pgidtable;	/* Holds the old-new process group ID pairs */
     struct slskv_table  *sesstable;	/* Holds the old-new session ID pairs */
     struct slskv_table  *mbuftable;	/* Holds the mbufs used by processes */
+    struct slskv_table  *vnodetable;	/* Holds all vnodes, indexed by vnode ID */
     struct cv	    proccv;	/* Used as a barrier while creating pgroups */
     struct mtx	    procmtx;	/* Used alongside the cv above */
     struct cv	    cv;		/* Global restore cv */

@@ -1,5 +1,6 @@
 NEWFS=$SRCROOT/tools/newfs_sls/newfs_sls
 SLSCTL=$SRCROOT/tools/slsctl/slsctl
+MNT=/testmnt
 
 # Load and unload kernel modules
 loadsls()
@@ -54,12 +55,12 @@ slsnewfs()
 
 slsmount()
 {
-    mount -t slsfs /dev/md$MDDISK /mnt
+    mount -t slsfs /dev/md$MDDISK $MNT
 }
 
 slsunmount()
 {
-    umount /mnt
+    umount $MNT
 }
 
 aursetup()

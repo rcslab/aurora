@@ -879,6 +879,7 @@ sls_writemeta_slos(struct sls_record *rec, struct vnode **vpp, bool overwrite)
 	st.len = len;
 
 	KASSERT(st.type != 0, ("invalid record type"));
+	KASSERT(st.len > 0, ("Writing out empty record of type %ld", st.type));
 
 	VOP_UNLOCK(vp, 0);
 	error = VOP_IOCTL(vp, SLS_SET_RSTAT, &st, 0, NULL, td);
@@ -966,8 +967,8 @@ sls_writedata_slos(struct sls_record *rec, struct slskv_table *objtable)
 	 */
 	if (rec->srec_type == SLOSREC_VMOBJ) {
 		vminfo = (struct slsvmobject *) sbuf_data(sb);
-		/* The .id field is not the slsid, it's the memory pointer. */
-		obj = (vm_object_t) vminfo->id;
+		/* Get the object itself. */
+		obj = (vm_object_t) vminfo->objptr;
 	}
 #ifdef SLS_TEST
 	else if (rec->srec_type == SLOSREC_TESTDATA) {
@@ -1171,7 +1172,7 @@ slstable_mkinfo_addrec(struct slskv_table *table, uint64_t slsid, meta_info *min
 	rec = sls_getrecord(sb, slsid, type);
 	error = slskv_add(table, slsid, (uint64_t) rec);
 	if (error != 0) {
-		free(rec, M_SLSMM);
+		free(rec, M_SLSREC);
 		sbuf_delete(sb);
 		return (error);
 	}

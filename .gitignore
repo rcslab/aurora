@@ -88,3 +88,4 @@ nginx_*
 lighttpd_*
 memcached_*
 vmobject-*
+tests/testfile

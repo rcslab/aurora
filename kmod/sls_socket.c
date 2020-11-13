@@ -54,7 +54,6 @@
 
 #include "sls_file.h"
 #include "sls_internal.h"
-#include "sls_path.h"
 
 /* 
  * XXX Sendfile doesn't work, because there might be pageins in progress that
@@ -162,7 +161,7 @@ slsckpt_sockbuf(struct sockbuf *sockbuf, struct slsckpt_data *sckpt_data)
 	/* Add the new buffer to the tables. */
 	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) sockbuf, (uintptr_t) rec);
 	if (error != 0) {
-		free(rec, M_SLSMM);
+		free(rec, M_SLSREC);
 		sbuf_delete(sb);
 		return (error);
 	}
@@ -363,10 +362,12 @@ slsrest_sockbuf(struct slskv_table *table, uint64_t sockbufid, struct sockbuf *s
 static int
 slsrest_uipc_bindat(struct socket *so, struct sockaddr *nam)
 {
+	struct thread *td = curthread;
 	struct sockaddr_un *soun;
+	struct nameidata nd;
+	cap_rights_t rights;
 	struct unpcb *unp;
 	struct vnode *vp;
-	struct sbuf *sb;
 	int error;
 
 	/* 
@@ -386,30 +387,27 @@ slsrest_uipc_bindat(struct socket *so, struct sockaddr *nam)
 	KASSERT((soun->sun_len > offsetof(struct sockaddr_un, sun_path)), 
 	    ("socket path size too small"));
 
-	sb = sbuf_new_auto();
-	sbuf_bcpy(sb, soun->sun_path, strnlen(soun->sun_path, UNADDR_MAX));
-
 	KASSERT(((unp->unp_flags & UNP_BINDING) == 0), ("unix socket already binding"));
 	KASSERT((unp->unp_vnode == NULL), ("unix socket already bound"));
 
-	error = sls_path_to_vn(sb, &vp);
-	if (error != 0) {
-		sbuf_delete(sb);
+	NDINIT_ATRIGHTS(&nd, LOOKUP, FOLLOW | AUDITVNODE1, UIO_SYSSPACE, soun->sun_path,
+	    AT_FDCWD, &rights, td);
+	error = namei(&nd);
+	vp = nd.ni_vp;
+	NDFREE(&nd, NDF_ONLY_PNBUF);
+	if (error != 0)
 		return (error);
-	}
-
-	soun = (struct sockaddr_un *) sodupsockaddr(nam, M_WAITOK);
-
+	/* XXX Make sure the refcounting is correct. */
+	vref(vp);
 	VOP_LOCK(vp, LK_EXCLUSIVE);
 	/* Set up the internal vp state (used when calling connect()). */
 	VOP_UNP_BIND(vp, unp);
 
 	/* Finish intializing the socket itself. */
 	unp->unp_vnode = vp;
-	unp->unp_addr = soun;
+	unp->unp_addr = (struct sockaddr_un *) sodupsockaddr(nam, M_WAITOK);
 	VOP_UNLOCK(vp, 0);
 
-	sbuf_delete(sb);
 	return (0);
 }
 

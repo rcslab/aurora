@@ -55,21 +55,23 @@
 
 #include "sls_file.h"
 #include "sls_internal.h"
-#include "sls_path.h"
 #include "debug.h"
 
 int
 slsckpt_posixshm(struct shmfd *shmfd, struct sbuf *sb)
 {
 	struct slsposixshm slsposixshm;
-	uint64_t len;
 	int error;
 
 	slsposixshm.slsid = (uint64_t) shmfd;
 	slsposixshm.magic = SLSPOSIXSHM_ID;
 	slsposixshm.mode = shmfd->shm_mode;
 	slsposixshm.object = (uint64_t) shmfd->shm_object->objid;
-	slsposixshm.is_anon = (shmfd->shm_path == NULL) ? 1 : 0;
+	slsposixshm.is_named = (shmfd->shm_path != NULL); 
+
+	/* Write down the path, if it exists. */
+	if (shmfd->shm_path != NULL)
+		strlcpy(slsposixshm.path, shmfd->shm_path, PATH_MAX);
 
 	/* 
 	 * While the shmfd is unique for the shared memory, and so
@@ -80,14 +82,6 @@ slsckpt_posixshm(struct shmfd *shmfd, struct sbuf *sb)
 	error = sbuf_bcat(sb, &slsposixshm, sizeof(slsposixshm));
 	if (error != 0) 
 		return (error);
-
-	/* Write down the path, if it exists. */
-	if (shmfd->shm_path != NULL) {
-		len = strnlen(shmfd->shm_path, PATH_MAX);
-		error = sls_path_append(shmfd->shm_path, len, sb);
-		if (error != 0)
-			return (error);
-	}
 
 	return (0);
 }
@@ -102,13 +96,12 @@ slsrest_posixshm(struct slsposixshm *info, struct slskv_table *objtable, int *fd
 	int error;
 	int fd;
 
-
 	/* First and foremost, go fetch the object backing the shared memory. */
 	error = slskv_find(objtable, info->object, (uintptr_t *) &obj);
 	if (error != 0)
 		return (error);
 
-	path = (info->sb != NULL) ? sbuf_data(info->sb) : SHM_ANON;
+	path = (info->is_named) ? info->path : SHM_ANON;
 	DEBUG1("Restoring shared memory with path %p",
 	    path == SHM_ANON ? path : "(anon)");
 

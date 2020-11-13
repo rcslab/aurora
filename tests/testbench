@@ -2,9 +2,8 @@
 
 export SRCROOT=..
 MDDISK=""
-export MOUNTPT="/mnt"
-export TESTLOG="testbench.log"
 export KTRLOG="ktrdump.log"
+export TESTLOG="testbench.log"
 
 TIMEOUT=30
 
@@ -64,6 +63,7 @@ run_tests()
 {
     rm -f $TESTLOG
     rm -f $KTRLOG
+    touch $TESTLOG
 
     echo Build: `uname -sri`
     echo Test started: `date`

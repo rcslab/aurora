@@ -1,4 +1,4 @@
-SUBDIR = array compute fd fifo fork llist main memory mmap \
+SUBDIR = array compute fd fifo fork llist main mmap \
 	 multithread register pipes posix posixshm print sharemap \
 	signal sleep slsfs socketpair sysvshm tcplisten udplisten \
 	unixlisten vmobject unlink

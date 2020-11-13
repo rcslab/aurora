@@ -2,7 +2,9 @@ NAME=mmap
 
 PROG= $(NAME)
 SRC= $(NAME).c
-CFLAGS += 
+LDADD= -lsls
+LDFLAGS= -L../../libsls
+CFLAGS += -I../../include -g
 MAN=
 
 .include <bsd.prog.mk>

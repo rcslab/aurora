@@ -18,10 +18,13 @@
 static uma_zone_t slskvpair_zone = NULL;
 uma_zone_t slskv_zone = NULL;
 
+int slskv_count = 0;
+
 static int
 slskv_zone_ctor(void *mem, int size, void *args __unused, int flags __unused)
 {
 	/* XXX Put in KASSERTs */
+	atomic_add_int(&slskv_count, 1);
 	return (0);
 }
 
@@ -46,6 +49,8 @@ slskv_zone_dtor(void *mem, int size, void *args __unused)
 			uma_zfree(slskvpair_zone, kv);
 		}
 	}
+
+	atomic_add_int(&slskv_count, -1);
 }
 
 static int
@@ -164,6 +169,7 @@ slskv_find_unlocked(struct slskv_table *table, uint64_t key, uintptr_t *value)
 	}
 
 	mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+
 	/* We failed to find the key. */
 	return (EINVAL);
 }

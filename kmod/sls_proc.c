@@ -18,7 +18,7 @@
 
 #include "sls_kv.h"
 #include "sls_proc.h"
-#include "sls_path.h"
+#include "sls_vnode.h"
 #include "debug.h"
 
 /*
@@ -158,7 +158,8 @@ slsrest_thread(struct proc *p, struct slsthread *slsthread)
  * like PIDs. This function takes and leaves the process locked.
  */
 int
-slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset)
+slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset,
+    struct slsckpt_data *sckpt_data)
 {
 	struct thread *td;
 	int error = 0;
@@ -240,15 +241,16 @@ slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset)
 
 	PROC_UNLOCK(p);
 
-	error = sbuf_bcat(sb, (void *) &slsproc, sizeof(slsproc));
-	if (error != 0)
-		goto error;
-
 	/* Save the path of the executable. */
 	KASSERT(p->p_textvp != NULL, ("process %p has no text vnode", p));
-	error = sls_vn_to_path_append(p->p_textvp, sb);
+	slsproc.textvp = (uint64_t) p->p_textvp;
+	error = slsckpt_vnode(p->p_textvp, sckpt_data);
 	if (error != 0)
-		goto error;
+		return (error);
+
+	error = sbuf_bcat(sb, (void *) &slsproc, sizeof(slsproc));
+	if (error != 0)
+		return (error);
 
 	/* Checkpoint each thread individually. */
 	FOREACH_THREAD_IN_PROC(p, td) {
@@ -258,10 +260,6 @@ slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset)
 	}
 
 	return (0);
-
-error:
-
-	return (error);
 }
 
 
@@ -301,8 +299,8 @@ sls_enterpgrp(struct proc *p, struct pgrp *pgrp, struct session *sess)
  * like PIDs. This function takes and leaves the process locked.
  */
 int
-slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
-    struct slsproc *slsproc, struct slsrest_data *restdata)
+slsrest_proc(struct proc *p, uint64_t daemon, struct slsproc *slsproc,
+    struct slsrest_data *restdata)
 {
 	struct sigacts *newsigacts, *oldsigacts;
 	struct session *sess = NULL;
@@ -362,13 +360,13 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 		error = slskv_add(restdata->sesstable, slsproc->sid, (uintptr_t) sess);
 		if (error != 0) {
 			mtx_unlock(&restdata->procmtx);
-			goto error;
+			return (error);
 		}
 
 		error = slskv_add(restdata->pgidtable, slsproc->pgid, (uintptr_t) pgrp);
 		if (error != 0) {
 			mtx_unlock(&restdata->procmtx);
-			goto error;
+			return (error);
 		}
 
 		/* Wake up any processes waiting to join the pgrp/session. */
@@ -404,7 +402,7 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 		error = slskv_add(restdata->pgidtable, slsproc->pgid, (uintptr_t) pgrp);
 		mtx_unlock(&restdata->procmtx);
 		if (error != 0)
-			goto error;
+			return (error);
 
 	}
 
@@ -450,21 +448,11 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 		 * We might already be in the right pgrp, if that is the group
 		 * of the parent process that called sls_restore().
 		 */
-		/* XXX Enter the session of the pgroup, too. */
-#if 0
-		if (pgrp->pg_id != p->p_pgid) {
-			sx_xlock(&proctree_lock);
-			PROC_UNLOCK(p);
-			error = enterthispgrp(p, pgrp);
-			PROC_LOCK(p);
-			sx_xunlock(&proctree_lock);
-			if (error != 0) {
-				/* Turn it back into null so we don't free it while error handling. */
-				pgrp = NULL;
-				goto error;
-			}
-		}
-#endif
+		/*
+		 * XXX Enter the session of the pgroup, too. This whole block is
+		 * complex and needs refactoring so we are sure we cover all
+		 * cases.
+		 */
 
 	} else if (!SESS_LEADER(p) && (slsproc->sid != 0)) {
 		/* We are the pgrp leader, but not the session leader. */
@@ -523,11 +511,9 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 	sigacts_free(oldsigacts);
 
 	/* Restore the original executable pointer. */
-	PROC_UNLOCK(p);
-	error = sls_path_to_vn(name, &textvp);
-	PROC_LOCK(p);
+	error = slskv_find(restdata->vnodetable, slsproc->textvp, (uintptr_t *) &textvp);
 	if (error != 0)
-		goto error;
+		return (error);
 
 	/* Restore the executable name and path. */
 	memcpy(p->p_comm, slsproc->name, MAXCOMLEN + 1);
@@ -545,12 +531,7 @@ slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
 	 * the correct vector by using the value as an index in a table).
 	 */
 
-	sbuf_delete(name);
 	return (0);
-
-error:
-	sbuf_delete(name);
-	return (error);
 
 alloc_error:
 	free(pgrp, M_PGRP);

@@ -12,6 +12,6 @@
 #include "sls_table.h"
 
 int slsckpt_vmobject(struct proc *p, vm_object_t obj, struct slsckpt_data *sckpt_data);
-int slsrest_vmobject(struct slsvmobject *slsvmobject, struct slskv_table *objtable);
+int slsrest_vmobject(struct slsvmobject *slsvmobject, struct slsrest_data *restdata);
 
 #endif /* _SLS_VMOBJECT_H_ */

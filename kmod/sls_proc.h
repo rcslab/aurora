@@ -24,9 +24,10 @@
 #include "sls_kv.h"
 #include "sls_internal.h"
 
-int slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset);
-int slsrest_proc(struct proc *p, struct sbuf *name, uint64_t daemon,
-	struct slsproc *slsproc, struct slsrest_data *restdata);
+int slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset,
+	struct slsckpt_data *sckpt_data);
+int slsrest_proc(struct proc *p, uint64_t daemon, struct slsproc *slsproc,
+	struct slsrest_data *restdata);
 int slsrest_thread(struct proc *p, struct slsthread *slsthread);
 
 

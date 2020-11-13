@@ -14,7 +14,7 @@
 #define SLOSREC_FILE	    0x00000005  /* Record holds info for a file */
 #define SLOSREC_SYSVSHM	    0x00000006	/* Record holds info for SYSV shared memory */
 #define SLOSREC_SOCKBUF	    0x00000007	/* Record holds info for socket buffers */
-#define SLOSREC_DIR	    0x00000008	/* Record holds a directory */
+#define SLOSREC_VNODE	    0x00000008	/* Record holds info for a vnode */
 #define SLOSREC_DATA	    0x00000009	/* Record holds arbitrary data */
 #define SLOSREC_MANIFEST    0x0000000a	/* Record holds the manifest of a checkpoint */
 

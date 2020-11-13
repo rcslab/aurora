@@ -36,6 +36,7 @@ struct slsproc {
 	uint64_t	pgrpwait;   /* Should we wait for the process group
 				       to be rebuilt? */
 	pid_t		sid;	    /* Session ID */
+	uint64_t	textvp;	    /* ID of the text vnode */
 	struct sigacts sigacts;	    /* Signal handling info */
 	char	    name[MAXCOMLEN + 1]; /* Name of the process */
 };
@@ -83,16 +84,23 @@ struct slssession {
 #define SLSVMOBJECT_ID 0x7abc7303
 struct slsvmobject {
 	uint64_t magic;
-	uint64_t obj;		/* The object pointer itself */
+	vm_object_t objptr;		/* The object pointer itself */
 	uint64_t slsid;
 	vm_pindex_t size;
 	enum obj_type type;
-	vm_object_t id;
 	/* Used for objects that are shadows of others */
 	uint64_t backer;
 	vm_ooffset_t backer_off;
+	uint64_t vnode;  /* Backing SLS vnode */
+};
+
+#define SLSVNODE_ID 0xbaba9001
+struct slsvnode {
+	uint64_t magic;
+	uint64_t slsid;
+	int has_path;
+	uint64_t ino;
 	char path[PATH_MAX];	/* Filesystem path for vnode VM objects. */
-	/* XXX Bookkeeping for swapped out pages? */
 };
 
 #define SLSVMENTRY_ID 0x736c7304
@@ -110,6 +118,7 @@ struct slsvmentry {
 	uint64_t obj;
 	vm_inherit_t inheritance;
 	enum obj_type type;
+	uint64_t vp;
 };
 
 #define SLSFILE_ID 0x736c7234
@@ -124,8 +133,6 @@ struct slsfile {
 	off_t offset;
 	uint64_t backer;
 	uint64_t ino;
-	int has_path;
-
 	/* 
 	* Let's not bother with this flag from the filedescent struct.
 	* It's only about autoclosing on exec, and we don't really care right now 
@@ -138,8 +145,8 @@ struct slsfiledesc {
 	uint64_t magic;
 	uint64_t slsid;
 
-	struct sbuf *cdir;
-	struct sbuf *rdir;
+	uint64_t cdir;
+	uint64_t rdir;
 	/* TODO jdir */
 
 	u_short fd_cmask;
@@ -253,11 +260,8 @@ struct slsposixshm {
 	uint64_t    slsid;
 	mode_t	    mode;
 	uint64_t    object;
-	uint64_t    is_anon;
-	/* XXX Hacky. Turn into fixed-length name buffer. */
-	struct sbuf *sb;
-
-	/* XXX Rangelocks? */
+	bool	    is_named;
+	char	    path[PATH_MAX];
 };
 
 #define SLSMBUF_ID  0x736c7245
