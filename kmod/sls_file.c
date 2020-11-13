@@ -272,6 +272,7 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *fpslsid, struct slsckpt_
 
 	sb = sbuf_new_auto();
 
+	DEBUG1("Restoring file of type %d", fp->f_type);
 	/* Checkpoint further information depending on the file's type. */
 	switch (fp->f_type) {
 		/* Backed by a vnode - get the name. */
@@ -486,13 +487,17 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 	int fd;
 	int error;
 
+	DEBUG1("Restoring file of type %d", info->type);
 	switch(info->type) {
 	case DTYPE_VNODE:
 	case DTYPE_FIFO:
 
 		error = slskv_find(restdata->vnodetable, info->backer, (uintptr_t *) &vp);
-		if (error != 0)
+		if (error != 0) {
+			/* XXX Ignore the error if ignoring unlinked files. */
+			DEBUG("Probably restoring an unlinked file");
 			return (error);
+		}
 
 		/* Create the file handle, open the vnode associate the two. */
 		error = falloc_noinstall(td, &fp);
@@ -570,7 +575,8 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 			return (0);
 		}
 
-		error = slsrest_pipe(restdata->filetable, (struct slspipe *) slsbacker, &fd);
+		error = slsrest_pipe(restdata->filetable, info->flag & (O_NONBLOCK | O_CLOEXEC),
+		    (struct slspipe *) slsbacker, &fd);
 		if (error != 0)
 			return (error);
 

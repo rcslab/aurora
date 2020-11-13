@@ -49,7 +49,7 @@ run_test()
 {
     NAME=`basename $1`
     print_running $NAME
-    $t >> $TESTLOG
+    $1 >> $TESTLOG
     if [ $? -eq 0 ]; then
 	print_success $NAME
     else
@@ -81,7 +81,8 @@ MDDISK=`createmd`
 export MDDISK=$MDDISK
 
 if [ $# -eq 1 ]; then
-	run_test $1
+	touch $TESTLOG
+	run_test "$PWD/$1"
 else
 	run_tests
 fi

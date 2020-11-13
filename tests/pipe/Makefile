@@ -1,5 +1,5 @@
-PROG = pipes
-SRCS = pipes.c
+PROG = pipe
+SRCS = pipe.c
 CFLAGS += 
 MAN = 
 

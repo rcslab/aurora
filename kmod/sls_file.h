@@ -23,7 +23,7 @@ int slsckpt_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb);
 int slsrest_kqueue(struct slskqueue *kqinfo, int *fdp);
 
 int slsckpt_pipe(struct proc *p, struct file *fp, struct sbuf *sb);
-int slsrest_pipe(struct slskv_table *table, struct slspipe *ppinfo, int *fdp);
+int slsrest_pipe(struct slskv_table *table, int flags, struct slspipe *ppinfo, int *fdp);
 
 int slsckpt_posixshm(struct shmfd *shmfd, struct sbuf *sb);
 int slsrest_posixshm(struct slsposixshm *info, struct slskv_table *objtable, int *fdp);

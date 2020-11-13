@@ -148,11 +148,13 @@ slsckpt_vnode(struct vnode *vp, struct slsckpt_data *sckpt_data)
 		if (error != 0)
 			goto error;
 
+		DEBUG("Checkpointing vnode by path");
 	} else {
 		slsvnode.magic = SLSVNODE_ID;
 		slsvnode.slsid = (uint64_t) vp;
 		slsvnode.has_path = 0;
 		slsvnode.ino = INUM(SLSVP(vp));
+		DEBUG1("Checkpointing vnode with inode 0x%lx", slsvnode.ino);
 	}
 
 	/* Write out the struct file. */
@@ -231,10 +233,13 @@ slsrest_vnode(struct slsvnode *info, struct slsrest_data *restdata)
 	int error;
 
 	/* Get the vnode either from the inode or the path. */
-	if (info->has_path == 1)
+	if (info->has_path == 1) {
+		DEBUG("Restoring named vnode");
 		error = slsrest_vnode_path(info, &vp);
-	else
+	} else {
+		DEBUG1("Restoring vnode with inode number 0x%lx", info->ino);
 		error = slsrest_vnode_ino(info, &vp);
+	}
 	if (error != 0)
 		return (error);
 

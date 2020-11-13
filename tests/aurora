@@ -80,7 +80,7 @@ aurteardown()
 slscheckpoint()
 {
     $SLSCTL attach -p $1 -m
-    $SLSCTL checkpoint -m
+    $SLSCTL checkpoint -m -r
 }
 
 slsrestore()
@@ -91,14 +91,14 @@ slsrestore()
 slsosdcheckpoint()
 {
     $SLSCTL attach -p $1
-    $SLSCTL checkpoint
+    $SLSCTL checkpoint -r
 }
 
 slslazycheckpoint()
 {
     $SLSCTL partadd -o $2 -l
     $SLSCTL attach -p $1 -o $2
-    $SLSCTL checkpoint -o $2
+    $SLSCTL checkpoint -o $2 -r
 }
 
 slsosdrestore()

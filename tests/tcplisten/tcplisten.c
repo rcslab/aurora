@@ -15,19 +15,62 @@
 #define LOCALHOST   ("127.0.0.1")
 #define SOCKET	    (6668)
 #define BACKLOG	    (4)
-#define BUFSIZE	    (1024)
-#define MSGSIZE	    (4)
+#define MSG	    ("message")
+#define BUFSIZE	    (sizeof(MSG))
 
 char buf[BUFSIZE];
 
-int 
+int
+getmessage(int listsock)
+{
+	struct sockaddr_in dataaddr;
+	socklen_t addrlen;
+	ssize_t datalen;
+	int datasock;
+	int error;
+
+	printf("Waiting for a connection...\n");
+	addrlen = sizeof(dataaddr);
+	datasock = accept(listsock, (struct sockaddr *) &dataaddr, &addrlen);
+	if (datasock == -1) {
+		perror("accept");
+	}
+
+	printf("Connection established.\n");
+	printf("Socket fd: %d\n", datasock);
+	printf("Remote Address: %s:%d\n", inet_ntoa(dataaddr.sin_addr), ntohs(dataaddr.sin_port));
+
+	for (;;) {
+	/* Cleanup the buffer on every message. */
+	memset(buf, 0, BUFSIZE);
+
+	datalen = recv(datasock, buf, BUFSIZE, 0);
+	if (datalen == - 1) {
+		perror("recv");
+		/* This is where we bounce back after restoring. */
+		return (0);
+	}
+
+	if (datalen == 0)
+		break;
+
+	printf("Data received: %s\n", buf);
+	}
+
+	printf("Connection done.\n");
+
+	close(datasock);
+	return(0);
+
+}
+
+int
 main(void)
 {
-	struct sockaddr_in listaddr, dataaddr;
-	int listsock, datasock;
-	socklen_t addrlen; 
-	ssize_t datalen;
-	size_t len;
+	struct sockaddr_in listaddr;
+	socklen_t addrlen;
+	int listsock;
+	int option;
 	int error;
 
 	listsock = socket(AF_INET, SOCK_STREAM, 0);
@@ -45,6 +88,10 @@ main(void)
 
 	}
 
+	option = 1;
+	error = setsockopt(listsock, SOL_SOCKET, (SO_REUSEPORT | SO_REUSEADDR),
+	    &option, sizeof(option));
+
 	error = bind(listsock, (struct sockaddr *) &listaddr, sizeof(listaddr));
 	if (error == -1) {
 	    perror("bind");
@@ -57,43 +104,19 @@ main(void)
 	    exit(0);
 	}
 
-	for(;;) {
-	    printf("Garbage fd: %d\n", datasock);
-	    printf("Garbage Address: %s:%d\n", inet_ntoa(dataaddr.sin_addr), ntohs(dataaddr.sin_port));
-
-	    printf("Waiting for a connection...\n");
-	    addrlen = sizeof(dataaddr);
-	    datasock = accept(listsock, (struct sockaddr *) &dataaddr, &addrlen);
-	    if (datasock == -1) {
-		perror("accept");
-		exit(0);
-	    }
-
-	    printf("Connection established.\n");
-	    printf("Socket fd: %d\n", datasock);
-	    printf("Remote Address: %s:%d\n", inet_ntoa(dataaddr.sin_addr), ntohs(dataaddr.sin_port));
-
-	    for (;;) {
-		/* Cleanup the buffer on every message. */
-		memset(buf, 0, BUFSIZE);
-
-		len = MSGSIZE;
-		datalen = recv(datasock, buf, len, 0);
-		if (datalen == - 1) {
-		    perror("recv");
-		    break;
-		}
-
-		if (datalen == 0)
-		    break;
-
-		printf("Data received: %s\n", buf);
-	    }
-
-	    printf("Connection done.\n");
-
-	    close(datasock);
+	/* Pre-restore setup. Open one connection, get data, and stay open.  */
+	error = getmessage(listsock);
+	if (error != 0) {
+		printf("Failed with %d", error);
+		exit(1);
 	}
 
-	return 0;
+	/* Post-restore. Recovered from the killed connection, now get data. */
+	error = getmessage(listsock);
+	if (error != 0) {
+		printf("Failed with %d", error);
+		exit(1);
+	}
+
+	return (0);
 }

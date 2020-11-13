@@ -15,12 +15,12 @@
 #define LOCALHOST   ("127.0.0.1")
 #define SOCKET	    (6668)
 #define BACKLOG	    (4)
-#define BUFSIZE	    (1024)
-#define MSGSIZE	    (4)
+#define MSG	    ("message")
+#define BUFSIZE	    (sizeof(MSG))
 
 char buf[BUFSIZE];
 
-int 
+int
 main(void)
 {
 	struct sockaddr_in sockaddr;
@@ -50,24 +50,21 @@ main(void)
 	    exit(0);
 	}
 
-	printf("Waiting for data...\n");
-	for(;;) {
-	    /* Cleanup the buffer on every message. */
-	    memset(buf, 0, BUFSIZE);
-
-	    len = MSGSIZE;
-	    datalen = recv(sock, buf, len, 0);
-	    if (datalen == - 1) {
+	sleep(5);
+	memset(buf, 0, BUFSIZE);
+	datalen = recv(sock, buf, BUFSIZE, 0);
+	if (datalen == -1) {
 		perror("recv");
-		exit(0);
-	    }
-
-	    if (datalen == 0)
-		break;
-
-	    printf("Data received: %s\n", buf);
+		exit(1);
 	}
+
+	if (strncmp(buf, MSG, BUFSIZE)) {
+		printf("Got %s instead of %s\n", buf, MSG);
+		exit(1);
+	}
+
+	printf("Data received: %s\n", buf);
 	printf("Server done.\n");
 
-	return 0;
+	return (0);
 }

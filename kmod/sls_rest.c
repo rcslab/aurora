@@ -161,6 +161,7 @@ slsrest_dofile(struct slsrest_data *restdata, char **bufp, size_t *buflenp)
 	switch (slsfile.type) {
 	case DTYPE_KQUEUE:
 	case DTYPE_VNODE:
+	case DTYPE_FIFO:
 	case DTYPE_SHM:
 		/* Nothing to clean up. */
 		break;
@@ -420,9 +421,9 @@ static void
 slsrest_metadata(void *args)
 {
 	struct slsrest_data *restdata;
+	struct proc *p = curproc;
 	uint64_t daemon;
 	uint64_t rest_stopped;
-	struct proc *p;
 	size_t buflen;
 	int error;
 	char *buf;
@@ -441,28 +442,28 @@ slsrest_metadata(void *args)
 	free(args, M_SLSMM);
 
 	/* We always work on the current process. */
-	p = curproc;
 	PROC_LOCK(p);
+	thread_single(p, SINGLE_BOUNDARY);
+
+	/* Restore the process in a stopped state if needed. */
+	if (rest_stopped == 1)
+		kern_psignal(p, SIGSTOP);
+
+	PROC_UNLOCK(p);
+
+	DEBUG("SLS Restore VMSPACE");
+	error = slsrest_dovmspace(p, &buf, &buflen, restdata);
+	if (error != 0)
+		goto error; 
 
 	/*
 	 * Restore CPU state, file state, and memory
 	 * state, parsing the buffer at each step. 
 	 */
 	DEBUG("SLS Restore Proc");
+	PROC_LOCK(p);
 	error = slsrest_doproc(p, daemon, &buf, &buflen, restdata);
-
-	/*
-	 * Make sure everything is stopped at the boundary, otherwise we might
-	 * get newly created threads trying to execute.
-	 */
-	thread_single(p, SINGLE_BOUNDARY);
 	PROC_UNLOCK(p);
-	if (error != 0)
-		goto error; 
-
-
-	DEBUG("SLS Restore VMSPACE");
-	error = slsrest_dovmspace(p, &buf, &buflen, restdata);
 	if (error != 0)
 		goto error; 
 
@@ -504,10 +505,6 @@ slsrest_metadata(void *args)
 	error = slsrest_ttyfixup(p);
 	if (error != 0)
 		SLS_DBG("tty_fixup failed with %d\n", error);
-
-	/* Allow the process to continue if we want it to. */
-	if (rest_stopped == 1)
-		kern_psignal(p, SIGSTOP);
 
 	thread_single_end(p, SINGLE_BOUNDARY);
 	PROC_UNLOCK(p);
@@ -1126,6 +1123,8 @@ cleanup:
 	/* Clean up the restore data if coming here from an error. */
 	if (restdata != NULL)
 		slsrest_fini(restdata);
+
+	DEBUG1("Restore done with %d", error);
 
 	return (error);
 }

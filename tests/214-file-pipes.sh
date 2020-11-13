@@ -3,7 +3,7 @@
 . aurora
 aursetup
 
-"./mmap/mmap" "$MNT" file > /dev/null 2> /dev/null &
+"./pipe/pipe" > /dev/null 2> /dev/null &
 PID=$!
 sleep 1
 
@@ -15,7 +15,7 @@ then
 fi
 
 sleep 1
-killandwait $PID
+wait $PID
 
 slsrestore
 if [ $? -ne 0 ];
@@ -33,7 +33,6 @@ then
     exit 1
 fi
 
-rm "$MNT/testfile"
 aurteardown
 if [ $? -ne 0 ]; then
     echo "Failed to tear down Aurora"

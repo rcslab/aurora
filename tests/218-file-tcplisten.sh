@@ -1,9 +1,10 @@
+#/bin/sh
 #!/bin/sh
 
 . aurora
 aursetup
 
-"./mmap/mmap" "$MNT" file > /dev/null 2> /dev/null &
+"./udplisten/udplisten" > /dev/null 2> /dev/null &
 PID=$!
 sleep 1
 
@@ -14,8 +15,11 @@ then
     exit 1
 fi
 
-sleep 1
+# Write out a message, keep the connected socket open.
+printf "message\0" | nc -u localhost 6668 &
+
 killandwait $PID
+sleep 10
 
 slsrestore
 if [ $? -ne 0 ];
@@ -23,17 +27,20 @@ then
     echo "Restore failed with $?"
     exit 1
 fi
+PID=$!
 
 sleep 1
+printf "message\0" | nc -u -N localhost 6668 &
+sleep 1
+killandwait $!
 
-wait $!
+wait $PID
 if [ $? -ne 0 ];
 then
     echo "Process exited with $?"
     exit 1
 fi
 
-rm "$MNT/testfile"
 aurteardown
 if [ $? -ne 0 ]; then
     echo "Failed to tear down Aurora"

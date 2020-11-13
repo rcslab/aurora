@@ -493,8 +493,6 @@ slsfs_checkpoint(struct mount *mp, int closing)
 	int error;
 
 again:
-	DEBUG("Checkpointing vnodes");
-
 	/* Go throught the list of vnodes attached to the filesystem. */
 	MNT_VNODE_FOREACH_ACTIVE(vp, mp, mvp) {
 		/* If we can't get a reference, the vnode is probably dead. */
@@ -643,8 +641,6 @@ again:
 	} else {
 		slos.slos_sb->sb_attempted_checkpoints++;
 	}
-	DEBUG("Checkpoint done");
-
 }
 
 uint64_t checkpointtime = 100;

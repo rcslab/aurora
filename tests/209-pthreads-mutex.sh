@@ -3,7 +3,7 @@
 . aurora
 aursetup
 
-"./mmap/mmap" "$MNT" file > /dev/null 2> /dev/null &
+"./multithread/multithread" "$MNT" file > /dev/null 2> /dev/null &
 PID=$!
 sleep 1
 
@@ -25,15 +25,16 @@ then
 fi
 
 sleep 1
+pkill multithread
+killandwait $!
+sleep 2
 
-wait $!
 if [ $? -ne 0 ];
 then
     echo "Process exited with $?"
     exit 1
 fi
 
-rm "$MNT/testfile"
 aurteardown
 if [ $? -ne 0 ]; then
     echo "Failed to tear down Aurora"

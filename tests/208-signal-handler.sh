@@ -3,37 +3,38 @@
 . aurora
 aursetup
 
-"./mmap/mmap" "$MNT" file > /dev/null 2> /dev/null &
+"./signal/signal" "$MNT" file > /dev/null 2> /dev/null &
 PID=$!
 sleep 1
 
 slscheckpoint $PID
 if [ $? -ne 0 ];
 then
-    echo "Checkpoint failed with $?"
+    echo "Checkpoint failed"
     exit 1
 fi
 
 sleep 1
+kill -SIGUSR1 $PID
 killandwait $PID
 
 slsrestore
 if [ $? -ne 0 ];
 then
-    echo "Restore failed with $?"
+    echo "Restore failed"
     exit 1
 fi
 
 sleep 1
+pkill -SIGUSR1 signal
+wait `pidof signal`
 
-wait $!
 if [ $? -ne 0 ];
 then
-    echo "Process exited with $?"
+    echo "Process exited with nonzero"
     exit 1
 fi
 
-rm "$MNT/testfile"
 aurteardown
 if [ $? -ne 0 ]; then
     echo "Failed to tear down Aurora"

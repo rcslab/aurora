@@ -15,12 +15,13 @@ tests/compute/compute
 tests/fd/fd
 tests/fifo/fifo
 tests/fork/fork
+tests/forkwait/forkwait
 tests/llist/llist
 tests/main/main
 tests/memory/memory
 tests/mmap/mmap
 tests/multithread/multithread
-tests/pipes/pipes
+tests/pipe/pipe
 tests/posixshm/posixshm
 tests/posix/posix
 tests/print/print

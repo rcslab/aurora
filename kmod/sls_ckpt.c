@@ -142,16 +142,17 @@ slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_dat
 
 	sb = sbuf_new_auto();
 
-	error = slsckpt_proc(p, sb, procset, sckpt_data);
-	if (error != 0) {
-		SLS_DBG("Error: slsckpt_proc failed with error code %d\n", error);
-		goto out;
-	}
-	SDT_PROBE0(sls, , , proc);
 
 	error = slsckpt_vmspace(p, sb, sckpt_data);
 	if (error != 0) {
 		SLS_DBG("Error: slsckpt_vmspace failed with error code %d\n", error);
+		goto out;
+	}
+	SDT_PROBE0(sls, , , proc);
+
+	error = slsckpt_proc(p, sb, procset, sckpt_data);
+	if (error != 0) {
+		SLS_DBG("Error: slsckpt_proc failed with error code %d\n", error);
 		goto out;
 	}
 

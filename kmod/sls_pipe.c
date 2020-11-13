@@ -93,7 +93,7 @@ slsckpt_pipe(struct proc *p, struct file *fp, struct sbuf *sb)
 
 
 int
-slsrest_pipe(struct slskv_table *filetable, struct slspipe *ppinfo, int *fdp)
+slsrest_pipe(struct slskv_table *filetable, int flags, struct slspipe *ppinfo, int *fdp)
 {
 	struct file *fp, *peerfp;
 	int localfd, peerfd;
@@ -102,7 +102,7 @@ slsrest_pipe(struct slskv_table *filetable, struct slspipe *ppinfo, int *fdp)
 	int error;
 
 	/* Create both ends of the pipe. */
-	error = kern_pipe(curthread, filedes, O_NONBLOCK, NULL, NULL);
+	error = kern_pipe(curthread, filedes, flags, NULL, NULL);
 	if (error != 0)
 		return error;
 

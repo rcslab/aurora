@@ -3,7 +3,7 @@
 . aurora
 aursetup
 
-"./mmap/mmap" "$MNT" file > /dev/null 2> /dev/null &
+"./fd/fd" "$MNT" > /dev/null 2> /dev/null &
 PID=$!
 sleep 1
 
@@ -24,8 +24,7 @@ then
     exit 1
 fi
 
-sleep 1
-
+sleep 2
 wait $!
 if [ $? -ne 0 ];
 then

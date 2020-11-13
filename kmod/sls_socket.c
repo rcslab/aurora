@@ -55,11 +55,29 @@
 #include "sls_file.h"
 #include "sls_internal.h"
 
-/* 
+#include "debug.h"
+
+/*
  * XXX Sendfile doesn't work, because there might be pageins in progress that
  * cannot be tracked across restarts. We could fix this by monitoring pageins
  * in progress from SLSFS, and restarting them together with the checkpoint.
  */
+
+/*
+ * XXX Fix restoring the socket buffers for all kinds of sockets. While we don't
+ * restore TCP connection sockets, and we can drop UDP packets since UDP is not
+ * reliable, Unix sockets assume that no data between sockets is lost.
+ */
+
+/*
+ * These socket flags are just set and unset in sosetopt, without any side effects.
+ * They are thus easily restorable.
+ */
+#define SLS_SO_RESTORABLE (SO_DEBUG | SO_KEEPALIVE | SO_DONTROUTE | SO_USELOOPBACK | \
+		SO_BROADCAST | SO_REUSEADDR | SO_REUSEPORT | SO_REUSEPORT_LB | \
+		SO_OOBINLINE | SO_TIMESTAMP | SO_BINTIME | SO_NOSIGPIPE | SO_NO_DDP | \
+		SO_NO_OFFLOAD)
+
 
 #if 0
 static int
@@ -279,7 +297,9 @@ slsckpt_socket(struct proc *p, struct socket *so,
 	 * If this isn't a listening socket, mark it as invalid, because we
 	 * can't restore it yet.
 	 */
-	if (!SOLISTENING(so))
+	if ((info.family == AF_INET) &&
+	    (info.type == SOCK_STREAM) &&
+	    !SOLISTENING(so))
 		info.family = AF_UNSPEC;
 
 	/* Write it out to the SLS record. */
@@ -415,17 +435,16 @@ int
 slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
     struct slssock *info, struct slsfile *finfo, int *fdp)
 {
+	struct thread *td = curthread;
 	struct sockaddr_un *unaddr;
 	struct sockaddr_in *inaddr;
 	struct socket *so, *sopeer;
 	struct file *fp, *peerfp;
 	struct unpcb *unpcb, *unpeerpcb;
 	int fd, peerfd = -1;
-	struct thread *td;
+	int option = 1;
 	int family;
 	int error;
-
-	td = curthread;
 
 	/* We create an inet dummy sockets if we can't properly restore. */
 	family = (info->family == AF_UNSPEC)? AF_INET : info->family;
@@ -450,9 +469,15 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 		so->so_options = info->options & (~SO_ACCEPTCONN);
 	}
 
-	/*
-	 * XXX Set any other options we can.
-	 */
+	/* Set any options we can. */
+	if (info->options & SLS_SO_RESTORABLE) {
+		error = kern_setsockopt(td, fd, SOL_SOCKET, info->options &
+		    SLS_SO_RESTORABLE, &option, UIO_SYSSPACE, sizeof(option));
+		if (error != 0)
+			goto error;
+	}
+
+	DEBUG1("Restoring socket of family %d", info->family);
 	switch (info->family) {
 	/* A socket we can't restore. Mark it as closed. */
 	case AF_UNSPEC:
@@ -543,6 +568,7 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 
 	/* Check if we need to listen for incoming connections. */
 	if ((info->options & SO_ACCEPTCONN) != 0) {
+		DEBUG("Setting the socket to listen");
 		error = kern_listen(td, fd, info->backlog);
 		if (error != 0)
 			goto error;

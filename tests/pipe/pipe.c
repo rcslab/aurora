@@ -7,7 +7,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
-#define PATH	("testfifo")
 #define MSG	("Message")
 char buf[sizeof(MSG)];
 
@@ -15,29 +14,12 @@ int
 main(int argc, char *argv[])
 {
 	int error;
+	int pipes[2];
 	pid_t pid;
-	int fd;
 
-	if (argc != 2) {
-		printf("Usage:./fifo basedir\n");
-		exit(1);
-	}
-
-	error = chdir(argv[1]);
+	error = pipe(pipes);
 	if (error < 0) {
-		perror("chdir");
-		exit(1);
-	}
-
-	error = mkfifo(PATH, O_RDWR);
-	if (error < 0 && errno != EEXIST) {
-	    perror("mkfifo");
-	    exit(1);
-	}
-
-	fd = open(PATH, O_RDWR);
-	if (fd < 0) {
-	    perror("open");
+	    perror("pipe");
 	    exit(1);
 	}
 
@@ -50,7 +32,7 @@ main(int argc, char *argv[])
 	if (pid == 0) {
 		/* The child writes. */
 		sleep(120);
-		write(fd, MSG, sizeof(MSG));
+		write(pipes[1], MSG, sizeof(MSG));
 		exit(0);
 	}
 
@@ -59,7 +41,7 @@ main(int argc, char *argv[])
 	 * try to read after the restore.
 	 */
 
-	error = read(fd, buf, sizeof(MSG));
+	error = read(pipes[0], buf, sizeof(MSG));
 	if (error < 0) {
 		perror("read");
 		exit(1);

@@ -1,13 +1,18 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include <signal.h>
 #include <machine/sysarch.h>
 
-#define CYCLES (1000 * 1000 * 1000)
+#define SIGMSG ("SIGUSR1 handler called successfully.\n")
+
 void handle_sigusr(int signal)
 {
-	printf("SIGUSR1 handler called successfully.\n");
+	char *msg = SIGMSG;
+
+	write(STDOUT_FILENO, SIGMSG, sizeof(SIGMSG));
+	exit(0);
 }
 
 int main()
@@ -21,22 +26,17 @@ int main()
 
 	sigfillset(&sa.sa_mask);
 
-
 	if (sigaction(SIGUSR1, &sa, NULL) < 0) {
 		printf("Setting up SIGUSR failed.\n");
-
+		exit (1);
 	}
 
+	sleep(5);
 
-	for (;;) {
-		for (i = 0; i < CYCLES; i++)
-			;
+	printf("Waiting for the signal...\n");
 
-		printf("Program still here.\n");
-		amd64_get_fsbase(&addr);
-		printf("Userspace pointer: %p\n", addr);
-	}
+	sleep(5);
+	printf("Signal never arrived\n");
 
-	return 0;
-
+	exit(1);
 }

@@ -83,7 +83,7 @@ sls_thread_create(struct thread *td, void *thunk)
 
 	PROC_LOCK(td->td_proc);
 
-	/* 
+	/*
 	 * We need to reset the threads' system registers as if
 	 * we were calling execve(). For that, we need to call
 	 * exec_setregs(), used during the syscall; the signature
@@ -134,9 +134,10 @@ sls_thread_create(struct thread *td, void *thunk)
 
 done:
 
+	thread_suspend_check(1);
 	PROC_UNLOCK(td->td_proc);
 
-	return error;
+	return (error);
 }
 
 int
@@ -150,7 +151,7 @@ slsrest_thread(struct proc *p, struct slsthread *slsthread)
 	error = thread_create(curthread, NULL, sls_thread_create, (void *) slsthread);
 	PROC_LOCK(p);
 
-	return error;
+	return (error);
 }
 
 /*
@@ -492,7 +493,6 @@ slsrest_proc(struct proc *p, uint64_t daemon, struct slsproc *slsproc,
 		error = slskv_find(restdata->proctable, slsproc->pptr, (uintptr_t *) &pptr); 
 		KASSERT(error == 0, ("restored pptr not found"));
 
-		printf("PPTR switcheroo\n");
 		sx_xlock(&proctree_lock);
 		proc_reparent(p, pptr, 1);
 		sx_xunlock(&proctree_lock);
