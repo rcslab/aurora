@@ -27,8 +27,15 @@ fi
 
 
 sleep 1
-killandwait $!
 pkill compute
+wait $!
+EXIT=$?
+# 15 is exiting with SIGTERM
+if [ $EXIT -ne 0 -a $EXIT -ne 15 ];
+then
+    echo "Process exited with $EXIT"
+    exit 1
+fi
 
 aurteardown
 if [ $? -ne 0 ]; then

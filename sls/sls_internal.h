@@ -107,16 +107,12 @@ struct sls_record *sls_getrecord(struct sbuf *sb, uint64_t slsid, uint64_t type)
 struct sls_checkpointd_args {
     struct slspart *slsp;
     bool recurse;
-    bool sync;
-    struct mtx synch_mtx;
-    struct cv synch_cv;
 };
 
 struct sls_restored_args {
-    uint64_t oid;
+    struct slspart *slsp;
     uint64_t daemon;
     uint64_t rest_stopped;
-    int target;
 };
 
 #define TONANO(tv) ((1000UL * 1000 * 1000 * (tv).tv_sec) + (tv).tv_nsec)
@@ -144,10 +140,7 @@ extern uint64_t sls_metadata_sent;
 extern uint64_t sls_metadata_received;
 extern uint64_t sls_data_sent;
 extern uint64_t sls_data_received;
-extern unsigned int sls_use_nulldev;
-extern uint64_t sls_iochain_size;
-extern struct file *sls_blackholefp;
-extern int sls_sync;
+extern int sls_vfs_sync;
 extern int sls_drop_io;
 extern uint64_t sls_pages_grabbed;
 extern uint64_t sls_io_initiated;
@@ -176,7 +169,7 @@ static inline int
 sls_startop(bool allow_concurrent)
 {
 	SLS_LOCK();
-	if ((SLS_EXITING() != 0) || 
+	if ((SLS_EXITING() != 0) ||
 	    (!allow_concurrent && (slsm.slsm_inprog > 0))) {
 	    SLS_UNLOCK();
 	    return (EBUSY);

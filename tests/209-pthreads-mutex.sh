@@ -26,12 +26,12 @@ fi
 
 sleep 1
 pkill multithread
-killandwait $!
-sleep 2
+wait $!
 
-if [ $? -ne 0 ];
+# 15 is the return code for SIGTERM
+if [ $? -ne 0 -a $? -ne 15 ];
 then
-    echo "Process exited with $?"
+    echo "Process exited with nonzero"
     exit 1
 fi
 

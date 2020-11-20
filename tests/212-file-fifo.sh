@@ -37,7 +37,7 @@ wait $!
 if [ $? -ne 0 ];
 then
     rm $FIFO
-    echo "Process exited with $?"
+    echo "Process exited with nonzero"
     exit 1
 fi
 

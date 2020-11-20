@@ -55,7 +55,7 @@ run_test()
     else
 	print_fail $NAME
 	ktrdump >> $KTRLOG
-	cleanup_testbench
+	exit 0
     fi
 }
 

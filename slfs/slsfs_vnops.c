@@ -645,7 +645,9 @@ slsfs_read(struct vop_read_args *args)
 	}
 
 	resid = omin(uio->uio_resid, (filesize - uio->uio_offset));
+#ifdef VERBOSE
 	DEBUG3("Reading filesize %lu - %lu, %lu", SLSVP(vp)->sn_pid, filesize, uio->uio_offset);
+#endif
 	while(resid) {
 		if (!checksum_enabled) {
 			gbflag |= GB_UNMAPPED;
@@ -1244,11 +1246,13 @@ slsfs_checkpath(struct vnode *src, struct vnode *target, struct ucred *cred)
 {
 	int error = 0;
 	struct dirent dir;
+
 	DEBUG("Checking path");
 	if (SLSVP(target)->sn_pid == SLSVP(src)->sn_pid) {
 		error = EEXIST;
 		goto out;
 	}
+
 	if (SLSVP(target)->sn_pid == SLOS_ROOT_INODE) {
 		goto out;
 	}

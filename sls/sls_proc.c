@@ -145,11 +145,9 @@ slsrest_thread(struct proc *p, struct slsthread *slsthread)
 {
 	int error;
 
-	PROC_UNLOCK(p);
 	DEBUG1("Trying to restore thread with tid %lu", slsthread->tid);
-	/* XXX Temporary work around kernel regression. */
+	/* XXX Pass the thread ID we wish the restored thread to have. */
 	error = thread_create(curthread, NULL, sls_thread_create, (void *) slsthread);
-	PROC_LOCK(p);
 
 	return (error);
 }
@@ -224,7 +222,7 @@ slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset,
 		/* If we're the leader, we're already locked. */
 		if (pleader == p)
 			_PRELE(p);
-		else 
+		else
 			PRELE(pleader);
 	}
 
@@ -266,7 +264,6 @@ slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset,
 
 /* XXX Find a better way to include system call vectors. */
 extern struct sysentvec elf64_freebsd_sysvec;
-//struct sysentvec elf64_aurora_sysvec;
 /* 
  * XXX Create our own custom syscall vector for future use.
  * It can be used, for example, for interposing between 
@@ -277,7 +274,7 @@ extern struct sysentvec elf64_freebsd_sysvec;
  * Create a new process group and session, properly locking while doing it.
  */
 static int
-sls_enterpgrp(struct proc *p, struct pgrp *pgrp, struct session *sess)
+slsrest_enterpgrp(struct proc *p, struct pgrp *pgrp, struct session *sess)
 {
 	int error;
 
@@ -295,124 +292,190 @@ sls_enterpgrp(struct proc *p, struct pgrp *pgrp, struct session *sess)
 	return (error);
 }
 
-/*
- * Set the process state, including process tree relations and
- * like PIDs. This function takes and leaves the process locked.
- */
-int
-slsrest_proc(struct proc *p, uint64_t daemon, struct slsproc *slsproc,
-    struct slsrest_data *restdata)
+static int
+slsrest_proc_reparent(struct slsproc *slsproc, struct slsrest_data *restdata, int daemon)
 {
-	struct sigacts *newsigacts, *oldsigacts;
-	struct session *sess = NULL;
-	struct tty *oldtty, *newtty;
-	struct pgrp *pgrp = NULL;
-	struct vnode *textvp;
+	struct proc *p = curproc;
 	struct proc *pptr;
 	int error;
 
-	/* Check if we do not have to change sessions/pgroups. */
-	if (slsproc->sid == 0)
-		sess = p->p_session;
-	if (slsproc->pgrpwait == 0)
-		pgrp = p->p_pgrp;
+	sx_xlock(&proctree_lock);
+	if (slsproc->pptr != slsproc->slsid) {
+		DEBUG1("Reparenting process %d", slsproc->pid);
+		/* If the parent is in the SLS, it must have been restored. */
+		error = slskv_find(restdata->proctable, slsproc->pptr, (uintptr_t *) &pptr); 
+		KASSERT(error == 0, ("restored pptr not found"));
 
-	/* 
-	 * Setting up process groups and sessions needs to be done carefully,
-	 * because once a process is a group/session leader it cannot give
-	 * up that role. Therefore we have to create process groups/sessions
-	 * only for the leaders, and have the rest of the processes join them.
-	 *
-	 * This constraint unfortunately serializes the restore procedure, 
-	 * since we need a barrier between pgrp/session creation and join.
+		proc_reparent(p, pptr, 1);
+	} else if (daemon != 0) {
+		proc_reparent(p, p->p_reaper, true);
+	}
+	sx_xunlock(&proctree_lock);
+	DEBUG2("Parent for %d is %d", slsproc->pid, p->p_pptr->p_pid);
+
+	return (0);
+}
+
+static int
+slsrest_proc_signals(struct slsproc *slsproc, struct slsrest_data *restdata)
+{
+	struct sigacts *newsigacts, *oldsigacts;
+	struct proc *p = curproc;
+
+	/* We bcopy the exact way it's done in sigacts_copy(). */
+	newsigacts = sigacts_alloc();
+	bcopy(&slsproc->sigacts, newsigacts, offsetof(struct sigacts, ps_refcnt));
+
+	oldsigacts = p->p_sigacts;
+	p->p_sigacts = newsigacts;
+
+	sigacts_free(oldsigacts);
+
+	return (0);
+}
+
+
+static int
+slsrest_proc_textvp(struct slsproc *slsproc, struct slsrest_data *restdata)
+{
+	struct proc *p = curproc;
+	struct vnode *textvp;
+	int error;
+
+	/* Restore the original executable pointer. */
+	error = slskv_find(restdata->vnodetable, slsproc->textvp, (uintptr_t *) &textvp);
+	if (error != 0)
+		return (error);
+
+	/* Restore the executable name and path. */
+	memcpy(p->p_comm, slsproc->name, MAXCOMLEN + 1);
+	vref(textvp);
+
+	vrele(p->p_textvp);
+	p->p_textvp = textvp;
+
+	return (0);
+}
+
+static int
+slsrest_session(struct slsproc *slsproc, struct slsrest_data *restdata)
+{
+	struct proc *p = curproc;
+	struct pgrp *pgrp = NULL;
+	struct session *sess;
+	int error;
+
+	DEBUG1("Restoring session leader %ld", slsproc->pid);
+
+	pgrp = malloc(sizeof(*pgrp), M_PGRP, M_WAITOK | M_ZERO);
+	if (pgrp == NULL)
+		return (ENOMEM);
+
+	sess = malloc(sizeof(*sess), M_SESSION, M_WAITOK | M_ZERO);
+	if (sess == NULL) {
+		free(pgrp, M_PGRP);
+		return (ENOMEM);
+	}
+
+	/* Create the new session. */
+	error = slsrest_enterpgrp(p, pgrp, sess);
+	if (error != 0) {
+		free(pgrp, M_PGRP);
+		free(sess, M_SESSION);
+		return (error);
+	}
+
+	/*
+	 * After this point the group and session are in the system, we cannot
+	 * clean them up in case of an error.
 	 */
 
-	/* 
-	 * We can't change the process group of a session leader. 
-	 * This shouldn't be a problem, since we are a child of the
-	 * original process which called us.
+	/* Session leaders have to be group leaders. */
+	MPASS(slsproc->sid == slsproc->pgid);
+
+	/*
+	 * Add the new pgrp and session to our tables. We take the lock to
+	 * serialize against non-leaders checking the hashtables.
 	 */
-	KASSERT(!SESS_LEADER(p), ("process is a session leader"));
-	/* Check if we were the original session leader. */
-	if (slsproc->pid == slsproc->sid) {
+	mtx_lock(&restdata->procmtx);
+	error = slskv_add(restdata->sesstable, slsproc->sid, (uintptr_t) sess);
+	if (error != 0) {
+		mtx_unlock(&restdata->procmtx);
+		return (error);
+	}
+
+	error = slskv_add(restdata->pgidtable, slsproc->pgid, (uintptr_t) pgrp);
+	if (error != 0) {
+		mtx_unlock(&restdata->procmtx);
+		return (error);
+	}
+
+	/* Wake up any processes waiting to join the pgrp/session. */
+	mtx_unlock(&restdata->procmtx);
+
+	return (0);
+}
+
+static int
+slsrest_pgrp(struct slsproc *slsproc, struct slsrest_data *restdata, int daemon)
+{
+	struct proc *p = curproc;
+	struct pgrp *pgrp;
+	int error;
+
+	DEBUG1("Restoring group leader %ld", slsproc->pid);
+	if (daemon != 0) {
+		DEBUG("Daemon mode, creating new process group");
+
+		/* Otherwise we just create a new pgrp if we were the group leader. */
 		pgrp = malloc(sizeof(*pgrp), M_PGRP, M_WAITOK | M_ZERO);
 		if (pgrp == NULL)
-			goto alloc_error;
+			return (ENOMEM);
 
-		sess = malloc(sizeof(*sess), M_SESSION, M_WAITOK | M_ZERO);
-		if (sess == NULL)
-			goto alloc_error;
 
-		/* Create the new session. */
-		error = sls_enterpgrp(p, pgrp, sess);
+		/* Create just the pgrp. */
+		error = slsrest_enterpgrp(p, pgrp, NULL);
 		if (error != 0) {
 			free(pgrp, M_PGRP);
-			free(sess, M_SESSION);
 			return (error);
 		}
 
-		MPASS(slsproc->sid == slsproc->pgid);
+	} else {
+		DEBUG("Not in daemon mode, staying in the caller's pgroup");
 
-		/* 
-		 * Add the new pgrp and session to our tables. We take the lock to 
-		 * serialize against non-leaders checking the hashtables. 
-		 */
-		mtx_lock(&restdata->procmtx);
-		error = slskv_add(restdata->sesstable, slsproc->sid, (uintptr_t) sess);
-		if (error != 0) {
-			mtx_unlock(&restdata->procmtx);
-			return (error);
-		}
-
-		error = slskv_add(restdata->pgidtable, slsproc->pgid, (uintptr_t) pgrp);
-		if (error != 0) {
-			mtx_unlock(&restdata->procmtx);
-			return (error);
-		}
-
-		/* Wake up any processes waiting to join the pgrp/session. */
-		mtx_unlock(&restdata->procmtx);
-
-	} else if (slsproc->pid == slsproc->pgid) {
-		if (daemon != 0) {
-
-			/* Otherwise we just create a new pgrp if we were the group leader. */
-			pgrp = malloc(sizeof(*pgrp), M_PGRP, M_WAITOK | M_ZERO);
-			if (pgrp == NULL)
-				goto alloc_error;
-
-
-			/* Create just the pgrp. */
-			error = sls_enterpgrp(p, pgrp, NULL);
-			if (error != 0) {
-				free(pgrp, M_PGRP);
-				return (error);
-			}
-
-		} else {
-			/* 
-			 * We want nondaemon processes in the SLS to be able to receive SIGTERM 
-			 * signals for sls_restore(). The code above should be used for daemons,
-			 * but for the rest it essentially detaches the process from the terminal. 
-			 */
-			slsproc->pgrpwait = 0;
-			pgrp = p->p_pgrp;
-		}
-
-		mtx_lock(&restdata->procmtx);
-		error = slskv_add(restdata->pgidtable, slsproc->pgid, (uintptr_t) pgrp);
-		mtx_unlock(&restdata->procmtx);
-		if (error != 0)
-			return (error);
-
+		/*
+		* We want nondaemon processes in the SLS to be able to receive
+		* SIGTERM signals for sls_restore(). The code above should be
+		* used for daemons, but for the rest it essentially detaches the
+		* process from the terminal.
+		*/
+		slsproc->pgrpwait = 0;
+		pgrp = p->p_pgrp;
 	}
 
 	/* Wake up any processes waiting to join the pgrp. */
-	cv_broadcast(&restdata->proccv);
+	mtx_lock(&restdata->procmtx);
+	error = slskv_add(restdata->pgidtable, slsproc->pgid, (uintptr_t) pgrp);
+	mtx_unlock(&restdata->procmtx);
+	if (error != 0)
+		return (error);
 
-	/* Do the thing, but have it be mutually exclusive w/ pgrp creation.  */
+	return (0);
+}
+
+/*
+ * Wait until the sessions and groups of the process are created.
+ */
+static void
+slsrest_procwait(struct slsproc *slsproc, struct slsrest_data *restdata)
+{
+	struct sesssion *sess;
+	struct pgrp *pgrp;
+	struct proc *pptr;
+
 	mtx_lock(&restdata->procmtx);
 	for (;;) {
+		DEBUG("Waiting on all process groups and sessions");
 		/* Check if the pgrp we need is available. */
 		if ((slsproc->pid != slsproc->pgid) &&
 		    (slsproc->pgrpwait != 0) &&
@@ -439,90 +502,157 @@ slsrest_proc(struct proc *p, uint64_t daemon, struct slsproc *slsproc,
 		break;
 	}
 	mtx_unlock(&restdata->procmtx);
+}
+
+/*
+ * Attach the process to a newly restored process group.
+ */
+static int
+slsrest_attach_pgrp(int pgid, struct slsrest_data *restdata)
+{
+	struct pgrp *pgrp;
+	int error;
+
+	error = slskv_find(restdata->pgidtable, pgid, (uint64_t *) &pgrp);
+	KASSERT(error == 0, ("restored pgrp not found"));
+
+	/*
+	 * We might already be in the right pgrp, if that is the group
+	 * of the parent process that called sls_restore().
+	 */
+
+	/*
+	 * XXX Actually implement Enter the session of the pgroup, too. This
+	 * whole block was complex and buggy, so it has been removed for now.
+	 */
+
+	return (0);
+}
+
+/*
+ * Attach a group leader to a to a newly restored session.
+ */
+static int
+slsrest_attach_sess(int sid, struct slsrest_data *restdata)
+{
+	struct proc *p = curproc;
+	struct pgrp *pgrp = p->p_pgrp;
+	struct tty *oldtty, *newtty;
+	struct session *sess;
+	int error;
+
+	/* We are the pgrp leader, but not the session leader. */
+	error = slskv_find(restdata->sesstable, sid, (uintptr_t *) &sess);
+	KASSERT(error == 0, ("restored session not found"));
+
+	/* Associate the pgrp with the session. */
+	sx_xlock(&proctree_lock);
+
+	/* If we are in the foreground of our tty, make sure we leave it. */
+	oldtty = pgrp->pg_session->s_ttyp;
+	newtty = sess->s_ttyp;
+	if (oldtty != newtty) {
+		tty_lock(oldtty);
+		tty_rel_pgrp(oldtty, pgrp);
+	}
+
+	/*
+	 * Associate with the new session and dissociate with the old one.
+	 * These operations need to happen in that order, because if the old
+	 * and the new sessions coincide, and the old session is only referred
+	 * to by us, dropping our reference causes it to be destroyed.
+	 */
+	sess_hold(sess);
+	sess_release(pgrp->pg_session);
+	pgrp->pg_session = sess;
+
+	sx_xunlock(&proctree_lock);
+
+	return (0);
+}
+
+/*
+ * Set the process state, including process tree relations and
+ * like PIDs. This function takes and leaves the process locked.
+ */
+int
+slsrest_proc(struct proc *p, uint64_t daemon, struct slsproc *slsproc,
+    struct slsrest_data *restdata)
+{
+	int error;
+
+	PROC_LOCK(p);
+	/*
+	 * Setting up process groups and sessions needs to be done carefully,
+	 * because once a process is a group/session leader it cannot give
+	 * up that role. Therefore we have to create process groups/sessions
+	 * only for the leaders, and have the rest of the processes join them.
+	 *
+	 * This constraint unfortunately serializes the restore procedure,
+	 * since we need a barrier between pgrp/session creation and join.
+	 */
+
+	/*
+	 * We can't change the process group of a session leader.
+	 * This shouldn't be a problem, since we are a child of the
+	 * original process which called us.
+	 */
+	KASSERT(!SESS_LEADER(p), ("process is a session leader"));
+	/* Check if we were the original session leader. */
+	if (slsproc->pid == slsproc->sid) {
+		error = slsrest_session(slsproc, restdata);
+		if (error != 0)
+			goto out;
+	} else if (slsproc->pid == slsproc->pgid) {
+		error = slsrest_pgrp(slsproc, restdata, daemon);
+		if (error != 0)
+			goto out;
+	}
+
+	/* Wake up any processes waiting for a session, group, or parent. */
+	mtx_lock(&restdata->procmtx);
+	cv_broadcast(&restdata->proccv);
+	mtx_unlock(&restdata->procmtx);
+
+	/*
+	 * Wait for the session, group, and parent of the process. We can sleep,
+	 * so release the process lock.
+	 */
+	PROC_UNLOCK(p);
+	slsrest_procwait(slsproc, restdata);
+	PROC_LOCK(p);
 
 	/* XXX Leaderless pgroups are not being migrated to a new pgroup. */
 	/* If we need to enter a pgroup, look it up in the tables and do it here. */
 	if ((slsproc->pid != slsproc->pgid) && (slsproc->pgrpwait != 0)) {
-		error = slskv_find(restdata->pgidtable, slsproc->pgid, (uint64_t *) &pgrp);
-		KASSERT(error == 0, ("restored pgrp not found"));
-		/*
-		 * We might already be in the right pgrp, if that is the group
-		 * of the parent process that called sls_restore().
-		 */
-		/*
-		 * XXX Enter the session of the pgroup, too. This whole block is
-		 * complex and needs refactoring so we are sure we cover all
-		 * cases.
-		 */
-
-	} else if (!SESS_LEADER(p) && (slsproc->sid != 0)) {
-		/* We are the pgrp leader, but not the session leader. */
-		error = slskv_find(restdata->sesstable, slsproc->sid, (uintptr_t *) &sess);
-		KASSERT(error == 0, ("restored session not found"));
-
-		/* Associate the pgrp with the session. */
-		sx_xlock(&proctree_lock);
-
-		/* If we are in the foreground of our tty, make sure we leave it. */
-		oldtty = pgrp->pg_session->s_ttyp;
-		newtty = sess->s_ttyp;
-		if (oldtty != newtty) {
-			tty_lock(oldtty);
-			tty_rel_pgrp(oldtty, pgrp);
-		}
-
-		/* 
-		 * Associate with the new session and dissociate with the old one. 
-		 * These operations need to happen in that order, because if the old
-		 * and the new sessions coincide, and the old session is only referred
-		 * to by us, dropping our reference causes it to be destroyed.
-		 */
-		sess_hold(sess);
-		sess_release(pgrp->pg_session);
-		pgrp->pg_session = sess;
-
-		sx_xunlock(&proctree_lock);
+		error = slsrest_attach_pgrp(slsproc->pgid, restdata);
+		if (error != 0)
+			goto out;
+	} else if ((slsproc->pid != slsproc->sid) &&
+	    (slsproc->pid == slsproc->pgid) &&
+	    (slsproc->sid != 0)) {
+		error = slsrest_attach_sess(slsproc->sid, restdata);
+		if (error != 0)
+			goto out;
 	}
 
-	/* 
+	/*
 	 * Reparent the process to the original parent, if it exists.
 	 * Otherwise the parent remains the original sls_restore process.
 	 */
-	if (slsproc->pptr != slsproc->slsid) {
-		/* If the parent is in the SLS, it must have been restored. */
-		error = slskv_find(restdata->proctable, slsproc->pptr, (uintptr_t *) &pptr); 
-		KASSERT(error == 0, ("restored pptr not found"));
-
-		sx_xlock(&proctree_lock);
-		proc_reparent(p, pptr, 1);
-		sx_xunlock(&proctree_lock);
-	}
-
-	/* We bcopy the exact way it's done in sigacts_copy(). */
-	newsigacts = sigacts_alloc();
-	bcopy(&slsproc->sigacts, newsigacts, offsetof(struct sigacts, ps_refcnt));
-
-	oldsigacts = p->p_sigacts;
-	p->p_sigacts = newsigacts;
-	/* Restore the standard syscall vector.*/
-	/* XXX Allow for arbitrary syscall vectors. */
-
-	p->p_sysent = &elf64_freebsd_sysvec;
-	sigacts_free(oldsigacts);
-
-	/* Restore the original executable pointer. */
-	error = slskv_find(restdata->vnodetable, slsproc->textvp, (uintptr_t *) &textvp);
+	error = slsrest_proc_reparent(slsproc, restdata, daemon);
 	if (error != 0)
-		return (error);
+		goto out;
 
-	/* Restore the executable name and path. */
-	memcpy(p->p_comm, slsproc->name, MAXCOMLEN + 1);
-	vref(textvp);
-	vrele(p->p_textvp);
-	p->p_textvp = textvp;
+	error = slsrest_proc_signals(slsproc, restdata);
+	if (error != 0)
+		goto out;
+
+	error = slsrest_proc_textvp(slsproc, restdata);
+	if (error != 0)
+		goto out;
 
 	/* Restore the standard syscall vector.*/
-
 	/* 
 	 * XXX Allow for arbitrary syscall vectors.
 	 * The correct way would be to find out what kind of vector
@@ -530,12 +660,12 @@ slsrest_proc(struct proc *p, uint64_t daemon, struct slsproc *slsproc,
 	 * process, then doing the opposite at restore time (finding
 	 * the correct vector by using the value as an index in a table).
 	 */
+	p->p_sysent = &elf64_freebsd_sysvec;
 
-	return (0);
+out:
+	PROC_UNLOCK(p);
 
-alloc_error:
-	free(pgrp, M_PGRP);
-	free(sess, M_SESSION);
-	return (ENOMEM);
+	return (error);
+
 }
 

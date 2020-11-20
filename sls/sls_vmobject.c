@@ -54,7 +54,7 @@ slsckpt_vmobject(vm_object_t obj, struct slsckpt_data *sckpt_data)
 	if ((sckpt_data->sckpt_attr.attr_target == SLS_MEM) && OBJT_ISANONYMOUS(obj))
 		return (0);
 
-	DEBUG2("Checkpointing metadata for object %p (ID %lx)", obj, obj->objid);
+	DEBUG3("Checkpointing metadata for object %p (ID %lx, type %d)", obj, obj->objid, obj->type);
 	/* First time we come across it, create a buffer for the info struct. */
 	sb = sbuf_new_auto();
 

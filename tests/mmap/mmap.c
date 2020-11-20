@@ -104,7 +104,6 @@ main(int argc, char **argv)
 
 	}
 
-	sleep(5);
 	printf("Success\n");
 
 	return (0);

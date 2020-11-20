@@ -15,7 +15,6 @@ struct sls_attr {
 struct sls_checkpoint_args {
 	uint64_t	oid;		/* The OID of the partition to be checkpointed. */
 	bool		recurse;    	/* Include all descendants of attached processes */
-	bool 		synchronous;    /* Wait for the checkpoint to be done */
 };
 
 struct sls_restore_args {
@@ -63,9 +62,7 @@ struct sls_partdel_args {
  */
 #define SLS_FULL		0   /* Full dump, all pages are saved */
 #define SLS_DELTA		1   /* Delta dump, only modified pages are saved */
-#define SLS_DEEP		2   /* Deep delta (explained in sls_ckpt.c) */
-#define SLS_SHALLOW		3   /* Shallow delta (explained in sls_ckpt.c) */
-#define SLS_MODES		4   /* Number of modes */
+#define SLS_MODES		2   /* Number of modes */
 
 /*
  * Values for the target field of the arguments for SLS_OP
@@ -78,5 +75,10 @@ struct sls_partdel_args {
 /* Control flags for partitions */
 #define SLSATTR_IGNUNLINKED	0x1 /* Ignore unlinked files */
 #define SLSATTR_LAZYREST	0x2 /* Restore lazily */
+
+#define SLSATTR_FLAGISSET(attr, flag) (((attr).attr_flags & flag) != 0)
+#define SLSATTR_ISIGNUNLINKED(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_IGNUNLINKED))
+#define SLSATTR_ISLAZYREST(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_LAZYREST))
+
 
 #endif

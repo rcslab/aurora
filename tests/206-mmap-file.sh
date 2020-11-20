@@ -15,7 +15,7 @@ then
 fi
 
 sleep 1
-killandwait $PID
+wait $PID
 
 slsrestore
 if [ $? -ne 0 ];
@@ -27,9 +27,11 @@ fi
 sleep 1
 
 wait $!
-if [ $? -ne 0 ];
+
+EXIT=$?
+if [ $EXIT -ne 0 ];
 then
-    echo "Process exited with $?"
+    echo "Process exited with $EXIT"
     exit 1
 fi
 

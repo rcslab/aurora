@@ -460,9 +460,7 @@ slsrest_metadata(void *args)
 	 * state, parsing the buffer at each step. 
 	 */
 	DEBUG("SLS Restore Proc");
-	PROC_LOCK(p);
 	error = slsrest_doproc(p, daemon, &buf, &buflen, restdata);
-	PROC_UNLOCK(p);
 	if (error != 0)
 		goto error; 
 
@@ -883,12 +881,11 @@ slsrest_rectable_to_metatable(struct slskv_table *rectable, struct slskv_table *
 		}
 	}
 
-
 	return (0);
 }
 
 static int
-sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
+sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
 {
 	struct slskv_table *metatable = NULL;
 	struct slskv_table *rectable = NULL;
@@ -897,7 +894,6 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 	vm_object_t obj, shadow;
 	struct slskv_iter iter;
 	struct slos_rstat *st;
-	struct slspart *slsp;
 	struct sbuf *record;
 	int slsstate_changed;
 	size_t buflen;
@@ -910,17 +906,6 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 	error = slsrest_init(&restdata);
 	if (error != 0)
 		return (error);
-
-	/* Check if the requested partition exists. */
-	slsp = slsp_find(oid);
-	if (slsp == NULL)
-		goto cleanup;
-
-	if ((slsp->slsp_attr.attr_target == SLS_MEM) &&
-	   (slsp->slsp_sckpt == NULL)) {
-		slsp_deref(slsp);
-		goto cleanup;
-	}
 
 	/* Can't restore if we're still in the middle of checkpointing. */
 	while (atomic_cmpset_int(&slsp->slsp_status, SLSPART_AVAILABLE,
@@ -941,8 +926,10 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 	case SLS_OSD:
 		/* Bring in the whole checkpoint in the form of SLOS records. */
 		error = sls_read_slos(slsp, &rectable, &objtable);
-		if (error != 0)
+		if (error != 0) {
+			DEBUG1("Reading the SLOS failed with %d", error);
 			goto out;
+		}
 
 		/* Again, bandaid until we remove extraneous state. */
 		slskv_destroy(restdata->objtable);
@@ -950,22 +937,27 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 		objtable = NULL;
 
 		error = slsrest_rectable_to_metatable(rectable, &metatable);
-		if (error != 0)
+		if (error != 0) {
+			DEBUG1("Reading the rectable failed with %d", error);
 			goto out;
+		}
 
 		break;
 
 	case SLS_MEM:
 
 		error = slsrest_rectable_to_metatable(slsp->slsp_sckpt->sckpt_rectable, &metatable);
-		if (error != 0)
+		if (error != 0) {
+			DEBUG1("Reading the rectable failed with %d", error);
 			goto out;
+		}
 
 		/*
 		 * Shadow the objects provided by the in-memory checkpoint. That way we
 		 * do not destroy the in-memory checkpoint by restoring.
 		 */
 		KV_FOREACH(slsp->slsp_sckpt->sckpt_objtable, iter, obj, shadow) {
+			DEBUG2("Object %p has ID %lx", obj, obj->objid);
 			vm_object_reference(obj);
 
 			vm_object_t shadow = obj;
@@ -974,6 +966,7 @@ sls_rest(struct proc *p, uint64_t oid, uint64_t daemon, uint64_t rest_stopped)
 
 			error = slskv_add(restdata->objtable, (uint64_t) obj->objid, (uintptr_t) shadow);
 			if (error != 0) {
+				DEBUG1("Tried to add object %lx twice", obj->objid);
 				vm_object_deallocate(shadow);
 				KV_ABORT(iter);
 				goto out;
@@ -1105,8 +1098,6 @@ out:
 	    SLSPART_AVAILABLE);
 	KASSERT(slsstate_changed != 0, ("invalid state transition"));
 
-cleanup:
-
 	/*
 	 * Cleanup the tables used for bringing the data in memory. The buffers
 	 * for the metatable are sbufs, so we cannot free them.
@@ -1118,17 +1109,13 @@ cleanup:
 		slskv_destroy(metatable);
 	}
 
-	/* Leave the reference we got when searching for the partition. */
-	if (slsp != NULL)
-		slsp_deref(slsp);
-
 	sls_free_rectable(rectable);
 
 	/* Clean up the restore data if coming here from an error. */
 	if (restdata != NULL)
 		slsrest_fini(restdata);
 
-	DEBUG1("Restore done with %d", error);
+	DEBUG1("Restore daemon done with %d", error);
 
 	return (error);
 }
@@ -1136,6 +1123,7 @@ cleanup:
 void
 sls_restored(struct sls_restored_args *args)
 {
+	struct slspart *slsp = args->slsp;
 	int error;
 
 	/*
@@ -1146,25 +1134,31 @@ sls_restored(struct sls_restored_args *args)
 	mtx_lock(&sls_restmtx);
 	if (sls_resttds >= 0) {
 		mtx_unlock(&sls_restmtx);
-		printf("Error: Concurrent restores not supported\n");
+		DEBUG("Concurrent restores not supported\n");
+		error = EINVAL;
 		goto out;
 	}
 
 	sls_resttds = 0;
 	mtx_unlock(&sls_restmtx);
 
-	sls_resttds = 0;
 	/* Restore the old process. */
-	error = sls_rest(curproc, args->oid, args->daemon, args->rest_stopped);
+	error = sls_rest(args->slsp, args->daemon, args->rest_stopped);
 	if (error != 0)
-		printf("Error: sls_rest failed with %d\n", error);
+		DEBUG1("Error: sls_rest failed with %d", error);
 
 out:
-	/* Free the arguments */
+	/* The caller is waiting for us, propagate the return value. */
+	slsp_signal(slsp, error);
+
+	/* Drop the reference we got for the SLS process. */
+	slsp_deref(args->slsp);
+
+	/* Free the arguments. */
 	free(args, M_SLSMM);
 
 	/* Release the reference to the module. */
 	sls_finishop();
 
-	return;
+	kthread_exit();
 }

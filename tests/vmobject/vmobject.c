@@ -29,7 +29,7 @@ checkpoint_round(int round)
 		exit(0);
 	}
 
-	error = sls_checkpoint(OID, false, true);
+	error = sls_checkpoint(OID, false);
 	if (error != 0) {
 		fprintf(stderr, "sls_checkpoint returned %d\n", error);
 		exit(0);

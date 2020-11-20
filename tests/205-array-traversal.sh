@@ -33,7 +33,13 @@ fi
 sleep 1
 killandwait $!
 
-pkill array
+EXIT=$?
+# Code 143 is exiting with SIGTERM
+if [ $EXIT -ne 0 -a $EXIT -ne 143 ];
+then
+    echo "Process exited with $EXIT"
+    exit 1
+fi
 
 aurteardown
 if [ $? -ne 0 ]; then

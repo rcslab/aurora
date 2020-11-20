@@ -19,12 +19,19 @@ killandwait %1
 slslazyrestore $OID
 if [ $? -ne 0 ];
 then
-    echo Restore failed
+    echo "Restore failed"
     aurteardown
     exit 1
 fi
 
 sleep 1
 killandwait $!
+
+
+aurteardown
+if [ $? -ne 0 ]; then
+    echo "Failed to tear down Aurora"
+    exit 1
+fi
 
 exit 0

@@ -78,7 +78,6 @@ static int
 sls_checkpoint(struct sls_checkpoint_args *args)
 {
 	struct sls_checkpointd_args *ckptd_args;
-	struct proc *p = curproc;
 	struct slspart *slsp;
 	int error = 0;
 
@@ -88,13 +87,8 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 
 	/* Get the partition to be checkpointed. */
 	slsp = slsp_find(args->oid);
-	if (slsp == NULL)
-		goto error;
-
-	/* Cannot do periodic checkpoints synchronously. */
-	if ((slsp->slsp_attr.attr_period != 0) &&
-		(args->synchronous != 0)) {
-		slsp_deref(slsp);
+	if (slsp == NULL) {
+		error = EINVAL;
 		goto error;
 	}
 
@@ -102,46 +96,29 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	ckptd_args = malloc(sizeof(*ckptd_args), M_SLSMM, M_WAITOK);
 	ckptd_args->slsp = slsp;
 	ckptd_args->recurse = args->recurse;
-	ckptd_args->sync = args->synchronous;
-	if (args->synchronous) {
-		mtx_lock(&slsp->slsp_syncmtx);
-
-		/*
-		 * We cannot induce single threading for this process if we are
-		 * waiting on the CV below. Turn this process into single
-		 * threading mode here.
-		 */
-		PROC_LOCK(p);
-		thread_single(p, SINGLE_BOUNDARY);
-		PROC_UNLOCK(p);
-	}
+	mtx_lock(&slsp->slsp_syncmtx);
 
 	/* Create the daemon. */
 	error = kthread_add((void(*)(void *)) sls_checkpointd,
 	    ckptd_args, NULL, NULL, 0, 0, "sls_checkpointd");
 	if (error != 0) {
-		if (args->synchronous)
-			mtx_unlock(&slsp->slsp_syncmtx);
-
+		mtx_unlock(&slsp->slsp_syncmtx);
 		free(ckptd_args, M_SLSMM);
-		slsp_deref(slsp);
 		goto error;
 	}
 
-	if (args->synchronous) {
-		slsp_waitfor(slsp);
+	/* If it's a periodic daemon, don't wait for it. */
+	if (slsp->slsp_attr.attr_period != 0)
+		mtx_unlock(&slsp->slsp_syncmtx);
+	else
+		error = slsp_waitfor(slsp);
 
-		/*
-		 * No need to get ourselves out of single threading mode,
-		 * the daemon already did it for us.
-		 */
-	}
-
-	return (0);
+	return (error);
 
 error:
+	if (slsp != NULL)
+		slsp_deref(slsp);
 
-	/* Release both references from here. */
 	sls_finishop();
 
 	return (EINVAL);
@@ -150,27 +127,54 @@ error:
 static int
 sls_restore(struct sls_restore_args *args)
 {
-	struct sls_restored_args *restd_args = NULL;
+	struct sls_restored_args *restd_args;
+	struct slspart *slsp;
+	int error;
 
 	/* Try to get a reference to the module. */
 	if (sls_startop(true) != 0)
 		return (EBUSY);
 
-	/* Set up the arguments for the restore. */
+	/* Get the partition to be checkpointed. */
+	slsp = slsp_find(args->oid);
+	if (slsp == NULL) {
+		error = EINVAL;
+		goto error;
+	}
+
+	/* Make sure an in-memory checkpoint already has data. */
+	if ((slsp->slsp_attr.attr_target == SLS_MEM) &&
+	   (slsp->slsp_sckpt == NULL)) {
+		error = EINVAL;
+		goto error;
+	}
+
+	/* Set up the arguments. */
 	restd_args = malloc(sizeof(*restd_args), M_SLSMM, M_WAITOK);
-	restd_args->oid = args->oid;
+	restd_args->slsp = slsp;
 	restd_args->daemon = args->daemon;
 	restd_args->rest_stopped = args->rest_stopped;
 
-	/* 
-	 * The sls_restored function can alternatively
-	 * be called as a separate kernel process, but
-	 * this poses its own set of problems, so we
-	 * use it directly. 
-	 */
-	sls_restored(restd_args);
+	mtx_lock(&slsp->slsp_syncmtx);
 
-	return (0);
+	/* Create the daemon. */
+	error = kthread_add((void(*)(void *)) sls_restored,
+	    restd_args, curproc, NULL, 0, 0, "sls_restored");
+	if (error != 0) {
+		mtx_unlock(&slsp->slsp_syncmtx);
+		free(restd_args, M_SLSMM);
+		goto error;
+	}
+
+	return (slsp_waitfor(slsp));
+
+error:
+	if (slsp != NULL)
+		slsp_deref(slsp);
+
+	sls_finishop();
+
+	return (error);
 }
 
 /* Add a process to an SLS partition, allowing it to be checkpointed. */
@@ -320,17 +324,11 @@ sls_sysctl_init(void)
 	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "contig_limit",
 	    CTLFLAG_RW, &sls_contig_limit,
 	    0, "Limit of contiguous IOs");
-	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "use_nulldev",
-	    CTLFLAG_RW, &sls_use_nulldev,
-	    0, "Route IOs to the null device");
 	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "drop_io",
 	    CTLFLAG_RW, &sls_drop_io,
 	    0, "Drop all IOs immediately");
-	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "iochain_size",
-	    CTLFLAG_RW, &sls_iochain_size,
-	    0, "Maximum IO chain size");
-	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "sync",
-	    CTLFLAG_RW, &sls_sync,
+	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "vfs_sync",
+	    CTLFLAG_RW, &sls_vfs_sync,
 	    0, "Sync to the device after finishing dumping");
 	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "ckpt_attempted",
 	    CTLFLAG_RW, &sls_ckpt_attempted,
@@ -346,27 +344,6 @@ sls_sysctl_init(void)
 	    0, "Traverse VM objects instead of entries when applying COW");
 
 	return (0);
-}
-
-static int
-sls_setup_blackholefp(void)
-{
-	int sls_blackholefd;
-	int error;
-
-	error = kern_openat(curthread, AT_FDCWD, "/dev/null", UIO_SYSSPACE, O_RDWR, 0);
-	if (error != 0)
-		return (error);
-
-	sls_blackholefd = curthread->td_retval[0];
-	sls_blackholefp = FDTOFP(curthread->td_proc, sls_blackholefd);
-	(void) fhold(sls_blackholefp);
-
-	error = kern_close(curthread, sls_blackholefd);
-	if (error != 0)
-		SLS_DBG("Could not close sls_blackholefd, error %d\n", error);
-
-	return (error);
 }
 
 static int
@@ -441,10 +418,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		mtx_init(&slsm.slsm_mtx, "slsm", NULL, MTX_DEF);
 		cv_init(&slsm.slsm_exitcv, "slsm");
 
-		error = sls_setup_blackholefp();
-		if (error != 0)
-			return (error);
-
 		error = slskv_init();
 		if (error)
 			return (error);
@@ -508,14 +481,17 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 
 	case MOD_UNLOAD:
 
-		SLS_LOCK();
 
-		/* Signal that we're exiting and wait for threads to finish. */
-		slsm.slsm_exiting = 1;
-
-		/* Destroy the device, wait for all ioctls in progress. */
+		/*
+		 * Destroy the device, wait for all ioctls in progress. We do
+		 * this without the non-sleepable module lock.
+		 */
 		if (slsm.slsm_cdev != NULL)
 			destroy_dev(slsm.slsm_cdev);
+
+		SLS_LOCK();
+		/* Signal that we're exiting and wait for threads to finish. */
+		slsm.slsm_exiting = 1;
 
 		while (slsm.slsm_inprog > 0)
 			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
@@ -552,9 +528,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 
 		cv_destroy(&slsm.slsm_exitcv);
 		mtx_destroy(&slsm.slsm_mtx);
-
-		if (sls_blackholefp != NULL)
-			fdrop(sls_blackholefp, curthread);
 
 		cv_destroy(&sls_restcv);
 		mtx_destroy(&sls_restmtx);

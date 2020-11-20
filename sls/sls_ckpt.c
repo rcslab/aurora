@@ -74,13 +74,12 @@ SDT_PROBE_DEFINE(sls, , , dump);
 SDT_PROBE_DEFINE(sls, , , dedup);
 SDT_PROBE_DEFINE(sls, , , sync);
 
-int sls_sync = 0;
+int sls_vfs_sync = 0;
 uint64_t sls_ckpt_attempted;
 uint64_t sls_ckpt_done;
 
 static void slsckpt_stop(slsset *procset);
-static int sls_checkpoint(slsset *procset, struct slspart *slsp, int sync);
-static int slsckpt_metadata(struct proc *p,slsset *procset, 
+static int slsckpt_metadata(struct proc *p,slsset *procset,
     struct slsckpt_data *sckpt_data);
 
 
@@ -192,7 +191,7 @@ out:
  * by the partition's processes.
  */
 static int __attribute__ ((noinline))
-sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
+sls_checkpoint(slsset *procset, struct slspart *slsp)
 {
 	struct slsckpt_data *sckpt_data, *sckpt_old;
 	struct slskv_iter iter;
@@ -227,11 +226,15 @@ sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 	 * This is regardless of whether we have SLS_FULL as a mode; we might be 
 	 * doing deltas, with this being the first iteration.
 	 */
-	is_fullckpt = (slsp->slsp_sckpt == NULL) ? 1 : 0;
+	if (slsp->slsp_attr.attr_target == SLS_MEM)
+		is_fullckpt = 0;
+	else
+		is_fullckpt = (slsp->slsp_sckpt == NULL) ? 1 : 0;
 
 	/* Shadow SYSV shared memory. */
 	error = slsckpt_sysvshm(sckpt_data, sckpt_data->sckpt_objtable);
 	if (error != 0) {
+		DEBUG1("Checkpointing SYSV failed with %d\n", error);
 		slsckpt_cont(procset);
 		goto error;
 	}
@@ -242,7 +245,8 @@ sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 	KVSET_FOREACH(procset, iter, p) {
 		error = slsckpt_metadata(p, procset, sckpt_data);
 		if(error != 0) {
-			SLS_DBG("Checkpointing failed\n");
+			DEBUG2("Checkpointing process %d failed with %d\n",
+			    p->p_pid, error);
 			KV_ABORT(iter);
 			slsckpt_cont(procset);
 			goto error;
@@ -258,16 +262,12 @@ sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 	/* Shadow the objects to be dumped. */
 	error = slsvm_procset_shadow(procset, sckpt_data->sckpt_objtable, is_fullckpt);
 	if (error != 0) {
-		SLS_DBG("shadowing failed with %d\n", error);
+		DEBUG1("shadowing failed with %d\n", error);
 		slsckpt_cont(procset);
 		goto error;
 	}
 
 	SDT_PROBE0(sls, , , shadow);
-
-	/* If synchronous, this is where we let the application execute. */
-	if (sync != 0)
-		slsp_signal(slsp);
 
 	/* Let the process execute ASAP */
 	slsckpt_cont(procset);
@@ -284,7 +284,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 		 */
 		error = sls_write_slos(slsp->slsp_oid, sckpt_data);
 		if (error != 0) {
-			SLS_DBG("sls_write_slos return %d\n", error);
+			DEBUG1("Writing to disk failed with %d", error);
 			goto error;
 		}
 
@@ -353,29 +353,19 @@ sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 	switch (slsp->slsp_attr.attr_mode) {
 	case SLS_FULL:
 		/* Destroy the shadows. We don't keep any between iterations. */
+		DEBUG("Compacting full checkpoint");
 		slsckpt_destroy(sckpt_data, NULL);
 		sckpt_data = NULL;
 		break;
 
-		/* XXX For now we assume deep deltas. */
 	case SLS_DELTA:
-	case SLS_DEEP:
+		DEBUG("Compacting deltas");
 		/* Destroy the old shadows, now only the new ones remain. */
 		sckpt_old = slsp->slsp_sckpt;
 		if (sckpt_old != NULL)
 			slsckpt_destroy(sckpt_old, sckpt_data);
 		slsp->slsp_sckpt = sckpt_data;
 		break;
-
-	case SLS_SHALLOW:
-		/* Destroy the new shadow, if we already have an old one. */
-		sckpt_old = slsp->slsp_sckpt;
-		if (sckpt_old != NULL)
-			slsckpt_destroy(sckpt_data, NULL);
-		else 
-			slsp->slsp_sckpt = sckpt_data;
-		break;
-
 	default:
 		panic("invalid mode %d\n", slsp->slsp_attr.attr_mode);
 	}
@@ -386,7 +376,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 	if (slsp->slsp_attr.attr_target == SLS_OSD) {
 		taskqueue_drain_all(slos.slos_tq);
 		/* XXX Using MNT_WAIT is causing a deadlock right now. */
-		VFS_SYNC(slos.slsfs_mount, (sls_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
+		VFS_SYNC(slos.slsfs_mount, (sls_vfs_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
 	}
 
 	/*
@@ -396,7 +386,6 @@ sls_checkpoint(slsset *procset, struct slspart *slsp, int sync)
 
 	SDT_PROBE0(sls, , , sync);
 
-	slsp->slsp_epoch += 1;
 	DEBUG("Checkpointed partition once");
 
 	return (0);
@@ -521,9 +510,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	slsset *procset = NULL;
 	int slsstate_changed;
 	struct proc *p;
-	int error;
-
-	(void) fhold(sls_blackholefp);
+	int error = 0;
 
 	/* Check if the partition is available for checkpointing. */
 
@@ -532,10 +519,6 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		sls_ckpt_attempted += 1;
 		printf("Overlapping checkpoints\n");
 		SLS_DBG("Partition %ld in state %d\n", slsp->slsp_oid, slsp->slsp_status);
-
-		if (args->sync != 0)
-			slsp_signal(slsp);
-
 		goto out;
 	}
 
@@ -543,9 +526,6 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	error = slsset_create(&procset);
 	if (error != 0) {
 		sls_ckpt_attempted += 1;
-		if (args->sync != 0)
-			slsp_signal(slsp);
-
 		goto out;
 	}
 
@@ -590,13 +570,15 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		slsckpt_stop(procset);
 
 		/* Checkpoint the process once. */
-		sls_checkpoint(procset, slsp, args->sync);
+		error = sls_checkpoint(procset, slsp);
+		if (error != 0) {
+			DEBUG1("Checkpoint failed with %d\n", error);
+			break;
+		}
+
 		nanotime(&tend);
 
-		if (error != 0)
-			printf("%s: Checkpoint failed with %d\n", __func__, error);
-		else
-			sls_ckpt_done += 1;
+		sls_ckpt_done += 1;
 
 		/* Release all checkpointed processes. */
 		KVSET_FOREACH_POP(procset, p)
@@ -627,7 +609,14 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	DEBUG("Stopped checkpointing");
 
 out:
-	fdrop(sls_blackholefp, curthread);
+
+	/*
+	 * Either everything went ok, or something went wrong before or during
+	 * checkpointing proper. In any case, propagate the error if the caller
+	 * is waiting for it.
+	 */
+	if (slsp->slsp_attr.attr_period == 0)
+		slsp_signal(slsp, error);
 
 	/* Drop the reference we got for the SLS process. */
 	slsp_deref(slsp);

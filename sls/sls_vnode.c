@@ -133,7 +133,7 @@ slsckpt_vnode(struct vnode *vp, struct slsckpt_data *sckpt_data)
 		error = vn_fullpath(td, vp, &fullpath, &freepath);
 		if (error != 0) {
 			DEBUG2("vn_fullpath() failed for vnode %p with error %d", vp, error);
-			if ((sckpt_data->sckpt_attr.attr_flags & SLSATTR_IGNUNLINKED) == 0)
+			if (SLSATTR_ISIGNUNLINKED(sckpt_data->sckpt_attr))
 				panic("Unlinked vnode %p not in the SLOS", vp);
 
 			/* Otherwise clean up as if after an error. */

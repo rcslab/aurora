@@ -38,7 +38,8 @@ struct slspart {
     uint64_t		    slsp_procnum;   /* Number of processes in the partition */
     struct mtx		    slsp_syncmtx;   /* Mutex used for synchronization by the SLS */
     struct cv		    slsp_synccv;    /* CV used for synchronization by the SLS */
-    /* XXX slsp_mtx member */
+    int			    slsp_retval;    /* Return value of an operation done on the partition */
+    bool		    slsp_syncdone;  /* Variable for slsp_signal/waitfor */
 
     LIST_ENTRY(slspart)	    slsp_parts;	    /* List of active SLS partitions */
 };
@@ -61,7 +62,10 @@ void slsp_deref(struct slspart *slsp);
 int slsp_isempty(struct slspart *slsp);
 void slsp_epoch_advance(struct slspart *slsp);
 
-void slsp_signal(struct slspart *slsp);
-void slsp_waitfor(struct slspart *slsp);
+void slsp_signal(struct slspart *slsp, int retval);
+int slsp_waitfor(struct slspart *slsp);
+
+#define SLSPART_IGNUNLINKED(slsp)  (SLSATTR_ISIGNUNLINKED((slsp)->slsp_attr))
+#define SLSPART_LAZYREST(slsp)  (SLSATTR_ISLAZYREST((slsp)->slsp_attr))
 
 #endif /* _SLSPART_H_ */

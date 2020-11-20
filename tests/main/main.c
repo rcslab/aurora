@@ -84,7 +84,7 @@ checkpoint(pid_t pid, int period)
 	    return (error);
 	}
 
-	error = sls_checkpoint(oid, true, false);
+	error = sls_checkpoint(oid, true);
 	if (error != 0) {
 	    fprintf(stderr, "sls_checkpoint failed with %d\n", error);
 	    return (error);

@@ -376,7 +376,11 @@ slsvm_object_shadowexact(vm_object_t *objp)
 	DEBUG2("(SHADOW) Object %p has shadow %p", obj, *objp);
 #endif
 	/* Inherit the unique object ID from the parent. */
+	VM_OBJECT_WLOCK(*objp);
+	DEBUG3("Changing the ID of %p from %lx to %lx", *objp,
+	    (*objp)->objid, obj->objid);
 	(*objp)->objid = obj->objid;
+	VM_OBJECT_WUNLOCK(*objp);
 }
 
 /*
@@ -391,6 +395,7 @@ slsvm_print_vmobject(struct vm_object *obj)
 		DEBUG2("    vm_object:%p offset:%llx",
 			current_object, current_object->backing_object_offset);
 		DEBUG2("                 type:%x flags:%x", current_object->type, current_object->flags);
+		DEBUG1("    	objid:%lx", current_object->objid);
 	} while ((current_object = current_object->backing_object) != NULL);
 }
 

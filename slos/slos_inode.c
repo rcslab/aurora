@@ -162,7 +162,7 @@ slos_svpimport(struct slos *slos, uint64_t svpid, bool system, struct slos_node 
 	if (error)
 		goto error;
 
-	DEBUG2("Importing inode for %s %lu", system ? "block" : "pid", svpid);
+	DEBUG2("Importing inode for %s %lu", system ? "block" : "OID", svpid);
 	/*
 	 * System inodes are read from set locations in the SLOS.
 	 * The rest are retrieved from the inode btree.
@@ -209,6 +209,7 @@ slos_svpimport(struct slos *slos, uint64_t svpid, bool system, struct slos_node 
 	return (0);
 
 error:
+	DEBUG1("failed with %d", error);
 	uma_zfree(slos_node_zone, svp);
 	return (error);
 }
@@ -324,9 +325,8 @@ slos_iopen(struct slos *slos, uint64_t oid, struct slos_node **svpp)
 	} else {
 		/* Create a vnode for the inode. */
 		error = slos_svpimport(slos, oid, false, &svp);
-		if (error) {
+		if (error)
 			return (error);
-		}
 	}
 
 	/* For invalid inodes, erase all data by wiping out the btree root. */

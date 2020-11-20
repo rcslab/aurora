@@ -4,7 +4,7 @@
 #include <unistd.h>
 
 #define ARRAY_SIZE (8)
-#define ITERATIONS (100)
+#define ITERATIONS (15)
 
 int arr[ARRAY_SIZE];
 

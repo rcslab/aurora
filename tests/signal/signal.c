@@ -1,9 +1,7 @@
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-
-#include <signal.h>
-#include <machine/sysarch.h>
 
 #define SIGMSG ("SIGUSR1 handler called successfully.\n")
 
@@ -28,14 +26,14 @@ int main()
 
 	if (sigaction(SIGUSR1, &sa, NULL) < 0) {
 		printf("Setting up SIGUSR failed.\n");
-		exit (1);
+		exit(1);
 	}
 
 	sleep(5);
 
 	printf("Waiting for the signal...\n");
 
-	sleep(5);
+	sleep(1000);
 	printf("Signal never arrived\n");
 
 	exit(1);

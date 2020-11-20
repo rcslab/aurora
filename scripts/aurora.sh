@@ -26,7 +26,6 @@ function aurload {
     # Set the sysctls, including SLOS checkpoints per second
     # and setting the SLS to dump asynchronously to disk.
     sysctl aurora.async_slos=1
-    sysctl aurora.sync_slos=0
     sysctl aurora_slos.checkpointtime=200
 
     # Dump the configuration to a file.

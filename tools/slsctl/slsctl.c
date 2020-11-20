@@ -120,7 +120,7 @@ slscli(void)
 	History *hist = history_init();
 	history(hist, &ev, H_SETSIZE, 100);
 
-	 EditLine *el = el_init("slsctl", stdin, stdout, stderr);
+	EditLine *el = el_init("slsctl", stdin, stdout, stderr);
 
 	/* Editing mode to use. */
 	el_set(el, EL_EDITOR, "vi");
@@ -174,8 +174,6 @@ main(int argc, const char *argv[])
 	}
 
 	error = slscommand(argc - 1, (char **) argv + 1);
-	if (error != 0)
-		usage();
 
 	exit(error);
 }

@@ -273,7 +273,7 @@ main(int argc, char *argv[])
 		teardown_and_exit();
 	}
 
-	error = sls_checkpoint(OID, false, true);
+	error = sls_checkpoint(OID, false);
 	if (error != 0) {
 		fprintf(stderr, "sls_checkpoint returned %d\n", error);
 		teardown_and_exit();

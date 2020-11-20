@@ -3,7 +3,7 @@
 . aurora
 aursetup
 
-"./signal/signal" "$MNT" file > /dev/null 2> /dev/null &
+"./signal/signal" > /dev/null 2> /dev/null &
 PID=$!
 sleep 1
 
@@ -25,13 +25,14 @@ then
     exit 1
 fi
 
-sleep 1
+sleep 2
 pkill -SIGUSR1 signal
-wait `pidof signal`
+wait $!
 
-if [ $? -ne 0 ];
+EXIT=$?
+if [ $EXIT -ne 0 ];
 then
-    echo "Process exited with nonzero"
+    echo "Process exited with $EXIT"
     exit 1
 fi
 

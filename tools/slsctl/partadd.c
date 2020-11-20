@@ -18,15 +18,24 @@ static struct option partadd_longopts[] = {
 	{ "oid", required_argument, NULL, 'o' },
 	{ "period", required_argument, NULL, 't' },
 	{ "backend", required_argument, NULL, 'b' },
-	{ "ignore_unlinked", required_argument, NULL, 'i' },
-	{ "lazy", required_argument, NULL, 'l' },
+	{ "ignore unlinked files", required_argument, NULL, 'i' },
+	{ "lazy restore", required_argument, NULL, 'l' },
 	{ NULL, no_argument, NULL, 0 },
 };
 
 void
 partadd_usage(void)
 {
-	printf("Usage: slsctl partadd -o <id>  [-b <memory|slos>] [-t ms] [-d] [-i] [-l]\n");
+	struct option opt;
+	int i;
+
+	printf("Usage: slsctl partadd -o <id>  [-b <memory|slos>] [-t ms] [options]\n");
+	printf("Full options list:\n");
+	i = 0;
+	for (opt = partadd_longopts[0]; opt.name != NULL; opt = partadd_longopts[++i])
+		printf("-%c\t%s\n", opt.val, opt.name);
+
+	exit(0);
 }
 
 int
@@ -50,6 +59,7 @@ partadd_main(int argc, char* argv[])
 		case 'd':
 			attr.attr_mode = SLS_DELTA;
 			break;
+
 		case 'i':
 			attr.attr_flags |= SLSATTR_IGNUNLINKED;
 			break;

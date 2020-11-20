@@ -58,10 +58,7 @@
 
 /* The maximum size of a single data transfer */
 uint64_t sls_contig_limit = MAXBCACHEBUF;
-unsigned int sls_use_nulldev = 0;
 int sls_drop_io = 0;
-uint64_t sls_iochain_size = 1;
-struct file *sls_blackholefp;
 size_t sls_metadata_sent = 0;
 size_t sls_metadata_received = 0;
 size_t sls_data_sent = 0;
@@ -84,31 +81,6 @@ static uint64_t sls_datastructs[] =  {
 };
 
 static int
-sls_doio_null(struct uio *auio)
-{
-	size_t sent;
-	int error;
-
-	/* We don't need to do anything for a null IO.
-	 * XXX We could use the zero device later for this.
-	 */
-	if (auio->uio_rw == UIO_READ) {
-		auio->uio_resid = 0;
-		return (0);
-	}
-
-	sent = auio->uio_resid;
-	while (auio->uio_resid > 0) {
-		error = dofilewrite(curthread, -1, sls_blackholefp, auio, 0, 0);
-		if (error != 0)
-			return (error);
-	}
-	sls_metadata_sent += sent;
-
-	return (0);
-}
-
-static int
 sls_doio(struct vnode *vp, struct uio *auio)
 {
 	int error = 0;
@@ -120,15 +92,6 @@ sls_doio(struct vnode *vp, struct uio *auio)
 	/* If we don't want to do anything just return. */
 	if (sls_drop_io) {
 		auio->uio_resid = 0;
-		return (0);
-	}
-
-	/* Route the IO to the null device if that's what we want. */
-	if (sls_use_nulldev) {
-		error = sls_doio_null(auio);
-		if (error != 0)
-			goto out;
-		sls_io_initiated += 1;
 		return (0);
 	}
 
@@ -763,7 +726,7 @@ sls_read_slos(struct slspart *slsp, struct slskv_table **rectablep,
 
 	for (i = 0; i < idlen; i++) {
 		error = sls_read_slos_record(ids[i], rectable, objtable,
-		    slsp->slsp_attr.attr_flags & SLSATTR_LAZYREST);
+		    SLSPART_LAZYREST(slsp));
 		if (error != 0)
 			goto error;
 

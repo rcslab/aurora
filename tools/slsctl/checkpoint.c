@@ -17,7 +17,6 @@ static struct option checkpoint_longopts[] = {
 	{ "memory", no_argument, NULL, 'm' },
 	{ "oid", required_argument, NULL, 'o' },
 	{ "recursive", no_argument, NULL, 'r' },
-	{ "synchronous", no_argument, NULL, 's' },
 	{ "help", no_argument, NULL, 'h' },
 	{ NULL,	no_argument, NULL, 0},
 };
@@ -25,7 +24,7 @@ static struct option checkpoint_longopts[] = {
 void
 checkpoint_usage(void)
 {
-	printf("Usage: slsctl checkpoint <-o oid> [-r] \n");
+	printf("Usage: slsctl checkpoint <-o oid> [-r] [-m] \n");
 }
 
 int
@@ -49,9 +48,6 @@ checkpoint_main(int argc, char* argv[])
 		case 'r':
 			recurse = true;
 			break;
-		case 's':
-			synchronous = true;
-			break;
 		case 'h':
 		default:
 			checkpoint_usage();
@@ -64,7 +60,7 @@ checkpoint_main(int argc, char* argv[])
 		return (0);
 	}
 
-	if (sls_checkpoint(oid, recurse, synchronous) < 0)
+	if (sls_checkpoint(oid, recurse) < 0)
 		return 1;
 
 	return 0;

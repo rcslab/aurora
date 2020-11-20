@@ -83,25 +83,23 @@ restore_main(int argc, char* argv[]) {
 	 * Wait for all children. If we end up
 	 * with no children the program exits.
 	 */
-	if (!daemon) {
-		while (1) {
-			childpid = wait(&status);
-			if (childpid < 0 && errno == ECHILD) {
-				return (0);
-			} else if (childpid < 0) {
-				perror("wait");
-				return (1);
-			} else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
-				fprintf(stderr, "Process exited with status %d\n", WEXITSTATUS(status));
-				return (2);
-			} else if (WIFSIGNALED(status)) {
-				if (WTERMSIG(status) == SIGSEGV) {
-					fprintf(stderr, "Process segfaulted\n");
-					return (3);
-				}
-				fprintf(stderr, "Process terminated with signal %d\n", WTERMSIG(status));
-				return (4);
+	while (1) {
+		childpid = wait(&status);
+		if (childpid < 0 && errno == ECHILD) {
+			/* No more children to wait for. */
+			printf("No more children\n");
+			return (0);
+		} else if (childpid < 0) {
+			perror("wait");
+			return (-1);
+		} else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+			return (status);
+		} else if (WIFSIGNALED(status)) {
+			if (WTERMSIG(status) == SIGSEGV) {
+				fprintf(stderr, "Process segfaulted\n");
+				return (status);
 			}
+			return (status);
 		}
 	}
 

@@ -81,6 +81,7 @@ slsckpt_destroy(struct slsckpt_data *sckpt_data, struct slsckpt_data *sckpt_new)
 	if (sckpt_data == NULL)
 		return;
 
+	DEBUG("Destroying partition");
 	newtable = (sckpt_new != NULL) ? sckpt_new->sckpt_objtable : NULL;
 	if (sckpt_data->sckpt_objtable != NULL) {
 		slsvm_objtable_collapse(sckpt_data->sckpt_objtable, newtable);
@@ -360,21 +361,27 @@ slsp_epoch_advance(struct slspart *slsp)
 	slsp->slsp_epoch += 1;
 }
 
-void
+int
 slsp_waitfor(struct slspart *slsp)
 {
+	int error;
 	mtx_assert(&slsp->slsp_syncmtx, MA_OWNED);
 
-	cv_wait(&slsp->slsp_synccv, &slsp->slsp_syncmtx);
+	while (!slsp->slsp_syncdone)
+		cv_wait(&slsp->slsp_synccv, &slsp->slsp_syncmtx);
+	slsp->slsp_syncdone = false;
+	error = slsp->slsp_retval;
 	mtx_unlock(&slsp->slsp_syncmtx);
+
+	return (error);
 }
 
 void
-slsp_signal(struct slspart *slsp)
+slsp_signal(struct slspart *slsp, int retval)
 {
-	mtx_assert(&slsp->slsp_syncmtx, MA_NOTOWNED);
-
 	mtx_lock(&slsp->slsp_syncmtx);
+	slsp->slsp_syncdone = true;
+	slsp->slsp_retval = retval;
 	cv_signal(&slsp->slsp_synccv);
 	mtx_unlock(&slsp->slsp_syncmtx);
 
