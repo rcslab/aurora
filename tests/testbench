@@ -18,7 +18,7 @@ GREEN=$ESC"[0;32m"
 NORMAL=$ESC"[0;39m"
 
 FORMAT="%-40s [ %s%-7s"$NORMAL" ]"
-TFORMAT="%-40s [ %s%-7s ] %-10.6f"
+TFORMAT="%-40s [ %s%-7s"$NORMAL" ] %6s"
 
 print_fail()
 {
@@ -29,7 +29,7 @@ print_fail()
 print_success()
 {
     echo -n $CLEAR
-    printf "$FORMAT\n" $1 $GREEN "success"
+    printf "$TFORMAT\n" $1 $GREEN "success" $2
 }
 
 print_running()
@@ -49,9 +49,11 @@ run_test()
 {
     NAME=`basename $1`
     print_running $NAME
-    $1 >> $TESTLOG
+    tstart=`date +%s`
+    $t >> $TESTLOG
+    tstop=`date +%s`
     if [ $? -eq 0 ]; then
-	print_success $NAME
+	print_success $NAME `expr $tstop - $tstart`
     else
 	print_fail $NAME
 	ktrdump >> $KTRLOG
@@ -66,6 +68,7 @@ run_tests()
     touch $TESTLOG
 
     echo Build: `uname -sri`
+    echo Host: `hostname`
     echo Test started: `date`
     printf "%-40s   %-9s   %-10s\n" "Test" "Status" "Time"
     echo "-----------------------------------------------------------"
