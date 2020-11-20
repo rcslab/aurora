@@ -520,9 +520,16 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		while (slsm.slsm_inprog > 0)
 			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
 
-		/* Destroy all partitions. */
+		SLS_UNLOCK();
+
+		/*
+		 * Destroy all partitions. We need to be unlocked because by 
+		 * destroying the partitions we might destroy swap objects, 
+		 * which take the module lock during deinitialization.
+		 */
 		slsp_delall();
 
+		SLS_LOCK();
 		/* Remove the Aurora swapper, bring all objects back in. */
 		/*
 		 * XXX Make sure swapping is impossible while we are swapping

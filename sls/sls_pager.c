@@ -19,8 +19,13 @@
 #include "sls_internal.h"
 #include "sls_pager.h"
 
+#include "debug.h"
+
 #define SLS_SWAPOFF_RETRIES (100)
 #define SLS_VMOBJ_SWAPVP(obj) ((obj)->un_pager.swp.swp_tmpfs)
+
+/* The initial swap pager operations vector. */
+static struct pagerops swappagerops_old;
 
 /*
  * Mark the buffer as invalid and wake up any waiters on the object.
@@ -207,7 +212,7 @@ sls_pager_writebuf(vm_object_t obj, vm_pindex_t pindex, size_t targetsize)
  * Turn an Aurora object into a swap object. To be called both from the swapping 
  * code and the Aurora shadowing code.
  */
-static int
+int
 sls_pager_obj_init(vm_object_t obj)
 {
 	struct vnode *vp;
@@ -561,6 +566,13 @@ sls_pager_dealloc(vm_object_t obj) {
 	VM_OBJECT_ASSERT_LOCKED(obj);
 	KASSERT((obj->flags & OBJ_DEAD) != 0, ("dealloc of reachable object"));
 
+	/* This can be a swap object created before Aurora. */
+	if ((obj->flags & OBJ_AURORA) == 0) {
+		DEBUG1("Found non-Aurora swap object %p", obj);
+		(*swappagerops_old.pgo_dealloc)(obj);
+		return;
+	}
+
 	vm_object_pip_wait(obj, "slsdea");
 
 	/* Release the vnode backing the object, if it exists. */
@@ -580,8 +592,6 @@ static struct pagerops slspagerops = {
 	.pgo_putpages = sls_pager_putpages,
 	.pgo_haspage = sls_pager_haspage,
 };
-
-static struct pagerops swappagerops_old;
 
 /*
  * Register the Aurora backend with the kernel.

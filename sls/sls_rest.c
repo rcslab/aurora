@@ -211,11 +211,13 @@ slsrest_dovmspace(struct proc *p, char **bufp, size_t *buflenp,
 	/* Restore the VM space and its map. */
 	error = slsload_vmspace(&slsvmspace, &shmstate, bufp, buflenp);
 	if (error != 0)
-		goto out;
+		return (error);
 
 	error = slsrest_vmspace(p, &slsvmspace, shmstate);
-	if (error != 0)
-		goto out;
+	if (error != 0) {
+		free(shmstate, M_SHM);
+		return (error);
+	}
 
 	map = &p->p_vmspace->vm_map;
 
@@ -223,17 +225,14 @@ slsrest_dovmspace(struct proc *p, char **bufp, size_t *buflenp,
 	for (i = 0; i < slsvmspace.nentries; i++) {
 		error = slsload_vmentry(&slsvmentry, bufp, buflenp);
 		if (error != 0)
-			goto out;
+			return (error);
 
 		error = slsrest_vmentry(map, &slsvmentry, restdata);
 		if (error != 0)
-			goto out;
+			return (error);
 	}
 
-out:
-	free(shmstate, M_SHM);
-
-	return (error);
+	return (0);
 }
 
 static int
@@ -669,6 +668,9 @@ slsrest_dovmobjects(struct slskv_table *metatable, struct slsrest_data *restdata
 		 * the latter into the former, skipping the parse function.
 		 */
 		slsvmobjectp = (struct slsvmobject *) record;
+		if (slsvmobjectp->backer == 0)
+			continue;
+
 		error = slskv_find(restdata->objtable, slsvmobjectp->slsid,
 		    (uintptr_t *) &object);
 		if (error != 0) {
@@ -676,11 +678,13 @@ slsrest_dovmobjects(struct slskv_table *metatable, struct slsrest_data *restdata
 			return (error);
 		}
 
-		/* Try to find a parent for the restored object, if it exists. */
+		/* Find a parent for the restored object, if it exists. */
 		error = slskv_find(restdata->objtable, (uint64_t) slsvmobjectp->backer,
 		    (uintptr_t *) &parent);
-		if (error != 0)
-			continue;
+		if (error != 0) {
+			KV_ABORT(iter);
+			return (error);
+		}
 
 		vm_object_reference(parent);
 		slsrest_shadow(object, parent, slsvmobjectp->backer_off);

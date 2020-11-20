@@ -10,4 +10,6 @@ struct buf *sls_pager_writebuf(vm_object_t obj, vm_pindex_t pindex, size_t targe
 void sls_pager_unregister(void);
 void sls_pager_swapoff(void);
 
+int sls_pager_obj_init(vm_object_t obj);
+
 #endif /* _SLS_SWAPPER_H_ */

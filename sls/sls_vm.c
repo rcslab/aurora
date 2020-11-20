@@ -24,6 +24,7 @@
 
 #include "sls_internal.h"
 #include "sls_kv.h"
+#include "sls_pager.h"
 #include "sls_vm.h"
 #include "debug.h"
 
@@ -48,6 +49,19 @@ slsvm_object_shadow(struct slskv_table *objtable, vm_object_t *objp)
 
 	obj = *objp;
 	vm_object_reference(obj);
+	/* 
+	 * If we are entering a swap object in Aurora, we need to set up its 
+	 * swap space.
+	 */
+	if (obj->type == OBJT_SWAP) {
+		VM_OBJECT_WLOCK(obj);
+		error = sls_pager_obj_init(obj);
+		VM_OBJECT_WUNLOCK(obj);
+		if (error != 0) {
+			vm_object_deallocate(obj);
+			return (error);
+		}
+	}
 	slsvm_object_shadowexact(objp);
 	obj->flags |= OBJ_AURORA;
 
@@ -423,9 +437,7 @@ slsvm_print_crc32_vmspace(struct vmspace *vm)
 		obj = entry->object.vm_object;
 		DEBUG4("entry: 0x%lx\tpresent: %s obj %p pages %ld", entry->start, \
 		    (obj != NULL) ? "yes" : "no", obj, (obj != NULL) ? obj->resident_page_count : 0);
-		if (obj == NULL)
-			continue;
-		if (obj->type != OBJT_DEFAULT)
+		if (!OBJT_ISANONYMOUS(obj))
 			continue;
 		TAILQ_FOREACH(m, &obj->memq, listq) {
 			addr = IDX_TO_OFF(m->pindex) - entry->offset + entry->start;
@@ -447,10 +459,7 @@ slsvm_print_crc32_object(vm_object_t obj)
 {
 	vm_page_t m;
 
-	if (obj == NULL)
-		return;
-
-	if (obj->type != OBJT_DEFAULT)
+	if (!OBJT_ISANONYMOUS(obj))
 		return;
 
 	TAILQ_FOREACH(m, &obj->memq, listq) {

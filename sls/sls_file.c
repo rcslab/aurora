@@ -56,6 +56,7 @@
 #include "sls_file.h"
 #include "sls_internal.h"
 #include "sls_vm.h"
+#include "sls_vmobject.h"
 #include "sls_vnode.h"
 
 #include "debug.h"
@@ -241,7 +242,6 @@ slsckpt_getposixshm(struct proc *p, struct file *fp,
 static int
 slsckpt_file(struct proc *p, struct file *fp, uint64_t *fpslsid, struct slsckpt_data *sckpt_data)
 {
-	vm_object_t obj, shadow;
 	struct sbuf *sb, *oldsb;
 	struct sls_record *rec;
 	struct slsfile info;
@@ -394,31 +394,17 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *fpslsid, struct slsckpt_
 		break;
 
 	case DTYPE_SHM:
-		/* Backed by POSIX shared memory, get the metadata and shadow the object. */
+
+		/* Checkpoint the POSIX segment itself. */
 		error = slsckpt_getposixshm(p, fp, &info, sb);
 		if (error != 0)
 			goto error;
 
-		/* Lookup whether we have already shadowed the object. */
-		obj = ((struct shmfd *) fp->f_data)->shm_object;
-		error = slskv_find(sckpt_data->sckpt_objtable, (uint64_t) obj, (uintptr_t *) &shadow);
-
-		/* XXX Refactor into the main shadowing code. */
-		/* 
-		 * If we already have a shadow, have the shared memory code point to it
-		 * and transfer the reference. 
-		 */
-		if (error == 0) {
-			((struct shmfd *) fp->f_data)->shm_object = shadow;
-			vm_object_reference(shadow);
-			vm_object_deallocate(obj);
-
-			break;
-		}
-
-		error = slsvm_object_shadow(sckpt_data->sckpt_objtable, &obj);
-		KASSERT(error == 0, ("object %p already has a shadow", obj));
-		((struct shmfd *) fp->f_data)->shm_object = obj;
+		/* Update the object pointer, possibly shadowing the object. */
+		error = slsckpt_vmobject_shm(
+		    &((struct shmfd *) fp->f_data)->shm_object, sckpt_data);
+		if (error != 0)
+			goto error;
 
 		break;
 

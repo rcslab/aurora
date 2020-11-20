@@ -233,6 +233,7 @@ sls_swapderef(void)
 	sls_swapderef_unlocked();
 	SLS_UNLOCK();
 }
+
 /* Global mutexes for restoring. */
 extern struct mtx sls_restmtx;
 extern struct cv sls_restcv;

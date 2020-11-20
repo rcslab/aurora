@@ -166,6 +166,10 @@ sls_getrecord(struct sbuf *sb, uint64_t slsid, uint64_t type)
 {
 	struct sls_record *rec;
 
+	KASSERT(slsid != 0, ("attempting to get record with SLS ID 0"));
+	KASSERT(type != 0, ("attempting to get record invalid type"));
+	KASSERT(sbuf_done(sb) != 0, ("record sbuf is not done"));
+	KASSERT(sbuf_len(sb) != 0, ("sbuf length 0"));
 	rec = malloc(sizeof(*rec), M_SLSREC, M_WAITOK);
 	rec->srec_id = slsid;
 	rec->srec_sb = sb;
@@ -707,6 +711,7 @@ sls_read_slos_record(uint64_t oid, struct slskv_table *rectable,
 	 * If the record can hold data, "typecast" it to look like it only has 
 	 * metadata. We will manually read the data later.
 	 */
+	DEBUG1("Read record of type %d", st.type);
 	if (sls_isdata(st.type)) {
 		ret = sls_readdata(vp, oid, st.type, rectable, objtable, lazyrest);
 		if (ret != 0)
@@ -757,7 +762,7 @@ sls_read_slos(struct slspart *slsp, struct slskv_table **rectablep,
 		goto error;
 
 	for (i = 0; i < idlen; i++) {
-		error = sls_read_slos_record(ids[i], rectable, objtable, 
+		error = sls_read_slos_record(ids[i], rectable, objtable,
 		    slsp->slsp_attr.attr_flags & SLSATTR_LAZYREST);
 		if (error != 0)
 			goto error;

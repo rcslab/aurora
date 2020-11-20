@@ -109,13 +109,14 @@ slsckpt_vmspace(struct proc *p, struct sbuf *sb, struct slsckpt_data *sckpt_data
 		error = sbuf_bcat(sb, vmspace->vm_shm, shminfo.shmseg * sizeof(*vmspace->vm_shm));
 		if (error != 0)
 			return (error);
+		KASSERT(vmspace->vm_shm != NULL, ("shmmap state array was deallocated"));
 	}
 
 	/* Checkpoint all objects, including their ancestors. */
-	for (entry = vm_map->header.next; entry != &vm_map->header; 
+	for (entry = vm_map->header.next; entry != &vm_map->header;
 	    entry = entry->next) {
 		for (obj = entry->object.vm_object; obj != NULL; obj = obj->backing_object) {
-			error = slsckpt_vmobject(p, obj, sckpt_data);
+			error = slsckpt_vmobject(obj, sckpt_data);
 			if (error != 0) 
 				return (error);
 		}
@@ -144,7 +145,8 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 	int error;
 
 	/* Find an object if it exists. */
-	if (slskv_find(objtable, (uint64_t) info->obj, (uintptr_t *) &object) != 0)
+	if ((info->obj == 0) || 
+	    slskv_find(objtable, (uint64_t) info->obj, (uintptr_t *) &object) != 0)
 		object = NULL;
 	else
 		vm_object_reference(object);
@@ -155,9 +157,9 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 	 */
 	vm_map_lock(map);
 	guard = MAP_NO_MERGE;
-	if (info->eflags & MAP_ENTRY_GUARD) {
+	if (info->eflags & MAP_ENTRY_GUARD)
 		guard |= MAP_CREATE_GUARD;
-	}
+
 	error = vm_map_insert(map, object, info->offset, 
 	    info->start, info->end, 
 	    info->protection, info->max_protection, guard);
@@ -174,6 +176,8 @@ slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info, struct slskv_t
 	KASSERT(entry->end == info->end,
 		("vm_map_entry end doesn't match: %lx vs. %lx", entry->end,
 		 info->end));
+#else
+	vm_map_lookup_entry(map, info->start, &entry);
 #endif /* INVARIANTS */
 
 	entry->eflags = info->eflags;
@@ -373,7 +377,7 @@ slsrest_vmspace(struct proc *p, struct slsvmspace *info, struct shmmap_state *sh
 	vmspace->vm_ssize = info->vm_ssize;
 	vmspace->vm_taddr = info->vm_taddr;
 	vmspace->vm_taddr = info->vm_daddr;
-	vmspace->vm_maxsaddr = info->vm_maxsaddr; 
+	vmspace->vm_maxsaddr = info->vm_maxsaddr;
 
 	if (shmstate != NULL)
 		vmspace->vm_shm = shmstate;

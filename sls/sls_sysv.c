@@ -10,15 +10,18 @@
 #include <slos_inode.h>
 #include <sls_data.h>
 
-#include "sysv_internal.h"
 #include "sls_internal.h"
 #include "sls_sysv.h"
+#include "sls_vmobject.h"
+#include "sysv_internal.h"
+
+#include "debug.h"
 
 SDT_PROBE_DEFINE(sls, , , sysvstart);
 SDT_PROBE_DEFINE(sls, , , sysvend);
 SDT_PROBE_DEFINE(sls, , , sysverror);
 
-/* 
+/*
  * Shadow and checkpoint all shared objects in the system. We assume all
  * shared objects are in use by workloads in the SLS, and so traverse the
  * whole space looking for valid segments.
@@ -28,12 +31,11 @@ int
 slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 {
 	struct slssysvshm slssysvshm;
-	vm_object_t obj, shadow;
 	struct sls_record *rec;
 	struct sbuf *sb = NULL;
-	vm_ooffset_t offset;
 	int error, i;
 
+	DEBUG("Checkpointing SYSV shared memory");
 	SDT_PROBE0(sls, , , sysvstart);
 
 	for (i = 0; i < shmalloced; i++) {
@@ -46,8 +48,7 @@ slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 
 		/* Dump the metadata to the records table. */
 		slssysvshm.magic = SLSSYSVSHM_ID;
-		/* XXX Use the encoding for the rest of the object? */
-		slssysvshm.slsid = (uint64_t) shmsegs[i].object;
+		slssysvshm.slsid = (uint64_t) shmsegs[i].object->objid;
 		slssysvshm.key = shmsegs[i].u.shm_perm.key;
 		slssysvshm.shm_segsz = shmsegs[i].u.shm_segsz;
 		slssysvshm.mode = shmsegs[i].u.shm_perm.mode;
@@ -57,26 +58,10 @@ slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 		if (error != 0)
 			goto error;
 
-		obj = shmsegs[i].object;
-
-		/* If we have already shadowed, we can just mend the reference. */
-		error = slskv_find(objtable, (uint64_t) obj, (uintptr_t *) &shadow);
-		if (error == 0) {
-			vm_object_reference(shadow);
-			shmsegs[i].object = shadow;
-			vm_object_deallocate(obj);
-		} else {
-			/* Shadow the object and add it to the table. */
-			obj = shmsegs[i].object;
-			vm_object_reference(obj);
-
-			offset = 0;
-			vm_object_shadow(&shmsegs[i].object, &offset, ptoa(obj->size));
-
-			/* It's impossible for us to have checkpointed the object yet. */
-			error = slskv_add(objtable, (uint64_t) obj, (uintptr_t) shmsegs[i].object);
-			KASSERT((error == 0), ("VM object already checkpointed"));
-		}
+		KASSERT(shmsegs[i].object != NULL, ("segment has no object"));
+		error = slsckpt_vmobject_shm(&shmsegs[i].object, sckpt_data);
+		if (error != 0)
+			goto error;
 
 	}
 
@@ -124,6 +109,8 @@ slsrest_sysvshm(struct slssysvshm *slssysvshm, struct slskv_table *objtable)
 	 * clean slate to work with shared memory-wise is a reasonable
 	 * assumption.
 	 */
+	KASSERT(shmalloced > slssysvshm->segnum, ("shmalloced %d, segnum %d",
+	    shmalloced, slssysvshm->segnum));
 	shmseg = &shmsegs[slssysvshm->segnum];
 	if ((shmseg->u.shm_perm.mode & SHMSEG_ALLOCATED) != 0)
 		return (EINVAL);
@@ -138,6 +125,7 @@ slsrest_sysvshm(struct slssysvshm *slssysvshm, struct slskv_table *objtable)
 	 * in shmget_allocate_segment(). 
 	 */
 
+	vm_object_reference(obj);
 	shmseg->object = obj;
 	shmseg->u.shm_perm.cuid = shmseg->u.shm_perm.uid = cred->cr_uid;
 	shmseg->u.shm_perm.cgid = shmseg->u.shm_perm.gid = cred->cr_gid;

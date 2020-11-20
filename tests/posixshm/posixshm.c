@@ -6,80 +6,64 @@
 
 #include <sys/types.h>
 #include <sys/mman.h>
-		
+
 #include <machine/atomic.h>
 
 #define POSIXPATH   ("/fake/path/posixshm")
-#define SHM_SIZE    (4096) 
-#define PARENT_MSG  ("PARENT WAS HERE")
-#define CHILD_MSG   ("CHILD WAS HERE")
+#define SHM_SIZE    (4096)
 
-int 
+int
 main()
 {
 	key_t key;
 	pid_t pid;
 	char *shm;
-	char *buf;
 	uint8_t *mtx;
-	int error;
+	int error, i;
 	int fd;
+	char c;
 
-	fd = shm_open(SHM_ANON, O_RDWR | O_CREAT, 0666);
+	fd = shm_open(POSIXPATH, O_RDWR | O_CREAT, 0666);
 	if (fd < 0) {
 	    perror("shm_open");
-	    exit(0);
+	    exit(1);
 	}
+
+	shm_unlink(POSIXPATH);
 
 	error = ftruncate(fd, getpagesize());
 	if (error != 0) {
 	    perror("ftruncate");
-	    exit(0);
+	    exit(1);
 	}
 
 	shm = (char *) mmap(NULL, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	if (shm == MAP_FAILED) {
 	    perror("mmap");
-	    exit(0);
+	    exit(1);
 	}
 
-	/* Initialization of the "mutex" (not really a mutex). */
-	atomic_store_8((uint8_t *) shm, 0);
+	c = 'a' + (random() % ('z' - 'a' + 1));
+	memset(shm, c, SHM_SIZE);
+	munmap(shm, SHM_SIZE);
 
-	pid = fork();
-	if (pid < 0) {
-	    perror("fork");
-	    exit(0);
+	sleep(5);
+
+	shm = (char *) mmap(NULL, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (shm == MAP_FAILED) {
+	    perror("mmap");
+	    exit(1);
 	}
-		
-	/* The "mutex" is in the first byte of the segment, the rest holds data. */
-	mtx = (uint8_t *) shm;
-	buf = &shm[1];
 
-	for (;;) {
-	    /* Get the "mutex". */
-	    while (atomic_cmpset_8(mtx, 0, 1) == 0)
-		sleep(1);
-
-	    if (pid > 0)
-		strlcpy(buf, PARENT_MSG, sizeof(PARENT_MSG));
-	    else
-		strlcpy(buf, CHILD_MSG, sizeof(CHILD_MSG));
-
-	    sleep(1);
-
-	    /* Leave the critical section. */
-	    atomic_store_8(mtx, 0);
-
-	    sleep(1);
-	    
-	    while (atomic_cmpset_8(mtx, 0, 1) == 0)
-		sleep(1);
-
-	    printf("Reading from %s: %s\n", (pid > 0) ? "parent" : "child", buf);
-
-	    atomic_store_8(mtx, 0);
+	for (i = 0; i < SHM_SIZE; i++) {
+		if (shm[i] != c) {
+			printf("Found byte '%d' instead of %d", shm[i], c);
+			exit(1);
+		}
 	}
+
+	close(fd);
+	printf("Done.\n");
 
 	return 0;
 }

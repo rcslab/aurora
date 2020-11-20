@@ -3,7 +3,7 @@
 . aurora
 aursetup
 
-"./fd/fd" "$MNT" > /dev/null 2> /dev/null &
+"./sysvshm/sysvshm" > /dev/null 2> /dev/null &
 PID=$!
 sleep 1
 
@@ -15,7 +15,8 @@ then
 fi
 
 sleep 1
-killandwait $PID
+# The segment is destroyed by the test, recreated by the SLS.
+wait $PID
 
 slsrestore
 if [ $? -ne 0 ];
@@ -24,15 +25,15 @@ then
     exit 1
 fi
 
-sleep 2
+sleep 1
+
 wait $!
 if [ $? -ne 0 ];
 then
-    echo "Process exited with nonzero"
+    echo "Process exited with $?"
     exit 1
 fi
 
-rm "$MNT/testfile"
 aurteardown
 if [ $? -ne 0 ]; then
     echo "Failed to tear down Aurora"
