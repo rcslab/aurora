@@ -42,6 +42,8 @@ struct slspart {
     bool		    slsp_syncdone;  /* Variable for slsp_signal/waitfor */
 
     LIST_ENTRY(slspart)	    slsp_parts;	    /* List of active SLS partitions */
+#define slsp_target slsp_attr.attr_target
+#define slsp_mode slsp_attr.attr_mode
 };
 
 LIST_HEAD(slsp_list, slspart);

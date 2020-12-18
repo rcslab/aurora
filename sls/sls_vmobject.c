@@ -188,7 +188,7 @@ slsrest_vmobject(struct slsvmobject *info, struct slsrest_data *restdata)
 		 * in vmentry_rest.
 		 */
 
-		error = slskv_find(restdata->vnodetable, info->vnode, (uintptr_t *) &vp);
+		error = slskv_find(restdata->vntable, info->vnode, (uintptr_t *) &vp);
 		if (error != 0)
 			return (error);
 

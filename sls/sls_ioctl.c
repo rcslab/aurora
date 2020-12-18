@@ -422,13 +422,10 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		if (error)
 			return (error);
 
-		slspagerun_zone = uma_zcreate("SLS pageruns",
-		    sizeof(struct slspagerun), NULL, NULL, NULL,
-		    NULL, UMA_ALIGNOF(struct slspagerun), 0);
-		if (slspagerun_zone == NULL) {
-			error = ENOMEM;
+		/* The restore data zone depends on the kv zone. */
+		error = slsrest_zoneinit();
+		if (error != 0)
 			return (error);
-		}
 
 		error = slskv_create(&slsm.slsm_procs);
 		if (error != 0)
@@ -524,6 +521,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		if (sysctl_ctx_free(&aurora_ctx))
 			printf("Failed to destroy sysctl\n");
 
+		slsrest_zonefini();
 		slskv_fini();
 
 		cv_destroy(&slsm.slsm_exitcv);

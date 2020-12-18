@@ -48,6 +48,7 @@ int slskv_add_unlocked(struct slskv_table *table, uint64_t key, uintptr_t value)
 int slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value);
 int slskv_pop(struct slskv_table *table, uint64_t *key, uintptr_t *value);
 void slskv_del(struct slskv_table *table, uint64_t key);
+void slskv_del_unlocked(struct slskv_table *table, uint64_t key);
 int slskv_serial(struct slskv_table *table, struct sbuf *sbp);
 int slskv_serial_unlocked(struct slskv_table *table, struct sbuf *sbp);
 int slskv_deserial(char *buf, size_t len, struct slskv_table **tablep);

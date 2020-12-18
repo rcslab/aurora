@@ -79,7 +79,7 @@ rec_to_string(uint64_t type)
 		return "Process Info";
 	case SLOSREC_SESS:
 		return "Session Info";
-	case SLOSREC_MEM:
+	case SLOSREC_VMSPACE:
 		return "VM Space";
 	case SLOSREC_VMOBJ:
 		return "VM Object";

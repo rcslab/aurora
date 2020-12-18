@@ -67,8 +67,6 @@ uint64_t sls_pages_grabbed = 0;
 uint64_t sls_io_initiated = 0;
 unsigned int sls_async_slos = 1;
 
-uma_zone_t slspagerun_zone = NULL;
-
 /*
  * A list of info structs which can hold data,
  * along with the size of their metadata.
@@ -698,9 +696,9 @@ out:
 /* Reads in a record from the SLOS and saves it in the record table. */
 int
 sls_read_slos(struct slspart *slsp, struct slskv_table **rectablep,
-    struct slskv_table **objtablep)
+    struct slskv_table *objtable)
 {
-	struct slskv_table *rectable, *objtable = NULL;
+	struct slskv_table *rectable;
 	uint64_t *ids = NULL;
 	size_t idlen;
 	int error, i;
@@ -710,16 +708,7 @@ sls_read_slos(struct slspart *slsp, struct slskv_table **rectablep,
 	if (error != 0)
 		return (error);
 
-	error = slskv_create(&objtable);
-	if (error != 0) {
-		slskv_destroy(rectable);
-		return (error);
-	}
-
-	/* 
-	 * Read the manifest, get the record number and vnode numbers for the 
-	 * checkpoint. 
-	 */
+	/* Read the manifest, get the record number for the checkpoint. */
 	error = sls_read_slos_manifest(slsp->slsp_oid, &ids, &idlen);
 	if (error != 0)
 		goto error;
@@ -733,7 +722,6 @@ sls_read_slos(struct slspart *slsp, struct slskv_table **rectablep,
 	}
 
 	*rectablep = rectable;
-	*objtablep = objtable;
 
 	free(ids, M_SLSMM);
 
@@ -742,9 +730,8 @@ sls_read_slos(struct slspart *slsp, struct slskv_table **rectablep,
 error:
 	free(ids, M_SLSMM);
 	sls_free_rectable(rectable);
-	/* XXX Destroy objtable properly. */
 
-	return error;
+	return (error);
 }
 
 /*

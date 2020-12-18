@@ -134,7 +134,8 @@ sls_thread_create(struct thread *td, void *thunk)
 
 done:
 
-	thread_suspend_check(1);
+	/* Have the thread check itself for suspension at the kernel boundary. */
+	td->td_flags |= TDF_NEEDSUSPCHK;
 	PROC_UNLOCK(td->td_proc);
 
 	return (error);
@@ -343,7 +344,7 @@ slsrest_proc_textvp(struct slsproc *slsproc, struct slsrest_data *restdata)
 	int error;
 
 	/* Restore the original executable pointer. */
-	error = slskv_find(restdata->vnodetable, slsproc->textvp, (uintptr_t *) &textvp);
+	error = slskv_find(restdata->vntable, slsproc->textvp, (uintptr_t *) &textvp);
 	if (error != 0)
 		return (error);
 
@@ -398,8 +399,10 @@ slsrest_session(struct slsproc *slsproc, struct slsrest_data *restdata)
 	 * serialize against non-leaders checking the hashtables.
 	 */
 	mtx_lock(&restdata->procmtx);
+	sess_hold(sess);
 	error = slskv_add(restdata->sesstable, slsproc->sid, (uintptr_t) sess);
 	if (error != 0) {
+		sess_release(sess);
 		mtx_unlock(&restdata->procmtx);
 		return (error);
 	}

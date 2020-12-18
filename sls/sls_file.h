@@ -30,7 +30,7 @@ int slsrest_posixshm(struct slsposixshm *info, struct slskv_table *objtable, int
 
 int slsckpt_pts_mst(struct proc *p, struct tty *pts, struct sbuf *sb);
 int slsckpt_pts_slv(struct proc *p, struct vnode *vp, struct sbuf *sb);
-int slsrest_pts(struct slskv_table *filetable,  struct slspts *slspts, int *fdp);
+int slsrest_pts(struct slskv_table *fptable,  struct slspts *slspts, int *fdp);
 
 int slsckpt_filedesc(struct proc *p, struct slsckpt_data *sckpt_data, struct sbuf *sb);
 int slsrest_filedesc(struct proc *p, struct slsfiledesc *slsfiledesc, 

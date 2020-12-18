@@ -29,7 +29,7 @@ then
 fi
 
 sleep 1
-pkill dd
+killall dd
 wait $!
 
 EXIT=$?

@@ -93,7 +93,7 @@ slsckpt_pipe(struct proc *p, struct file *fp, struct sbuf *sb)
 
 
 int
-slsrest_pipe(struct slskv_table *filetable, int flags, struct slspipe *ppinfo, int *fdp)
+slsrest_pipe(struct slskv_table *fptable, int flags, struct slspipe *ppinfo, int *fdp)
 {
 	struct file *fp, *peerfp;
 	int localfd, peerfd;
@@ -142,7 +142,7 @@ slsrest_pipe(struct slskv_table *filetable, int flags, struct slspipe *ppinfo, i
 	 * time that pipes and their corresponding open files have the
 	 * same ID, this is not a problem.
 	 */
-	error = slskv_add(filetable, ppinfo->peer, (uintptr_t) peerfp);
+	error = slskv_add(fptable, ppinfo->peer, (uintptr_t) peerfp);
 	if (error != 0) {
 		kern_close(curthread, localfd);
 		kern_close(curthread, peerfd);

@@ -61,10 +61,6 @@
 
 #include "debug.h"
 
-SDT_PROBE_DEFINE1(sls, , , fileckptstart, "int");
-SDT_PROBE_DEFINE1(sls, , , fileckptend, "int");
-SDT_PROBE_DEFINE1(sls, , , fileckpterr, "int");
-
 static int
 slsckpt_getkqueue(struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
 {
@@ -258,8 +254,6 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *fpslsid, struct slsckpt_
 	if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) fp, (uintptr_t *) &sb) == 0)
 		return (0);
 
-	SDT_PROBE1(sls, , , fileckptstart, fp->f_type);
-
 	info.type = fp->f_type;
 	info.flag = fp->f_flag;
 	info.offset = fp->f_offset;
@@ -298,7 +292,7 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *fpslsid, struct slsckpt_
 			info.backer = (uint64_t) fp->f_vnode;
 			error = sbuf_bcat(sb, (void *) &info, sizeof(info));
 			if (error != 0)
-				return (error);
+				goto error;
 
 			break;
 
@@ -319,7 +313,6 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *fpslsid, struct slsckpt_
 		/* Check again if we have actually checkpointed this pts before. */
 		if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) *fpslsid, (uintptr_t *) &oldsb) == 0) {
 			sbuf_delete(sb);
-			SDT_PROBE1(sls, , , fileckptend, fp->f_type);
 			return (0);
 		}
 
@@ -360,7 +353,6 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *fpslsid, struct slsckpt_
 		 */
 		if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) *fpslsid, (uintptr_t *) &oldsb) == 0) {
 			sbuf_delete(sb);
-			SDT_PROBE1(sls, , , fileckptend, fp->f_type);
 			return (0);
 		}
 
@@ -381,7 +373,6 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *fpslsid, struct slsckpt_
 			/* Recheck - again, same as with pipes. */
 			if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) *fpslsid, (uintptr_t *) &oldsb) == 0) {
 				sbuf_delete(sb);
-				SDT_PROBE1(sls, , , fileckptend, fp->f_type);
 				return (0);
 			}
 		}
@@ -419,7 +410,6 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *fpslsid, struct slsckpt_
 		/* Check again if we have actually checkpointed this pts before. */
 		if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) *fpslsid, (uintptr_t *) &oldsb) == 0) {
 			sbuf_delete(sb);
-			SDT_PROBE1(sls, , , fileckptend, fp->f_type);
 			return (0);
 		}
 
@@ -445,17 +435,13 @@ slsckpt_file(struct proc *p, struct file *fp, uint64_t *fpslsid, struct slsckpt_
 		goto error;
 	}
 
-	SDT_PROBE1(sls, , , fileckptend, fp->f_type);
 	return (0);
 
 error:
-	SLS_DBG("error %d", error);
+	SLS_DBG("checkpointing file returned error %d", error);
 
 	sbuf_delete(sb);
-	SDT_PROBE1(sls, , , fileckpterr, fp->f_type);
-
 	return (error);
-
 }
 
 int
@@ -478,7 +464,7 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 	case DTYPE_VNODE:
 	case DTYPE_FIFO:
 
-		error = slskv_find(restdata->vnodetable, info->backer, (uintptr_t *) &vp);
+		error = slskv_find(restdata->vntable, info->backer, (uintptr_t *) &vp);
 		if (error != 0) {
 			/* XXX Ignore the error if ignoring unlinked files. */
 			DEBUG("Probably restoring an unlinked file");
@@ -537,7 +523,7 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 		 * also brings back the other. For this reason, we look
 		 * for the pipe's SLS ID instead of the open file's.
 		 *
-		 * Because the rest of the filetable's data is indexed
+		 * Because the rest of the fptable's data is indexed
 		 * by the ID held in the slsfile structure, we do an
 		 * extra check using the ID of slspipe. If we find it,
 		 * we have already restored the peer, and so we only need
@@ -545,7 +531,7 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 		 */
 		slspipe = (struct slspipe *) slsbacker;
 		slsid = slspipe->slsid;
-		if (slskv_find(restdata->filetable, slsid, (uintptr_t *) &fppeer) == 0) {
+		if (slskv_find(restdata->fptable, slsid, (uintptr_t *) &fppeer) == 0) {
 			pipepeer = (struct pipe *) fppeer->f_data;
 
 			/* Restore the buffer's state. */
@@ -561,7 +547,7 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 			return (0);
 		}
 
-		error = slsrest_pipe(restdata->filetable, info->flag & (O_NONBLOCK | O_CLOEXEC),
+		error = slsrest_pipe(restdata->fptable, info->flag & (O_NONBLOCK | O_CLOEXEC),
 		    (struct slspipe *) slsbacker, &fd);
 		if (error != 0)
 			return (error);
@@ -571,10 +557,10 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 	case DTYPE_SOCKET:
 		/* Same as with pipes, check if we have already restored it. */
 		slsid = ((struct slssock *) slsbacker)->slsid;
-		if (slskv_find(restdata->filetable, slsid, &peer) == 0)
+		if (slskv_find(restdata->fptable, slsid, &peer) == 0)
 			return (0);
 
-		error = slsrest_socket(restdata->filetable, restdata->mbuftable, slsbacker, info, &fd);
+		error = slsrest_socket(restdata->fptable, restdata->mbuftable, slsbacker, info, &fd);
 		if (error != 0) 
 			return (error);
 
@@ -586,10 +572,10 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 		 * Therefore, check whether we need to proceed.
 		 */
 		slsid = ((struct slspts *) slsbacker)->slsid;
-		if (slskv_find(restdata->filetable, slsid, &peer) == 0) 
+		if (slskv_find(restdata->fptable, slsid, &peer) == 0) 
 			return (0);
 
-		error = slsrest_pts(restdata->filetable, (struct slspts *) slsbacker, &fd);
+		error = slsrest_pts(restdata->fptable, (struct slspts *) slsbacker, &fd);
 		if (error != 0)
 			return (error);
 		break;
@@ -614,7 +600,7 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 	 */
 	if (fd >= 0) {
 		fp = FDTOFP(curproc, fd);
-		/* We keep the open file in the filetable. */
+		/* We keep the open file in the fptable. */
 		if (!fhold(fp)) {
 			kern_close(td, fd);
 			return (EBADF);
@@ -630,7 +616,7 @@ slsrest_file(void *slsbacker, struct slsfile *info, struct slsrest_data *restdat
 	fp->f_flag = info->flag;
 	fp->f_offset= info->offset;
 
-	error = slskv_add(restdata->filetable, info->slsid, (uintptr_t) fp);
+	error = slskv_add(restdata->fptable, info->slsid, (uintptr_t) fp);
 	if (error != 0) {
 		fdrop(fp, td);
 		return (error);
@@ -843,11 +829,11 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc *info,
 	uint64_t fd;
 	int res;
 
-	error = slskv_find(restdata->vnodetable, info->cdir, (uintptr_t *) &cdir);
+	error = slskv_find(restdata->vntable, info->cdir, (uintptr_t *) &cdir);
 	if (error != 0)
 		return (EINVAL);
 
-	error = slskv_find(restdata->vnodetable, info->rdir, (uintptr_t *) &rdir);
+	error = slskv_find(restdata->vntable, info->rdir, (uintptr_t *) &rdir);
 	if (error != 0)
 		return (EINVAL);
 
@@ -887,7 +873,7 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc *info,
 	KV_FOREACH_POP(fdtable, fd, slsid) {
 
 		/* Get the restored open file from the ID. */
-		error = slskv_find(restdata->filetable, slsid, (uint64_t *) &fp);
+		error = slskv_find(restdata->fptable, slsid, (uint64_t *) &fp);
 		if (error != 0)
 			goto error;
 
@@ -916,7 +902,7 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc *info,
 		 */
 		_finstall(p->p_fd, fp, fd, O_CLOEXEC, NULL);
 
-		/* Fix up the kqueue to point to its new filetable. */
+		/* Fix up the kqueue to point to its new fptable. */
 		if (fp->f_type == DTYPE_KQUEUE)
 			slsrest_kqattach_locked(p, (struct kqueue *) fp->f_data);
 	}

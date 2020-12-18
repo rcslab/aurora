@@ -73,7 +73,7 @@ function slsckpt {
     if [ -z "$1" ]
     then
 	echo "No PID of process to be checkpointed specified"
-	exit 0
+	return 0
     fi
 
     # Check if we're doing delta checkpointing.

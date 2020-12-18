@@ -26,7 +26,7 @@ fi
 
 sleep 1
 
-wait $!
+wait `pidof mmap`
 
 EXIT=$?
 if [ $EXIT -ne 0 ];

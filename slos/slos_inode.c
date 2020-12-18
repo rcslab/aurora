@@ -185,8 +185,10 @@ slos_svpimport(struct slos *slos, uint64_t svpid, bool system, struct slos_node 
 	memcpy(ino, bp->b_data, sizeof(struct slos_inode));
 	brelse(bp);
 
-	if (ino->ino_magic != SLOS_IMAGIC)
+	if (ino->ino_magic != SLOS_IMAGIC) {
+		error = EINVAL;
 		goto error;
+	}
 
 	/*
 	 * Move each field separately, translating between the two.
@@ -308,6 +310,8 @@ slos_iopen(struct slos *slos, uint64_t oid, struct slos_node **svpp)
 	struct buf *bp;
 
 	DEBUG1("Opening Inode %lu", oid);
+
+	oid = OIDTOSLSID(oid);
 
 	/*
 	 * We should not hold this essentially global lock in this object. We 

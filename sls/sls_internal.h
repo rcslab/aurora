@@ -47,9 +47,12 @@ struct sls_metadata {
 };
 
 struct slsckpt_data {
-    struct slskv_table *sckpt_rectable; /* In-memory records */
-    struct slskv_table *sckpt_objtable; /* In-memory live VM Objects */
-    struct sls_attr	sckpt_attr;	/* Attributes of the partition */
+    struct slskv_table	*sckpt_rectable;    /* In-memory records */
+    struct slskv_table	*sckpt_objtable;    /* In-memory live VM Objects */
+    slsset		*sckpt_vntable;  /* In-memory active vnodes */
+    struct sls_attr	sckpt_attr;	    /* Attributes of the partition */
+#define sckpt_mode sckpt_attr.attr_mode
+#define sckpt_target sckpt_attr.attr_target
 };
 
 /* An in-memory version of an Aurora record. */
@@ -63,12 +66,14 @@ struct sls_record {
 struct slsrest_data {
     struct slskv_table  *objtable;	/* Holds the new VM Objects, indexed by ID */
     struct slskv_table  *proctable;	/* Holds the process records, indexed by ID */
-    struct slskv_table  *filetable;	/* Holds the new files, indexed by ID */
+    struct slskv_table  *fptable;	/* Holds the new files, indexed by ID */
     struct slskv_table  *kevtable;	/* Holds the kevents for a kq, indexed by kq */
     struct slskv_table  *pgidtable;	/* Holds the old-new process group ID pairs */
     struct slskv_table  *sesstable;	/* Holds the old-new session ID pairs */
     struct slskv_table  *mbuftable;	/* Holds the mbufs used by processes */
-    struct slskv_table  *vnodetable;	/* Holds all vnodes, indexed by vnode ID */
+    struct slskv_table  *vntable;	/* Holds all vnodes, indexed by vnode ID */
+    struct slspart	*slsp;		/* The partition being restored */
+
     struct cv	    proccv;	/* Used as a barrier while creating pgroups */
     struct mtx	    procmtx;	/* Used alongside the cv above */
     struct cv	    cv;		/* Global restore cv */
@@ -231,6 +236,10 @@ sls_swapderef(void)
 extern struct mtx sls_restmtx;
 extern struct cv sls_restcv;
 extern int sls_resttds;
+
+#define SLSREST_ZONEWARM (1024)
+int slsrest_zoneinit(void);
+void slsrest_zonefini(void);
 
 MALLOC_DECLARE(M_SLSMM);
 MALLOC_DECLARE(M_SLSREC);

@@ -231,16 +231,12 @@ slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value)
 	return (error);
 }
 
-/* 
- * Delete all instances of a key. 
- */
 void
-slskv_del(struct slskv_table *table, uint64_t key)
+slskv_del_unlocked(struct slskv_table *table, uint64_t key)
 {
 	struct slskv_pairs *bucket;
 	struct slskv_pair *kv, *tmpkv;
 
-	sx_slock(&table->sx);
 	mtx_lock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 	/* Get the bucket for the key and traverse it. */
 	bucket = &table->buckets[SLSKV_BUCKETNO(table, key)];
@@ -260,6 +256,16 @@ slskv_del(struct slskv_table *table, uint64_t key)
 	}
 
 	mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+}
+
+/* 
+ * Delete all instances of a key. 
+ */
+void
+slskv_del(struct slskv_table *table, uint64_t key)
+{
+	sx_slock(&table->sx);
+	slskv_del_unlocked(table, key);
 	sx_sunlock(&table->sx);
 }
 

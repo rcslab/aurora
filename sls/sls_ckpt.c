@@ -51,6 +51,7 @@
 #include "sls_table.h"
 #include "sls_vm.h"
 #include "sls_vmspace.h"
+#include "sls_vnode.h"
 #include "debug.h"
 
 #define SLS_PROCALIVE(proc) \
@@ -141,8 +142,7 @@ slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_dat
 
 	sb = sbuf_new_auto();
 
-
-	error = slsckpt_vmspace(p, sb, sckpt_data);
+	error = slsckpt_vmspace(p->p_vmspace, sb, sckpt_data);
 	if (error != 0) {
 		SLS_DBG("Error: slsckpt_vmspace failed with error code %d\n", error);
 		goto out;
@@ -226,7 +226,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	 * This is regardless of whether we have SLS_FULL as a mode; we might be 
 	 * doing deltas, with this being the first iteration.
 	 */
-	if (slsp->slsp_attr.attr_target == SLS_MEM)
+	if (slsp->slsp_target == SLS_MEM)
 		is_fullckpt = 0;
 	else
 		is_fullckpt = (slsp->slsp_sckpt == NULL) ? 1 : 0;
@@ -239,7 +239,6 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 		goto error;
 	}
 	SDT_PROBE0(sls, , , sysv);
-
 
 	/* Get the data from all processes in the partition. */
 	KVSET_FOREACH(procset, iter, p) {
@@ -273,8 +272,20 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	slsckpt_cont(procset);
 	SDT_PROBE0(sls, , ,cont);
 
-	switch (slsp->slsp_attr.attr_target) {
+	switch (slsp->slsp_target) {
 	case SLS_OSD:
+
+		/* Create a record for every vnode. */
+		/*
+		 * Actually serializing vnodes proves costly for applications 
+		 * with hundreds of vnodes. We avoid it completely for in-memory 
+		 * checkponts, and defer it to after the partition has resumed 
+		 * if using disk.
+		 */
+		error = slsckpt_vnode_serialize(sckpt_data);
+		if (error != 0)
+			goto error;
+
 		/*
 		 * The cleanest way for this to go away is by splitting
 		 * different SLS records to different on-disk inodes. This
@@ -298,7 +309,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 		break;
 
 	default:
-		panic("Invalid target %d\n", slsp->slsp_attr.attr_target);
+		panic("Invalid target %d\n", slsp->slsp_target);
 	}
 
 	/* Advance the current epoch. */
@@ -350,7 +361,7 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 	 * checkpoints we have in hand below, because they are not reachable 
 	 * by the partition.
 	 */
-	switch (slsp->slsp_attr.attr_mode) {
+	switch (slsp->slsp_mode) {
 	case SLS_FULL:
 		/* Destroy the shadows. We don't keep any between iterations. */
 		DEBUG("Compacting full checkpoint");
@@ -367,13 +378,13 @@ sls_checkpoint(slsset *procset, struct slspart *slsp)
 		slsp->slsp_sckpt = sckpt_data;
 		break;
 	default:
-		panic("invalid mode %d\n", slsp->slsp_attr.attr_mode);
+		panic("invalid mode %d\n", slsp->slsp_mode);
 	}
 
 	SDT_PROBE0(sls, , , dedup);
 	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
 
-	if (slsp->slsp_attr.attr_target == SLS_OSD) {
+	if (slsp->slsp_target == SLS_OSD) {
 		taskqueue_drain_all(slos.slos_tq);
 		/* XXX Using MNT_WAIT is causing a deadlock right now. */
 		VFS_SYNC(slos.slsfs_mount, (sls_vfs_sync != 0) ? MNT_WAIT : MNT_NOWAIT);

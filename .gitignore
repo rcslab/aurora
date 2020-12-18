@@ -37,7 +37,9 @@ tests/unixlisten/unixlisten
 tests/unlink/unlink
 tests/vmobject/vmobject
 tests/slsfs/file
+tests/testfile
 
+scripts/config.sh
 
 tools/newfs_sls/newfs_sls
 tools/slsctl/slsctl
@@ -61,6 +63,7 @@ output/
 *.core
 *.depend*
 *~*
+*.tmp
 *garbage*
 .nfs*
 ckpt.sh
@@ -89,4 +92,3 @@ nginx_*
 lighttpd_*
 memcached_*
 vmobject-*
-tests/testfile

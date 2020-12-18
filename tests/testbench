@@ -50,7 +50,7 @@ run_test()
     NAME=`basename $1`
     print_running $NAME
     tstart=`date +%s`
-    $t >> $TESTLOG
+    $1 >> $TESTLOG
     tstop=`date +%s`
     if [ $? -eq 0 ]; then
 	print_success $NAME `expr $tstop - $tstart`
@@ -85,7 +85,7 @@ export MDDISK=$MDDISK
 
 if [ $# -eq 1 ]; then
 	touch $TESTLOG
-	run_test "$PWD/$1"
+	run_test "$SRCROOT/tests/$1"
 else
 	run_tests
 fi

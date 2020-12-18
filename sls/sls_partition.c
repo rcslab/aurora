@@ -55,6 +55,10 @@ slsckpt_create(struct slsckpt_data **sckpt_datap, struct sls_attr *attr)
 	if (error != 0)
 		goto error;
 
+	error = slskv_create(&sckpt_data->sckpt_vntable);
+	if (error != 0)
+		goto error;
+
 	memcpy(&sckpt_data->sckpt_attr, attr, sizeof(sckpt_data->sckpt_attr));
 
 	*sckpt_datap = sckpt_data;
@@ -64,6 +68,7 @@ slsckpt_create(struct slsckpt_data **sckpt_datap, struct sls_attr *attr)
 error:
 
 	if (sckpt_data != NULL) {
+		slskv_destroy(sckpt_data->sckpt_vntable);
 		slskv_destroy(sckpt_data->sckpt_objtable);
 		slskv_destroy(sckpt_data->sckpt_rectable);
 	}
@@ -77,16 +82,25 @@ void
 slsckpt_destroy(struct slsckpt_data *sckpt_data, struct slsckpt_data *sckpt_new)
 {
 	struct slskv_table *newtable;
+	struct vnode *vp;
 
 	if (sckpt_data == NULL)
 		return;
 
-	DEBUG("Destroying partition");
+	DEBUG("Destroying stored checkpoint");
+	/*
+	 * Collapse all objects created for the checkpoint. If delta
+	 * checkpointing, update the new table's keys to be the backers of
+	 * the shadows being destroyed here, instead of the shadows themselves.
+	 */
 	newtable = (sckpt_new != NULL) ? sckpt_new->sckpt_objtable : NULL;
-	if (sckpt_data->sckpt_objtable != NULL) {
-		slsvm_objtable_collapse(sckpt_data->sckpt_objtable, newtable);
-		slskv_destroy(sckpt_data->sckpt_objtable);
-	}
+	slsvm_objtable_collapse(sckpt_data->sckpt_objtable, newtable);
+	slskv_destroy(sckpt_data->sckpt_objtable);
+
+	/* Release all held vnodes. */
+	KVSET_FOREACH_POP(sckpt_data->sckpt_vntable, vp)
+		vrele(vp);
+	slsset_destroy(sckpt_data->sckpt_vntable);
 
 	sls_free_rectable(sckpt_data->sckpt_rectable);
 

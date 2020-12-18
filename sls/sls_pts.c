@@ -284,7 +284,7 @@ slsckpt_pts_slv(struct proc *p, struct vnode *vp, struct sbuf *sb)
  * both the master and the slave side of the pts. 
  */
 int
-slsrest_pts(struct slskv_table *filetable,  struct slspts *slspts, int *fdp)
+slsrest_pts(struct slskv_table *fptable,  struct slspts *slspts, int *fdp)
 {
 	struct file *masterfp, *slavefp;
 	int masterfd, slavefd;
@@ -346,7 +346,7 @@ slsrest_pts(struct slskv_table *filetable,  struct slspts *slspts, int *fdp)
 	 * with the fd that we return to it.
 	 */
 	if (slspts->ismaster != 0) {
-		error = slskv_add(filetable, slspts->peerid, (uintptr_t) slavefp);
+		error = slskv_add(fptable, slspts->peerid, (uintptr_t) slavefp);
 		if (error != 0) {
 			kern_close(curthread, slavefd);
 			goto error;
@@ -364,7 +364,7 @@ slsrest_pts(struct slskv_table *filetable,  struct slspts *slspts, int *fdp)
 		kern_close(curthread, slavefd);
 
 	} else {
-		error = slskv_add(filetable, slspts->peerid, (uintptr_t) masterfp);
+		error = slskv_add(fptable, slspts->peerid, (uintptr_t) masterfp);
 		if (error != 0) {
 			kern_close(curthread, masterfd);
 			return (error);

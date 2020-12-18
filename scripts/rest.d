@@ -1,21 +1,34 @@
 #pragma D option quiet
-int reststart, resttime;
+int restore_start, last_restore_event;
+int proc_restore_start, proc_last_restore_event;
 
 BEGIN
 {
 }
 
-fbt::sls_restore:entry
+fbt::slsrest_metadata:entry
 {
-    reststart = timestamp;
+    proc_restore_start = proc_last_restore_event = timestamp;
 }
 
-sls:sls::restdone
+fbt::sls_rest:entry
 {
-    resttime = timestamp - reststart;
+    restore_start = last_restore_event = timestamp;
+}
+
+sls::slsrest_metadata:
+{
+    printf("%s\t%d ns\n", stringof(arg0), timestamp - proc_last_restore_event);
+    proc_last_restore_event = timestamp;
+}
+
+sls::sls_rest:
+{
+    printf("%s\t%d ns\n", stringof(arg0), timestamp - last_restore_event);
+    last_restore_event = timestamp;
 }
 
 END
 {
-	print("Restore time (ns): %d", resttime);
+    printf("%s\t%d ns\n", "Total time", last_restore_event - restore_start);
 }

@@ -75,29 +75,25 @@ slsckpt_vmentry(struct vm_map_entry *entry, struct sbuf *sb)
 }
 
 int
-slsckpt_vmspace(struct proc *p, struct sbuf *sb, struct slsckpt_data *sckpt_data)
+slsckpt_vmspace(struct vmspace *vm, struct sbuf *sb, struct slsckpt_data *sckpt_data)
 {
-	vm_map_t vm_map;
-	struct vmspace *vmspace;
+	vm_map_t vm_map = &vm->vm_map;
 	struct vm_map_entry *entry;
 	struct slsvmspace slsvmspace;
 	vm_object_t obj;
 	int error;
 
-	vmspace = p->p_vmspace;
-	vm_map = &vmspace->vm_map;
-
 	slsvmspace = (struct slsvmspace) {
 		.magic = SLSVMSPACE_ID,
-		    .vm_swrss = vmspace->vm_swrss,
-		    .vm_tsize = vmspace->vm_tsize,
-		    .vm_dsize = vmspace->vm_dsize,
-		    .vm_ssize = vmspace->vm_ssize,
-		    .vm_taddr = vmspace->vm_taddr,
-		    .vm_daddr = vmspace->vm_daddr,
-		    .vm_maxsaddr = vmspace->vm_maxsaddr,
+		    .vm_swrss = vm->vm_swrss,
+		    .vm_tsize = vm->vm_tsize,
+		    .vm_dsize = vm->vm_dsize,
+		    .vm_ssize = vm->vm_ssize,
+		    .vm_taddr = vm->vm_taddr,
+		    .vm_daddr = vm->vm_daddr,
+		    .vm_maxsaddr = vm->vm_maxsaddr,
 		    .nentries = vm_map->nentries,
-		    .has_shm = ((vmspace->vm_shm != NULL) ? 1 : 0),
+		    .has_shm = ((vm->vm_shm != NULL) ? 1 : 0),
 	};
 
 	error = sbuf_bcat(sb, (void *) &slsvmspace, sizeof(slsvmspace));
@@ -106,10 +102,10 @@ slsckpt_vmspace(struct proc *p, struct sbuf *sb, struct slsckpt_data *sckpt_data
 
 	/* Get the table wholesale (it's not large, so just grab all of it). */
 	if (slsvmspace.has_shm != 0) {
-		error = sbuf_bcat(sb, vmspace->vm_shm, shminfo.shmseg * sizeof(*vmspace->vm_shm));
+		error = sbuf_bcat(sb, vm->vm_shm, shminfo.shmseg * sizeof(*vm->vm_shm));
 		if (error != 0)
 			return (error);
-		KASSERT(vmspace->vm_shm != NULL, ("shmmap state array was deallocated"));
+		KASSERT(vm->vm_shm != NULL, ("shmmap state array was deallocated"));
 	}
 
 	/* Checkpoint all objects, including their ancestors. */
@@ -215,7 +211,7 @@ slsrest_vmentry_file(struct vm_map *map, struct slsvmentry *entry,
 		return (EPERM);
 
 	/* Retrieve the restored vnode pointer. */
-	error = slskv_find(restdata->vnodetable, (uint64_t) entry->vp, (uintptr_t *) &vp);
+	error = slskv_find(restdata->vntable, (uint64_t) entry->vp, (uintptr_t *) &vp);
 	if (error != 0)
 		return (error);
 

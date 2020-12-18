@@ -1093,6 +1093,8 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	vp = NULL;
 	none = NULL;
 
+	ino = OIDTOSLSID(ino);
+
 	/* Make sure the inode does not already have a vnode. */
 	error = vfs_hash_get(mp, ino, LK_EXCLUSIVE, td, &vp,
 	    NULL, NULL);

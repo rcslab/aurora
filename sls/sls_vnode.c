@@ -54,6 +54,7 @@
 
 #include "sls_internal.h"
 #include "sls_file.h"
+#include "sls_file.h"
 #include "sls_vnode.h"
 
 #include "debug.h"
@@ -103,11 +104,34 @@ slsckpt_vnode_ckptbyname(struct vnode *vp)
 	return (false);
 }
 
+/* 
+ * Store a vnode in memory, without serializing. For disk checkpoints, we 
+ * serialize after the partition has resumed.
+ */
 int
 slsckpt_vnode(struct vnode *vp, struct slsckpt_data *sckpt_data)
 {
+	int error;
+
+	if (slsset_find(sckpt_data->sckpt_vntable, (uint64_t) vp) == 0)
+		return (0);
+
+	error = slsset_add(sckpt_data->sckpt_vntable, (uint64_t) vp);
+	if (error != 0)
+		return (EINVAL);
+
+	vref(vp);
+
+	return (0);
+}
+
+/*
+ * Serialize a single vnode into a record, held in an sbuf.
+ */
+static int
+slsckpt_vnode_serialize_single(struct vnode *vp, bool allow_unlinked, struct sbuf **sbp)
+{
 	struct thread *td = curthread;
-	struct sls_record *rec;
 	char *freepath = NULL;
 	char *fullpath = "";
 	struct slsvnode slsvnode;
@@ -117,10 +141,6 @@ slsckpt_vnode(struct vnode *vp, struct slsckpt_data *sckpt_data)
 	/* Check if using the name/inode number makes sense. */
 	if (!slsckpt_vnode_ckptbyname(vp))
 		return (EINVAL);
-
-	/* Check if we have already checkpointed this vnode. */
-	if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) vp, (uintptr_t *) &rec) == 0)
-		return (0);
 
 	sb = sbuf_new_auto();
 
@@ -133,7 +153,7 @@ slsckpt_vnode(struct vnode *vp, struct slsckpt_data *sckpt_data)
 		error = vn_fullpath(td, vp, &fullpath, &freepath);
 		if (error != 0) {
 			DEBUG2("vn_fullpath() failed for vnode %p with error %d", vp, error);
-			if (SLSATTR_ISIGNUNLINKED(sckpt_data->sckpt_attr))
+			if (allow_unlinked) 
 				panic("Unlinked vnode %p not in the SLOS", vp);
 
 			/* Otherwise clean up as if after an error. */
@@ -164,13 +184,7 @@ slsckpt_vnode(struct vnode *vp, struct slsckpt_data *sckpt_data)
 
 	sbuf_finish(sb);
 
-	/* Whether we have a path or not, create the new record. */
-	rec = sls_getrecord(sb, slsvnode.slsid, SLOSREC_VNODE);
-	error = slskv_add(sckpt_data->sckpt_rectable, slsvnode.slsid, (uintptr_t) rec);
-	if (error != 0) {
-		free(rec, M_SLSREC);
-		goto error;
-	}
+	*sbp = sb;
 
 	free(freepath, M_TEMP);
 	return (0);
@@ -180,6 +194,38 @@ error:
 
 	free(freepath, M_TEMP);
 	return (error);
+}
+
+int
+slsckpt_vnode_serialize(struct slsckpt_data *sckpt_data)
+{
+	struct sls_record *rec;
+	struct slskv_iter iter;
+	struct vnode *vp;
+	struct sbuf *sb;
+	int error;
+
+	KVSET_FOREACH(sckpt_data->sckpt_vntable, iter, vp) {
+		/* Check if we have already serialized this vnode. */
+		if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) vp, (uintptr_t *) &rec) == 0)
+			return (0);
+
+		error = slsckpt_vnode_serialize_single(vp, 
+		    SLSATTR_ISIGNUNLINKED(sckpt_data->sckpt_attr), &sb);
+		if (error != 0)
+			return (error);
+		
+		/* Whether we have a path or not, create the new record. */
+		rec = sls_getrecord(sb, (uint64_t) vp, SLOSREC_VNODE);
+		error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) vp, (uintptr_t) rec);
+		if (error != 0) {
+			free(rec, M_SLSREC);
+			sbuf_delete(sb);
+			return (error);
+		}
+	}
+
+	return (0);
 }
 
 /*
@@ -244,7 +290,7 @@ slsrest_vnode(struct slsvnode *info, struct slsrest_data *restdata)
 		return (error);
 
 	/* Add it to the table of open vnodes. */
-	error = slskv_add(restdata->vnodetable, info->slsid, (uintptr_t) vp);
+	error = slskv_add(restdata->vntable, info->slsid, (uintptr_t) vp);
 	if (error != 0) {
 		vrele(vp);
 		return (error);
