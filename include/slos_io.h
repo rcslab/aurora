@@ -22,6 +22,9 @@ int slos_sbat(struct slos *slos, int index, struct slos_sb *sb);
 int slos_iotask_create(struct vnode *vp, struct buf *bp, bool async);
 boolean_t slos_hasblock(struct vnode *vp, uint64_t lblkno_req, int *rbehind, int *rahead);
 
+int slos_io_init(void);
+void slos_io_uninit(void);
+
 extern int slos_pbufcnt;
 
 #endif /* _SLOS_IO_H_ */

@@ -1,4 +1,3 @@
-
 #include <sys/param.h>
 #include <sys/bio.h>
 #include <sys/buf.h>
@@ -67,8 +66,13 @@ int
 slos_init(void)
 {
 	struct sysctl_oid *root;
+	int error;
 
-	slos_node_zone = uma_zcreate("slos node zone", sizeof(struct slos_node),
+	error = slos_io_init();
+	if (error != 0)
+		return (error);
+
+	slos_node_zone = uma_zcreate("SLOS node zone", sizeof(struct slos_node),
 	    NULL,
 #ifdef INVARIANTS
 	    slos_node_dtor,
@@ -76,6 +80,10 @@ slos_init(void)
 	    NULL,
 #endif
 	    slos_node_init, slos_node_fini, 0, 0);
+	if (slos_node_zone == NULL) {
+		slos_io_uninit();
+		return (ENOMEM);
+	}
 
 	bzero(&slos, sizeof(struct slos));
 	lockinit(&slos.slos_lock, PVFS, "sloslock", VLKTIMEOUT, LK_NOSHARE);

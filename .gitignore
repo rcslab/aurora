@@ -97,3 +97,5 @@ redisinput
 criu-results/
 *.tar
 *.gz
+stats.*
+dtraceoutput

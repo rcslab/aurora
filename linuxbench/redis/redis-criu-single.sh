@@ -2,13 +2,13 @@
 
 REDISSRV="redis-server"
 CKPTDIR="$PWD/criuimage"
-CONF="redis.conf"
+CONF="redis.linux.conf"
 TMPFILE="redisinput"
 SIZE="$1"
 
 if [ -z "$SIZE" ];then
 	echo "No size given"
-	exit 
+	exit
 fi
 
 pkill $REDISSRV
@@ -26,7 +26,7 @@ sleep 1
 REDISPID=$(pidof $REDISSRV)
 
 # For some reason, directly piping redisgen.py breaks the pipe.
-./redisgen.py "$SIZE"  > "$TMPFILE"
+"$SRCROOT/linuxbench/redis/redisgen.py" "$SIZE"  > "$TMPFILE"
 cat "$TMPFILE" | redis-cli --pipe > /dev/null
 rm "$TMPFILE"
 

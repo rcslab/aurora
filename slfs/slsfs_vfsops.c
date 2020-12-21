@@ -73,9 +73,18 @@ slsfs_init(struct vfsconf *vfsp)
 
 	fnode_zone = uma_zcreate("Btree Fnode Slabs", sizeof(struct fnode),
 		&fnode_construct, &fnode_deconstruct, NULL, NULL, UMA_ALIGN_PTR, 0);
+	if (fnode_zone == NULL) {
+		slos_uninit();
+		return (ENOMEM);
+	}
+
 	fnode_trie_zone = uma_zcreate("Btree Fnode Trie Slabs", pctrie_node_size(),
 		NULL, NULL, pctrie_zone_init, NULL, UMA_ALIGN_PTR, UMA_ZONE_NOFREE);
-
+	if (fnode_trie_zone == NULL) {
+		uma_zdestroy(fnode_zone);
+		slos_uninit();
+		return (ENOMEM);
+	}
 
 	return (0);
 }
@@ -88,6 +97,7 @@ slsfs_uninit(struct vfsconf *vfsp)
 {
 	int usecnt;
 
+	/* Wait for anyone who still has the lock. */
 	SLOS_LOCK(&slos);
 	usecnt = slos.slos_usecnt;
 	SLOS_UNLOCK(&slos);

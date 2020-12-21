@@ -1,3 +1,5 @@
+#!/usr/sbin/dtrace -s
+
 #pragma D option quiet
 int checkpoint_start, last_checkpoint_event;
 int proc_checkpoint_start, proc_last_checkpoint_event;

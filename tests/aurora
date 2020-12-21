@@ -1,8 +1,14 @@
 SRCROOT="/root/sls"
 NEWFS=$SRCROOT/tools/newfs_sls/newfs_sls
+MNT="/testmnt"
+
 SLSCTL=$SRCROOT/tools/slsctl/slsctl
 SLSROOT="$SRCROOT/root.tar.gz"
-MNT=/testmnt
+SLSMINROOT="$SRCROOT/minroot.tar.gz"
+
+STRIPESIZE="$(( 64 * 1024 ))"
+STRIPENAME="st0"
+STRIPEDISKS="nvd0 nvd1 nvd2 nvd3"
 
 # Load and unload kernel modules
 loadsls()
@@ -68,9 +74,25 @@ slsunmount()
     umount $MNT
 }
 
+aurstripe()
+{
+    gstripe load
+    gstripe stop "$STRIPENAME"
+    gstripe create -s "$STRIPESIZE" -v "$STRIPENAME" $STRIPEDISKS
+
+    DISK="stripe/$STRIPENAME"
+    DISKPATH="/dev/$DISK"
+}
+
+aurunstripe()
+{
+    gstripe destroy $STRIPENAME > /dev/null 2> /dev/null
+}
+
 aursetup()
 {
     loadmod
+    #finddisk
     slsnewfs
     slsmount
 }
@@ -147,6 +169,7 @@ createroot()
 {
     if [ ! -f "$SLSROOT" ]; then
 	$SRCROOT/scripts/image.sh
+	$SRCROOT/scripts/rootmin.sh
     fi
 }
 
@@ -154,4 +177,11 @@ installroot()
 {
     # Unpack the root into the mount if it exists
     tar -C "$MNT" -xf "$SLSROOT"
+}
+
+
+installminroot()
+{
+    # Unpack the root into the mount if it exists
+    tar -C "$MNT" -xf "$SLSMINROOT"
 }

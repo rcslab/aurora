@@ -1,6 +1,6 @@
 #!/bin/sh
 
-PARTITIONS="$DISK"
+PARTITIONS="$DISK GPT {auto freebsd-ufs /}"
 DISTRIBUTIONS="base.txz"
 BSDINSTALL_CHROOT="$MNT"
 
@@ -12,3 +12,6 @@ sysrc sshd_enable="NO"
 pkg install -y readline
 pkg install -y bash
 pkg install -y python
+pkg install -y redis
+
+return

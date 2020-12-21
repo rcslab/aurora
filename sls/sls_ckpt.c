@@ -260,6 +260,8 @@ slsckpt_initio(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 	if (error != 0)
 		return (error);
 
+	SDT_PROBE1(sls, , sls_checkpoint, , "Serializing vnodes");
+
 	error = sls_write_slos(slsp->slsp_oid, sckpt_data);
 	if (error != 0) {
 		DEBUG1("Writing to disk failed with %d", error);

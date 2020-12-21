@@ -54,7 +54,8 @@ struct slos slos;
 /* The SLOS can use as many physical buffers as it needs to. */
 int slos_pbufcnt = -1;
 
-static MALLOC_DEFINE(M_SLOS_IO, "slos_io", "SLOS IO context");
+static uma_zone_t slos_taskctx_zone;
+
 MALLOC_DEFINE(M_SLOS_SB, "slos_superblock", "SLOS superblock");
 
 struct slos_taskctx {
@@ -62,6 +63,23 @@ struct slos_taskctx {
 	struct vnode *vp;
 	struct buf *bp;
 };
+
+int
+slos_io_init(void)
+{
+	slos_taskctx_zone = uma_zcreate("SLOS io task contexts", sizeof(struct slos_taskctx),
+	    NULL, NULL, NULL, NULL, UMA_ALIGNOF(struct slos_taskctx), 0);
+	if (slos_taskctx_zone == NULL)
+		return (ENOMEM);
+
+	return (0);
+}
+
+void
+slos_io_uninit(void)
+{
+	uma_zdestroy(slos_taskctx_zone);
+}
 
 /*
  * Initialize a UIO for operation rwflag at offset off,
@@ -230,7 +248,7 @@ slos_ptr_trimstart(uint64_t newbln, uint64_t bln, size_t blksize, diskptr_t *ptr
 }
 
 /* Do the necessary btree manipulations before initiating an IO. */
-static int
+static int __attribute__ ((noinline))
 slos_io_setdaddr(struct slos_node *svp, size_t size, struct buf *bp)
 {
 	struct fbtree *tree = &svp->sn_tree;
@@ -329,7 +347,7 @@ error:
 /*
  * Set up the physical on-disk address for the IO.
  */
-static void
+static void __attribute__ ((noinline))
 slos_io_physaddr(struct buf *bp, struct slos *slos)
 {
 	bp->b_flags &= ~B_INVAL;
@@ -402,7 +420,7 @@ out:
 	BUF_ASSERT_LOCKED(bp);
 	relpbuf(bp, &slos_pbufcnt);
 
-	free(task, M_SLOS_IO);
+	uma_zfree(slos_taskctx_zone, task);
 }
 
 static struct slos_taskctx *
@@ -410,7 +428,7 @@ slos_iotask_init(struct vnode *vp, struct buf *bp)
 {
 	struct slos_taskctx *ctx;
 
-	ctx = malloc(sizeof(*ctx), M_SLOS_IO, M_WAITOK | M_ZERO);
+	ctx = uma_zalloc(slos_taskctx_zone, M_WAITOK | M_ZERO);
 	*ctx = (struct slos_taskctx) {
 		.vp = vp,
 		.bp = bp,

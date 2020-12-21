@@ -1,11 +1,15 @@
 #!/bin/sh
 
+SRCROOT=../../
+export SRCROOT
+
 BASE="100"
 STEPS="10"
 RESULTSDIR="criu-results"
 
 SIZE="$BASE"
 
+rm -rf $RESULTSDIR
 mkdir -p $RESULTSDIR
 
 while [ $SIZE -le $(( $BASE * $STEPS )) ] 
