@@ -9,6 +9,7 @@
 #include "sls_ioctl.h"
 
 /* Low-level APIs */
+int sls_memsnap(uint64_t oid, void *addr);
 int sls_checkpoint(uint64_t oid, bool recurse);
 int sls_restore(uint64_t oid, bool daemon, bool rest_stopped);
 

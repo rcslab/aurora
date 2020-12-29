@@ -24,13 +24,16 @@
      ((obj->type == OBJT_DEFAULT) || \
       (obj->type == OBJT_SWAP)))
 
-int slsvm_object_shadow(struct slskv_table *objtable, vm_object_t *objp);
+int slsvm_entry_shadow(struct proc *p, struct slskv_table *table, vm_map_entry_t entry,
+	bool is_fullckpt);
+void slsvm_objtable_collapsenew(struct slskv_table *objtable, struct slskv_table *newtable);
 void slsvm_objtable_collapse(struct slskv_table *objtable, struct slskv_table *newtable);
-int slsvm_proc_shadow(struct proc *p, struct slskv_table *table, int is_fullckpt);
-int slsvm_procset_shadow(slsset *procset, struct slskv_table *table, int is_fullckpt);
+int slsvm_procset_shadow(slsset *procset, struct slskv_table *table, bool is_fullckpt);
+
 void slsvm_object_reftransfer(vm_object_t src, vm_object_t dst);
-void slsvm_object_shadowexact(vm_object_t *objp);
+int slsvm_object_shadow(struct slskv_table *objtable, vm_object_t *objp);
 void slsvm_object_copy(struct proc *p, struct vm_map_entry *entry, vm_object_t obj);
+
 void slsvm_print_chain(vm_object_t shadow);
 void slsvm_print_crc32_vmspace(struct vmspace *vm);
 void slsvm_print_crc32_object(vm_object_t obj);

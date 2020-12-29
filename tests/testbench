@@ -51,8 +51,9 @@ run_test()
     print_running $NAME
     tstart=`date +%s`
     $1 >> $TESTLOG
+    RETVAL=$?
     tstop=`date +%s`
-    if [ $? -eq 0 ]; then
+    if [ $RETVAL -eq 0 ]; then
 	print_success $NAME `expr $tstop - $tstart`
     else
 	print_fail $NAME

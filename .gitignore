@@ -19,6 +19,7 @@ tests/forkwait/forkwait
 tests/llist/llist
 tests/main/main
 tests/memory/memory
+tests/memsnap/memsnap
 tests/mmap/mmap
 tests/multithread/multithread
 tests/pipe/pipe
@@ -26,6 +27,7 @@ tests/posixshm/posixshm
 tests/posix/posix
 tests/print/print
 tests/register/register
+tests/selfie/selfie
 tests/sharemap/sharemap
 tests/signal/signal
 tests/sleep/sleep

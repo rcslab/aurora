@@ -93,7 +93,9 @@ restore_main(int argc, char* argv[]) {
 			perror("wait");
 			return (-1);
 		} else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
-			return (status);
+			fprintf(stderr, "Process exited with %d\n",
+			    WEXITSTATUS(status));
+			return (WEXITSTATUS(status));
 		} else if (WIFSIGNALED(status)) {
 			if (WTERMSIG(status) == SIGSEGV) {
 				fprintf(stderr, "Process segfaulted\n");

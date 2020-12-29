@@ -17,13 +17,13 @@
 #include "sls_kv.h"
 #include "sls_internal.h"
 
-/* Possible states of an slspart */
-#define	SLSPART_AVAILABLE	    0	/* Partition not doing anything */
-#define	SLSPART_CHECKPOINTING	    1	/* Partition is currently being checkpointed */
-#define SLSPART_DETACHED	    2	/* Partition has been detached */
-#define SLSPART_RESTORING	    3	/* Partition is being restored */
+#define SLSPART_EPOCHINIT   1	/* Initial epoch for each partition */
 
-#define SLSPART_EPOCHINIT	    1	/* Initial epoch for each partition */
+/* Possible states of an slspart */
+#define	SLSP_AVAILABLE	    0	/* Partition not doing anything */
+#define	SLSP_CHECKPOINTING  1	/* Partition is currently being checkpointed */
+#define SLSP_DETACHED	    2	/* Partition has been detached */
+#define SLSP_RESTORING	    3	/* Partition is being restored */
 
 struct slspart {
     uint64_t		    slsp_oid;	    /* OID of the partition */
@@ -62,10 +62,14 @@ void slsp_ref(struct slspart *slsp);
 void slsp_deref(struct slspart *slsp);
 
 int slsp_isempty(struct slspart *slsp);
-void slsp_epoch_advance(struct slspart *slsp);
+void slsp_epoch_advance_major(struct slspart *slsp);
+void slsp_epoch_advance_minor(struct slspart *slsp);
 
 void slsp_signal(struct slspart *slsp, int retval);
 int slsp_waitfor(struct slspart *slsp);
+
+int slsp_setstate(struct slspart *slsp, int curstate, int nextstate, bool sleep);
+int slsp_getstate(struct slspart *slsp);
 
 #define SLSPART_IGNUNLINKED(slsp)  (SLSATTR_ISIGNUNLINKED((slsp)->slsp_attr))
 #define SLSPART_LAZYREST(slsp)  (SLSATTR_ISLAZYREST((slsp)->slsp_attr))

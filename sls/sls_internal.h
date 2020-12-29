@@ -35,15 +35,10 @@ struct sls_metadata {
     struct slskv_table  *slsm_procs;	/* All (PID, OID) pairs in the SLS */ 
     struct cdev	    *slsm_cdev;		/* The cdev that exposes the SLS ops */
 
-    /* OSD Related members */
-    struct vnode	    *slsm_osdvp;	/* The device that holds the SLOS */
-
     struct mtx	    slsm_mtx;		/* Structure mutex. */
     struct cv	    slsm_exitcv;	/* CV for waiting on users to exit */
     int		    slsm_swapobjs;	/* Number of Aurora swap objects */
     int		    slsm_inprog;	/* Operations in progress */
-    /* XXX Move these outside, we can only restore one partition at a time.  */
-    struct cv	    slsm_proccv;	/* Condition variable for when all processes are restored */
 };
 
 struct slsckpt_data {
@@ -74,11 +69,9 @@ struct slsrest_data {
     struct slskv_table  *vntable;	/* Holds all vnodes, indexed by vnode ID */
     struct slspart	*slsp;		/* The partition being restored */
 
-    struct cv	    proccv;	/* Used as a barrier while creating pgroups */
+    struct cv	    proccv;	/* Used for synchronization during restores */
     struct mtx	    procmtx;	/* Used alongside the cv above */
-    struct cv	    cv;		/* Global restore cv */
-    struct mtx	    mtx;	/* Global restore mutex */
-    int		    restoring;	/* Number of processes currently being restored */
+    int		    proctds;	/* Same, used to create a restore time barrier */
 };
 
 extern struct sls_metadata slsm;
@@ -111,6 +104,7 @@ struct sls_record *sls_getrecord(struct sbuf *sb, uint64_t slsid, uint64_t type)
 
 struct sls_checkpointd_args {
     struct slspart *slsp;
+    struct proc *pcaller;
     bool recurse;
 };
 
@@ -123,6 +117,7 @@ struct sls_restored_args {
 #define TONANO(tv) ((1000UL * 1000 * 1000 * (tv).tv_sec) + (tv).tv_nsec)
 #define TOMICRO(tv) ((1000UL * 1000 * (tv).tv_sec) + (tv).tv_usec)
 
+int slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr);
 void sls_checkpointd(struct sls_checkpointd_args *args);
 void sls_restored(struct sls_restored_args *args);
 
@@ -169,12 +164,12 @@ SDT_PROVIDER_DECLARE(sls);
 #define SLS_UNLOCK() (mtx_unlock(&slsm.slsm_mtx))
 #define SLS_EXITING() (slsm.slsm_exiting != 0)
 
-/* Start an SLS ioctl operation. */
+/* Start an SLS ioctl operation. This guards global module state (not partition state). */
 static inline int
 sls_startop(bool allow_concurrent)
 {
 	SLS_LOCK();
-	if ((SLS_EXITING() != 0) ||
+	if (SLS_EXITING() ||
 	    (!allow_concurrent && (slsm.slsm_inprog > 0))) {
 	    SLS_UNLOCK();
 	    return (EBUSY);
@@ -231,11 +226,6 @@ sls_swapderef(void)
 	sls_swapderef_unlocked();
 	SLS_UNLOCK();
 }
-
-/* Global mutexes for restoring. */
-extern struct mtx sls_restmtx;
-extern struct cv sls_restcv;
-extern int sls_resttds;
 
 #define SLSREST_ZONEWARM (1024)
 int slsrest_zoneinit(void);

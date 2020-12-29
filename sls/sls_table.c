@@ -987,6 +987,29 @@ sls_write_slos_manifest(uint64_t oid, struct sbuf *sb)
 	return (0);
 }
 
+int
+sls_write_slos_dataregion(struct slsckpt_data *sckpt_data)
+{
+	struct sls_record *rec;
+	struct slskv_iter iter;
+	uint64_t slsid;
+	int error;
+
+	KV_FOREACH(sckpt_data->sckpt_rectable, iter, slsid, rec) {
+		/* We only dump VM objects. */
+		KASSERT(sls_isdata(rec->srec_type), ("dumping non object %ld", \
+		    rec->srec_type));
+		error = sls_writedata_slos(rec, sckpt_data->sckpt_objtable);
+		if (error != 0) {
+			KV_ABORT(iter);
+			printf("Writing to the SLOS failed with %d\n", error);
+			return (error);
+		}
+	}
+
+	return (0);
+}
+
 /*
  * Dumps a table of records into the SLOS. The records of VM objects
  * are special cases, since they are sparse and hold all pages that

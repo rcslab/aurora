@@ -31,6 +31,34 @@
 int sls_objprotect = 1;
 SDT_PROBE_DEFINE(sls, , , procset_loop);
 
+/*
+ * Create a shadow of the same size as the object, perfectly aligned.
+ */
+static void
+slsvm_object_shadowexact(vm_object_t *objp)
+{
+	vm_ooffset_t offset = 0;
+	vm_object_t obj;
+
+	obj = *objp;
+#ifdef VERBOSE
+	DEBUG2("(PRE) Object %p has %d references", obj, obj->ref_count);
+#endif
+	vm_object_shadow(objp, &offset, ptoa((*objp)->size));
+
+	KASSERT((obj != *objp), ("object %p wasn't shadowed", obj));
+#ifdef VERBOSE
+	DEBUG2("(POST) Object %p has %d references", obj, obj->ref_count);
+	DEBUG2("(SHADOW) Object %p has shadow %p", obj, *objp);
+#endif
+	/* Inherit the unique object ID from the parent. */
+	VM_OBJECT_WLOCK(*objp);
+	DEBUG3("Changing the ID of %p from %lx to %lx", *objp,
+	    (*objp)->objid, obj->objid);
+	(*objp)->objid = obj->objid;
+	VM_OBJECT_WUNLOCK(*objp);
+}
+
 /* 
  * Shadow an object. Take an extra reference on behalf of Aurora for the
  * object, and transfer the one already in the object to the shadow. The
@@ -80,37 +108,94 @@ slsvm_object_shadow(struct slskv_table *objtable, vm_object_t *objp)
 	return (0);
 }
 
+/*
+ * Collapse the new table into the old one.
+ */
+void
+slsvm_objtable_collapsenew(struct slskv_table *objtable, struct slskv_table *newtable)
+{
+	vm_object_t ancestor, ashadow, shadow, child;
+	int error;
+
+	/* We can have multiple objects (e.g. because of forks). */
+	KV_FOREACH_POP(newtable, shadow, child) {
+		VM_OBJECT_RLOCK(shadow);
+		/* 
+		 * If the child is NULL, we didn't really shadow - this is an 
+		 * internal object we want to hold. Push it all to the table.
+		 */
+
+		/*
+		 * Find if there is an ancestor of us that is in the table.
+		 * It is not necessarily our parent that is there, because it
+		 * might not yet be deallocated, e.g., because it is being 
+		 * dumped.
+		 */
+		for (ancestor = shadow->backing_object; ancestor != NULL; 
+		    ancestor = ancestor->backing_object) {
+			error = slskv_find(objtable, (uint64_t) ancestor, 
+			    (uintptr_t *) &ashadow);
+			if (error != 0)
+				continue;
+
+			/* Replace the shadow with the new child.  */
+			KASSERT(child != NULL, ("found shadow with no children"));
+			slskv_del(objtable, (uint64_t) ancestor);
+			error = slskv_add(objtable, (uint64_t) ancestor, (uintptr_t) child);
+			KASSERT(error == 0, ("Reinserting parent into table failed"));
+			VM_OBJECT_RUNLOCK(shadow);
+			vm_object_deallocate(shadow);
+
+			break;
+		}
+
+		/* If we found an ancestor, we fixed this object. */
+		if (ancestor != NULL)
+			continue;
+
+		/* Object not in the table, add it. */
+		VM_OBJECT_RUNLOCK(shadow);
+		/* Move the shadow (and its reference) to the main table. */
+
+		error = slskv_add(objtable, (uint64_t) shadow, (uintptr_t) child);
+		KASSERT(error == 0, ("failed to insert new shadow"));
+
+	}
+}
+
+/*
+ * Collapse the old object table into the new one. 
+ */
 void
 slsvm_objtable_collapse(struct slskv_table *objtable, struct slskv_table *newtable)
 {
-	struct slskv_iter iter;
 	vm_object_t obj, shadow, child;
 	int error;
 
 	/* Remove the Aurora reference from the backing objects. */
-	KV_FOREACH(objtable, iter, obj, shadow) {
+	KV_FOREACH_POP(objtable, obj, shadow) {
+		KASSERT(obj != NULL, ("Null object"));
+
 		DEBUG4("Deallocating object %p (ID %lx), with %d references and %d shadows", obj, obj->objid, obj->ref_count, obj->shadow_count);
 		if (newtable == NULL) {
 			vm_object_deallocate(obj);
 			continue;
 		}
 
-		/* Collapse the old checkpoint into the parent. */
+		/* Collapse the old shadow into the parent. */
 		error = slskv_find(newtable, (uint64_t) shadow, (uintptr_t *) &child);
-		if (error == 0) {
-			vm_object_deallocate(shadow);
-			/* The shadow is still in the checkpoint. */
-			slskv_del(newtable, (uint64_t) shadow);
-			error = slskv_add(newtable, (uint64_t) obj, (uintptr_t) child);
-			KASSERT(error == 0, 
-			    ("Object %p shadowed in consecutive checkpoints", obj));
-		} else {
-			/*
-			 * The shadow isn't in the checkpoint, destroy the
-			 * original object.
-			 */
+		if (error != 0) {
+			/* Shadow not in the checkpoint, destroy the original object. */
 			vm_object_deallocate(obj);
+			continue;
 		}
+
+		/* The shadow is still in the checkpoint. */
+		vm_object_deallocate(shadow);
+		slskv_del(newtable, (uint64_t) shadow);
+		error = slskv_add(newtable, (uint64_t) obj, (uintptr_t) child);
+		KASSERT(error == 0, 
+			("Object %p shadowed in consecutive checkpoints", obj));
 	}
 }
 
@@ -206,130 +291,134 @@ slsvm_object_copy(struct proc *p, struct vm_map_entry *entry, vm_object_t obj)
  * denote a reference to objects. To collapse the objects, we remove the
  * reference taken by the SLS.
  */
+int
+slsvm_entry_shadow(struct proc *p, struct slskv_table *table,
+    vm_map_entry_t entry, bool is_fullckpt)
+{
+	vm_object_t obj, vmshadow;
+	int error;
+
+	obj = entry->object.vm_object;
+	/*
+	 * Non anonymous objects cannot shadowed meaningfully.
+	 * Guard entries are null.
+	 */
+	if (!OBJT_ISANONYMOUS(obj))
+		return (0);
+
+	/*
+	 * Check if we have already shadowed the object. If we did,
+	 * have the process map point to the shadow.
+	 */
+	if (slskv_find(table, (uint64_t) obj, (uintptr_t *) &vmshadow) == 0) {
+		KASSERT((obj->flags & OBJ_AURORA) != 0,
+			("object %p in table not in Aurora", obj));
+
+		/*
+		 * If an object is already in the table, and it has no
+		 * shadow, it means it was the ancestor of an object attached to 
+		 * a VM entry. That means it had a shadow.  Objects with shadows 
+		 * _cannot_ be directly linked, since that would mean that the 
+		 * shadow would either see or not see the writes, depending on 
+		 * whether it already had a private copy (the kernel asserts for 
+		 * this in some places). If the object is writable but has a 
+		 * shadow, then the entry _has_ to be marked CoW, so that the 
+		 * fault handler fixes up the entry after forking.
+		*/
+		if (vmshadow == NULL) {
+			KASSERT((obj->shadow_count == 0) ||
+				((entry->protection & VM_PROT_WRITE) == 0) ||
+				((entry->eflags & MAP_ENTRY_COW) != 0),
+				("directly accessible writable object %p has %d shadows",
+				obj, obj->shadow_count));
+
+			/*
+			 * In all these cases, we don't actually need to do 
+			 * anything; the object cannot be written to, and will 
+			 * be safely shadowed by the system if needed.
+			 */
+
+			return (0);
+		}
+
+		/*
+		 * There is no race with the process here for the
+		 * entry, so there is no need to lock the map.
+		 */
+		if (sls_objprotect == 1)
+			slsvm_entry_protect_obj(p, entry);
+		else
+			slsvm_entry_protect(p, entry);
+		entry->object.vm_object = vmshadow;
+		VM_OBJECT_WLOCK(vmshadow);
+		vm_object_clear_flag(vmshadow, OBJ_ONEMAPPING);
+		slsvm_object_reftransfer(obj, vmshadow);
+		VM_OBJECT_WUNLOCK(vmshadow);
+		return (0);
+	}
+
+	/* Shadow the object, retain it in Aurora. */
+	if (sls_objprotect == 1)
+		slsvm_entry_protect_obj(p, entry);
+	else
+		slsvm_entry_protect(p, entry);
+	error = slsvm_object_shadow(table, &entry->object.vm_object);
+	if (error != 0)
+		return (error);
+
+	/*
+	 * We use is_fullckpt for the sole reason of taking numbers for full 
+	 * checkpoints.  Full checkpoints make zero sense as a concept, since we 
+	 * have the guarantee that objects that have been dumped once have been 
+	 * unmodified. Checkpointing an object with the OBJ_AURORA flag for any 
+	 * reason other than comparing naive and delta checkpoints is just 
+	 * stupid.
+	 */
+
+	/* Checkpoint down the tree. */
+	obj = obj->backing_object;
+	while (OBJT_ISANONYMOUS(obj) && 
+	    (is_fullckpt || ((obj->flags & OBJ_AURORA) == 0))) {
+		vm_object_reference(obj);
+		obj->flags |= OBJ_AURORA;
+		DEBUG2("Shadow pair (%p, %p)", obj, NULL);
+		/* These objects have no shadows. */
+		error = slskv_add(table, (uint64_t) obj, (uintptr_t) NULL);
+		if (error != 0) {
+			/* Already in the table. */
+			vm_object_deallocate(obj);
+			break;
+		}
+
+		obj = obj->backing_object;
+	}
+
+	return (0);
+}
 
 /*
  * Get all objects accessible throught the VM entries of the checkpointed process.
  * This causes any CoW objects shared among memory maps to split into two. 
  */
-int 
-slsvm_proc_shadow(struct proc *p, struct slskv_table *table, int is_fullckpt)
+static int
+slsvm_proc_shadow(struct proc *p, struct slskv_table *table, bool is_fullckpt)
 {
 	struct vm_map_entry *entry, *header;
-	vm_object_t obj, vmshadow;
 	int error;
 
 	header = &p->p_vmspace->vm_map.header;
 	for (entry = header->next; entry != header; entry = entry->next) {
-		obj = entry->object.vm_object;
-		/*
-		 * Non anonymous objects cannot shadowed meaningfully.
-		 * Guard entries are null.
-		 */
-		if (!OBJT_ISANONYMOUS(obj))
-			continue;
-
-		/*
-		 * Check if we have already shadowed the object. If we did,
-		 * have the process map point to the shadow.
-		 */
-		if (slskv_find(table, (uint64_t) obj, (uintptr_t *) &vmshadow) == 0) {
-			KASSERT((obj->flags & OBJ_AURORA) != 0,
-			    ("object %p in table not in Aurora", obj));
-
-			/*
-			 * If an object is already in the table, and it has no
-			 * shadow, it means it was the ancestor of an object 
-			 * attached to a VM entry. That means it had a shadow.  
-			 * Objects with shadows _cannot_ be directly to, since 
-			 * that would mean that the shadow would either see or 
-			 * not see the writes, depending on whether it already 
-			 * had a private copy (the kernel asserts for this in 
-			 * some places). If the object is writable but has a 
-			 * shadow, then the entry _has_ to be marked CoW, so 
-			 * that the fault handler fixes up the entry after 
-			 * forking.
-			 */
-			if (vmshadow == NULL) {
-				KASSERT((obj->shadow_count == 0) ||
-				    ((entry->protection & VM_PROT_WRITE) == 0) ||
-				    ((entry->eflags & MAP_ENTRY_COW) != 0),
-				    ("directly accessible writable object %p has %d shadows",
-				    obj, obj->shadow_count));
-
-				/*
-				 * In all these cases, we don't actually need to 
-				 * do anything; the object cannot be written to, 
-				 * and will be safely shadowed by the system if 
-				 * needed.
-				 */
-
-				continue;
-			}
-
-			/*
-			 * There is no race with the process here for the
-			 * entry, so there is no need to lock the map.
-			 */
-			if (sls_objprotect == 1)
-				slsvm_entry_protect_obj(p, entry);
-			else
-				slsvm_entry_protect(p, entry);
-			entry->object.vm_object = vmshadow;
-			VM_OBJECT_WLOCK(vmshadow);
-			vm_object_clear_flag(vmshadow, OBJ_ONEMAPPING);
-			slsvm_object_reftransfer(obj, vmshadow);
-			VM_OBJECT_WUNLOCK(vmshadow);
-			continue;
-		}
-
-		/* Shadow the object, retain it in Aurora. */
-		if (sls_objprotect == 1)
-			slsvm_entry_protect_obj(p, entry);
-		else
-			slsvm_entry_protect(p, entry);
-		error = slsvm_object_shadow(table, &entry->object.vm_object);
+		error = slsvm_entry_shadow(p, table, entry, is_fullckpt);
 		if (error != 0)
-			goto error;
-
-
-		/*
-		 * Only go ahead if it's a full checkpoint or we have not
-		 * checkpointed this object before.
-		 */
-		if ((!is_fullckpt) && (obj->flags & OBJ_AURORA))
-			continue;
-
-		/* Checkpoint down the tree. */
-		obj = obj->backing_object;
-		while (OBJT_ISANONYMOUS(obj)) {
-			vm_object_reference(obj);
-			obj->flags |= OBJ_AURORA;
-			DEBUG2("Shadow pair (%p, %p)", obj, NULL);
-			/* These objects have no shadows. */
-			error = slskv_add(table, (uint64_t) obj, (uintptr_t) NULL);
-			if (error != 0) {
-				/* Already in the table. */
-				vm_object_deallocate(obj);
-				break;
-			}
-
-			obj = obj->backing_object;
-		}
+			return (error);
 	}
 
 	return (0);
-
-error:
-
-	/* Deallocate only the shadows we have control over. */
-	uma_zfree(slskv_zone, table);
-
-	return (error);
 }
 
 /* Collapse the backing objects of all processes under checkpoint. */
 int
-slsvm_procset_shadow(slsset *procset, struct slskv_table *table, int is_fullckpt)
+slsvm_procset_shadow(slsset *procset, struct slskv_table *table, bool is_fullckpt)
 {
 	struct slskv_iter iter;
 	struct proc *p;
@@ -353,34 +442,6 @@ slsvm_object_reftransfer(vm_object_t src, vm_object_t dst)
 	VM_OBJECT_ASSERT_WLOCKED(dst);
 	vm_object_reference_locked(dst);
 	vm_object_deallocate(src);
-}
-
-/*
- * Create a shadow of the same size as the object, perfectly aligned.
- */
-void
-slsvm_object_shadowexact(vm_object_t *objp)
-{
-	vm_ooffset_t offset = 0;
-	vm_object_t obj;
-
-	obj = *objp;
-#ifdef VERBOSE
-	DEBUG2("(PRE) Object %p has %d references", obj, obj->ref_count);
-#endif
-	vm_object_shadow(objp, &offset, ptoa((*objp)->size));
-
-	KASSERT((obj != *objp), ("object %p wasn't shadowed", obj));
-#ifdef VERBOSE
-	DEBUG2("(POST) Object %p has %d references", obj, obj->ref_count);
-	DEBUG2("(SHADOW) Object %p has shadow %p", obj, *objp);
-#endif
-	/* Inherit the unique object ID from the parent. */
-	VM_OBJECT_WLOCK(*objp);
-	DEBUG3("Changing the ID of %p from %lx to %lx", *objp,
-	    (*objp)->objid, obj->objid);
-	(*objp)->objid = obj->objid;
-	VM_OBJECT_WUNLOCK(*objp);
 }
 
 /*

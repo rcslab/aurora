@@ -39,6 +39,7 @@
 #include "sls_vm.h"
 #include "debug.h"
 
+/* XXX Turn this into a zone, this is gonna be a bottleneck for region ckpts. */
 int
 slsckpt_create(struct slsckpt_data **sckpt_datap, struct sls_attr *attr)
 {
@@ -204,7 +205,7 @@ slsp_init(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
 	slsp->slsp_attr = attr;
 	/* The SLS module itself holds one reference to the partition. */
 	slsp->slsp_refcount = 1;
-	slsp->slsp_status = SLSPART_AVAILABLE;
+	slsp->slsp_status = SLSP_AVAILABLE;
 	slsp->slsp_epoch = SLSPART_EPOCHINIT;
 
 	/* Create the set of held processes. */
@@ -243,7 +244,12 @@ slsp_fini(struct slspart *slsp)
 	cv_destroy(&slsp->slsp_synccv);
 	mtx_destroy(&slsp->slsp_syncmtx);
 
-	/* XXX TEMP Remove the partition from the SLOS. */
+	/*
+	 * XXX TEMP Remove the partition from the SLOS. This is due to us not 
+	 * importing existing partitions from the SLOS, and thus having 
+	 * collisions on the partition numbers. If we implement sls ps, the user 
+	 * will be able to find which IDs are available. 
+	 */
 	slos_iremove(&slos, slsp->slsp_oid);
 
 	/* Destroy the proc bookkeeping structure. */
@@ -369,9 +375,24 @@ slsp_isempty(struct slspart *slsp)
 	return (slsp->slsp_procnum == 0);
 }
 
+/* 
+ * Epoch advancement functions. If we assume epochs are only incremented while a 
+ * partition is in the SLSP_CHECKPOINTING state, there is no need for mutexes.
+ */
 void
-slsp_epoch_advance(struct slspart *slsp)
+slsp_epoch_advance_major(struct slspart *slsp)
 {
+	KASSERT(SLSEPOCH_MAJOR(slsp) != UINT_MAX, ("Major epoch overflow"));
+	slsp->slsp_epoch += (1ULL << 32);
+	/* Zero out the minor epoch. */
+	slsp->slsp_epoch &= UPPER_BITS;
+
+}
+
+void
+slsp_epoch_advance_minor(struct slspart *slsp)
+{
+	KASSERT(SLSEPOCH_MINOR(slsp) != UINT_MAX, ("Minor epoch overflow"));
 	slsp->slsp_epoch += 1;
 }
 
@@ -399,4 +420,43 @@ slsp_signal(struct slspart *slsp, int retval)
 	cv_signal(&slsp->slsp_synccv);
 	mtx_unlock(&slsp->slsp_syncmtx);
 
+}
+
+int
+slsp_setstate(struct slspart *slsp, int curstate, int nextstate, bool sleep)
+{
+	struct mtx *mtxp;
+
+	KASSERT(curstate != SLSP_DETACHED,
+	    ("Trying to change detached partition's state"));
+
+	mtxp = mtx_pool_find(mtxpool_sleep, slsp);
+	mtx_lock(mtxp);
+	while (slsp->slsp_status != curstate) {
+		if (!sleep) {
+			mtx_unlock(mtxp);
+			return (EBUSY);
+		}
+
+		/* This is urgent, wake us up as if we were a realtime task. */
+		mtx_sleep(slsp, mtxp, PI_DULL, "slspstate", 0);
+
+		/* If the partition is detached we can't do anything.  */
+		if (slsp->slsp_status == SLSP_DETACHED) {
+			mtx_unlock(mtxp);
+			return (EINVAL);
+		}
+	}
+
+	slsp->slsp_status = nextstate;
+	wakeup(slsp);
+	mtx_unlock(mtxp);
+
+	return (0);
+}
+
+int
+slsp_getstate(struct slspart *slsp)
+{
+	return (slsp->slsp_status);
 }

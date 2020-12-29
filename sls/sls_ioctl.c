@@ -49,25 +49,18 @@
 #include "sls_pager.h"
 #include "sls_table.h"
 #include "sls_vm.h"
+#include "debug.h"
 
 /* XXX Rename to M_SLS. */
 MALLOC_DEFINE(M_SLSMM, "sls", "SLS");
 MALLOC_DEFINE(M_SLSREC, "slsrec", "SLSREC");
 
+SDT_PROVIDER_DEFINE(sls);
+
 extern int sls_objprotect;
 
 struct sls_metadata slsm;
 struct sysctl_ctx_list aurora_ctx;
-
-/*
- * This mutex/condition variable would need more work to be turned into per
- * process entities, so we just dump them in here and sacrifice parallelism when
- * restoring multiple partitions at the same time (NOTE: partitions, not
- * processes. Multiple processes in the same partition are fine.)
- */
-struct mtx sls_restmtx;
-struct cv sls_restcv;
-int sls_resttds = -1;
 
 /*
  * Start checkpointing a partition. If a checkpointing period
@@ -78,6 +71,7 @@ static int
 sls_checkpoint(struct sls_checkpoint_args *args)
 {
 	struct sls_checkpointd_args *ckptd_args;
+	struct proc *p = curproc;
 	struct slspart *slsp;
 	int error = 0;
 
@@ -88,14 +82,30 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	/* Get the partition to be checkpointed. */
 	slsp = slsp_find(args->oid);
 	if (slsp == NULL) {
-		error = EINVAL;
-		goto error;
+		sls_finishop();
+		return (EINVAL);
 	}
 
 	/* Set up the arguments. */
 	ckptd_args = malloc(sizeof(*ckptd_args), M_SLSMM, M_WAITOK);
 	ckptd_args->slsp = slsp;
+	ckptd_args->pcaller = NULL;
 	ckptd_args->recurse = args->recurse;
+
+	/* 
+	 * If this is a one-off checkpoint, this thread will wait on the 
+	 * partition. This causes a deadlock when the daemon tries to force its 
+	 * process into single threading mode. Get into and out of single 
+	 * threading mode by itself and let the daemon know.
+	 */
+	if (slsp->slsp_attr.attr_period == 0) {
+		PROC_LOCK(p);
+		_PHOLD(p);
+		thread_single(p, SINGLE_BOUNDARY);
+		PROC_UNLOCK(p);
+		ckptd_args->pcaller = p;
+	}
+
 	mtx_lock(&slsp->slsp_syncmtx);
 
 	/* Create the daemon. */
@@ -108,20 +118,29 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	}
 
 	/* If it's a periodic daemon, don't wait for it. */
-	if (slsp->slsp_attr.attr_period != 0)
-		mtx_unlock(&slsp->slsp_syncmtx);
-	else
+	if (slsp->slsp_attr.attr_period == 0) {
 		error = slsp_waitfor(slsp);
+		PROC_LOCK(p);
+		thread_single_end(p, SINGLE_BOUNDARY);
+		_PRELE(p);
+		PROC_UNLOCK(p);
+	} else {
+		mtx_unlock(&slsp->slsp_syncmtx);
+	}
 
 	return (error);
 
 error:
-	if (slsp != NULL)
-		slsp_deref(slsp);
+	if (slsp->slsp_attr.attr_period == 0) {
+		PROC_LOCK(p);
+		thread_single_end(p, SINGLE_BOUNDARY);
+		_PRELE(p);
+		PROC_UNLOCK(p);
+	}
 
-	sls_finishop();
+	slsp_deref(slsp);
 
-	return (EINVAL);
+	return (error);
 }
 
 static int
@@ -247,8 +266,6 @@ sls_partdel(struct sls_partdel_args *args)
 {
 	struct slspart *slsp;
 
-	/* XXX Use partition-local locks. */
-
 	/* Try to find the process. */
 	slsp = slsp_find(args->oid);
 	if (slsp == NULL)
@@ -261,7 +278,13 @@ sls_partdel(struct sls_partdel_args *args)
 	 * Set the status of the partition as detached, notifying
 	 * processes currently checkpointing it to exit.
 	 */
-	atomic_set_int(&slsp->slsp_status, SLSPART_DETACHED);
+	slsp_setstate(slsp, SLSP_AVAILABLE, SLSP_DETACHED, true);
+
+	/*
+	 * Check the state directly - there might be a benign race between 
+	 * slsp_del() instances that causes slsp_setstate() to fail.
+	 */
+	KASSERT(slsp_getstate(slsp) == SLSP_DETACHED, ("Partition still alive"));
 
 	/*
 	 * Dereference the partition. We can't just delete it,
@@ -291,6 +314,27 @@ sls_epoch(struct sls_epoch_args *args)
 	slsp_deref(slsp);
 	return (error);
 
+}
+
+static int
+sls_memsnap(struct sls_memsnap_args *args)
+{
+	struct proc *p = curproc;
+	struct slspart *slsp;
+	int error = 0;
+
+	/* Try to find the process. */
+	slsp = slsp_find(args->oid);
+	if (slsp == NULL)
+		return (EINVAL);
+
+	PHOLD(p);
+	error = slsckpt_dataregion(slsp, curproc, args->addr);
+	PRELE(p);
+
+	slsp_deref(slsp);
+
+	return (error);
 }
 
 static int
@@ -352,7 +396,7 @@ sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 {
 	int error = 0;
 
-	if (sls_startop(false))
+	if (sls_startop(true))
 		return (EBUSY);
 
 	switch (cmd) {
@@ -385,6 +429,10 @@ sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		error = sls_epoch((struct sls_epoch_args *) data);
 		break;
 
+	case SLS_MEMSNAP:
+		error = sls_memsnap((struct sls_memsnap_args *) data);
+		break;
+
 	default:
 		error = EINVAL;
 		break;
@@ -410,9 +458,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 
 	switch (inEvent) {
 	case MOD_LOAD:
-		mtx_init(&sls_restmtx, "slsrest", NULL, MTX_DEF);
-		cv_init(&sls_restcv, "slsrest");
-
 		bzero(&slsm, sizeof(slsm));
 
 		mtx_init(&slsm.slsm_mtx, "slsm", NULL, MTX_DEF);
@@ -526,9 +571,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 
 		cv_destroy(&slsm.slsm_exitcv);
 		mtx_destroy(&slsm.slsm_mtx);
-
-		cv_destroy(&sls_restcv);
-		mtx_destroy(&sls_restmtx);
 
 		break;
 	default:

@@ -75,15 +75,17 @@ static uma_zone_t slsrest_zone;
 static int
 slsrest_zone_ctor(void *mem, int size, void *args __unused, int flags __unused)
 {
-	/* XXX Put in KASSERTs */
-	//printf("Constructor\n");
+	struct slsrest_data *restdata = (struct slsrest_data *) mem;
+
+	restdata->proctds = 0;
+
 	return (0);
 }
 
 static void
 slsrest_zone_dtor(void *mem, int size, void *args __unused)
 {
-	struct slsrest_data *restdata = (struct slsrest_data *) mem;;
+	struct slsrest_data *restdata = (struct slsrest_data *) mem;
 	struct mbuf *m, *headm;
 	struct session *sess;
 	struct kqueue *kq;
@@ -96,7 +98,6 @@ slsrest_zone_dtor(void *mem, int size, void *args __unused)
 	struct file *fp;
 	struct proc *p;
 
-	//printf("Destructor\n");
 	KV_FOREACH_POP(restdata->fptable, slsid, fp) {
 		/*
 		 * Kqueues in the file table do not have an associated file
@@ -154,9 +155,9 @@ slsrest_zone_init(void *mem, int size, int flags __unused)
 	struct slsrest_data *restdata = (struct slsrest_data *) mem;;
 	int error;
 
-	//printf("Init\n");
 	mtx_init(&restdata->procmtx, "SLS proc mutex", NULL, MTX_DEF);
 	cv_init(&restdata->proccv, "SLS proc cv");
+	restdata->proctds = -1;
 
 	/* Initialize the necessary tables. */
 	error = slskv_create(&restdata->objtable);
@@ -226,7 +227,6 @@ slsrest_zone_fini(void *mem, int size)
 {
 	struct slsrest_data *restdata = (struct slsrest_data *) mem;
 
-	//printf("Fini\n");
 	slskv_destroy(restdata->vntable);
 	slskv_destroy(restdata->mbuftable);
 	slskv_destroy(restdata->sesstable);
@@ -596,7 +596,7 @@ slsrest_ttyfixup(struct proc *p)
 	ret = fhold(pttyfp);
 	error = kern_close(td, fd);
 	if (error != 0)
-		printf("Error %d when closing TTY\n", error); 
+		DEBUG1("Error %d when closing TTY\n", error); 
 	if (ret == 0)
 		return (EBADF);
 
@@ -720,40 +720,48 @@ slsrest_metadata(void *args)
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Restoring kqueues");
 	/* We're done restoring. If we are the last, notify the parent. */
-	mtx_lock(&sls_restmtx);
-	sls_resttds -= 1;
-	if (sls_resttds == 0) {
-		/*
-		* We have to cleanup the fptable before we let the processes keep
-		* executing, since by doing so we mark all master terminals that
-		* weren't actually used as gone, and we need that for
-		* slsrest_ttyfixup().
-		*/
-		slsrest_ttyrelease(restdata);
+	mtx_lock(&restdata->procmtx);
 
-		cv_signal(&slsm.slsm_proccv);
-	}
+	/*
+	 * The value of proctds can only be -1 after all restored threads are 
+	 * stuck waiting for the main one. This thread isn't stuck yet, so the 
+	 * value can't be 0 here.
+	 */
+	KASSERT(restdata->proctds > 0, ("invalid proctds value %d",
+	    restdata->proctds));
+	restdata->proctds -= 1;
 
-	/* Sleep until all sessions and controlling terminals are restored. */
-	while (sls_resttds >= 0)
-		cv_wait(&sls_restcv, &sls_restmtx);
+	/* Wake up the main thread if it's the only one waiting. */
+	if (restdata->proctds == 0)
+		cv_broadcast(&restdata->proccv);
+
+	/*
+	 * Sleep until all sessions and controlling terminals are restored.
+	 * The value -1 for proctds is used to denote that the main restore 
+	 * thread is done calling slsrest_ttyrelease.
+	 */
+	while (restdata->proctds >= 0)
+		cv_wait(&restdata->proccv, &restdata->procmtx);
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Process wakeup");
 
 	PROC_LOCK(p);
+
 	DEBUG("SLS Restore ttyfixup");
+
+	/* This must take place after slsrest_ttyrelease in the main thread. */
 	error = slsrest_ttyfixup(p);
 	if (error != 0)
 		SLS_DBG("tty_fixup failed with %d\n", error);
 
-	/* 
+	/*
 	 * If the original applications are running on a terminal,
 	 * then the master side is not included in the checkpoint. Since
 	 * in that case it doesn't make much sense restoring the terminal,
 	 * we instead pass the original restore process' terminal as an
 	 * argument.
 	 */
-	mtx_unlock(&sls_restmtx);
+	mtx_unlock(&restdata->procmtx);
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Fixing up the tty");
 	thread_single_end(p, SINGLE_BOUNDARY);
@@ -777,12 +785,15 @@ error:
 	thread_single_end(p, SINGLE_BOUNDARY);
 	PROC_UNLOCK(p);
 
-	printf("Error %d while restoring process\n", error);
-	mtx_lock(&sls_restmtx);
-	sls_resttds -= 1;
-	if (sls_resttds == 0)
-		cv_signal(&sls_restcv);
-	mtx_unlock(&sls_restmtx);
+	DEBUG1("Error %d while restoring process\n", error);
+	mtx_lock(&restdata->procmtx);
+	KASSERT(restdata->proctds > 0, ("invalid proctds value %d",
+	    restdata->proctds));
+
+	restdata->proctds -= 1;
+	if (restdata->proctds == 0)
+		cv_broadcast(&restdata->proccv);
+	mtx_unlock(&restdata->procmtx);
 
 	exit1(curthread, error, 0);
 }
@@ -823,6 +834,11 @@ slsrest_fork(uint64_t daemon, uint64_t rest_stopped, char *buf, size_t buflen,
 	td = FIRST_THREAD_IN_PROC(p2);
 	thread_lock(td);
 
+	/* Note down the fact that one more process is being restored. */
+	mtx_lock(&restdata->procmtx);
+	restdata->proctds += 1;
+	mtx_unlock(&restdata->procmtx);
+
 	/* Set the starting point of execution for the new process. */
 	cpu_fork_kthread_handler(td, slsrest_metadata, (void *) args);
 
@@ -834,11 +850,6 @@ slsrest_fork(uint64_t daemon, uint64_t rest_stopped, char *buf, size_t buflen,
 	/* Actually add it to the scheduler. */
 	sched_add(td, SRQ_BORING);
 	thread_unlock(td);
-
-	/* Note down the fact that one more process is being restored. */
-	mtx_lock(&sls_restmtx);
-	sls_resttds += 1;
-	mtx_unlock(&sls_restmtx);
 
 	return (0);
 }
@@ -1010,7 +1021,7 @@ sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
 	struct slsrest_data *restdata;
 	struct sls_record *rec;
 	struct slskv_iter iter;
-	int slsstate_changed;
+	int stateerr;
 	uint64_t slsid;
 	size_t buflen;
 	char *buf;
@@ -1024,10 +1035,16 @@ sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
 		return (ENOMEM);
 
 	SDT_PROBE1(sls, , sls_rest, , "Creating restore data tables");
-	/* Can't restore if we're still in the middle of checkpointing. */
-	while (atomic_cmpset_int(&slsp->slsp_status, SLSPART_AVAILABLE,
-	    SLSPART_RESTORING) == 0) {
-		pause_sbt("slsrs", SBT_1MS, 0, C_HARDCLOCK);
+
+	/* Wait until we're done checkpointing to restore. */
+	error = slsp_setstate(slsp, SLSP_AVAILABLE, SLSP_RESTORING, true);
+	if (error != 0) {
+		/* The partition might have been detached. */
+		KASSERT(slsp->slsp_status == SLSP_DETACHED,
+			("Blocking slsp_setstate() on live partition failed"));
+
+		uma_zfree(slsrest_zone, restdata);
+		return (error);
 	}
 
 	restdata->slsp = slsp;
@@ -1165,17 +1182,24 @@ sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
 
 out:
 	/* Wait until all processes are done restoring. */
-	mtx_lock(&sls_restmtx);
-	while (sls_resttds > 0)
-		cv_wait(&slsm.slsm_proccv, &sls_restmtx);
+	mtx_lock(&restdata->procmtx);
+	while (restdata->proctds > 0)
+		cv_wait(&restdata->proccv, &restdata->procmtx);
+
+	/*
+	 * We have to cleanup the fptable before we let the processes keep
+	 * executing, since by doing so we mark all master terminals that
+	 * weren't actually used as gone, and we need that for
+	 * slsrest_ttyfixup().
+	 */
+	slsrest_ttyrelease(restdata);
+
+	restdata->proctds -= 1;
+
+	cv_broadcast(&restdata->proccv);
+	mtx_unlock(&restdata->procmtx);
 
 	SDT_PROBE1(sls, , sls_rest, , "Waiting for processes");
-	/* We push the counter below 0 and restore all sessions. */
-	sls_resttds -= 1;
-
-	/* Restore all sessions. */
-	cv_broadcast(&sls_restcv);
-	mtx_unlock(&sls_restmtx);
 
 	/* Clean up the restore data if coming here from an error. */
 	if (restdata != NULL) {
@@ -1183,12 +1207,13 @@ out:
 		if (oldvntable != NULL)
 			restdata->vntable = oldvntable;
 
+		KASSERT(restdata->proctds == -1, ("proctds is %d at free",
+		    restdata->proctds));
 		uma_zfree(slsrest_zone, restdata);
 	}
 
-	slsstate_changed = atomic_cmpset_int(&slsp->slsp_status, SLSPART_RESTORING,
-	    SLSPART_AVAILABLE);
-	KASSERT(slsstate_changed != 0, ("invalid state transition"));
+	stateerr = slsp_setstate(slsp, SLSP_RESTORING, SLSP_AVAILABLE, false);
+	KASSERT(stateerr == 0, ("invalid state transition"));
 
 	if (slsp->slsp_target == SLS_OSD)
 		sls_free_rectable(rectable);
@@ -1205,28 +1230,11 @@ sls_restored(struct sls_restored_args *args)
 	struct slspart *slsp = args->slsp;
 	int error;
 
-	/*
-	 * If the number of threads being restored is >= 0, there is another partition
-	 * being restored. Do not allow for partitions to be restored 
-	 * concurrently.
-	 */
-	mtx_lock(&sls_restmtx);
-	if (sls_resttds >= 0) {
-		mtx_unlock(&sls_restmtx);
-		DEBUG("Concurrent restores not supported\n");
-		error = EINVAL;
-		goto out;
-	}
-
-	sls_resttds = 0;
-	mtx_unlock(&sls_restmtx);
-
 	/* Restore the old process. */
 	error = sls_rest(args->slsp, args->daemon, args->rest_stopped);
 	if (error != 0)
 		DEBUG1("Error: sls_rest failed with %d", error);
 
-out:
 	/* The caller is waiting for us, propagate the return value. */
 	slsp_signal(slsp, error);
 
