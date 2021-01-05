@@ -18,7 +18,7 @@ mmap_anon(void **addr)
 {
 	void *mapping;
 
-	mapping = mmap(0x100000000, MMAP_SIZE, PROT_READ | PROT_WRITE,
+	mapping = mmap((void *)0x100000000, MMAP_SIZE, PROT_READ | PROT_WRITE,
 			MAP_FIXED | MAP_ANON | MAP_PRIVATE, -1, 0);
 	if (mapping == MAP_FAILED) {
 		perror("mmap");

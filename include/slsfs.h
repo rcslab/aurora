@@ -38,6 +38,8 @@ struct slsfs_getsnapinfo {
 #define SLSFS_MOUNT_SNAP		_IOWR('N', 101, struct slsfs_getsnapinfo)
 #define SLSFS_COUNT_CHECKPOINTS 	_IOR('N', 102, uint64_t)
 
+#ifdef _KERNEL
+
 struct slsfsmount {
     STAILQ_ENTRY(slsfsmount)	sp_next_mount;
     struct mount		*sp_vfs_mount;
@@ -61,7 +63,6 @@ struct slsfs_device {
     uint64_t			devblocksize;
 };
 
-#ifdef _KERNEL
 extern uma_zone_t fnode_zone;
 extern uma_zone_t fnode_trie_zone;
 extern struct buf_ops bufops_slsfs;
@@ -69,7 +70,7 @@ extern struct buf_ops bufops_slsfs;
 struct buf;
 int slsfs_cksum(struct buf *bp);
 
-#endif
+#endif // _KERNEL
 
 #define SLS_SEEK_EXTENT _IOWR('s', 1, struct uio *)
 #define SLS_SET_RSTAT	_IOWR('s', 2, struct slos_rstat *)
