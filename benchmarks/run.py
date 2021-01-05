@@ -590,7 +590,7 @@ def slsckpt(options, pidlist):
     print("Started Aurora Checkpointer on {}".format(str(pidlist)))
 
 # Generate a configuration from a template
-def generate_conf(options, inputconf, outputconfig):
+def generate_conf(options, inputconf, outputconf):
     # The templated variables.
     replace_list = [
             ["SLS_MOUNT", options.mountdir],
@@ -602,7 +602,7 @@ def generate_conf(options, inputconf, outputconfig):
     # the path makes it necessary for us to be in the base SLS directory when
     # running the script, we need to change it in the future.
     with open(inputconf, 'r') as templatefile:
-        with open(outputconfig, 'w+') as conffile:
+        with open(outputconf, 'w+') as conffile:
             for line in templatefile:
                 for x in replace_list:
                     line = line.replace(x[0], x[1])
@@ -823,8 +823,8 @@ def redis_setup(options):
 
     # XXX Make them defaults with the Redis command somehow
     inputconfig = "benchmarks/redis.conf"
-    outputconfig = "{}/{}".format(options.mountdir, "redis.conf")
-    generate_conf(options, inputconfig, outputconfig)
+    outputconf = "{}/{}".format(options.mountdir, "redis.conf")
+    generate_conf(options, inputconfig, outputconf)
 
     # Create the configuration
     os.chdir(options.mountdir)
@@ -832,7 +832,7 @@ def redis_setup(options):
     make_slsdirs(options, "redis")
 
     # Start lighttpd using the new config file.
-    cmd = [options.redis, outputconfig]
+    cmd = [options.redis, outputconf]
     bashcmd(cmd)
 
     os.chdir(pwd)

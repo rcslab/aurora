@@ -4,10 +4,6 @@ x86
 */offset.inc
 */vnode_if*.h
 
-shim/shim.pico
-shim/*.so
-shim/tests/test
-
 tests/testbench.log
 tests/ktrdump.log
 tests/array/array
@@ -94,3 +90,7 @@ nginx_*
 lighttpd_*
 memcached_*
 vmobject-*
+
+criuimage
+redisinput
+criu-results/
