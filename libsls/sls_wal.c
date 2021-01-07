@@ -32,21 +32,21 @@ sls_wal_block_size(size_t size)
 	size_t block_size = sizeof(struct sls_wal_block) + size;
 	size_t align_mask = alignof(struct sls_wal_block) - 1;
 
-	return (block_size + align_mask) & ~align_mask;
+	return ((block_size + align_mask) & ~align_mask);
 }
 
 /* Get the maximum possible size of a block. */
 static size_t
 sls_wal_max_size(const struct sls_wal *wal)
 {
-	return wal->size - sizeof(struct sls_wal_header);
+	return (wal->size - sizeof(struct sls_wal_header));
 }
 
 /* Get the header of the log. */
 static struct sls_wal_header *
 sls_wal_header(struct sls_wal *wal)
 {
-	return (struct sls_wal_header *)wal->mapping;
+	return ((struct sls_wal_header *)wal->mapping);
 }
 
 /* Get the first block in the log, if one exists. */
@@ -56,11 +56,10 @@ sls_wal_first(struct sls_wal *wal)
 	struct sls_wal_header *header = sls_wal_header(wal);
 	size_t offset = atomic_load_explicit(&header->offset, memory_order_relaxed);
 
-	if (offset > sizeof(struct sls_wal_header)) {
-		return (struct sls_wal_block *)(wal->mapping + sizeof(*header));
-	} else {
-		return NULL;
-	}
+	if (offset > sizeof(struct sls_wal_header))
+		return ((struct sls_wal_block *)(wal->mapping + sizeof(*header)));
+	else
+		return (NULL);
 }
 
 /* Get the next block in the log, if one exists. */
@@ -75,11 +74,10 @@ sls_wal_next(struct sls_wal *wal, struct sls_wal_block *block)
 	offset = (char *)block - wal->mapping;
 	offset += sls_wal_block_size(block->size);
 
-	if (offset < limit) {
-		return (struct sls_wal_block *)(wal->mapping + offset);
-	} else {
-		return NULL;
-	}
+	if (offset < limit)
+		return ((struct sls_wal_block *)(wal->mapping + offset));
+	else
+		return (NULL);
 }
 
 /* Allocate a new block in the log. */
@@ -90,16 +88,14 @@ sls_wal_reserve(struct sls_wal *wal, size_t size)
 	size_t block_size = sls_wal_block_size(size);
 	size_t offset;
 
-	if (block_size > sls_wal_max_size(wal)) {
-		return NULL;
-	}
+	if (block_size > sls_wal_max_size(wal))
+		return (NULL);
 
 	offset = atomic_fetch_add(&header->offset, block_size);
-	if (offset + block_size <= wal->size) {
-		return (struct sls_wal_block *)(wal->mapping + offset);
-	} else {
-		return NULL;
-	}
+	if (offset + block_size <= wal->size)
+		return ((struct sls_wal_block *)(wal->mapping + offset));
+	else
+		return (NULL);
 }
 
 /* Get the current SLS epoch number. */
@@ -108,16 +104,15 @@ sls_wal_epoch(struct sls_wal *wal)
 {
 	uint64_t epoch;
 
-	if (sls_epoch(wal->oid, &epoch) != 0) {
+	if (sls_epoch(wal->oid, &epoch) != 0)
 		abort();
-	}
 
-	return epoch;
+	return (epoch);
 }
 
 /* Wait for a complete snapshot to occur, then clear the log. */
 static void
-sls_wal_sync(struct sls_wal *wal)
+sls_wal_full_checkpoint(struct sls_wal *wal)
 {
 	struct sls_wal_header *header = sls_wal_header(wal);
 	uint64_t epoch = sls_wal_epoch(wal);
@@ -139,43 +134,38 @@ sls_wal_sync(struct sls_wal *wal)
 }
 
 int
-sls_wal_open(struct sls_wal *wal, uint64_t oid, const char *path, size_t size)
+sls_wal_open(struct sls_wal *wal, uint64_t oid, size_t size)
 {
 	struct sls_wal_header *header;
+	size_t page_size = 4096;
+	size_t total_size = size + 2 * page_size;
 
-	wal->fd = open(path, O_RDWR | O_CREAT, 0600);
-	if (wal->fd < 0) {
+	// Allocate a guard page on either side to prevent coalescing
+	char *mapping = mmap(NULL, total_size, PROT_NONE, MAP_GUARD, -1, 0);
+	if (mapping == MAP_FAILED)
 		goto err;
-	}
 
-	if (ftruncate(wal->fd, size) != 0) {
-		goto err_close;
-	}
-
-	wal->mapping = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, wal->fd, 0);
-	if (wal->mapping == MAP_FAILED) {
-		goto err_close;
-	}
+	wal->mapping = mmap(mapping + page_size, size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+	if (wal->mapping == MAP_FAILED)
+		goto err_munmap;
 
 	wal->size = size;
+	wal->oid = oid;
 
-	if (pthread_mutex_init(&wal->mutex, NULL) != 0) {
+	if (pthread_mutex_init(&wal->mutex, NULL) != 0)
 		goto err_munmap;
-	}
 
 	header = sls_wal_header(wal);
 	atomic_store_explicit(&header->offset, sizeof(*header), memory_order_relaxed);
 
 	memset(wal->mapping + sizeof(*header), 0, size - sizeof(*header));
 
-	return 0;
+	return (0);
 
 err_munmap:
-	munmap(wal->mapping, wal->size);
-err_close:
-	close(wal->fd);
+	munmap(mapping, total_size);
 err:
-	return -1;
+	return (-1);
 }
 
 void
@@ -187,13 +177,19 @@ sls_wal_memcpy(struct sls_wal *wal, void *dest, const void *src, size_t size)
 
 	block = sls_wal_reserve(wal, size);
 	if (block == NULL) {
-		sls_wal_sync(wal);
+		sls_wal_full_checkpoint(wal);
 		return;
 	}
 
 	memcpy(block->data, src, size);
 	block->dest = dest;
 	atomic_store(&block->size, size);
+}
+
+int
+sls_wal_sync(struct sls_wal *wal)
+{
+	return (sls_memsnap(wal->oid, wal->mapping));
 }
 
 void
@@ -205,10 +201,9 @@ sls_wal_replay(struct sls_wal *wal)
 
 	while (block) {
 		size = atomic_load_explicit(&block->size, memory_order_relaxed);
-		if (size == 0) {
+		if (size == 0)
 			// A snapshot was taken with an incomplete block, so stop here
 			break;
-		}
 
 		memcpy(block->dest, block->data, size);
 		offset += sls_wal_block_size(size);
@@ -224,22 +219,19 @@ int
 sls_wal_close(struct sls_wal *wal)
 {
 	int ret = 0, error = 0;
+	size_t page_size = 4096;
+	size_t total_size = wal->size + 2 * page_size;
 
 	if (pthread_mutex_destroy(&wal->mutex) != 0) {
 		ret = -1;
 		error = errno;
 	}
 
-	if (munmap(wal->mapping, wal->size) != 0) {
-		ret = -1;
-		error = errno;
-	}
-
-	if (close(wal->fd) != 0) {
+	if (munmap(wal->mapping - page_size, total_size) != 0) {
 		ret = -1;
 		error = errno;
 	}
 
 	errno = error;
-	return ret;
+	return (ret);
 }

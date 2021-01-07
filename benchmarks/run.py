@@ -1475,6 +1475,11 @@ def ffbench(options):
             ms_elapsed = (time_elapsed.seconds * 1000) + (time_elapsed.microseconds / 1000)
             print("Did {} checkpoints in {}ms)".format(options.ckpt_done, ms_elapsed))
 
+@Command()
+def rocksdb(options):
+    bashcmd(["benchmarks/rocksdb.sh", options.mountdir])
+
+
 def main():
     global parser
     global subparser

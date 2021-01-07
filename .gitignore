@@ -27,15 +27,16 @@ tests/selfie/selfie
 tests/sharemap/sharemap
 tests/signal/signal
 tests/sleep/sleep
+tests/slsfs/file
 tests/socketpair/socketpair
 tests/sysvshm/sysvshm
+tests/testfile
 tests/tcplisten/tcplisten
 tests/udplisten/udplisten
 tests/unixlisten/unixlisten
 tests/unlink/unlink
 tests/vmobject/vmobject
-tests/slsfs/file
-tests/testfile
+tests/wal/wal
 
 scripts/config.sh
 
