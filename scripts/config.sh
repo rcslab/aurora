@@ -45,7 +45,7 @@ MOUNTDIR="/testmnt"
 
 # Drive in which the SLOS resides. Equal to the stripe drive only if there
 # is one, otherwise $STRIPEDRIVE is invalid
-DRIVE="/dev/vtbd1"
+DRIVE="/dev/nvd0"
 
 # Delay in seconds, inserted to avoid certain races between operations
 SYNCHDELAY="2"

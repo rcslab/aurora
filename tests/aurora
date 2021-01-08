@@ -1,16 +1,18 @@
+SRCROOT="/root/sls"
 NEWFS=$SRCROOT/tools/newfs_sls/newfs_sls
 SLSCTL=$SRCROOT/tools/slsctl/slsctl
+SLSROOT="$SRCROOT/root.tar.gz"
 MNT=/testmnt
 
 # Load and unload kernel modules
 loadsls()
 {
-    kldload ../sls/sls.ko
+    kldload "$SRCROOT/sls/sls.ko"
 }
 
 loadslos()
 {
-    kldload ../slos/slos.ko
+    kldload "$SRCROOT/slos/slos.ko"
 }
 
 loadmod()
@@ -39,23 +41,26 @@ unloadmod()
 # Create and destroy memory device
 createmd()
 {
-    MDDISK=`mdconfig -a -t malloc -s 1g`
-    echo $MDDISK | cut -b3-
+    MDDISK=`mdconfig -a -t malloc -s 5g`
+    DISK="$MDDISK"
+    DISKPATH="/dev/$MDDISK"
 }
 
 destroymd()
 {
-    mdconfig -d -u $MDDISK
+    mdconfig -d -u $1
 }
 
 slsnewfs()
 {
-    $NEWFS /dev/md$MDDISK > $TESTLOG 2> $TESTLOG
+    # Pipe to /dev/null if there is no log
+    TESTLOG=${TESTLOG:-"/dev/null"}
+    $NEWFS $DISKPATH > $TESTLOG 2> $TESTLOG
 }
 
 slsmount()
 {
-    mount -t slsfs /dev/md$MDDISK $MNT
+    mount -t slsfs $DISKPATH $MNT
 }
 
 slsunmount()
@@ -115,4 +120,38 @@ killandwait()
 {
     kill $1
     wait $1
+}
+
+finddisk()
+{
+    if [ -f "$DISKPATH" ] ; then
+	return
+    fi
+
+    DISKS=$(ls -1 /dev/ | grep -wE '(vtbd|md|nvd)[0-9]*')
+    MOUNTED=$(mount | grep -oE '(vtbd|md|nvd)[0-9]*')
+
+    # Search for the first nonmounted disk
+    for d in $DISKS;
+    do
+	if [ -z "$(echo $MOUNTED | grep $d)" ];
+	then
+	    DISK="$d"
+	    DISKPATH="/dev/$DISK"
+	    break
+	fi
+    done
+}
+
+createroot()
+{
+    if [ ! -f "$SLSROOT" ]; then
+	$SRCROOT/scripts/image.sh
+    fi
+}
+
+installroot()
+{
+    # Unpack the root into the mount if it exists
+    tar -C "$MNT" -xf "$SLSROOT"
 }

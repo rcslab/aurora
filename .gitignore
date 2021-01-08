@@ -95,3 +95,5 @@ vmobject-*
 criuimage
 redisinput
 criu-results/
+*.tar
+*.gz

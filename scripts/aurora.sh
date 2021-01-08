@@ -1,5 +1,5 @@
 # Stripe the Aurora disk
-function aurstripe {
+aurstripe() {
     if [ "$STRIPING" = false ];
     then
 	return
@@ -12,7 +12,7 @@ function aurstripe {
 }
 
 # Load the SLOS, create a filesystem, and load the SLS.
-function aurload {
+aurload() {
     # Load the SLOS itself.
     kldload "$SLSDIR"/slos/slos.ko
 
@@ -34,7 +34,7 @@ function aurload {
 }
 
 # Unload the SLS and unmount the SLOS.
-function aurunload {
+aurunload() {
     # Kill all tracing scripts and wait for them to finish
     pkill -SIGKILL dtrace
     sleep 1
@@ -56,7 +56,7 @@ function aurunload {
 }
 
 # Clean up any data produced by Aurora
-function aurclean {
+aurclean() {
     # Clean up the output produced by Aurora
     rm -r "$OUTDIR"
 
@@ -68,7 +68,7 @@ function aurclean {
 }
 
 # Set up the SLS. Done after setting up the benchmark.
-function slsckpt {
+slsckpt() {
     # Check if we actually supplied a process to checkpoint
     if [ -z "$1" ]
     then
@@ -96,7 +96,7 @@ function slsckpt {
     "$SLSCTL" checkpoint -o "$OID" -r
 }
 
-function slsrest {
+slsrest() {
     # Check if we need to stop the processes at the kernel at restore
     if [ "$RESTSTOP" == "yes" ]
     then

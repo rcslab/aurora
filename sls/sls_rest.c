@@ -691,7 +691,6 @@ slsrest_metadata(void *args)
 
 	PROC_UNLOCK(p);
 
-	DEBUG("SLS Restore VMSPACE");
 	error = slsrest_dovmspace(p, &buf, &buflen, restdata);
 	if (error != 0)
 		goto error; 
@@ -701,19 +700,16 @@ slsrest_metadata(void *args)
 	 * Restore CPU state, file state, and memory
 	 * state, parsing the buffer at each step. 
 	 */
-	DEBUG("SLS Restore Proc");
 	error = slsrest_doproc(p, daemon, &buf, &buflen, restdata);
 	if (error != 0)
 		goto error; 
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Restoring process state");
-	DEBUG("SLS Restore filedesc");
 	error = slsrest_dofiledesc(p, &buf, &buflen, restdata);
 	if (error != 0)
 		goto error; 
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Restoring file table");
-	DEBUG("SLS Restore knotes");
 	error = slsrest_doknotes(p, restdata->kevtable);
 	if (error != 0)
 		goto error; 

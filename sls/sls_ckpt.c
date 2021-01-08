@@ -66,6 +66,12 @@ int sls_vfs_sync = 0;
 uint64_t sls_ckpt_attempted;
 uint64_t sls_ckpt_done;
 
+SDT_PROBE_DEFINE1(sls, , sls_checkpointd, , "char *");
+SDT_PROBE_DEFINE1(sls, , sls_checkpoint, , "char *");
+SDT_PROBE_DEFINE1(sls, , slsckpt_metadata, , "char *");
+SDT_PROBE_DEFINE0(sls, , , stopclock_start);
+SDT_PROBE_DEFINE0(sls, , , stopclock_finish);
+
 /*
  * Stop the processes, and wait until they are truly not running. 
  */
@@ -111,7 +117,7 @@ slsckpt_cont(slsset *procset, struct proc *pcaller)
 /*
  * Get all the metadata of a process.
  */
-static int
+static int __attribute__ ((noinline))
 slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_data)
 {
 	struct sls_record *rec;
@@ -132,11 +138,15 @@ slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_dat
 
 	sb = sbuf_new_auto();
 
+	SDT_PROBE1(sls, , slsckpt_metadata, , "Setting up the metadata");
+
 	error = slsckpt_vmspace(p->p_vmspace, sb, sckpt_data);
 	if (error != 0) {
 		SLS_DBG("Error: slsckpt_vmspace failed with error code %d\n", error);
 		goto out;
 	}
+
+	SDT_PROBE1(sls, , slsckpt_metadata, , "Checkpointing vm state");
 
 	error = slsckpt_proc(p, sb, procset, sckpt_data);
 	if (error != 0) {
@@ -144,6 +154,7 @@ slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_dat
 		goto out;
 	}
 
+	SDT_PROBE1(sls, , slsckpt_metadata, , "Checkpointing process state");
 	/* XXX This has to be last right now, because the filedesc is not in its 
 	 * own record. */
 	error = slsckpt_filedesc(p, sckpt_data, sb);
@@ -151,6 +162,8 @@ slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_dat
 		SLS_DBG("Error: slsckpt_filedesc failed with error code %d\n", error);
 		goto out;
 	}
+
+	SDT_PROBE1(sls, , slsckpt_metadata, , "Checkpointing file table");
 
 	error = sbuf_finish(sb);
 	if (error != 0)
@@ -163,12 +176,16 @@ slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_dat
 		goto out;
 	}
 
+	SDT_PROBE1(sls, , slsckpt_metadata, , "Creating record");
+
 out:
 
 	if (error != 0) {
 		slskv_del(sckpt_data->sckpt_rectable, (uint64_t) sb);
 		sbuf_delete(sb);
 	}
+
+	SDT_PROBE1(sls, , slsckpt_metadata, , "Creating record");
 
 	return error;
 }
@@ -276,6 +293,8 @@ sls_checkpoint(slsset *procset, struct proc *pcaller, struct slspart *slsp)
 	if (error != 0)
 		return (error);
 
+	SDT_PROBE1(sls, , sls_checkpoint, , "Creating the checkpoint struct");
+
 	/* Shadow SYSV shared memory. */
 	error = slsckpt_sysvshm(sckpt_data, sckpt_data->sckpt_objtable);
 	if (error != 0) {
@@ -283,6 +302,8 @@ sls_checkpoint(slsset *procset, struct proc *pcaller, struct slspart *slsp)
 		slsckpt_cont(procset, pcaller);
 		goto error;
 	}
+
+	SDT_PROBE1(sls, , sls_checkpoint, , "Getting System V shared memory");
 
 	/* Get the data from all processes in the partition. */
 	KVSET_FOREACH(procset, iter, p) {
@@ -295,6 +316,8 @@ sls_checkpoint(slsset *procset, struct proc *pcaller, struct slspart *slsp)
 			goto error;
 		}
 	}
+
+	SDT_PROBE1(sls, , sls_checkpoint, , "Getting the metadata");
 
 	KVSET_FOREACH(procset, iter, p) {
 		KASSERT(P_SHOULDSTOP(p), ("process not stopped"));
@@ -311,8 +334,13 @@ sls_checkpoint(slsset *procset, struct proc *pcaller, struct slspart *slsp)
 		goto error;
 	}
 
+	SDT_PROBE1(sls, , sls_checkpoint, , "Shadowing the objects");
+
 	/* Let the process execute ASAP */
 	slsckpt_cont(procset, pcaller);
+
+	SDT_PROBE1(sls, , sls_checkpoint, , "Continuing the process");
+	SDT_PROBE0(sls, , , stopclock_finish);
 
 	/* Initiate IO, if necessary. */
 	if (slsp->slsp_target == SLS_OSD) {
@@ -321,11 +349,15 @@ sls_checkpoint(slsset *procset, struct proc *pcaller, struct slspart *slsp)
 			DEBUG1("slsckpt_initio failed with %d", error);
 	}
 
+	SDT_PROBE1(sls, , sls_checkpoint, , "Initiating IO");
+
 	/* 
 	 * Collapse the shadows. Do it before making the partition available to 
 	 * safely execute with region checkpoints.
 	 */
 	slsckpt_compact(slsp, sckpt_data);
+
+	SDT_PROBE1(sls, , sls_checkpoint, , "Compacting the address space");
 
 	/* 
 	 * Mark the partition as available. That way, region checkpoints 
@@ -343,6 +375,8 @@ sls_checkpoint(slsset *procset, struct proc *pcaller, struct slspart *slsp)
 		/* XXX Using MNT_WAIT is causing a deadlock right now. */
 		VFS_SYNC(slos.slsfs_mount, (sls_vfs_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
 	}
+
+	SDT_PROBE1(sls, , sls_checkpoint, , "Draining taskqueue");
 
 	/* Advance the current major epoch. */
 	slsp_epoch_advance_major(slsp);
@@ -666,7 +700,7 @@ slsckpt_gather_children(slsset *procset, struct proc *pcaller)
 /*
  * System process that continuously checkpoints a partition.
  */
-void
+void __attribute__ ((noinline))
 sls_checkpointd(struct sls_checkpointd_args *args)
 {
 	struct proc *pcaller = args->pcaller;
@@ -713,6 +747,8 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		if (slsp->slsp_status != SLSP_CHECKPOINTING)
 			break;
 
+		SDT_PROBE1(sls, , sls_checkpointd, , "Setting up");
+
 		/* Gather all processes still running. */
 		error = slsckpt_gather_processes(slsp, pcaller, procset);
 		if (error != 0)
@@ -737,7 +773,12 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 				break;
 		}
 
+		SDT_PROBE1(sls, , sls_checkpointd, , "Gathering processes");
+		SDT_PROBE0(sls, , , stopclock_start);
+
 		slsckpt_stop(procset, pcaller);
+
+		SDT_PROBE1(sls, , sls_checkpointd, , "Stopping processes");
 
 		/* Checkpoint the process once. */
 		error = sls_checkpoint(procset, pcaller, slsp);

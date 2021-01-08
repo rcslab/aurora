@@ -1,13 +1,12 @@
 #!/bin/sh
 
-export SRCROOT=..
-MDDISK=""
 export KTRLOG="ktrdump.log"
 export TESTLOG="testbench.log"
 
 TIMEOUT=30
 
 . aurora
+export SRCROOT
 
 ESC=`printf "\033"`
 CR=`printf "\015"`
@@ -79,10 +78,16 @@ run_tests()
 }
 
 # Cleanup any leftover Aurora state.
-aurteardown
+aurteardown 1>/dev/null 2>/dev/null
 
-MDDISK=`createmd`
-export MDDISK=$MDDISK
+createmd
+
+export MDDISK
+export DISK
+export DISKPATH
+
+# Create a directory tree for the root if needed
+createroot
 
 if [ $# -eq 1 ]; then
 	touch $TESTLOG
