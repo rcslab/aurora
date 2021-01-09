@@ -160,8 +160,8 @@ SDT_PROVIDER_DECLARE(sls);
 
 #define SLS_ASSERT_LOCKED() (mtx_assert(&slsm.slsm_mtx, MA_OWNED))
 #define SLS_ASSERT_UNLOCKED() (mtx_assert(&slsm.slsm_mtx, MA_NOTOWNED))
-#define SLS_LOCK() (mtx_lock(&slsm.slsm_mtx))
-#define SLS_UNLOCK() (mtx_unlock(&slsm.slsm_mtx))
+#define SLS_LOCK() mtx_lock(&slsm.slsm_mtx)
+#define SLS_UNLOCK() mtx_unlock(&slsm.slsm_mtx)
 #define SLS_EXITING() (slsm.slsm_exiting != 0)
 
 /* Start an SLS ioctl operation. This guards global module state (not partition state). */
