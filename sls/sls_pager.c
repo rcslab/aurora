@@ -205,6 +205,8 @@ sls_pager_writebuf(vm_object_t obj, vm_pindex_t pindex, size_t targetsize)
 	sls_pager_done_setup(bp);
 	VM_OBJECT_WUNLOCK(obj);
 
+	BUF_ASSERT_LOCKED(bp);
+
 	return (bp);
 }
 

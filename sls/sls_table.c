@@ -765,6 +765,8 @@ sls_writeobj_data(struct vnode *vp, vm_object_t obj)
 
 		/* Update the counter. */
 		sls_data_sent += bp->b_resid;
+
+		BUF_ASSERT_LOCKED(bp);
 		error = slos_iotask_create(vp, bp, sls_async_slos);
 		if (error != 0) {
 			return (error);

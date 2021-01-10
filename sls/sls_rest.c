@@ -380,10 +380,10 @@ slsrest_dofile(struct slsrest_data *restdata, char *buf, size_t buflen)
 	case DTYPE_KQUEUE:
 	case DTYPE_VNODE:
 	case DTYPE_FIFO:
-	case DTYPE_SHM:
 		/* Nothing to clean up. */
 		break;
 
+	case DTYPE_SHM:
 	case DTYPE_PIPE:
 	case DTYPE_SOCKET:
 	case DTYPE_PTS:

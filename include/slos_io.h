@@ -19,7 +19,7 @@ int slos_sbread(struct slos *slos);
 int slos_sbat(struct slos *slos, int index, struct slos_sb *sb);
 
 /* Direct SLOS IO. */
-int slos_iotask_create(struct vnode *vp, struct buf *bp, bool sync);
+int slos_iotask_create(struct vnode *vp, struct buf *bp, bool async);
 boolean_t slos_hasblock(struct vnode *vp, uint64_t lblkno_req, int *rbehind, int *rahead);
 
 extern int slos_pbufcnt;

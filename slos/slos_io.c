@@ -344,7 +344,7 @@ slos_io_physaddr(struct buf *bp, struct slos *slos)
 
 /* Perform an IO without copying from the VM objects to the buffer. */
 static void
-slos_io(void *ctx, int pending)
+slos_io(void *ctx, int __unused pending)
 {
 	struct slos_taskctx *task = (struct slos_taskctx *)ctx;
 	struct vnode *vp = task->vp;
@@ -362,6 +362,8 @@ slos_io(void *ctx, int pending)
 	    ("FS bsize %lu not multiple of device bsize %lu",
 	    SLOS_BSIZE(slos), SLOS_DEVBSIZE(slos)));
 	KASSERT(bp->b_bcount > 0, ("IO of size 0"));
+
+	BUF_ASSERT_LOCKED(bp);
 
 	if (iocmd == BIO_WRITE) {
 		/* Create the physical segment backing the write. */
@@ -397,6 +399,7 @@ slos_io(void *ctx, int pending)
 	 */
 	bwait(bp, PRIBIO, "slsrw");
 out:
+	BUF_ASSERT_LOCKED(bp);
 	relpbuf(bp, &slos_pbufcnt);
 
 	free(task, M_SLOS_IO);
@@ -417,18 +420,21 @@ slos_iotask_init(struct vnode *vp, struct buf *bp)
 }
 
 int
-slos_iotask_create(struct vnode *vp, struct buf *bp, bool sync)
+slos_iotask_create(struct vnode *vp, struct buf *bp, bool async)
 {
 	struct slos_taskctx *ctx;
 
 	KASSERT(bp->b_resid > 0, ("IO of size 0"));
 	ctx = slos_iotask_init(vp, bp);
 
-	if (sync) {
-		slos_io(ctx, 0);
-	} else {
+	BUF_ASSERT_LOCKED(bp);
+
+	if (async) {
 		TASK_INIT(&ctx->tk, 0, &slos_io, ctx);
+		BUF_KERNPROC(bp);
 		taskqueue_enqueue(slos.slos_tq, &ctx->tk);
+	} else {
+		slos_io(ctx, 0);
 	}
 
 	return (0);
