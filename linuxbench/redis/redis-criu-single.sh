@@ -31,5 +31,7 @@ cat "$TMPFILE" | redis-cli --pipe > /dev/null
 rm "$TMPFILE"
 
 mkdir -p $CKPTDIR
+sudo mount -t tmpfs -o size=10g tmpfs $CKPTDIR
 criu dump -D $CKPTDIR --shell-job -t $REDISPID --display-stats 2> /dev/null
+sudo umount $CKPTDIR
 rm -r $CKPTDIR
