@@ -27,19 +27,25 @@
 
 struct slspart {
     uint64_t		    slsp_oid;	    /* OID of the partition */
-    uint64_t		    slsp_epoch;	    /* Current epoch, incremented after ckpt */
 
     slsset		    *slsp_procs;    /* The processes that belong to this partition */
     int			    slsp_status;    /* Status of checkpoint */
     struct sls_attr	    slsp_attr;	    /* Parameters for checkpointing the process */
     int			    slsp_refcount;  /* Reference count for the partition. */
+
     struct slskv_table	    *slsp_objects;  /* VM Objects created for the SLS */
     struct slsckpt_data	    *slsp_sckpt;    /* In-memory checkpoint */
     uint64_t		    slsp_procnum;   /* Number of processes in the partition */
+
     struct mtx		    slsp_syncmtx;   /* Mutex used for synchronization by the SLS */
     struct cv		    slsp_synccv;    /* CV used for synchronization by the SLS */
-    int			    slsp_retval;    /* Return value of an operation done on the partition */
     bool		    slsp_syncdone;  /* Variable for slsp_signal/waitfor */
+    int			    slsp_retval;    /* Return value of an operation done on the partition */
+
+    struct mtx		    slsp_epochmtx;   /* Mutex used for guarding the epoch */
+    struct cv		    slsp_epochcv;    /* CV used for epoch events */
+    uint64_t		    slsp_epoch;	    /* Current epoch, incremented after ckpt is on disk */
+    uint64_t		    slsp_nextepoch; /* Epoch the caller's operations will be in after completion*/
 
     LIST_ENTRY(slspart)	    slsp_parts;	    /* List of active SLS partitions */
 #define slsp_target slsp_attr.attr_target
@@ -62,8 +68,8 @@ void slsp_ref(struct slspart *slsp);
 void slsp_deref(struct slspart *slsp);
 
 int slsp_isempty(struct slspart *slsp);
-void slsp_epoch_advance_major(struct slspart *slsp);
-void slsp_epoch_advance_minor(struct slspart *slsp);
+uint64_t slsp_epoch_preadvance(struct slspart *slsp);
+void slsp_epoch_advance(struct slspart *slsp, uint64_t next_epoch);
 
 void slsp_signal(struct slspart *slsp, int retval);
 int slsp_waitfor(struct slspart *slsp);

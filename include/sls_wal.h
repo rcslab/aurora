@@ -7,6 +7,7 @@ struct sls_wal {
 	uint64_t oid;
 	char *mapping;
 	size_t size;
+	uint64_t epoch;
 	pthread_mutex_t mutex;
 };
 
@@ -24,3 +25,6 @@ void sls_wal_replay(struct sls_wal *wal);
 
 /* Close a write-ahead log. */
 int sls_wal_close(struct sls_wal *wal);
+
+/* Specify a point at which execution will resume after a crash. */
+int sls_wal_savepoint(struct sls_wal *wal);

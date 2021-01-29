@@ -66,8 +66,11 @@ int sls_vfs_sync = 0;
 uint64_t sls_ckpt_attempted;
 uint64_t sls_ckpt_done;
 
+SDT_PROBE_DEFINE1(sls, , slsckpt_dataregion_dump, , "char *");
+SDT_PROBE_DEFINE1(sls, , slsckpt_dataregion_fillckpt, , "char *");
+SDT_PROBE_DEFINE1(sls, , slsckpt_dataregion, , "char *");
 SDT_PROBE_DEFINE1(sls, , sls_checkpointd, , "char *");
-SDT_PROBE_DEFINE1(sls, , sls_checkpoint, , "char *");
+SDT_PROBE_DEFINE1(sls, , sls_ckpt, , "char *");
 SDT_PROBE_DEFINE1(sls, , slsckpt_metadata, , "char *");
 SDT_PROBE_DEFINE0(sls, , , stopclock_start);
 SDT_PROBE_DEFINE0(sls, , , stopclock_finish);
@@ -138,7 +141,7 @@ slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_dat
 
 	sb = sbuf_new_auto();
 
-	SDT_PROBE1(sls, , slsckpt_metadata, , "Setting up the metadata");
+	SDT_PROBE1(sls, , slsckpt_metadata, , "Setting up metadata");
 
 	error = slsckpt_vmspace(p->p_vmspace, sb, sckpt_data);
 	if (error != 0) {
@@ -154,7 +157,7 @@ slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_dat
 		goto out;
 	}
 
-	SDT_PROBE1(sls, , slsckpt_metadata, , "Checkpointing process state");
+	SDT_PROBE1(sls, , slsckpt_metadata, , "Getting process state");
 	/* XXX This has to be last right now, because the filedesc is not in its 
 	 * own record. */
 	error = slsckpt_filedesc(p, sckpt_data, sb);
@@ -163,7 +166,7 @@ slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_dat
 		goto out;
 	}
 
-	SDT_PROBE1(sls, , slsckpt_metadata, , "Checkpointing file table");
+	SDT_PROBE1(sls, , slsckpt_metadata, , "Getting the fdtable");
 
 	error = sbuf_finish(sb);
 	if (error != 0)
@@ -176,16 +179,12 @@ slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_dat
 		goto out;
 	}
 
-	SDT_PROBE1(sls, , slsckpt_metadata, , "Creating record");
-
 out:
 
 	if (error != 0) {
 		slskv_del(sckpt_data->sckpt_rectable, (uint64_t) sb);
 		sbuf_delete(sb);
 	}
-
-	SDT_PROBE1(sls, , slsckpt_metadata, , "Creating record");
 
 	return error;
 }
@@ -260,7 +259,7 @@ slsckpt_initio(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 	if (error != 0)
 		return (error);
 
-	SDT_PROBE1(sls, , sls_checkpoint, , "Serializing vnodes");
+	SDT_PROBE1(sls, , sls_ckpt, , "Serializing vnodes");
 
 	error = sls_write_slos(slsp->slsp_oid, sckpt_data);
 	if (error != 0) {
@@ -277,7 +276,7 @@ slsckpt_initio(struct slspart *slsp, struct slsckpt_data *sckpt_data)
  * by the partition's processes.
  */
 static int __attribute__ ((noinline))
-sls_checkpoint(slsset *procset, struct proc *pcaller, struct slspart *slsp)
+sls_ckpt(slsset *procset, struct proc *pcaller, struct slspart *slsp, uint64_t nextepoch)
 {
 	struct slsckpt_data *sckpt_data;
 	struct slskv_iter iter;
@@ -295,7 +294,7 @@ sls_checkpoint(slsset *procset, struct proc *pcaller, struct slspart *slsp)
 	if (error != 0)
 		return (error);
 
-	SDT_PROBE1(sls, , sls_checkpoint, , "Creating the checkpoint struct");
+	SDT_PROBE1(sls, , sls_ckpt, , "Creating the checkpoint");
 
 	/* Shadow SYSV shared memory. */
 	error = slsckpt_sysvshm(sckpt_data, sckpt_data->sckpt_objtable);
@@ -305,7 +304,7 @@ sls_checkpoint(slsset *procset, struct proc *pcaller, struct slspart *slsp)
 		goto error;
 	}
 
-	SDT_PROBE1(sls, , sls_checkpoint, , "Getting System V shared memory");
+	SDT_PROBE1(sls, , sls_ckpt, , "Getting System V memory");
 
 	/* Get the data from all processes in the partition. */
 	KVSET_FOREACH(procset, iter, p) {
@@ -319,7 +318,7 @@ sls_checkpoint(slsset *procset, struct proc *pcaller, struct slspart *slsp)
 		}
 	}
 
-	SDT_PROBE1(sls, , sls_checkpoint, , "Getting the metadata");
+	SDT_PROBE1(sls, , sls_ckpt, , "Getting the metadata");
 
 	KVSET_FOREACH(procset, iter, p) {
 		KASSERT(P_SHOULDSTOP(p), ("process not stopped"));
@@ -336,12 +335,12 @@ sls_checkpoint(slsset *procset, struct proc *pcaller, struct slspart *slsp)
 		goto error;
 	}
 
-	SDT_PROBE1(sls, , sls_checkpoint, , "Shadowing the objects");
+	SDT_PROBE1(sls, , sls_ckpt, , "Shadowing the objects");
 
 	/* Let the process execute ASAP */
 	slsckpt_cont(procset, pcaller);
 
-	SDT_PROBE1(sls, , sls_checkpoint, , "Continuing the process");
+	SDT_PROBE1(sls, , sls_ckpt, , "Continuing the process");
 	SDT_PROBE0(sls, , , stopclock_finish);
 
 	/* Initiate IO, if necessary. */
@@ -349,27 +348,11 @@ sls_checkpoint(slsset *procset, struct proc *pcaller, struct slspart *slsp)
 		error = slsckpt_initio(slsp, sckpt_data);
 		if (error != 0)
 			DEBUG1("slsckpt_initio failed with %d", error);
+
+		SDT_PROBE1(sls, , sls_ckpt, , "Initiating IO to disk");
 	}
 
-	SDT_PROBE1(sls, , sls_checkpoint, , "Initiating IO");
-
-	/* 
-	 * Collapse the shadows. Do it before making the partition available to 
-	 * safely execute with region checkpoints.
-	 */
-	slsckpt_compact(slsp, sckpt_data);
-
-	SDT_PROBE1(sls, , sls_checkpoint, , "Compacting the address space");
-
-	/* 
-	 * Mark the partition as available. That way, region checkpoints 
-	 * progress while we wait for the taskqueue to be drained. There is 
-	 * possible interference in that draining the taskqueue might include 
-	 * draining IOs initiated by other checkpoints, but that shouldn't be 
-	 * too much of a problem.
-	 */
-	error = slsp_setstate(slsp, SLSP_CHECKPOINTING, SLSP_AVAILABLE, false);
-	KASSERT(error == 0, ("partition not in ckpt state"));
+	SDT_PROBE1(sls, , sls_ckpt, , "Object compaction");
 
 	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
 	if (slsp->slsp_target == SLS_OSD) {
@@ -378,10 +361,25 @@ sls_checkpoint(slsset *procset, struct proc *pcaller, struct slspart *slsp)
 		VFS_SYNC(slos.slsfs_mount, (sls_vfs_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
 	}
 
-	SDT_PROBE1(sls, , sls_checkpoint, , "Draining taskqueue");
+	SDT_PROBE1(sls, , sls_ckpt, , "Draining taskqueue");
 
 	/* Advance the current major epoch. */
-	slsp_epoch_advance_major(slsp);
+	slsp_epoch_advance(slsp, nextepoch);
+
+	/* 
+	 * Collapse the shadows. Do it before making the partition available to 
+	 * safely execute with region checkpoints.
+	 */
+	slsckpt_compact(slsp, sckpt_data);
+
+	/* 
+	 * Mark the partition as available. We don't have pipelining, so we wait 
+	 * for the taskqueue to drain before making the partition available 
+	 * again.
+	 */
+	error = slsp_setstate(slsp, SLSP_CHECKPOINTING, SLSP_AVAILABLE, false);
+	KASSERT(error == 0, ("partition not in ckpt state"));
+
 
 	DEBUG("Checkpointed partition once");
 
@@ -455,6 +453,7 @@ slsckpt_dataregion_fillckpt(struct slspart *slsp, struct proc *p,
 	if (error != 0)
 		return (error);
 
+	SDT_PROBE1(sls, , slsckpt_dataregion_fillckpt, , "Getting the object");
 	KASSERT(OBJT_ISANONYMOUS(obj), ("getting metadata for non anonymous obj"));
 
 	/* Only objects referenced only by the entry can be shadowed. */
@@ -466,12 +465,14 @@ slsckpt_dataregion_fillckpt(struct slspart *slsp, struct proc *p,
 	if (error != 0)
 		return (error);
 
+	SDT_PROBE1(sls, , slsckpt_dataregion_fillckpt, , "Object checkpointing");
 	/* Get the data and shadow it for the entry. */
 	error = slsvm_entry_shadow(p, sckpt_data->sckpt_objtable, entry,
 	    slsckpt_isfullckpt(slsp));
 	if (error != 0)
 		return (error);
 
+	SDT_PROBE1(sls, , slsckpt_dataregion_fillckpt, , "Object shadowing");
 
 	return (0);
 }
@@ -493,14 +494,72 @@ slsckpt_proc_in_part(struct slspart *slsp, struct proc *p)
 	return (false);
 }
 
+struct slsckpt_dataregion_dump_args {
+	struct slsckpt_data *sckpt_data;
+	struct slspart *slsp;
+	uint64_t nextepoch;
+};
+
+static void
+slsckpt_dataregion_dump(struct slsckpt_dataregion_dump_args *args)
+{
+	struct slsckpt_data *sckpt_data = args->sckpt_data;
+	uint64_t nextepoch = args->nextepoch;
+	struct slspart *slsp = args->slsp;
+	int stateerr, error;
+
+	if (slsp->slsp_target == SLS_OSD) {
+		error = sls_write_slos_dataregion(sckpt_data);
+		if (error != 0)
+			DEBUG1("slsckpt_initio failed with %d", error);
+	}
+
+	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Writing out the data");
+
+	/*
+	 * We compact before turning the checkpoint available, because we modify 
+	 * the partition's current checkpoint data.
+	 */
+	if ((slsp->slsp_target == SLS_MEM) || (slsp->slsp_target == SLS_DELTA))
+		slsckpt_compact_single(slsp, sckpt_data);
+	else
+		slsckpt_destroy(sckpt_data, NULL);
+
+	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Compacting the data");
+
+	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
+	if (slsp->slsp_target == SLS_OSD) {
+		taskqueue_drain_all(slos.slos_tq);
+		/* XXX Using MNT_WAIT is causing a deadlock right now. */
+		VFS_SYNC(slos.slsfs_mount, (sls_vfs_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
+	}
+
+	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Draining the taskqueue");
+
+	slsp_epoch_advance(slsp, nextepoch);
+
+	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Advancing the epoch");
+
+	stateerr = slsp_setstate(slsp, SLSP_CHECKPOINTING, SLSP_AVAILABLE, false);
+	KASSERT(stateerr == 0, ("partition not in ckpt state"));
+
+	slsp_deref(slsp);
+
+	free(args, M_SLSMM);
+
+	/* Remove the reference taken by the initial ioctl call. */
+	kthread_exit();
+}
+
 /*
  * Persist an area of memory of the process. The process must be in a partition.
  * At restore time, the data region has the data grabbed here, instead of the 
  * ones created during the previous checkpoint.
  */
 int
-slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr)
+slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr, uint64_t *nextepoch)
 {
+	struct slsckpt_dataregion_dump_args *dump_args;
 	struct slsckpt_data *sckpt_data = NULL;
 	int stateerr, error;
 
@@ -533,14 +592,20 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr)
 		goto error_single;
 	}
 
+	SDT_PROBE1(sls, , slsckpt_dataregion, , "Getting the partition");
+
 	error = slsckpt_create(&sckpt_data, &slsp->slsp_attr);
 	if (error != 0)
 		goto error_single;
+
+	SDT_PROBE0(sls, , , stopclock_start);
 
 	/* Single thread to avoid races with other threads. */
 	PROC_LOCK(p);
 	thread_single(p, SINGLE_BOUNDARY);
 	PROC_UNLOCK(p);
+
+	SDT_PROBE1(sls, , slsckpt_dataregion, , "Single threading");
 
 	/* Add the data and metadata. This also shadows the object. */
 	error =  slsckpt_dataregion_fillckpt(slsp, p, addr, sckpt_data);
@@ -549,38 +614,35 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr)
 		goto error;
 	}
 
+	SDT_PROBE1(sls, , slsckpt_dataregion, , "Filling in the data");
+
+	/* Preadvance the epoch, the kthread will advance it. */
+	*nextepoch = slsp_epoch_preadvance(slsp);
+
 	/* The process can continue while we are dumping. */
 	PROC_LOCK(p);
 	thread_single_end(p, SINGLE_BOUNDARY);
 	PROC_UNLOCK(p);
 
-	if (slsp->slsp_target == SLS_OSD) {
-		error = sls_write_slos_dataregion(sckpt_data);
-		if (error != 0)
-			DEBUG1("slsckpt_initio failed with %d", error);
-	}
+	SDT_PROBE0(sls, , , stopclock_finish);
 
 	/*
-	 * We compact before turning the checkpoint available, because we modify 
-	 * the partition's current checkpoint data.
+	 * Create a thread to asynchronously take care of the dumping.
+	 * The caller can wait for the epoch to advance using sls_epoch_wait().
 	 */
-	if ((slsp->slsp_target == SLS_MEM) || (slsp->slsp_target == SLS_DELTA))
-		slsckpt_compact_single(slsp, sckpt_data);
-	else
-		slsckpt_destroy(sckpt_data, NULL);
-
-	stateerr = slsp_setstate(slsp, SLSP_CHECKPOINTING, SLSP_AVAILABLE, false);
-	KASSERT(stateerr == 0, ("partition not in ckpt state"));
-
-	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
-	if (slsp->slsp_target == SLS_OSD) {
-		taskqueue_drain_all(slos.slos_tq);
-		/* XXX Using MNT_WAIT is causing a deadlock right now. */
-		VFS_SYNC(slos.slsfs_mount, (sls_vfs_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
+	dump_args = malloc(sizeof(*dump_args), M_SLSMM, M_WAITOK);
+	*dump_args = (struct slsckpt_dataregion_dump_args) {
+		.slsp = slsp,
+		.sckpt_data = sckpt_data,
+		.nextepoch = *nextepoch,
+	};
+	error = kthread_add((void(*)(void *)) slsckpt_dataregion_dump,
+	    dump_args, NULL, NULL, 0, 0, "slsckpt_dataregion_dump");
+	if (error != 0) {
+		DEBUG1("ERROR: Calling sls_dataregion_dump failed with %d", error);
+		slsp_epoch_advance(slsp, *nextepoch);
+		return (error);
 	}
-
-	/* Only advance the minor epoch, major epochs are full checkpoints. */
-	slsp_epoch_advance_minor(slsp);
 
 	return (0);
 
@@ -589,12 +651,17 @@ error:
 	thread_single_end(p, SINGLE_BOUNDARY);
 	PROC_UNLOCK(p);
 
+	SDT_PROBE0(sls, , , stopclock_finish);
+
 error_single:
 
 	stateerr = slsp_setstate(slsp, SLSP_CHECKPOINTING, SLSP_AVAILABLE, false);
 	KASSERT(stateerr == 0, ("partition not in ckpt state"));
 
 	slsckpt_destroy(sckpt_data, NULL);
+
+	/* Remove the reference taken by the initial ioctl call. */
+	slsp_deref(slsp);
 
 	return (error);
 }
@@ -705,6 +772,7 @@ slsckpt_gather_children(slsset *procset, struct proc *pcaller)
 void __attribute__ ((noinline))
 sls_checkpointd(struct sls_checkpointd_args *args)
 {
+	uint64_t *nextepoch = args->nextepoch;
 	struct proc *pcaller = args->pcaller;
 	struct slspart *slsp = args->slsp;
 	struct timespec tstart, tend;
@@ -782,9 +850,13 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 
 		SDT_PROBE1(sls, , sls_checkpointd, , "Stopping processes");
 
+		/* Preadvance the epoch, the checkpoint will advance it. */
+		*nextepoch = slsp_epoch_preadvance(slsp);
+
 		/* Checkpoint the process once. */
-		error = sls_checkpoint(procset, pcaller, slsp);
+		error = sls_ckpt(procset, pcaller, slsp, *nextepoch);
 		if (error != 0) {
+			slsp_epoch_advance(slsp, *nextepoch);
 			DEBUG1("Checkpoint failed with %d\n", error);
 			break;
 		}
@@ -809,7 +881,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 
 		DEBUG("Woke up");
 		/* 
-		 * The sls_checkpoint() process has marked the partition as 
+		 * The sls_ckpt() process has marked the partition as 
 		 * available after it was done initiating dumping to disk. 
 		 */
 	}

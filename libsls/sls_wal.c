@@ -98,29 +98,17 @@ sls_wal_reserve(struct sls_wal *wal, size_t size)
 		return (NULL);
 }
 
-/* Get the current SLS epoch number. */
-static uint64_t
-sls_wal_epoch(struct sls_wal *wal)
-{
-	uint64_t epoch;
-
-	if (sls_epoch(wal->oid, &epoch) != 0)
-		abort();
-
-	return (epoch);
-}
-
 /* Wait for a complete snapshot to occur, then clear the log. */
 static void
 sls_wal_full_checkpoint(struct sls_wal *wal)
 {
 	struct sls_wal_header *header = sls_wal_header(wal);
-	uint64_t epoch = sls_wal_epoch(wal);
 	size_t offset;
+	int error;
 
-	do {
-		usleep(10);
-	} while (sls_wal_epoch(wal) == epoch);
+	error = sls_untilepoch(wal->oid, wal->epoch);
+	if (error != 0)
+		abort();
 
 	pthread_mutex_lock(&wal->mutex);
 
@@ -137,15 +125,19 @@ int
 sls_wal_open(struct sls_wal *wal, uint64_t oid, size_t size)
 {
 	struct sls_wal_header *header;
-	size_t page_size = 4096;
-	size_t total_size = size + 2 * page_size;
+	size_t total_size = size + 2 * PAGE_SIZE;
+	int error;
+
+	error = sls_attach(SLS_DEFAULT_PARTITION, getpid());
+	if (error != 0)
+		goto err;
 
 	// Allocate a guard page on either side to prevent coalescing
 	char *mapping = mmap(NULL, total_size, PROT_NONE, MAP_GUARD, -1, 0);
 	if (mapping == MAP_FAILED)
 		goto err;
 
-	wal->mapping = mmap(mapping + page_size, size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+	wal->mapping = mmap(mapping + PAGE_SIZE, size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
 	if (wal->mapping == MAP_FAILED)
 		goto err_munmap;
 
@@ -160,12 +152,29 @@ sls_wal_open(struct sls_wal *wal, uint64_t oid, size_t size)
 
 	memset(wal->mapping + sizeof(*header), 0, size - sizeof(*header));
 
+	error = sls_checkpoint_epoch(oid, true, &wal->epoch);
+	if (error != 0)
+		goto err_checkpoint;
+
 	return (0);
+
+err_checkpoint:
+	pthread_mutex_destroy(&wal->mutex);
+
+	/* Unmap the guard pages created by overlaying the WAL. */
+	munmap(&wal->mapping, PAGE_SIZE);
+	munmap(&wal->mapping + PAGE_SIZE + size, PAGE_SIZE);
 
 err_munmap:
 	munmap(mapping, total_size);
 err:
 	return (-1);
+}
+
+int
+sls_wal_savepoint(struct sls_wal *wal)
+{
+	return (sls_checkpoint_epoch(wal->oid, true, &wal->epoch));
 }
 
 void
@@ -189,7 +198,7 @@ sls_wal_memcpy(struct sls_wal *wal, void *dest, const void *src, size_t size)
 int
 sls_wal_sync(struct sls_wal *wal)
 {
-	return (sls_memsnap(wal->oid, wal->mapping));
+	return (sls_memsnap_epoch(wal->oid, wal->mapping, &wal->epoch));
 }
 
 void
@@ -219,15 +228,14 @@ int
 sls_wal_close(struct sls_wal *wal)
 {
 	int ret = 0, error = 0;
-	size_t page_size = 4096;
-	size_t total_size = wal->size + 2 * page_size;
+	size_t total_size = wal->size + 2 * PAGE_SIZE;
 
 	if (pthread_mutex_destroy(&wal->mutex) != 0) {
 		ret = -1;
 		error = errno;
 	}
 
-	if (munmap(wal->mapping - page_size, total_size) != 0) {
+	if (munmap(wal->mapping - PAGE_SIZE, total_size) != 0) {
 		ret = -1;
 		error = errno;
 	}

@@ -39,10 +39,11 @@ if [ ! -f "$BSDINSTALL_DISTDIR/$DISTRIBUTIONS" ]; then
     fi
 fi
 
-finddisk
+createmd
 
 # The install script needs these when partitioning/mounting.
 export DISK
+export DISKPATH
 export MNT
 bsdinstall script "$SRCROOT/scripts/bsdinstall.sh"
 if [ $? -ne 0 ]; then
@@ -88,6 +89,7 @@ tar -C "$MNT" -czf "$SLSROOT" .
 rm "${SCRIPTS}"*
 umount "$MNT/dev"
 umount "$MNT"
+destroymd $MDDISK
 
 return
 

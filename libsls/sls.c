@@ -17,19 +17,25 @@
 #include "sls_private.h"
 
 /*
- * Checkpoint a process already in the SLS. Processes being periodically checkpointed
- * cannot also get explicitly checkpointed, since the two operations would interfere
- * with each other. In order to change modes from periodic to explicit checkpointing,
- * a call to sls_set_attr() has been made to change the checkpointing period
- * from zero to nonzero or vice versa.
+ * Checkpoint a partition with the given OID.
  */
 int
 sls_checkpoint(uint64_t oid, bool recurse)
+{
+	return (sls_checkpoint_epoch(oid, recurse, NULL));
+}
+
+/*
+ * As above, but return the epoch at which the checkpoint will be done.
+ */
+int
+sls_checkpoint_epoch(uint64_t oid, bool recurse, uint64_t *epoch)
 {
 	struct sls_checkpoint_args args;
 
 	args.oid= oid;
 	args.recurse = recurse ? 1 : 0;
+	args.nextepoch = epoch;
 
 	if (sls_ioctl(SLS_CHECKPOINT, &args) < 0) {
 	    perror("sls_checkpoint");
@@ -99,22 +105,48 @@ sls_partadd(uint64_t oid, const struct sls_attr attr)
 }
 
 /*
- * Get the current epoch of the partition.
+ * Check if the provided epoch is here.
  */
 int
-sls_epoch(uint64_t oid, uint64_t *epoch)
+sls_epochwait(uint64_t oid, uint64_t epoch, bool sync, bool *isdone)
 {
-	struct sls_epoch_args args;
+	struct sls_epochwait_args args;
 	int ret;
 
+	if (sync && (isdone != NULL))
+		return (EINVAL);
+
+	if (!sync && (isdone == NULL))
+		return (EINVAL);
+
 	args.oid = oid;
-	args.ret = epoch;
-	if (sls_ioctl(SLS_EPOCH, &args) != 0) {
+	args.epoch = epoch;
+	args.sync = sync;
+	args.isdone = isdone;
+	if (sls_ioctl(SLS_EPOCHWAIT, &args) != 0) {
 	    perror("sls_epoch");
 	    return (-1);
 	}
 
 	return (0);
+}
+
+/*
+ * Sleep until the provided epoch is here.
+ */
+int
+sls_untilepoch(uint64_t oid, uint64_t epoch)
+{
+	return (sls_epochwait(oid, epoch, true, NULL));
+}
+
+/*
+ * Query whether the epoch is her
+ */
+int
+sls_epochdone(uint64_t oid, uint64_t epoch, bool *isdone)
+{
+	return (sls_epochwait(oid, epoch, false, isdone));
 }
 
 /*
@@ -138,17 +170,26 @@ sls_partdel(uint64_t oid)
 }
 
 /*
- * Checkpoint a memory area into the SLS. The rest of the partition is 
- * unaffected. 
+ * Checkpoint a single memory area into the SLS.
  */
 int
 sls_memsnap(uint64_t oid, void *addr)
+{
+	return (sls_memsnap_epoch(oid, addr, NULL));
+}
+
+/*
+ * Same as above, also return the current epoch.
+ */
+int
+sls_memsnap_epoch(uint64_t oid, void *addr, uint64_t *epoch)
 {
 	struct sls_memsnap_args args;
 	int ret;
 
 	args.oid = oid;
 	args.addr = (vm_ooffset_t) addr;
+	args.nextepoch = epoch;
 	if (sls_ioctl(SLS_MEMSNAP, &args) != 0) {
 	    perror("sls_memsnap");
 	    return (-1);
@@ -189,32 +230,6 @@ sls_getattr(uint64_t oid, struct sls_attr *attr)
 }
 
 int
-sls_setattr(uint64_t oid, const struct sls_attr *attr)
-{
-	errno = ENOSYS;
-	return (-1);
-}
-
-uint64_t
-sls_getckptid(uint64_t oid)
-{
-	errno = ENOSYS;
-	return (-1);
-}
-
-
-bool
-sls_persistent()
-{
-    struct sls_attr attr;
-
-    if (sls_getattr(getpid(), &attr) < 0)
-	return (false);
-    else
-	return (true);
-}
-
-int
 sls_ffork(int fd)
 {
 	errno = ENOSYS;
@@ -226,16 +241,4 @@ sls_stat(int streamid, struct sls_stat *st)
 {
 	errno = ENOSYS;
 	return (-1);
-}
-
-int
-sls_barrier(int streamid)
-{
-    uint64_t ckptid = sls_getckptid(getpid());
-
-    while (ckptid == sls_getckptid(getpid())) {
-	usleep(1000);
-    }
-
-    return (0);
 }

@@ -42,13 +42,8 @@ fi
 mkdir -p "$TMPSRC"
 mkdir -p "$TMPDST"
 
-tar -C "$TMPSRC" -xvf "$SLSROOT"
+tar -C "$TMPSRC" -xf "$SLSROOT"
 
-#movefile bin
-#movefile var
-#movefile lib
-#movefile usr/bin
-#movefile usr/lib
 # Elf interpreter
 movefile /libexec/ld-elf.so.1
 movefile /usr/local/bin/redis-server
@@ -67,8 +62,12 @@ crdir var/cache
 crdir var/run
 crdir log
 crdir logs
+crdir dev
 
-tar -C "$TMPDST" -czvf "$SLSMINROOT" .
+tar -C "$TMPDST" -czf "$SLSMINROOT" .
 
+# Change permissions
+chflags -R noschg,nosunlink $TMPSRC
+chflags -R noschg,nosunlink $TMPDST
 rm -rf $TMPSRC
 rm -rf $TMPDST

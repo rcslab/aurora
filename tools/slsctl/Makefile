@@ -1,6 +1,6 @@
 PROG= slsctl
 SRCS= slsctl.c attach.c partadd.c partdel.c \
-	checkpoint.c restore.c epoch.c spawn.c \
+	checkpoint.c restore.c spawn.c \
 	listsnaps.c
 MAN=
 

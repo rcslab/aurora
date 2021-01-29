@@ -207,7 +207,7 @@ slsp_init(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
 	slsp->slsp_refcount = 1;
 	slsp->slsp_status = SLSP_AVAILABLE;
 	slsp->slsp_epoch = SLSPART_EPOCHINIT;
-
+	slsp->slsp_nextepoch = slsp->slsp_epoch + 1;
 	/* Create the set of held processes. */
 	error = slsset_create(&slsp->slsp_procs);
 	if (error != 0)
@@ -215,6 +215,9 @@ slsp_init(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
 
 	mtx_init(&slsp->slsp_syncmtx, "slssync", NULL, MTX_DEF);
 	cv_init(&slsp->slsp_synccv, "slssync");
+
+	mtx_init(&slsp->slsp_epochmtx, "slsepoch", NULL, MTX_DEF);
+	cv_init(&slsp->slsp_epochcv, "slsepoch");
 
 	*slspp = slsp;
 
@@ -229,8 +232,8 @@ error:
 	return (error);
 }
 
-/* 
- * Destroy a partition. The struct has to have 
+/*
+ * Destroy a partition. The struct has to have
  * have already been removed from the hashtable.
  */
 static void
@@ -243,6 +246,10 @@ slsp_fini(struct slspart *slsp)
 	mtx_assert(&slsp->slsp_syncmtx, MA_NOTOWNED);
 	cv_destroy(&slsp->slsp_synccv);
 	mtx_destroy(&slsp->slsp_syncmtx);
+
+	mtx_assert(&slsp->slsp_epochmtx, MA_NOTOWNED);
+	cv_destroy(&slsp->slsp_epochcv);
+	mtx_destroy(&slsp->slsp_epochmtx);
 
 	/*
 	 * XXX TEMP Remove the partition from the SLOS. This is due to us not 
@@ -375,37 +382,59 @@ slsp_isempty(struct slspart *slsp)
 	return (slsp->slsp_procnum == 0);
 }
 
-/* 
- * Epoch advancement functions. If we assume epochs are only incremented while a 
- * partition is in the SLSP_CHECKPOINTING state, there is no need for mutexes.
+/*
+ * Epoch advancement functions. Threads that want to advance the epoch may need
+ * to wait for threads that previously expressed their intent to advance the
+ * epoch to be done. We implement this by taking a ticket to advance the lock,
+ * then waiting for it to be called to actually do it.
  */
-void
-slsp_epoch_advance_major(struct slspart *slsp)
-{
-	KASSERT(SLSEPOCH_MAJOR(slsp) != UINT_MAX, ("Major epoch overflow"));
-	slsp->slsp_epoch += (1ULL << 32);
-	/* Zero out the minor epoch. */
-	slsp->slsp_epoch &= UPPER_BITS;
 
+uint64_t
+slsp_epoch_preadvance(struct slspart *slsp)
+{
+	uint64_t next_epoch;
+
+	mtx_lock(&slsp->slsp_epochmtx);
+
+	KASSERT(slsp->slsp_nextepoch != UINT64_MAX, ("Epoch overflow"));
+	next_epoch = slsp->slsp_nextepoch;
+	slsp->slsp_nextepoch += 1;
+
+	KASSERT(next_epoch > slsp->slsp_epoch, ("Got a passed epoch"));
+
+	/* No need to signal anyone, we didn't actually change the epoch. */
+	mtx_unlock(&slsp->slsp_epochmtx);
+
+	return (next_epoch);
 }
 
 void
-slsp_epoch_advance_minor(struct slspart *slsp)
+slsp_epoch_advance(struct slspart *slsp, uint64_t next_epoch)
 {
-	KASSERT(SLSEPOCH_MINOR(slsp) != UINT_MAX, ("Minor epoch overflow"));
+	mtx_lock(&slsp->slsp_epochmtx);
+	while (slsp->slsp_epoch + 1 != next_epoch)
+		cv_wait(&slsp->slsp_epochcv, &slsp->slsp_epochmtx);
+
+	KASSERT(slsp->slsp_epoch != UINT64_MAX, ("Epoch overflow"));
 	slsp->slsp_epoch += 1;
+	cv_broadcast(&slsp->slsp_epochcv);
+
+	KASSERT(slsp->slsp_epoch == next_epoch, ("Unexpected epoch"));
+	mtx_unlock(&slsp->slsp_epochmtx);
 }
 
 int
 slsp_waitfor(struct slspart *slsp)
 {
 	int error;
+
 	mtx_assert(&slsp->slsp_syncmtx, MA_OWNED);
 
 	while (!slsp->slsp_syncdone)
 		cv_wait(&slsp->slsp_synccv, &slsp->slsp_syncmtx);
 	slsp->slsp_syncdone = false;
 	error = slsp->slsp_retval;
+
 	mtx_unlock(&slsp->slsp_syncmtx);
 
 	return (error);

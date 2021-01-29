@@ -10,14 +10,14 @@
 
 /* Low-level APIs */
 int sls_memsnap(uint64_t oid, void *addr);
+int sls_memsnap_epoch(uint64_t oid, void *addr, uint64_t *epoch);
 int sls_checkpoint(uint64_t oid, bool recurse);
+int sls_checkpoint_epoch(uint64_t oid, bool recurse, uint64_t *epoch);
 int sls_restore(uint64_t oid, bool daemon, bool rest_stopped);
 
 int sls_attach(uint64_t oid, uint64_t pid);
 int sls_partadd(uint64_t oid, const struct sls_attr attr);
 int sls_partdel(uint64_t oid);
-
-int sls_epoch(uint64_t oid, uint64_t *epoch);
 
 struct sls_stat {
     int type;
@@ -25,6 +25,8 @@ struct sls_stat {
     uint64_t ckptid;
 };
 
+int sls_epochdone(uint64_t oid, uint64_t epoch, bool *isdone);
+int sls_untilepoch(uint64_t oid, uint64_t epoch);
 
 /* Storage Control APIs */
 int slos_openvol(const char *dev);
@@ -35,11 +37,8 @@ int slos_stat(struct statfs *sfs);
 int sls_suspend(uint64_t oid);
 int sls_resume(uint64_t oid);
 int sls_getattr(uint64_t oid, struct sls_attr *attr);
-int sls_setattr(uint64_t oid, const struct sls_attr *attr);
-uint64_t sls_getckptid(uint64_t oid);
 
 /* High-level APIs for Current Process */
-bool sls_persistent();
 int sls_ffork(int fd);
 int sls_stat(int streamid, struct sls_stat *st);
 int sls_barrier(int streamid);

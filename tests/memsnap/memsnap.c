@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,19 +46,97 @@ mmap_isfilled(void *addr, char c)
 	return (true);
 }
 
+static struct option memsnap_longopts[] = {
+	{ "poll", no_argument, NULL, 'p' },
+	{ "memory", no_argument, NULL, 'm' },
+	{ "wait", no_argument, NULL, 'w' },
+	{ NULL, no_argument, NULL, 0 },
+};
+
+enum ckptwait {
+	NOWAIT,
+	BUSYWAIT,
+	BLOCK,
+};
+
+static void
+wait_for_sls(uint64_t nextepoch, uint64_t oid, enum ckptwait ckptwait)
+{
+	bool isdone;
+	int error;
+
+	switch (ckptwait) {
+	case NOWAIT:
+		/* Nothing to do. */
+		break;
+
+	case BUSYWAIT:
+		do {
+			usleep(10);
+			error = sls_epochdone(oid, nextepoch, &isdone);
+			if (error != 0) {
+				fprintf(stderr, "sls_epochdone: %s\n", strerror(error));
+				exit(1);
+			}
+		} while (!isdone);
+
+		break;
+
+	case BLOCK:
+
+		error = sls_untilepoch(oid, nextepoch);
+		if (error != 0) {
+			fprintf(stderr, "sls_untilepoch: %s\n", strerror(error));
+			exit(1);
+		}
+
+		break;
+
+	default:
+		fprintf(stderr, "Invalid enum ckptwait %d\n", ckptwait);
+		exit(1);
+		break;
+
+	}
+}
+
 int
 main(int argc, char **argv)
 {
+	enum ckptwait wait;
+	uint64_t nextepoch;
 	void *addr;
 	int error;
 	uint64_t oid;
+	int opt;
 
 	/* Create the anonymous mapping*/
 	error = mmap_anon(&addr);
 	if (error != 0)
 		exit(1);
 
-	oid = (argc > 1) ? SLS_DEFAULT_MPARTITION : SLS_DEFAULT_PARTITION;
+	wait = NOWAIT;
+	oid = SLS_DEFAULT_PARTITION;
+	while ((opt = getopt_long(argc, argv, "mpw", memsnap_longopts, NULL)) != -1) {
+		switch(opt) {
+		case 'm':
+			oid = SLS_DEFAULT_MPARTITION;
+			break;
+
+		case 'p':
+			wait = BUSYWAIT;
+			break;
+
+		case 'w':
+			wait = BLOCK;
+			break;
+
+		default:
+			printf("Usage:./memsnap [-m] [-w]\n");
+			 exit(1);
+			break;
+		}
+	}
 
 	/* Attach ourselves to the partition. */
 	error = sls_attach(oid, getpid());
@@ -68,9 +147,10 @@ main(int argc, char **argv)
 	memset(addr, 'a', MMAP_SIZE);
 
 	/* Do a full checkpoint. */
-	error = sls_checkpoint(oid, false);
+	error = sls_checkpoint_epoch(oid, false, &nextepoch);
 	if (error != 0)
 		exit(1);
+
 
 	/*
 	 * If the map is filled with the character we filled it with _later_ in
@@ -80,6 +160,12 @@ main(int argc, char **argv)
 		printf("Secret ending!\n");
 		exit(0);
 	}
+
+	/* 
+	 * We can only wait for the SLS to flush if we are not a restored process. 
+	 * We know that because the check above failed.
+	 */
+	wait_for_sls(nextepoch, oid, wait);
 
 	if (!mmap_isfilled(addr, 'a')) {
 		printf("Memory corruption: %.16s\n", (char *)addr);
@@ -91,9 +177,11 @@ main(int argc, char **argv)
 		/* Fill the memory region with a different char. */
 		memset(addr, c, MMAP_SIZE);
 
-		error = sls_memsnap(oid, addr);
+		error = sls_memsnap_epoch(oid, addr, &nextepoch);
 		if (error != 0)
 			exit(1);
+
+		wait_for_sls(nextepoch, oid, wait);
 	}
 	printf("Regular ending\n");
 

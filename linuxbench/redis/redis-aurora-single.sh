@@ -2,7 +2,7 @@
 
 . $SRCROOT/tests/aurora
 
-DSCRIPT="$SRCROOT/scripts/sloswritepath.d"
+DSCRIPT="$SRCROOT/scripts/ckpt.d"
 REDISSRV="redis-server"
 CONF="redis.freebsd.conf"
 TMPFILE="redisinput"
@@ -18,9 +18,15 @@ pkill $REDISSRV
 # Wait for the server to die
 wait 1
 
+export DISK
+export DISKPATH
+export MNT
+
 # Create the absolute minimal root for Redis
 aursetup
 installminroot
+
+mount -t devfs devfs $MNT/dev
 
 # The output of dtrace is piped to the proper file by the parent script.
 $DSCRIPT &
@@ -51,4 +57,7 @@ sleep 1
 echo "Wrote $(( $( sysctl -n aurora.data_sent ) + \
     $( sysctl -n aurora.data_received ) )) bytes"
 
-aurteardown
+unloadsls
+umount "$MNT/dev"
+slsunmount
+unloadslos

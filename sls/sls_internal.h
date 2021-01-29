@@ -106,6 +106,7 @@ struct sls_checkpointd_args {
     struct slspart *slsp;
     struct proc *pcaller;
     bool recurse;
+    uint64_t *nextepoch;
 };
 
 struct sls_restored_args {
@@ -117,7 +118,8 @@ struct sls_restored_args {
 #define TONANO(tv) ((1000UL * 1000 * 1000 * (tv).tv_sec) + (tv).tv_nsec)
 #define TOMICRO(tv) ((1000UL * 1000 * (tv).tv_sec) + (tv).tv_usec)
 
-int slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr);
+int slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
+	uint64_t *nextepoch);
 void sls_checkpointd(struct sls_checkpointd_args *args);
 void sls_restored(struct sls_restored_args *args);
 

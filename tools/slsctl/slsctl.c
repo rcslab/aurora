@@ -36,7 +36,6 @@ struct command {
 	{ "restore",	"re",	&restore_usage,	    &restore_main },
 	{ "listsnaps",	"ls",	&listsnaps_usage,   &listsnaps_main },
 	{ "mountsnap",	"ms",	&mountsnap_usage,   &mountsnap_main },
-	{ "epoch",	"ep",	&epoch_usage,	    &epoch_main },
 	{ "spawn",	"sp",	&spawn_usage,	    &spawn_main },
 	{ "help",	"h",	NULL,		    &cmd_help },
 	{ "exit",	"q",	NULL,		    &cmd_exit },

@@ -13,11 +13,6 @@ main()
 	int forty_two = 42, twenty_four = 24;
 	int value;
 
-	if (sls_attach(SLS_DEFAULT_PARTITION, getpid()) != 0) {
-		perror("sls_attach()");
-		return (EXIT_FAILURE);
-	}
-
 	if (sls_wal_open(&wal, SLS_DEFAULT_PARTITION, 4096) != 0) {
 		perror("sls_wal_open()");
 		return (EXIT_FAILURE);
@@ -26,8 +21,8 @@ main()
 	sls_wal_memcpy(&wal, &value, &twenty_four, sizeof(value));
 	printf("value: %d\n", value);
 
-	if (sls_checkpoint(SLS_DEFAULT_PARTITION, false) != 0) {
-		perror("sls_checkpoint()");
+	if (sls_wal_savepoint(&wal) != 0) {
+		perror("sls_wal_sync()");
 		return (EXIT_FAILURE);
 	}
 

@@ -61,19 +61,41 @@ run_test()
     fi
 }
 
-run_tests()
+test_banner()
 {
-    rm -f $TESTLOG
-    rm -f $KTRLOG
-    touch $TESTLOG
-
     echo Build: `uname -sri`
     echo Host: `hostname`
     echo Test started: `date`
     printf "%-40s   %-9s   %-10s\n" "Test" "Status" "Time"
     echo "-----------------------------------------------------------"
+}
+
+run_all_tests()
+{
+    rm -f $TESTLOG
+    rm -f $KTRLOG
+    touch $TESTLOG
+
+    test_banner
     for t in `find $SRCROOT/tests -maxdepth 1 -name \*.sh | sort -n`; do
 	run_test $t
+    done
+}
+
+run_tests()
+{
+    if [ $# -eq 0 ]; then
+	echo "No tests found"
+	exit 0
+    fi
+
+    rm -f $TESTLOG
+    rm -f $KTRLOG
+    touch $TESTLOG
+
+    test_banner
+    for t in $1; do
+	run_test "$SRCROOT/tests/$t"
     done
 }
 
@@ -89,11 +111,14 @@ export DISKPATH
 # Create a directory tree for the root if needed
 createroot
 
-if [ $# -eq 1 ]; then
-	touch $TESTLOG
-	run_test "$SRCROOT/tests/$1"
+if [ $# -ge 1 ]; then
+    INPUTS=""
+    for i in $@; do
+	INPUTS="$INPUTS $i"
+    done
+    run_tests "$INPUTS"
 else
-	run_tests
+    run_all_tests
 fi
 
 cleanup_testbench > /dev/null 2> /dev/null

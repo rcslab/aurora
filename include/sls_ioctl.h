@@ -13,8 +13,9 @@ struct sls_attr {
 };
 
 struct sls_checkpoint_args {
-	uint64_t	oid;		/* The OID of the partition to be checkpointed. */
+	uint64_t	oid;		/* The OID of the partition to be checkpointed */
 	bool		recurse;    	/* Include all descendants of attached processes */
+	uint64_t	*nextepoch;	/* Epoch at which the checkpoint will be persistent */
 };
 
 struct sls_restore_args {
@@ -23,9 +24,11 @@ struct sls_restore_args {
 	uint64_t	    rest_stopped;   /* Restored the partition in a stopped state */
 };
 
-struct sls_epoch_args {
+struct sls_epochwait_args {
 	uint64_t    oid;	    /* OID of partition */
-	uint64_t    *ret;	    /* Output variable for the ioctl */
+	uint64_t    epoch;	    /* Epoch until which to wait */
+	bool	    sync;	    /* Sleep if epoch not there yet? */
+	bool	    *isdone;	    /* Is the epoch here? */
 };
 
 struct sls_attach_args {
@@ -45,6 +48,7 @@ struct sls_partdel_args {
 struct sls_memsnap_args {
 	uint64_t	oid;		/* The OID of the partition to be checkpointed. */
 	vm_ooffset_t	addr;		/* The address of the entry for checkpointing. */
+	uint64_t	*nextepoch;	/* Epoch at which the checkpoint will be persistent */
 };
 
 #define SLS_CHECKPOINT		_IOW('d', 1, struct sls_checkpoint_args)
@@ -52,7 +56,7 @@ struct sls_memsnap_args {
 #define SLS_ATTACH		_IOW('d', 3, struct sls_attach_args)
 #define SLS_PARTADD		_IOW('d', 4, struct sls_partadd_args)
 #define SLS_PARTDEL		_IOW('d', 5, struct sls_partdel_args)
-#define SLS_EPOCH		_IOWR('d', 6, struct sls_epoch_args)
+#define SLS_EPOCHWAIT		_IOWR('d', 6, struct sls_epochwait_args)
 #define SLS_MEMSNAP		_IOWR('d', 7, struct sls_memsnap_args)
 
 #define SLS_DEFAULT_PARTITION	5115
@@ -85,10 +89,5 @@ struct sls_memsnap_args {
 #define SLSATTR_FLAGISSET(attr, flag) (((attr).attr_flags & flag) != 0)
 #define SLSATTR_ISIGNUNLINKED(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_IGNUNLINKED))
 #define SLSATTR_ISLAZYREST(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_LAZYREST))
-
-/* Epoch related definitions */
-#define UPPER_BITS		(((unsigned long long) UINT32_MAX) << 32)
-#define SLSEPOCH_MINOR(slsp)	(((slsp)->slsp_epoch & (UPPER_BITS)) >> 32)
-#define SLSEPOCH_MAJOR(slsp)	((slsp)->slsp_epoch & UINT32_MAX)
 
 #endif

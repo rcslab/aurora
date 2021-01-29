@@ -73,6 +73,7 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	struct sls_checkpointd_args *ckptd_args;
 	struct proc *p = curproc;
 	struct slspart *slsp;
+	uint64_t nextepoch;
 	int error = 0;
 
 	/* Take another reference for the worker thread. */
@@ -91,6 +92,7 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	ckptd_args->slsp = slsp;
 	ckptd_args->pcaller = NULL;
 	ckptd_args->recurse = args->recurse;
+	ckptd_args->nextepoch = &nextepoch;
 
 	/* 
 	 * If this is a one-off checkpoint, this thread will wait on the 
@@ -118,15 +120,24 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	}
 
 	/* If it's a periodic daemon, don't wait for it. */
-	if (slsp->slsp_attr.attr_period == 0) {
-		error = slsp_waitfor(slsp);
-		PROC_LOCK(p);
-		thread_single_end(p, SINGLE_BOUNDARY);
-		_PRELE(p);
-		PROC_UNLOCK(p);
-	} else {
+	if (slsp->slsp_attr.attr_period != 0) {
 		mtx_unlock(&slsp->slsp_syncmtx);
+		return (error);
 	}
+
+	error = slsp_waitfor(slsp);
+	PROC_LOCK(p);
+	thread_single_end(p, SINGLE_BOUNDARY);
+	_PRELE(p);
+	PROC_UNLOCK(p);
+
+	if (error != 0)
+		return (error);
+
+
+	/* Give the next epoch to userspace if it asks for it. */
+	if (args->nextepoch != NULL)
+		error = copyout(&nextepoch, args->nextepoch, sizeof(nextepoch));
 
 	return (error);
 
@@ -296,19 +307,32 @@ sls_partdel(struct sls_partdel_args *args)
 }
 
 static int
-sls_epoch(struct sls_epoch_args *args)
+sls_epochwait(struct sls_epochwait_args *args)
 {
 	struct slspart *slsp;
-	int error;
+	int error = 0;
+	bool isdone;
 
 	/* Try to find the process. */
 	slsp = slsp_find(args->oid);
 	if (slsp == NULL)
 		return (EINVAL);
 
-	/* Copy out the status of the process. */
-	error = copyout(&slsp->slsp_epoch, args->ret,
-		sizeof(slsp->slsp_epoch));
+	mtx_lock(&slsp->slsp_epochmtx);
+
+	/* Asynchronous case, just return with an answer. */
+	if (!args->sync) {
+		isdone = (args->epoch <= slsp->slsp_epoch);
+		error = copyout(&isdone, args->isdone, sizeof(isdone));
+		goto out;
+	}
+
+	/* Synchronous case, sleep until done. */
+	while (args->epoch > slsp->slsp_epoch)
+		cv_wait(&slsp->slsp_epochcv, &slsp->slsp_epochmtx);
+
+out:
+	mtx_unlock(&slsp->slsp_epochmtx);
 
 	/* Free the reference given by slsp_find(). */
 	slsp_deref(slsp);
@@ -321,18 +345,27 @@ sls_memsnap(struct sls_memsnap_args *args)
 {
 	struct proc *p = curproc;
 	struct slspart *slsp;
+	uint64_t nextepoch;
 	int error = 0;
 
-	/* Try to find the process. */
+	/* 
+	 * Try to find the process. The partition is released inside the 
+	 * operation.
+	 */
 	slsp = slsp_find(args->oid);
 	if (slsp == NULL)
 		return (EINVAL);
 
 	PHOLD(p);
-	error = slsckpt_dataregion(slsp, curproc, args->addr);
+	error = slsckpt_dataregion(slsp, curproc, args->addr, &nextepoch);
 	PRELE(p);
 
-	slsp_deref(slsp);
+	if (error != 0)
+		return (error);
+
+	/* Give the next epoch to userspace if it asks for it. */
+	if (args->nextepoch != NULL)
+		error = copyout(&nextepoch, args->nextepoch, sizeof(nextepoch));
 
 	return (error);
 }
@@ -425,8 +458,8 @@ sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		error = sls_restore((struct sls_restore_args *) data);
 		break;
 
-	case SLS_EPOCH:
-		error = sls_epoch((struct sls_epoch_args *) data);
+	case SLS_EPOCHWAIT:
+		error = sls_epochwait((struct sls_epochwait_args *) data);
 		break;
 
 	case SLS_MEMSNAP:

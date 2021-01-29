@@ -210,11 +210,11 @@ slsckpt_vnode_serialize(struct slsckpt_data *sckpt_data)
 		if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) vp, (uintptr_t *) &rec) == 0)
 			return (0);
 
-		error = slsckpt_vnode_serialize_single(vp, 
+		error = slsckpt_vnode_serialize_single(vp,
 		    SLSATTR_ISIGNUNLINKED(sckpt_data->sckpt_attr), &sb);
 		if (error != 0)
 			return (error);
-		
+
 		/* Whether we have a path or not, create the new record. */
 		rec = sls_getrecord(sb, (uint64_t) vp, SLOSREC_VNODE);
 		error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) vp, (uintptr_t) rec);
@@ -224,6 +224,9 @@ slsckpt_vnode_serialize(struct slsckpt_data *sckpt_data)
 			return (error);
 		}
 	}
+
+	KVSET_FOREACH_POP(sckpt_data->sckpt_vntable, vp)
+	    vrele(vp);
 
 	return (0);
 }
