@@ -4,13 +4,12 @@
 
 #include <fcntl.h>
 #include <getopt.h>
+#include <sls.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-#include <sls.h>
 
 static struct option partadd_longopts[] = {
 	{ "delta", no_argument, NULL, 'd' },
@@ -29,17 +28,19 @@ partadd_usage(void)
 	struct option opt;
 	int i;
 
-	printf("Usage: slsctl partadd -o <id>  [-b <memory|slos>] [-t ms] [options]\n");
+	printf(
+	    "Usage: slsctl partadd -o <id>  [-b <memory|slos>] [-t ms] [options]\n");
 	printf("Full options list:\n");
 	i = 0;
-	for (opt = partadd_longopts[0]; opt.name != NULL; opt = partadd_longopts[++i])
+	for (opt = partadd_longopts[0]; opt.name != NULL;
+	     opt = partadd_longopts[++i])
 		printf("-%c\t%s\n", opt.val, opt.name);
 
 	exit(0);
 }
 
 int
-partadd_main(int argc, char* argv[])
+partadd_main(int argc, char *argv[])
 {
 	int opt;
 	int error;
@@ -49,12 +50,13 @@ partadd_main(int argc, char* argv[])
 
 	attr = (struct sls_attr) {
 		.attr_target = SLS_OSD,
-		    .attr_mode = SLS_FULL,
-		    .attr_period = 0,
-		    .attr_flags = 0,
+		.attr_mode = SLS_FULL,
+		.attr_period = 0,
+		.attr_flags = 0,
 	};
 
-	while ((opt = getopt_long(argc, argv, "b:dilo:p:t:", partadd_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(
+		    argc, argv, "b:dilo:p:t:", partadd_longopts, NULL)) != -1) {
 		switch (opt) {
 		case 'd':
 			attr.attr_mode = SLS_DELTA;
@@ -106,5 +108,4 @@ partadd_main(int argc, char* argv[])
 		return 1;
 
 	return 0;
-
 }

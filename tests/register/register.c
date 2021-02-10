@@ -1,14 +1,14 @@
-#include <stdio.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #define CYCLES (1000 * 1000 * 1000)
 
-
-int main() 
+int
+main()
 {
-	volatile register uint64_t r13 asm ("r13");
-	volatile register uint64_t r14 asm ("r14");
-	volatile register uint64_t r15 asm ("r15");
+	volatile register uint64_t r13 asm("r13");
+	volatile register uint64_t r14 asm("r14");
+	volatile register uint64_t r15 asm("r15");
 
 	/* XXX We cannot use these registers it seems.
 	volatile register uint16_t cs asm ("cs");
@@ -20,7 +20,7 @@ int main()
 	*/
 
 	uint16_t fs;
-	
+
 	for (;;) {
 		r13 = r14 = 0;
 
@@ -29,10 +29,7 @@ int main()
 			r14 += 2;
 		}
 
-		asm volatile ("mov %%fs, %0\n\t"
-			      : "=r" (fs)
-		);
-
+		asm volatile("mov %%fs, %0\n\t" : "=r"(fs));
 
 		printf("fs %u\n", fs);
 		printf("r13 %lu\tr14 %lu\n", r13, r14);

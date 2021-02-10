@@ -33,6 +33,8 @@ from selenium.webdriver.support.wait import WebDriverWait
 
 # Captured output can be disabled (None), capture a single command in which only one file is needed
 # or multiple commands in case a directory is needed to store the output
+
+
 class CapturedOut(Enum):
     NONE = 0
     SINGLE = 1
@@ -41,78 +43,97 @@ class CapturedOut(Enum):
 # ====== PARSER CONFIGURATION ======
 
 # Set the arguments for mounting a filesystem for benchmarking/use
+
+
 def set_defaults_mount(p):
     p.add('--disks', metavar='d1,d2,etc', required=True, action="append",
-        help='Comma seperated values of disk devices')
-    p.add('--stripe', required=True, help='Size of stripe of geom layer in bytes')
+          help='Comma separated values of disk devices')
+    p.add(
+        '--stripe',
+        required=True,
+        help='Size of stripe of geom layer in bytes')
     p.add('--type', required=True, metavar='n',
-        help='Type of filesystem to benchmark (or memory)',
-        choices=['slos','zfs','ffs', 'memory'])
+          help='Type of filesystem to benchmark (or memory)',
+          choices=['slos', 'zfs', 'ffs', 'memory'])
     p.add('--mountdir', required=True, metavar='md',
-        help='Directory to mount onto')
+          help='Directory to mount onto')
     p.add('--stripename', required=True, metavar='n',
-        help='name of stripe device')
+          help='name of stripe device')
 
 # Set the defaults for the SLS module
+
+
 def set_defaults_sls(p):
     p.add('--slsperiod', required=True, metavar='slsperiod',
-        help="SLS checkpointing period in milliseconds (0 for one checkpoint)")
+          help="SLS checkpointing period in milliseconds (0 for one checkpoint)")
     p.add('--oid', required=True, metavar='oid',
-        help="SLS partition OID")
+          help="SLS partition OID")
     p.add('--delta', default=True, required=False, metavar='delta',
-        help="SLS delta checkpointing")
+          help="SLS delta checkpointing")
     p.add('--recursive', default=True, required=False, metavar='recursive',
-        help="SLS checkpoints all descendants of processes")
-    p.add('--slsctl',required=True, metavar='slsctl',
-            help='Path to the slsctl tool')
+          help="SLS checkpoints all descendants of processes")
+    p.add('--slsctl', required=True, metavar='slsctl',
+          help='Path to the slsctl tool')
     p.add('--clients', metavar='h1,h2,etc', required=True, action="append",
-        help='Comma seperated values of client hosts')
+          help='Comma separated values of client hosts')
     p.add('--ignore_unlinked', metavar='ignore_unlinked', required=False, default=True, action="store",
-        help='Ignore unlinked files when checkpointed')
+          help='Ignore unlinked files when checkpointed')
 
 # Set the defaults for the SLOS module
+
+
 def set_defaults_slos(p):
     p.add('--checksum', default=False, action="store_true",
-        help="Checksumming on")
+          help="Checksumming on")
     p.add('--compress', default=False, action="store_true",
-        help="Turn on compress")
+          help="Turn on compress")
     p.add_argument('--withgstat', required=False, action='store_true',
-        help="Capture gstat")
+                   help="Capture gstat")
     p.add('--checkpointtime', required=True, metavar='checkpointtime',
-        help="Number of ms between SLOS checkpoints")
+          help="Number of ms between SLOS checkpoints")
+
 
 def set_defaults_bench(p):
-    p.add('--benchaddr', required=False, metavar='benchaddr', help="Address on which the benchmark server runs")
-    p.add('--benchport', required=False, metavar='benchport', help="Address on which the benchmark port runs")
-    p.add('--sshaddr', required=False, metavar='sshaddr', help="Address of benchmarking client")
-    p.add('--sshport', required=False, metavar='sshport', help="Port of benchmarking client")
-    p.add('--sshkey', required=True, metavar='sshkey', help='Key used for sshing into remotes')
-    p.add('--sshuser',required=True, metavar='sshuser',
-            help='Remote user name for sshing into for benchmarks')
+    p.add('--benchaddr', required=False, metavar='benchaddr',
+          help="Address on which the benchmark server runs")
+    p.add('--benchport', required=False, metavar='benchport',
+          help="Address on which the benchmark port runs")
+    p.add('--sshaddr', required=False, metavar='sshaddr',
+          help="Address of benchmarking client")
+    p.add('--sshport', required=False, metavar='sshport',
+          help="Port of benchmarking client")
+    p.add('--sshkey', required=True, metavar='sshkey',
+          help='Key used for sshing into remotes')
+    p.add('--sshuser', required=True, metavar='sshuser',
+          help='Remote user name for sshing into for benchmarks')
+
 
 def set_defaults_stats(p):
-    p.add('--runno',required=False, metavar='runno', default='0',
-            help='Run number')
-    p.add('--runstart',required=False, metavar='runstart', default='0',
-            help='Beginning of run')
-    p.add('--runend',required=False, metavar='runend', default='0',
-            help='End of run')
-    p.add('--ckpt_done',required=False, metavar='ckpt_done', default='0',
-            help='Checkpoints successfully done')
-    p.add('--ckpt_attempted',required=False, metavar='ckpt_attempted',
-            default='0', help='Checkpoints attempted')
-    p.add('--slsfreq',required=False, metavar='slsfreq',
-            default='0', help='slsfreq')
+    p.add('--runno', required=False, metavar='runno', default='0',
+          help='Run number')
+    p.add('--runstart', required=False, metavar='runstart', default='0',
+          help='Beginning of run')
+    p.add('--runend', required=False, metavar='runend', default='0',
+          help='End of run')
+    p.add('--ckpt_done', required=False, metavar='ckpt_done', default='0',
+          help='Checkpoints successfully done')
+    p.add('--ckpt_attempted', required=False, metavar='ckpt_attempted',
+          default='0', help='Checkpoints attempted')
+    p.add('--slsfreq', required=False, metavar='slsfreq',
+          default='0', help='slsfreq')
+
 
 def set_defaults(p):
     p.add('-c', '--config', required=False, is_config_file=True,
-        help='Path to config')
-    p.add('--slsmodule',required=True, metavar='sls',
-            help='Path to sls module')
-    p.add('--slosmodule',required=True, metavar='slos', help='Path to slos module')
-    p.add('--newfs',required=True, metavar='newfs', help='Path to newfs tool')
+          help='Path to config')
+    p.add('--slsmodule', required=True, metavar='sls',
+          help='Path to sls module')
+    p.add('--slosmodule', required=True,
+          metavar='slos', help='Path to slos module')
+    p.add('--newfs', required=True, metavar='newfs', help='Path to newfs tool')
     p.add('--runs', default=1, type=int, required=False, help="Number of runs")
-    p.add('--nounload', default=False, action="store_true", required=False, help="Unload after benchmark")
+    p.add('--nounload', default=False, action="store_true",
+          required=False, help="Unload after benchmark")
     set_defaults_mount(p)
     set_defaults_sls(p)
     set_defaults_slos(p)
@@ -120,8 +141,11 @@ def set_defaults(p):
     set_defaults_stats(p)
 
 # Wrapper for print_help() that drops all arguments
+
+
 def help_msg(options):
     parser.print_help()
+
 
 # Define the parsers.
 parser = configargparse.ArgParser(add_help=True)
@@ -129,6 +153,8 @@ parser.set_defaults(func=help_msg)
 subparser = parser.add_subparsers(parser_class=configargparse.ArgParser)
 
 # Build a new command for running a benchmark.
+
+
 def Command(captureOut=CapturedOut.NONE, required=[], help="", add_args=[]):
     def real(func):
         # A global parser imported by the module
@@ -143,20 +169,23 @@ def Command(captureOut=CapturedOut.NONE, required=[], help="", add_args=[]):
         h = help
 
         if len(required) > 0 and h == "":
-            raise Exception("Please add a help message for the command {}" % name)
+            raise Exception(
+                "Please add a help message for the command {}" % name)
         elif h == "":
             h = "No extra arguments required"
 
         # New parser just for this command
         p = subparser.add_parser(name, help=h,
-                default_config_files=['benchmarks/sls.conf'])
+                                 default_config_files=['benchmarks/sls.conf'])
         set_defaults(p)
 
         # Add default names for the output file/directory if needed
         if captureOut == CapturedOut.SINGLE:
-            p.add('-o', required=False, metavar='f.out', help='File to capture command output')
+            p.add('-o', required=False, metavar='f.out',
+                  help='File to capture command output')
         elif captureOut == CapturedOut.MULTI:
-            p.add('-o', required=False, metavar='dirout', help='Directory to capture command output')
+            p.add('-o', required=False, metavar='dirout',
+                  help='Directory to capture command output')
 
         # Add any more configuration options needed.
         for x in required:
@@ -172,18 +201,23 @@ def Command(captureOut=CapturedOut.NONE, required=[], help="", add_args=[]):
 
 # ====== BASIC SHELL COMMANDS ======
 
+
 def numhosts(options):
     return len(options.clients)
 
 # Construct an SSH command for logging into a remote.
+
+
 def sshcmd(options, host=-1):
     sshaddr = options.sshaddr
     if host != -1:
         sshaddr = options.clients[host]
     return ["ssh", "-i", options.sshkey, "-p", options.sshport,
-        "{}@{}".format(options.sshuser, options.sshaddr)]
+            "{}@{}".format(options.sshuser, options.sshaddr)]
 
 # Run a bash command
+
+
 def bashcmd(lst, fail_okay=False):
     if fail_okay:
         # Propagate the return code upwards
@@ -194,17 +228,20 @@ def bashcmd(lst, fail_okay=False):
         subprocess.run(lst).check_returncode()
         return 0
 
+
 def ycsbcmd(options, cmd, dbname):
     basecmd = ["{}/{}".format(options.ycsb, "bin/ycsb.sh"), cmd, dbname, "-P",
-            "{}/workloads/{}".format(options.ycsb, options.workload), "-p",
-            "{}.host={}".format(dbname, options.benchaddr),
-            "-p", "{}.port={}".format(dbname, options.benchport),
-            "-p", "recordcount={}".format(options.recordcount)]
+               "{}/workloads/{}".format(options.ycsb, options.workload), "-p",
+               "{}.host={}".format(dbname, options.benchaddr),
+               "-p", "{}.port={}".format(dbname, options.benchport),
+               "-p", "recordcount={}".format(options.recordcount)]
 
     if cmd == "run":
-        basecmd.extend(["-threads", options.ycsbthreads, "-p", "operationcount={}".format(options.operationcount)])
+        basecmd.extend(["-threads", options.ycsbthreads, "-p",
+                        "operationcount={}".format(options.operationcount)])
 
     return basecmd
+
 
 def mutilatecmd(options, *args):
     return ["{}".format(options.mutilate),
@@ -212,37 +249,45 @@ def mutilatecmd(options, *args):
             "{}:{}".format(options.benchaddr, options.benchport)] + list(args)
 
 # Do a sysctl into the system
+
+
 def sysctl(module, key, value):
     if value is None:
         return subprocess.run(["sysctl", "-n", "{}.{}".format(module, key)],
-                check=True,
-                stdout=subprocess.PIPE).stdout.decode('UTF-8').rstrip()
+                              check=True,
+                              stdout=subprocess.PIPE).stdout.decode('UTF-8').rstrip()
     else:
         bashcmd(["sysctl", "{}.{}={}".format(module, key, value)])
         return None
 
 
-def sysctl_slos(key,value=None):
+def sysctl_slos(key, value=None):
     return sysctl("aurora_slos", key, value)
 
-def sysctl_sls(key,value=None):
+
+def sysctl_sls(key, value=None):
     return sysctl("aurora", key, value)
+
 
 def kldload(path):
     kldl = ["kldload", path]
     return bashcmd(kldl, fail_okay=True)
+
 
 def kldunload(path):
     kldl = ["kldunload", path]
     return bashcmd(kldl, fail_okay=True)
 
 # Create the full path of the disk by prefixing its name.
+
+
 def prefixdisk(options):
     # Different prefixes for striped and non-striped disks
     if len(options.disks) == 1:
         return "/dev/{}".format(options.stripename)
     else:
-        return  "/dev/stripe/{}".format(options.stripename)
+        return "/dev/stripe/{}".format(options.stripename)
+
 
 def mount(options):
     # Different prefixes for striped and non-striped disks
@@ -251,15 +296,18 @@ def mount(options):
     if (options.type in ["slos", "memory"]):
         cmd = ["mount", "-t", "slsfs", path, options.mountdir]
     elif (options.type == "zfs"):
-        cmd = ["zfs", "set", "mountpoint={}".format(options.mountdir), "{}{}".format(options.stripename, options.mountdir)]
+        cmd = ["zfs", "set", "mountpoint={}".format(
+            options.mountdir), "{}{}".format(options.stripename, options.mountdir)]
     elif (options.type == "ffs"):
         cmd = ["mount", path, options.mountdir]
     bashcmd(cmd)
     os.chmod(options.mountdir, 0o777)
 
+
 def umount(options):
     if (options.type == "zfs"):
-        cmd = ["zfs", "destroy", "-r", "{}{}".format(options.stripename, options.mountdir)]
+        cmd = ["zfs", "destroy", "-r",
+               "{}{}".format(options.stripename, options.mountdir)]
         bashcmd(cmd)
         cmd = ["zpool", "destroy", options.stripename]
         bashcmd(cmd)
@@ -268,11 +316,13 @@ def umount(options):
         bashcmd(cmd, fail_okay=True)
 
 # Return the disk we'll use for the SLOS. If it's a geom stripe, create it.
+
+
 def geom_init(options, disks, stripe):
     if (options.type != "zfs"):
         # Gstripe does not work with 1 disk
         if len(disks) == 1:
-            options.stripename=disks[0]
+            options.stripename = disks[0]
             return
 
         create = ["gstripe", "create", "-s", stripe, "-v", options.stripename]
@@ -285,9 +335,11 @@ def geom_init(options, disks, stripe):
         if (bashcmd(create, fail_okay=True)):
             print("\nERROR: Problem with loading gstripe\n")
             unload(options)
-            exit (1)
+            exit(1)
 
 # Create a new filesystem. This can be a regular filesystem or a SLOS
+
+
 def newfs(options):
     path = prefixdisk(options)
 
@@ -314,16 +366,19 @@ def newfs(options):
             bashcmd(zpool)
 
         zpool = ["zfs", "set", "recordsize={}".format(options.stripe),
-                options.stripename]
+                 options.stripename]
         bashcmd(zpool)
 
-        zpool = ["zfs", "create", "{}{}".format(options.stripename, options.mountdir)]
+        zpool = ["zfs", "create", "{}{}".format(
+            options.stripename, options.mountdir)]
         bashcmd(zpool)
 
     else:
         raise Exception("Invalid backend {} specified".format(options.type))
 
 # Set up all modules and filesystems.
+
+
 def module_init(options):
     if (options.type != "zfs"):
         geom_init(options, options.disks, options.stripe)
@@ -338,8 +393,11 @@ def module_init(options):
     mount(options)
 
 # Clean up for the work done in module_init().
+
+
 def module_fini(options):
-    # Needed because some benchmarks keep dumping even after they're supposedly done.
+    # Needed because some benchmarks keep dumping even after they're
+    # supposedly done.
     cmd = ['pkill', '-SIGTERM', 'dtrace']
     bashcmd(cmd, fail_okay=True)
 
@@ -355,41 +413,48 @@ def module_fini(options):
 # ===== SLOS BENCHMARKING COMMANDS =====
 
 # Check if the stripe already exists
+
+
 def stripe_loaded(options):
     return path.exists("/dev/stripe/{}".format(options.stripename))
 
+
 def get_num_snaps(options):
     if (options.type == "slos"):
-        cmd = ["../tools/fsdb/fsdb", "-s", "/dev/stripe/{}".format(options.stripename)]
+        cmd = ["../tools/fsdb/fsdb", "-s",
+               "/dev/stripe/{}".format(options.stripename)]
         result = subprocess.run(cmd, stdout=subprocess.PIPE)
         return int(result.stdout.decode('utf-8'))
     else:
         return 0
 
+
 def gstat(name, timeout, path):
     cmd = ["timeout", str(timeout), "gstat", "-C", "-f", name]
-    out = open(path, "w+");
+    out = open(path, "w+")
     subprocess.run(cmd, stdout=out)
     out.close()
+
 
 def startgstat(name, timeout, path):
     x = threading.Thread(target=gstat, args=(name, timeout, path,))
     x.start()
     return x
 
+
 def runbench(options, path, output):
     cmd = ["filebench", "-f", path]
     gthread = None
     if output != "":
-            stdout = open(output, 'w+')
+        stdout = open(output, 'w+')
     else:
-            stdout = None
+        stdout = None
 
-    snap = get_num_snaps(options);
+    snap = get_num_snaps(options)
 
     if (options.withgstat and output != ""):
-            path = "{}.gstat.csv".format(output)
-            gthread = startgstat(options.stripename, 40, path)
+        path = "{}.gstat.csv".format(output)
+        gthread = startgstat(options.stripename, 40, path)
 
     subprocess.run(cmd, stdout=stdout)
     if (output != ""):
@@ -398,13 +463,13 @@ def runbench(options, path, output):
         cmd = [c, output]
         subprocess.run(cmd)
         stdout = open(output, 'a+')
-        snap = get_num_snaps(options) - snap;
+        snap = get_num_snaps(options) - snap
         stdout.write(str(snap))
         stdout.close()
         if (gthread):
             gthread.join(timeout=25)
     else:
-        snap = get_num_snaps(options) - snap;
+        snap = get_num_snaps(options) - snap
         print("CHECKPOINTS COMPLETED {}".format(str(snap)))
 
 
@@ -413,10 +478,11 @@ def load(options):
     # XXX Why is having a stripe equivalent to having everything loaded?
     if stripe_loaded(options):
         print("Already loaded. Unload first to reload")
-        exit (1)
+        exit(1)
     else:
         module_init(options)
         print("Loaded..")
+
 
 @Command()
 def unload(options):
@@ -427,7 +493,9 @@ def unload(options):
     module_fini(options)
     print("Unloaded..")
 
-@Command(captureOut=CapturedOut.SINGLE, required=["script"], help="filebench script as extra arg")
+
+@Command(captureOut=CapturedOut.SINGLE,
+         required=["script"], help="filebench script as extra arg")
 def benchmark(options):
     if stripe_loaded(options):
         print("Already loaded. Unload first to runbenchmark")
@@ -435,13 +503,14 @@ def benchmark(options):
     load(options)
     outpath = ""
     if options.o is not None:
-        outpath = options.o;
+        outpath = options.o
 
     runbench(options, options.script, outpath)
     unload(options)
 
+
 @Command(required=["dir"], captureOut=CapturedOut.MULTI,
-        help="script directory as extra arg")
+         help="script directory as extra arg")
 def allbenchmarks(options):
     if stripe_loaded(options):
         print("Already loaded. Unload first to runbenchmark")
@@ -454,7 +523,7 @@ def allbenchmarks(options):
             try:
                 os.mkdir(outdir)
                 os.chmod(outdir, 0o777)
-            except:
+            except BaseException:
                 pass
         else:
             outdir = ""
@@ -469,8 +538,9 @@ def allbenchmarks(options):
             runbench(options, fullpath, output)
             unload(options)
 
+
 @Command(required=["script", "min", "max", "steps"], captureOut=CapturedOut.MULTI,
-        help="Time series")
+         help="Time series")
 def series(options):
     max = int(options.max)
     min = int(options.min)
@@ -479,21 +549,21 @@ def series(options):
         print("Already loaded. Unload first to runbenchmark")
         return
 
-    for x in range(0,  int(options.steps)):
+    for x in range(0, int(options.steps)):
         value = min + (((max - min) * x) // (int(options.steps) - 1))
         print("======= Running Step %s ======" % value)
         options.checkps = value
         if options.o:
-            output= "{}/{}.out".format(options.o, value)
+            output = "{}/{}.out".format(options.o, value)
 
         load(options)
         runbench(options, options.script, output)
         unload(options)
 
 
-@Command(required=["script", "min", "max", "steps"], 
-        captureOut=CapturedOut.MULTI,
-        help="Time series")
+@Command(required=["script", "min", "max", "steps"],
+         captureOut=CapturedOut.MULTI,
+         help="Time series")
 def allseries(options):
     outputdir = options.o
     dir = options.script
@@ -505,7 +575,7 @@ def allseries(options):
             try:
                 os.mkdir(outdir)
                 os.chmod(outdir, 0o777)
-            except:
+            except BaseException:
                 pass
         else:
             outdir = ""
@@ -515,7 +585,7 @@ def allseries(options):
                 try:
                     os.mkdir(path)
                     os.chmod(path, 0o777)
-                except:
+                except BaseException:
                     pass
                 options.o = path
             options.script = "{}/{}".format(dir, file)
@@ -528,12 +598,13 @@ def allseries(options):
 # multiple processes, so we need to get the root of its process tree, assuming
 # it exists. Note that we can only do this if we assume non-random PIDs, and
 # even then PID allocation must not wrap around.
+
+
 def pid_main(benchname):
     cmd = ["pidof", benchname]
     output = subprocess.run(cmd, check=True,
-            stdout=subprocess.PIPE).stdout.decode('UTF-8')
-    pids = list(map(int, output.strip().split()))
-    pids.sort()
+                            stdout=subprocess.PIPE).stdout.decode('UTF-8')
+    pids = sorted(map(int, output.strip().split()))
     return pids[0]
 
 
@@ -543,8 +614,8 @@ def pid_main(benchname):
 # SLOS, and are therefore definitely checkpointable.
 def make_slsdirs(options, benchmark):
     folders = ["data", "log", "log/" + benchmark, "logs",
-        "tmp", "var", "var/cache", "var/cache/" + benchmark,
-        "var/run", "var/run/" + benchmark, benchmark]
+               "tmp", "var", "var/cache", "var/cache/" + benchmark,
+               "var/run", "var/run/" + benchmark, benchmark]
     for folder in folders:
         path = "{}/{}".format(options.mountdir, folder)
         try:
@@ -559,7 +630,8 @@ def make_slsdirs(options, benchmark):
 # Insert a series of PIDs into a partition and start checkpointing them.
 def slsckpt(options, pidlist):
 
-    print("Starting Aurora Checkpointer on {} (period {})".format(str(pidlist), options.slsperiod))
+    print("Starting Aurora Checkpointer on {} (period {})".format(
+        str(pidlist), options.slsperiod))
 
     # If period is 0 we do not put the PIDs in the SLS.
     if options.slsperiod == 0:
@@ -569,8 +641,8 @@ def slsckpt(options, pidlist):
         raise Exception("Invalid SLS backend {}".format(options.type))
 
     cmd = [options.slsctl, "partadd",
-            "-o", options.oid, "-b", options.type,
-            "-t", str(options.slsperiod)]
+           "-o", options.oid, "-b", options.type,
+           "-t", str(options.slsperiod)]
     if options.delta:
         cmd.append("-d")
     if options.ignore_unlinked:
@@ -590,12 +662,14 @@ def slsckpt(options, pidlist):
     print("Started Aurora Checkpointer on {}".format(str(pidlist)))
 
 # Generate a configuration from a template
+
+
 def generate_conf(options, inputconf, outputconf):
     # The templated variables.
     replace_list = [
-            ["SLS_MOUNT", options.mountdir],
-            ["SLS_SERVER_URL", options.benchaddr],
-            ["SLS_SERVER_PORT", options.benchport]
+        ["SLS_MOUNT", options.mountdir],
+        ["SLS_SERVER_URL", options.benchaddr],
+        ["SLS_SERVER_PORT", options.benchport]
     ]
 
     # Search and replace all template strings in the files. The way we specify
@@ -610,6 +684,8 @@ def generate_conf(options, inputconf, outputconf):
 
 # Create a configuration file for the web server so that it only uses files in
 # the SLS. This is needed to be able to checkpoint filesystem state.
+
+
 def webserver_createconf(options, inputconf, outputconf, srvconf):
 
     # Link the original directory used by the server into the SLOS. Done so we
@@ -645,6 +721,8 @@ def lighttpd_setup(options, inputconf, outputconf, srvconf):
     return pid_main("lighttpd")
 
 # Start the lighttpd server
+
+
 def nginx_setup(options, inputconf, outputconf, srvconf):
     # Get the current difrectory, so that we can switch back to it later.
     pwd = os.getcwd()
@@ -665,10 +743,11 @@ def nginx_setup(options, inputconf, outputconf, srvconf):
     # select the smallest possible process.
     return pid_main("nginx")
 
+
 def tomcat_setup(options):
     # Call the startup script
     bashcmd("{}/{}".format(options.tomcat, "/bin/startup.sh"))
-    options.benchport="8080"
+    options.benchport = "8080"
     time.sleep(5)
     return pid_main("java")
 
@@ -680,18 +759,18 @@ def webserver_setup(options):
     # anyway.
     if options.server == "nginx":
         return nginx_setup(options,
-                inputconf="benchmarks/nginx.conf",
-                outputconf="{}/{}".format(options.mountdir,
-                "nginx/nginx.conf"),
-                srvconf=options.nginxconfdir
-                )
+                           inputconf="benchmarks/nginx.conf",
+                           outputconf="{}/{}".format(options.mountdir,
+                                                     "nginx/nginx.conf"),
+                           srvconf=options.nginxconfdir
+                           )
     elif options.server == "lighttpd":
         return lighttpd_setup(options,
-                inputconf="benchmarks/lighttpd.conf",
-                outputconf="{}/{}".format(options.mountdir,
-                "lighttpd/lighttpd.conf"),
-                srvconf=options.lighttpdconfdir
-                )
+                              inputconf="benchmarks/lighttpd.conf",
+                              outputconf="{}/{}".format(options.mountdir,
+                                                        "lighttpd/lighttpd.conf"),
+                              srvconf=options.lighttpdconfdir
+                              )
     elif options.server == "tomcat":
         return tomcat_setup(options)
     else:
@@ -700,83 +779,83 @@ def webserver_setup(options):
 
 # Command for spinning up a webserver and taking numbers
 @Command(required=[],
-    captureOut=CapturedOut.MULTI,
-    add_args=[
-            [
-                # Default locations of the binaries and config files
-                ['--lighttpd'],
-                {
-                    "action" : "store",
-                    "default" : "/usr/local/sbin/lighttpd",
-                    "help" : "Location of lighttpd"
-                }
-            ],
-            [
-                ['--nginx'],
-                {
-                    "action" : "store",
-                    "default" : "/usr/local/sbin/nginx",
-                    "help" : "Location of nginx"
-                }
-            ],
-            [
-                ['--tomcat'],
-                {
-                    "action" : "store",
-                    "default" : "/usr/local/apache-tomcat-9.0",
-                    "help" : "Location of Apache Tomcat directory"
-                }
-            ],
-            [
-                ['--lighttpdconfdir'],
-                {
-                    "action" : "store",
-                    "default" : "/usr/local/etc/lighttpd",
-                    "help" : "Location of lighttpd config dir",
-                }
-            ],
-            [
-                ['--nginxconfdir'],
-                {
-                    "action" : "store",
-                    "default" : "/usr/local/etc/nginx",
-                    "help" : "Location of nginx config dir",
-                }
-            ],
-            [
-                ['--server'],
-                {
-                    "action" : "store",
-                    "default" : "nginx",
-                    "help" : "Standard web server to use",
-                }
-            ],
-            [
-                ['--threads'],
-                {
-                    "action" : "store",
-                    "default" : "10",
-                    "help" : "Number of client threads to use"
-                }
-            ],
-            [
-                ['--connections'],
-                {
-                    "action" : "store",
-                    "default" : "50",
-                    "help" : "Number of connections used by wrk",
-                }
-            ],
-            [
-                ['--time'],
-                {
-                    "action" : "store",
-                    "default" : "10",
-                    "help" : "Duration of the benchmark in seconds",
-                }
-            ],
-        ],
-        help="Run a web server sls workload")
+         captureOut=CapturedOut.MULTI,
+         add_args=[
+    [
+        # Default locations of the binaries and config files
+        ['--lighttpd'],
+        {
+            "action": "store",
+            "default": "/usr/local/sbin/lighttpd",
+            "help": "Location of lighttpd"
+        }
+    ],
+    [
+        ['--nginx'],
+        {
+            "action": "store",
+            "default": "/usr/local/sbin/nginx",
+            "help": "Location of nginx"
+        }
+    ],
+    [
+        ['--tomcat'],
+        {
+            "action": "store",
+            "default": "/usr/local/apache-tomcat-9.0",
+            "help": "Location of Apache Tomcat directory"
+        }
+    ],
+    [
+        ['--lighttpdconfdir'],
+        {
+            "action": "store",
+            "default": "/usr/local/etc/lighttpd",
+            "help": "Location of lighttpd config dir",
+        }
+    ],
+    [
+        ['--nginxconfdir'],
+        {
+            "action": "store",
+            "default": "/usr/local/etc/nginx",
+            "help": "Location of nginx config dir",
+        }
+    ],
+    [
+        ['--server'],
+        {
+            "action": "store",
+            "default": "nginx",
+            "help": "Standard web server to use",
+        }
+    ],
+    [
+        ['--threads'],
+        {
+            "action": "store",
+            "default": "10",
+            "help": "Number of client threads to use"
+        }
+    ],
+    [
+        ['--connections'],
+        {
+            "action": "store",
+            "default": "50",
+            "help": "Number of connections used by wrk",
+        }
+    ],
+    [
+        ['--time'],
+        {
+            "action": "store",
+            "default": "10",
+            "help": "Duration of the benchmark in seconds",
+        }
+    ],
+],
+    help="Run a web server sls workload")
 def webserver(options):
     # XXX Replace with module_init?
     load(options)
@@ -792,30 +871,31 @@ def webserver(options):
 
     # Run the benchmark.
     ssh = sshcmd(options)
-    wrk = ["wrk", "-d", str(options.time), "-t", str(options.threads), \
-            "-c", str(options.connections),
-            "http://{}:{}".format(options.benchaddr, options.benchport)]
+    wrk = ["wrk", "-d", str(options.time), "-t", str(options.threads),
+           "-c", str(options.connections),
+           "http://{}:{}".format(options.benchaddr, options.benchport)]
     wrkoutput = subprocess.run(ssh + wrk,
-            stdout=subprocess.PIPE).stdout.decode('UTF-8')
-    
-    options.ckpt_done= int(sysctl_sls("ckpt_done"))
+                               stdout=subprocess.PIPE).stdout.decode('UTF-8')
+
+    options.ckpt_done = int(sysctl_sls("ckpt_done"))
     options.ckpt_attempted = int(sysctl_sls("ckpt_attempted"))
     options.runend = datetime.datetime.now()
 
-    with open("{}_{}_{}".format(str(options.server), str(options.slsfreq), 
-        str(options.runno)), "w") as outfile:
+    with open("{}_{}_{}".format(str(options.server), str(options.slsfreq),
+                                str(options.runno)), "w") as outfile:
         outfile.write(wrkoutput)
-
 
     # Kill the server
     cmd = ['kill', '-9', str(pid)]
     bashcmd(cmd)
 
     time_elapsed = options.runend - options.runstart
-    ms_elapsed = (time_elapsed.seconds * 1000) + (time_elapsed.microseconds / 1000)
+    ms_elapsed = (time_elapsed.seconds * 1000) + \
+        (time_elapsed.microseconds / 1000)
     print("Did {} checkpoints in {}ms)".format(options.ckpt_done, ms_elapsed))
     # XXX Replace with module_fini?
     unload(options)
+
 
 def redis_setup(options):
     # Get the current directory, so that we can switch back to it later.
@@ -843,6 +923,7 @@ def redis_setup(options):
     # select the smallest possible process.
     return pid_main("redis-server")
 
+
 def memcached_setup(options):
     # Get the current directory, so that we can switch back to it later.
     pwd = os.getcwd()
@@ -851,96 +932,98 @@ def memcached_setup(options):
 
     # Create the directory for the PID file
     cmd = ["memcached", "-u", options.memcacheduser, "-l", options.benchaddr,
-            "-p", options.benchport, "-P", "{}/{}".format(options.mountdir,
-            "memcached.pid"), "-d"]
+           "-p", options.benchport, "-P", "{}/{}".format(options.mountdir,
+                                                         "memcached.pid"), "-d"]
     bashcmd(cmd)
 
     # Switch back to the original directory.
     os.chdir(pwd)
- 
+
     return pid_main("memcached")
 
 # Command for spinning up a webserver and taking numbers
+
+
 @Command(required=[],
-    captureOut=CapturedOut.MULTI,
-    add_args=[
-            [
-                # Default locations of the binaries and config files
-                ['--redis'],
-                {
-                    "action" : "store",
-                    "default" : "/usr/local/bin/redis-server",
-                    "help" : "Location of the Redis server"
-                }
-            ],
-            [
-                # Default locations of the binaries and config files
-                ['--ycsb'],
-                {
-                    "action" : "store",
-                    "default" : "/home/etsal/ycsb/",
-                    "help" : "Location of the YCSB directory"
-                }
-            ],
-            [
-                ['--recordcount'],
-                {
-                    "action" : "store",
-                    "default" : str(10 * 1000),
-                    "help" : "Number of records to be loaded into the database"
-                }
+         captureOut=CapturedOut.MULTI,
+         add_args=[
+    [
+        # Default locations of the binaries and config files
+        ['--redis'],
+        {
+            "action": "store",
+            "default": "/usr/local/bin/redis-server",
+            "help": "Location of the Redis server"
+        }
+    ],
+    [
+        # Default locations of the binaries and config files
+        ['--ycsb'],
+        {
+            "action": "store",
+            "default": "/home/etsal/ycsb/",
+            "help": "Location of the YCSB directory"
+        }
+    ],
+    [
+        ['--recordcount'],
+        {
+            "action": "store",
+            "default": str(10 * 1000),
+            "help": "Number of records to be loaded into the database"
+        }
 
-            ],
-            [
-                ['--workload'],
-                {
-                    "action" : "store",
-                    "default" : "workloada",
-                    "help" : "Workload profile to be used with YCSB" }
+    ],
+    [
+        ['--workload'],
+        {
+            "action": "store",
+            "default": "workloada",
+            "help": "Workload profile to be used with YCSB"}
 
-            ],
-            [
-                ['--kvstore'],
-                {
-                    "action" : "store",
-                    "default" : "redis",
-                    "help" : "The key-value store to be benchmarked",
-                }
-            ],
-            [
-                ['--memcached'],
-                {
-                    "action" : "store",
-                    "default" : "/usr/local/bin/memcached",
-                    "help" : "Location of the memcached server"
-                }
-            ],
-            [
-                ['--memcacheduser'],
-                {
-                    "action" : "store",
-                    "default" : "root",
-                    "help" : "User under which memcached runs"
-                }
-            ],
-            [
-                ["--ycsbthreads"],
-                {
-                    "action" : "store",
-                    "default" : "16",
-                    "help" : "Number of threads for the YCSB client"
-                }
-            ],
-            [
-                ["--operationcount"],
-                {
-                    "action" : "store",
-                    "default" : str(100* 1000),
-                    "help" : "Number of target operations from the YCSB client"
-                }
-            ],
-        ],
-        help="Run the Redis server")
+    ],
+    [
+        ['--kvstore'],
+        {
+            "action": "store",
+            "default": "redis",
+            "help": "The key-value store to be benchmarked",
+        }
+    ],
+    [
+        ['--memcached'],
+        {
+            "action": "store",
+            "default": "/usr/local/bin/memcached",
+            "help": "Location of the memcached server"
+        }
+    ],
+    [
+        ['--memcacheduser'],
+        {
+            "action": "store",
+            "default": "root",
+            "help": "User under which memcached runs"
+        }
+    ],
+    [
+        ["--ycsbthreads"],
+        {
+            "action": "store",
+            "default": "16",
+            "help": "Number of threads for the YCSB client"
+        }
+    ],
+    [
+        ["--operationcount"],
+        {
+            "action": "store",
+            "default": str(100 * 1000),
+            "help": "Number of target operations from the YCSB client"
+        }
+    ],
+],
+    help="Run the Redis server")
 def kvstore(options):
     # XXX Replace with module_init?
     load(options)
@@ -953,7 +1036,7 @@ def kvstore(options):
     else:
         raise Exception("Invalid options.kvstore {}".format(options.kvstore))
 
-    if pid == None:
+    if pid is None:
         raise Exception("No PID for process")
 
     # Warm it up using YCSB. We can do this locally, but then we would need two
@@ -961,7 +1044,7 @@ def kvstore(options):
     ssh = sshcmd(options)
     cmd = ycsbcmd(options, "load", options.kvstore)
     ycsboutput = subprocess.run(ssh + cmd,
-            stdout=subprocess.DEVNULL)
+                                stdout=subprocess.DEVNULL)
 
     # Insert the server into the SLS.
     if (options.type in ["slos", "memory"]):
@@ -973,14 +1056,14 @@ def kvstore(options):
     # XXX Parse it into a form we can use for graphing.
     cmd = ycsbcmd(options, "run", options.kvstore)
     ycsboutput = subprocess.run(ssh + cmd,
-            stdout=subprocess.PIPE).stdout.decode('UTF-8')
+                                stdout=subprocess.PIPE).stdout.decode('UTF-8')
 
-    options.ckpt_done= int(sysctl_sls("ckpt_done"))
+    options.ckpt_done = int(sysctl_sls("ckpt_done"))
     options.ckpt_attempted = int(sysctl_sls("ckpt_attempted"))
     options.runend = datetime.datetime.now()
 
-    with open("{}_{}_{}".format(str(options.kvstore), str(options.slsfreq), 
-        str(options.runno)), "w") as outfile:
+    with open("{}_{}_{}".format(str(options.kvstore), str(options.slsfreq),
+                                str(options.runno)), "w") as outfile:
         outfile.write(ycsboutput)
 
     # Kill the server
@@ -988,69 +1071,72 @@ def kvstore(options):
     bashcmd(cmd)
 
     # XXX Measure time
-    #print("{} checkpoints (expected around {})".format(
-        #sysctl_sls("ckpt_done"),
-        #(1000 / int(options.slsperiod)) * sleeptime))
+    # print("{} checkpoints (expected around {})".format(
+    # sysctl_sls("ckpt_done"),
+    # (1000 / int(options.slsperiod)) * sleeptime))
 
     # Wait for a bit to avoid races # XXX Necessary?
     time.sleep(3)
     time_elapsed = options.runend - options.runstart
-    ms_elapsed = (time_elapsed.seconds * 1000) + (time_elapsed.microseconds / 1000)
+    ms_elapsed = (time_elapsed.seconds * 1000) + \
+        (time_elapsed.microseconds / 1000)
     print("Did {} checkpoints in {}ms)".format(options.ckpt_done, ms_elapsed))
 
     # XXX Replace with module_fini?
     unload(options)
 
 # Command for spinning up a webserver and taking numbers
+
+
 @Command(required=[],
-    captureOut=CapturedOut.MULTI,
-    add_args=[
-            [
-                ['--memcached'],
-                {
-                    "action" : "store",
-                    "default" : "/usr/local/bin/memcached",
-                    "help" : "Location of the memcached server"
-                }
-            ],
-            [
-                ['--memcacheduser'],
-                {
-                    "action" : "store",
-                    "default" : "root",
-                    "help" : "User under which memcached runs"
-                }
-            ],
-            [
-                ['--mutilate'],
-                {
-                    "action" : "store",
-                    "default" : "/home/ali/working/mutilate/mutilate",
-                    "help" : "Location of mutilate"
-                }
-            ],
-            [
-                ['--mutilatethreads'],
-                {
-                    "action" : "store",
-                    "default" : "12",
-                    "help" : "Number of mutilate threads"
-                }
-            ]
-        ],
-        help="Run the memcached/mutilate")
+         captureOut=CapturedOut.MULTI,
+         add_args=[
+    [
+        ['--memcached'],
+        {
+            "action": "store",
+            "default": "/usr/local/bin/memcached",
+            "help": "Location of the memcached server"
+        }
+    ],
+    [
+        ['--memcacheduser'],
+        {
+            "action": "store",
+            "default": "root",
+            "help": "User under which memcached runs"
+        }
+    ],
+    [
+        ['--mutilate'],
+        {
+            "action": "store",
+            "default": "/home/ali/working/mutilate/mutilate",
+            "help": "Location of mutilate"
+        }
+    ],
+    [
+        ['--mutilatethreads'],
+        {
+            "action": "store",
+            "default": "12",
+            "help": "Number of mutilate threads"
+        }
+    ]
+],
+    help="Run the memcached/mutilate")
 def mutilate(options):
     load(options)
 
     # Start mutilate
     pid = memcached_setup(options)
-    if pid == None:
+    if pid is None:
         raise Exception("No PID for process")
 
     time.sleep(1)
 
     # Load database
-    ssh = sshcmd(options, host = 0)
+    ssh = sshcmd(options, host=0)
     cmd = mutilatecmd(options, "--loadonly")
     bashcmd(ssh + cmd)
 
@@ -1062,8 +1148,8 @@ def mutilate(options):
     agents = []
     for n in range(numhosts(options) - 1):
         print("Spawning " + options.clients[n])
-        cmd = [ options.mutilate, "-T", "12", "-A"]
-        ssh = sshcmd(options, host = n + 1)
+        cmd = [options.mutilate, "-T", "12", "-A"]
+        ssh = sshcmd(options, host=n + 1)
         print(ssh + cmd)
         proc = subprocess.Popen(ssh + cmd)
         agents.append(proc)
@@ -1072,15 +1158,15 @@ def mutilate(options):
     options.runstart = datetime.datetime.now()
 
     cmd = mutilatecmd(options, "--noload", "-B",
-            "-T", options.mutilatethreads, # Threads (loadgen)
-            "-c", "12", # Connections Per Thread (loadgen)
-            "-Q", "1000", # Measurement QPS
-            "-C", "4", # Measurement Connections
-            "-w", "5", # Warmup
-            "-t", "10") # Duration
+                      "-T", options.mutilatethreads,  # Threads (loadgen)
+                      "-c", "12",  # Connections Per Thread (loadgen)
+                      "-Q", "1000",  # Measurement QPS
+                      "-C", "4",  # Measurement Connections
+                      "-w", "5",  # Warmup
+                      "-t", "10")  # Duration
     for n in range(numhosts(options) - 1):
         cmd = cmd + ["-a", options.clients[n]]
-    ssh = sshcmd(options, host = 0)
+    ssh = sshcmd(options, host=0)
     print(ssh + cmd)
     p = subprocess.run(ssh + cmd, stdout=subprocess.PIPE)
     out = p.stdout.decode('UTF-8')
@@ -1092,7 +1178,7 @@ def mutilate(options):
     for c in agents:
         c.kill()
 
-    options.ckpt_done= int(sysctl_sls("ckpt_done"))
+    options.ckpt_done = int(sysctl_sls("ckpt_done"))
     options.ckpt_attempted = int(sysctl_sls("ckpt_attempted"))
     options.runend = datetime.datetime.now()
 
@@ -1106,54 +1192,59 @@ def mutilate(options):
     unload(options)
 
 # Command for spinning up a webserver and taking numbers
+
+
 @Command(required=[],
-    captureOut=CapturedOut.MULTI,
-    add_args=[
-            [
-                ['--memcached'],
-                {
-                    "action" : "store",
-                    "default" : "/usr/local/bin/memcached",
-                    "help" : "Location of the memcached server"
-                }
-            ],
-            [
-                ['--memcacheduser'],
-                {
-                    "action" : "store",
-                    "default" : "root",
-                    "help" : "User under which memcached runs"
-                }
-            ],
-            [
-                ['--mutilate'],
-                {
-                    "action" : "store",
-                    "default" : "/home/ali/working/mutilate/mutilate",
-                    "help" : "Location of mutilate"
-                }
-            ],
-            [
-                ['--mutilatethreads'],
-                {
-                    "action" : "store",
-                    "default" : "12",
-                    "help" : "Number of mutilate threads"
-                }
-            ]
-        ],
-        help="Run the memcached/mutilate multiple times")
+         captureOut=CapturedOut.MULTI,
+         add_args=[
+    [
+        ['--memcached'],
+        {
+            "action": "store",
+            "default": "/usr/local/bin/memcached",
+            "help": "Location of the memcached server"
+        }
+    ],
+    [
+        ['--memcacheduser'],
+        {
+            "action": "store",
+            "default": "root",
+            "help": "User under which memcached runs"
+        }
+    ],
+    [
+        ['--mutilate'],
+        {
+            "action": "store",
+            "default": "/home/ali/working/mutilate/mutilate",
+            "help": "Location of mutilate"
+        }
+    ],
+    [
+        ['--mutilatethreads'],
+        {
+            "action": "store",
+            "default": "12",
+            "help": "Number of mutilate threads"
+        }
+    ]
+],
+    help="Run the memcached/mutilate multiple times")
 def mutilatebench(options):
     for slsfreq in [0, 1] + list(range(10, 101, 10)):
-        for i in range(0,5):
+        for i in range(0, 5):
             options.slsfreq = slsfreq
             options.slsperiod = int((1000 / slsfreq)) if slsfreq != 0 else 0
             options.runno = str(i + 1)
             # XXX How to call the decorator before the thing
             mutilate(options)
             time_elapsed = options.runend - options.runstart
-            ms_elapsed = (time_elapsed.seconds * 1000) + (time_elapsed.microseconds / 1000)
-            print("Did {} checkpoints in {}ms)".format(options.ckpt_done, ms_elapsed))
+            ms_elapsed = (time_elapsed.seconds * 1000) + \
+                (time_elapsed.microseconds / 1000)
+            print("Did {} checkpoints in {}ms)".format(
+                options.ckpt_done, ms_elapsed))
+
 
 def firefox_benchmark(options):
     ffoptions = Options()
@@ -1169,14 +1260,14 @@ def firefox_benchmark(options):
     cap["marionette"] = True
 
     driver = Firefox(firefox_binary=options.firefox, options=ffoptions,
-            firefox_profile=profile, capabilities=cap)
+                     firefox_profile=profile, capabilities=cap)
     wait = WebDriverWait(driver, timeout=10000)
 
-    url = "http://{}:{}/{}".format(options.benchaddr, options.benchport, 
-            options.firefoxdriver)
+    url = "http://{}:{}/{}".format(options.benchaddr, options.benchport,
+                                   options.firefoxdriver)
     driver.get(url)
 
-    wait.until(lambda driver : "results" in driver.current_url)
+    wait.until(lambda driver: "results" in driver.current_url)
     values = urllib.parse.unquote(driver.current_url.split('?')[1])
     vals = json.loads(values)
     runtime = 0
@@ -1193,29 +1284,31 @@ def firefox_benchmark(options):
     driver.quit()
 
 # Command for spinning up a Firefox instance and taking numbers
+
+
 @Command(required=[],
-    captureOut=CapturedOut.MULTI,
-    add_args=[
-            [
-                # Default locations of the binaries and config files
-                ['--firefox'],
-                {
-                    "action" : "store",
-                    "default" : "/usr/local/bin/firefox",
-                    "help" : "Location of the Firefox binary"
-                }
-            ],
-            [
-                # Default path of the benchmark in the server
-                ['--firefoxdriver'],
-                {
-                    "action" : "store",
-                    "default" : "/kraken-1.1/driver.html",
-                    "help" : "URL of the driver of the benchmark"
-                }
-            ],
-        ],
-        help="Run the Firefox JS benchmark")
+         captureOut=CapturedOut.MULTI,
+         add_args=[
+    [
+        # Default locations of the binaries and config files
+        ['--firefox'],
+        {
+            "action": "store",
+            "default": "/usr/local/bin/firefox",
+            "help": "Location of the Firefox binary"
+        }
+    ],
+    [
+        # Default path of the benchmark in the server
+        ['--firefoxdriver'],
+        {
+            "action": "store",
+            "default": "/kraken-1.1/driver.html",
+            "help": "URL of the driver of the benchmark"
+        }
+    ],
+],
+    help="Run the Firefox JS benchmark")
 def firefox(options):
     # XXX Replace with module_init?
     load(options)
@@ -1225,8 +1318,8 @@ def firefox(options):
     # Choose a random port every time. Created sockets linger, so if want to be
     # able to run the benchmark multiple times we need to use a different port
     # each time.
-    options.benchaddr="localhost"
-    options.benchport=str(random.randrange(8000, 16000))
+    options.benchaddr = "localhost"
+    options.benchport = str(random.randrange(8000, 16000))
 
     # Create the server, serve forever. This is the server that _serves_ the
     # benchmarks, not the benchmark that executes the JS and gets checkpointed.
@@ -1235,7 +1328,7 @@ def firefox(options):
         os.chdir("/root/sls-bench/firefox/hosted")
         handler = http.server.SimpleHTTPRequestHandler
         httpd = socketserver.TCPServer((options.benchaddr,
-            int(options.benchport)), handler)
+                                        int(options.benchport)), handler)
         httpd.serve_forever()
 
     # Spawn the new process. This is the process that ultimately spawns the
@@ -1257,7 +1350,7 @@ def firefox(options):
     # Wait for the benchmark to be done
     os.waitpid(benchpid, 0)
 
-    options.ckpt_done= int(sysctl_sls("ckpt_done"))
+    options.ckpt_done = int(sysctl_sls("ckpt_done"))
     options.ckpt_attempted = int(sysctl_sls("ckpt_attempted"))
     options.runend = datetime.datetime.now()
 
@@ -1268,81 +1361,82 @@ def firefox(options):
     # XXX Replace with module_fini?
     unload(options)
 
+
 @Command(required=["--server"],
-        captureOut=CapturedOut.MULTI,
-        # XXX Find a way to not repeat these, is it possible though with the
-        # way we're using the parser and building a global object?
-        add_args=[
-            [
-                # Default locations of the binaries and config files
-                ['--lighttpd'],
-                {
-                    "action" : "store",
-                    "default" : "/usr/local/sbin/lighttpd",
-                    "help" : "Location of lighttpd"
-                }
-            ],
-            [
-                ['--nginx'],
-                {
-                    "action" : "store",
-                    "default" : "/usr/local/sbin/nginx",
-                    "help" : "Location of nginx"
-                }
-            ],
-            [
-                ['--tomcat'],
-                {
-                    "action" : "store",
-                    "default" : "/usr/local/apache-tomcat-9.0",
-                    "help" : "Location of Apache Tomcat directory"
-                }
-            ],
-            [
-                ['--lighttpdconfdir'],
-                {
-                    "action" : "store",
-                    "default" : "/usr/local/etc/lighttpd",
-                    "help" : "Location of lighttpd config dir",
-                }
-            ],
-            [
-                ['--nginxconfdir'],
-                {
-                    "action" : "store",
-                    "default" : "/usr/local/etc/nginx",
-                    "help" : "Location of nginx config dir",
-                }
-            ],
-            [
-                ['--threads'],
-                {
-                    "action" : "store",
-                    "default" : "10",
-                    "help" : "Number of client threads to use"
-                }
-            ],
-            [
-                ['--connections'],
-                {
-                    "action" : "store",
-                    "default" : "50",
-                    "help" : "Number of connections used by wrk",
-                }
-            ],
-            [
-                ['--time'],
-                {
-                    "action" : "store",
-                    "default" : "10",
-                    "help" : "Duration of the benchmark in seconds",
-                }
-            ],
-        ],
-        help="Run the webserver benchmark multiple times")
+         captureOut=CapturedOut.MULTI,
+         # XXX Find a way to not repeat these, is it possible though with the
+         # way we're using the parser and building a global object?
+         add_args=[
+    [
+        # Default locations of the binaries and config files
+        ['--lighttpd'],
+        {
+            "action": "store",
+            "default": "/usr/local/sbin/lighttpd",
+            "help": "Location of lighttpd"
+        }
+    ],
+    [
+        ['--nginx'],
+        {
+            "action": "store",
+            "default": "/usr/local/sbin/nginx",
+            "help": "Location of nginx"
+        }
+    ],
+    [
+        ['--tomcat'],
+        {
+            "action": "store",
+            "default": "/usr/local/apache-tomcat-9.0",
+            "help": "Location of Apache Tomcat directory"
+        }
+    ],
+    [
+        ['--lighttpdconfdir'],
+        {
+            "action": "store",
+            "default": "/usr/local/etc/lighttpd",
+            "help": "Location of lighttpd config dir",
+        }
+    ],
+    [
+        ['--nginxconfdir'],
+        {
+            "action": "store",
+            "default": "/usr/local/etc/nginx",
+            "help": "Location of nginx config dir",
+        }
+    ],
+    [
+        ['--threads'],
+        {
+            "action": "store",
+            "default": "10",
+            "help": "Number of client threads to use"
+        }
+    ],
+    [
+        ['--connections'],
+        {
+            "action": "store",
+            "default": "50",
+            "help": "Number of connections used by wrk",
+        }
+    ],
+    [
+        ['--time'],
+        {
+            "action": "store",
+            "default": "10",
+            "help": "Duration of the benchmark in seconds",
+        }
+    ],
+],
+    help="Run the webserver benchmark multiple times")
 def webbench(options):
     for slsfreq in list(range(10, 101, 10)):
-        for i in range(0,5):
+        for i in range(0, 5):
             options.slsfreq = slsfreq
             options.slsperiod = int((1000 / slsfreq)) if slsfreq != 0 else 0
             options.runno = str(i + 1)
@@ -1350,89 +1444,91 @@ def webbench(options):
             webserver(options)
 
 # Command for benchmarking a web server with multiple configurations
+
+
 @Command(required=[],
-    captureOut=CapturedOut.MULTI,
-    add_args=[
-            [
-                # Default locations of the binaries and config files
-                ['--redis'],
-                {
-                    "action" : "store",
-                    "default" : "/usr/local/bin/redis-server",
-                    "help" : "Location of the Redis server"
-                }
-            ],
-            [
-                # Default locations of the binaries and config files
-                ['--ycsb'],
-                {
-                    "action" : "store",
-                    "default" : "/home/etsal/ycsb/",
-                    "help" : "Location of the YCSB directory"
-                }
-            ],
-            [
-                ['--recordcount'],
-                {
-                    "action" : "store",
-                    "default" : str(10 * 1000),
-                    "help" : "Number of records to be loaded into the database"
-                }
+         captureOut=CapturedOut.MULTI,
+         add_args=[
+    [
+        # Default locations of the binaries and config files
+        ['--redis'],
+        {
+            "action": "store",
+            "default": "/usr/local/bin/redis-server",
+            "help": "Location of the Redis server"
+        }
+    ],
+    [
+        # Default locations of the binaries and config files
+        ['--ycsb'],
+        {
+            "action": "store",
+            "default": "/home/etsal/ycsb/",
+            "help": "Location of the YCSB directory"
+        }
+    ],
+    [
+        ['--recordcount'],
+        {
+            "action": "store",
+            "default": str(10 * 1000),
+            "help": "Number of records to be loaded into the database"
+        }
 
-            ],
-            [
-                ['--workload'],
-                {
-                    "action" : "store",
-                    "default" : "workloada",
-                    "help" : "Workload profile to be used with YCSB" }
+    ],
+    [
+        ['--workload'],
+        {
+            "action": "store",
+            "default": "workloada",
+            "help": "Workload profile to be used with YCSB"}
 
-            ],
-            [
-                ['--kvstore'],
-                {
-                    "action" : "store",
-                    "default" : "redis",
-                    "help" : "The key-value store to be benchmarked",
-                }
-            ],
-            [
-                ['--memcached'],
-                {
-                    "action" : "store",
-                    "default" : "/usr/local/bin/memcached",
-                    "help" : "Location of the memcached server"
-                }
-            ],
-            [
-                ['--memcacheduser'],
-                {
-                    "action" : "store",
-                    "default" : "root",
-                    "help" : "User under which memcached runs"
-                }
-            ],
-            [
-                ["--ycsbthreads"],
-                {
-                    "action" : "store",
-                    "default" : "16",
-                    "help" : "Number of threads for the YCSB client"
-                }
-            ],
-            [
-                ["--operationcount"],
-                {
-                    "action" : "store",
-                    "default" : str(1000 * 1000),
-                    "help" : "Number of target operations from the YCSB client"
-                }
-            ],
-        ],
-        help="Run the Redis server")
+    ],
+    [
+        ['--kvstore'],
+        {
+            "action": "store",
+            "default": "redis",
+            "help": "The key-value store to be benchmarked",
+        }
+    ],
+    [
+        ['--memcached'],
+        {
+            "action": "store",
+            "default": "/usr/local/bin/memcached",
+            "help": "Location of the memcached server"
+        }
+    ],
+    [
+        ['--memcacheduser'],
+        {
+            "action": "store",
+            "default": "root",
+            "help": "User under which memcached runs"
+        }
+    ],
+    [
+        ["--ycsbthreads"],
+        {
+            "action": "store",
+            "default": "16",
+            "help": "Number of threads for the YCSB client"
+        }
+    ],
+    [
+        ["--operationcount"],
+        {
+            "action": "store",
+            "default": str(1000 * 1000),
+            "help": "Number of target operations from the YCSB client"
+        }
+    ],
+],
+    help="Run the Redis server")
 def kvbench(options):
     for slsfreq in [0, 1] + list(range(10, 101, 10)):
-        for i in range(0,5):
+        for i in range(0, 5):
             options.slsfreq = slsfreq
             options.slsperiod = int((1000 / slsfreq)) if slsfreq != 0 else 0
             options.runno = str(i + 1)
@@ -1440,40 +1536,45 @@ def kvbench(options):
             kvstore(options)
 
 # Command for spinning up a webserver and taking numbers
+
+
 @Command(required=[],
-    captureOut=CapturedOut.MULTI,
-    add_args=[
-            [
-                # Default locations of the binaries and config files
-                ['--firefox'],
-                {
-                    "action" : "store",
-                    "default" : "/usr/local/bin/firefox",
-                    "help" : "Location of the Firefox binary"
-                }
-            ],
-            [
-                # Default path of the benchmark in the server
-                ['--firefoxdriver'],
-                {
-                    "action" : "store",
-                    "default" : "/kraken-1.1/driver.html",
-                    "help" : "URL of the driver of the benchmark"
-                }
-            ],
-        ],
-        help="Run the Firefox JS benchmark on a loop")
+         captureOut=CapturedOut.MULTI,
+         add_args=[
+    [
+        # Default locations of the binaries and config files
+        ['--firefox'],
+        {
+            "action": "store",
+            "default": "/usr/local/bin/firefox",
+            "help": "Location of the Firefox binary"
+        }
+    ],
+    [
+        # Default path of the benchmark in the server
+        ['--firefoxdriver'],
+        {
+            "action": "store",
+            "default": "/kraken-1.1/driver.html",
+            "help": "URL of the driver of the benchmark"
+        }
+    ],
+],
+    help="Run the Firefox JS benchmark on a loop")
 def ffbench(options):
     for slsfreq in [0, 1] + list(range(10, 101, 10)):
-        for i in range(0,1):
+        for i in range(0, 1):
             options.slsfreq = slsfreq
             options.slsperiod = int((1000 / slsfreq)) if slsfreq != 0 else 0
             options.runno = str(i + 1)
             # XXX How to call the decorator before the thing
             firefox(options)
             time_elapsed = options.runend - options.runstart
-            ms_elapsed = (time_elapsed.seconds * 1000) + (time_elapsed.microseconds / 1000)
-            print("Did {} checkpoints in {}ms)".format(options.ckpt_done, ms_elapsed))
+            ms_elapsed = (time_elapsed.seconds * 1000) + \
+                (time_elapsed.microseconds / 1000)
+            print("Did {} checkpoints in {}ms)".format(
+                options.ckpt_done, ms_elapsed))
+
 
 @Command()
 def rocksdb(options):
@@ -1487,6 +1588,7 @@ def main():
 
     options = parser.parse_args()
     options.func(options)
+
 
 if __name__ == "__main__":
     main()

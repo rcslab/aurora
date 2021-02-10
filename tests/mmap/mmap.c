@@ -1,3 +1,6 @@
+#include <sys/param.h>
+#include <sys/mman.h>
+
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -5,9 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-#include <sys/param.h>
-#include <sys/mman.h>
 
 #define MMAP_SIZE (PAGE_SIZE * 64)
 
@@ -32,8 +32,8 @@ mmap_file(void **addr)
 	error = write(fd, "", 1);
 	assert(error >= 0);
 
-	mapping = mmap(NULL, MMAP_SIZE, PROT_READ | PROT_WRITE,
-			MAP_SHARED, fd, 0);
+	mapping = mmap(
+	    NULL, MMAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	if (mapping == MAP_FAILED) {
 		perror("mmap");
 		close(fd);
@@ -52,7 +52,7 @@ mmap_anon(void **addr)
 	void *mapping;
 
 	mapping = mmap(NULL, MMAP_SIZE, PROT_READ | PROT_WRITE,
-			MAP_ANON | MAP_PRIVATE, -1, 0);
+	    MAP_ANON | MAP_PRIVATE, -1, 0);
 	if (mapping == MAP_FAILED) {
 		perror("mmap");
 		return (-1);
@@ -97,11 +97,10 @@ main(int argc, char **argv)
 	sleep(5);
 
 	for (i = 0; i < MMAP_SIZE; i++) {
-		if (((char *) mapping)[i] != 'a') {
+		if (((char *)mapping)[i] != 'a') {
 			printf("Error\n");
 			exit(1);
 		}
-
 	}
 
 	printf("Success\n");

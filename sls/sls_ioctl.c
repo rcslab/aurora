@@ -1,5 +1,6 @@
 #include <sys/types.h>
-
+#include <sys/param.h>
+#include <sys/systm.h>
 #include <sys/capsicum.h>
 #include <sys/conf.h>
 #include <sys/fcntl.h>
@@ -8,12 +9,10 @@
 #include <sys/kernel.h>
 #include <sys/kthread.h>
 #include <sys/limits.h>
+#include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
 #include <sys/mutex.h>
-#include <sys/lock.h>
-#include <sys/queue.h>
-#include <sys/param.h>
 #include <sys/pcpu.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
@@ -23,33 +22,32 @@
 #include <sys/shm.h>
 #include <sys/signalvar.h>
 #include <sys/stat.h>
-#include <sys/sysctl.h>
-#include <sys/systm.h>
 #include <sys/syscallsubr.h>
+#include <sys/sysctl.h>
 #include <sys/time.h>
 #include <sys/uio.h>
 #include <sys/vnode.h>
 
-#include <machine/atomic.h>
-#include <machine/param.h>
-#include <machine/reg.h>
-
+#include <vm/vm.h>
 #include <vm/pmap.h>
 #include <vm/uma.h>
-#include <vm/vm.h>
 #include <vm/vm_extern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
 #include <vm/vm_radix.h>
 
+#include <machine/atomic.h>
+#include <machine/param.h>
+#include <machine/reg.h>
+
+#include "debug.h"
 #include "sls_internal.h"
 #include "sls_ioctl.h"
 #include "sls_kv.h"
 #include "sls_pager.h"
 #include "sls_table.h"
 #include "sls_vm.h"
-#include "debug.h"
 
 /* XXX Rename to M_SLS. */
 MALLOC_DEFINE(M_SLSMM, "sls", "SLS");
@@ -94,10 +92,10 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	ckptd_args->recurse = args->recurse;
 	ckptd_args->nextepoch = &nextepoch;
 
-	/* 
-	 * If this is a one-off checkpoint, this thread will wait on the 
-	 * partition. This causes a deadlock when the daemon tries to force its 
-	 * process into single threading mode. Get into and out of single 
+	/*
+	 * If this is a one-off checkpoint, this thread will wait on the
+	 * partition. This causes a deadlock when the daemon tries to force its
+	 * process into single threading mode. Get into and out of single
 	 * threading mode by itself and let the daemon know.
 	 */
 	if (slsp->slsp_attr.attr_period == 0) {
@@ -111,8 +109,8 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	mtx_lock(&slsp->slsp_syncmtx);
 
 	/* Create the daemon. */
-	error = kthread_add((void(*)(void *)) sls_checkpointd,
-	    ckptd_args, NULL, NULL, 0, 0, "sls_checkpointd");
+	error = kthread_add((void (*)(void *))sls_checkpointd, ckptd_args, NULL,
+	    NULL, 0, 0, "sls_checkpointd");
 	if (error != 0) {
 		mtx_unlock(&slsp->slsp_syncmtx);
 		free(ckptd_args, M_SLSMM);
@@ -133,7 +131,6 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 
 	if (error != 0)
 		return (error);
-
 
 	/* Give the next epoch to userspace if it asks for it. */
 	if (args->nextepoch != NULL)
@@ -174,7 +171,7 @@ sls_restore(struct sls_restore_args *args)
 
 	/* Make sure an in-memory checkpoint already has data. */
 	if ((slsp->slsp_attr.attr_target == SLS_MEM) &&
-	   (slsp->slsp_sckpt == NULL)) {
+	    (slsp->slsp_sckpt == NULL)) {
 		error = EINVAL;
 		goto error;
 	}
@@ -188,8 +185,8 @@ sls_restore(struct sls_restore_args *args)
 	mtx_lock(&slsp->slsp_syncmtx);
 
 	/* Create the daemon. */
-	error = kthread_add((void(*)(void *)) sls_restored,
-	    restd_args, curproc, NULL, 0, 0, "sls_restored");
+	error = kthread_add((void (*)(void *))sls_restored, restd_args, curproc,
+	    NULL, 0, 0, "sls_restored");
 	if (error != 0) {
 		mtx_unlock(&slsp->slsp_syncmtx);
 		free(restd_args, M_SLSMM);
@@ -237,7 +234,8 @@ sls_partadd(struct sls_partadd_args *args)
 	struct slspart *slsp = NULL;
 	int error;
 
-	/* We are only using the SLOS for now. Later we will be able to use the network. */
+	/* We are only using the SLOS for now. Later we will be able to use the
+	 * network. */
 	if ((args->attr.attr_target != SLS_OSD) &&
 	    (args->attr.attr_target != SLS_MEM))
 		return (EINVAL);
@@ -271,7 +269,8 @@ sls_partadd(struct sls_partadd_args *args)
 	return (0);
 }
 
-/* Remove a partition from the SLS. All processes in the partition are removed. */
+/* Remove a partition from the SLS. All processes in the partition are removed.
+ */
 static int
 sls_partdel(struct sls_partdel_args *args)
 {
@@ -292,10 +291,11 @@ sls_partdel(struct sls_partdel_args *args)
 	slsp_setstate(slsp, SLSP_AVAILABLE, SLSP_DETACHED, true);
 
 	/*
-	 * Check the state directly - there might be a benign race between 
+	 * Check the state directly - there might be a benign race between
 	 * slsp_del() instances that causes slsp_setstate() to fail.
 	 */
-	KASSERT(slsp_getstate(slsp) == SLSP_DETACHED, ("Partition still alive"));
+	KASSERT(
+	    slsp_getstate(slsp) == SLSP_DETACHED, ("Partition still alive"));
 
 	/*
 	 * Dereference the partition. We can't just delete it,
@@ -337,7 +337,6 @@ out:
 	/* Free the reference given by slsp_find(). */
 	slsp_deref(slsp);
 	return (error);
-
 }
 
 static int
@@ -348,8 +347,8 @@ sls_memsnap(struct sls_memsnap_args *args)
 	uint64_t nextepoch;
 	int error = 0;
 
-	/* 
-	 * Try to find the process. The partition is released inside the 
+	/*
+	 * Try to find the process. The partition is released inside the
 	 * operation.
 	 */
 	slsp = slsp_find(args->oid);
@@ -377,55 +376,54 @@ sls_sysctl_init(void)
 
 	sysctl_ctx_init(&aurora_ctx);
 
-	root = SYSCTL_ADD_ROOT_NODE(&aurora_ctx, OID_AUTO, "aurora", CTLFLAG_RW, 0,
-	    "Aurora statistics and configuration variables");
+	root = SYSCTL_ADD_ROOT_NODE(&aurora_ctx, OID_AUTO, "aurora", CTLFLAG_RW,
+	    0, "Aurora statistics and configuration variables");
 
-	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "metadata_sent",
-	    CTLFLAG_RD, &sls_metadata_sent,
-	    0, "Bytes of metadata sent to the disk");
-	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "metadata_received",
-	    CTLFLAG_RD, &sls_metadata_sent,
-	    0, "Bytes of metadata received from the disk");
-	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "data_sent",
-	    CTLFLAG_RD, &sls_data_sent,
-	    0, "Bytes of data sent to the disk");
-	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "data_received",
-	    CTLFLAG_RD, &sls_data_sent,
-	    0, "Bytes of data received from the disk");
-	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "pages_grabbed",
-	    CTLFLAG_RD, &sls_pages_grabbed,
-	    0, "Pages grabbed by the SLS");
-	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "io_initiated",
-	    CTLFLAG_RD, &sls_io_initiated,
-	    0, "IOs to disk initiated");
-	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "contig_limit",
-	    CTLFLAG_RW, &sls_contig_limit,
-	    0, "Limit of contiguous IOs");
-	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "drop_io",
-	    CTLFLAG_RW, &sls_drop_io,
-	    0, "Drop all IOs immediately");
-	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "vfs_sync",
-	    CTLFLAG_RW, &sls_vfs_sync,
-	    0, "Sync to the device after finishing dumping");
-	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "ckpt_attempted",
-	    CTLFLAG_RW, &sls_ckpt_attempted,
-	    0, "Checkpoints attempted");
-	(void) SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "ckpt_done",
-	    CTLFLAG_RW, &sls_ckpt_done,
-	    0, "Checkpoints successfully done");
-	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "async_slos",
-	    CTLFLAG_RW, &sls_async_slos,
-	    0, "Asynchronous SLOS writes");
-	(void) SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "objprotect",
-	    CTLFLAG_RW, &sls_objprotect,
-	    0, "Traverse VM objects instead of entries when applying COW");
+	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "metadata_sent", CTLFLAG_RD, &sls_metadata_sent, 0,
+	    "Bytes of metadata sent to the disk");
+	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "metadata_received", CTLFLAG_RD, &sls_metadata_sent, 0,
+	    "Bytes of metadata received from the disk");
+	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "data_sent", CTLFLAG_RD, &sls_data_sent, 0,
+	    "Bytes of data sent to the disk");
+	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "data_received", CTLFLAG_RD, &sls_data_sent, 0,
+	    "Bytes of data received from the disk");
+	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "pages_grabbed", CTLFLAG_RD, &sls_pages_grabbed, 0,
+	    "Pages grabbed by the SLS");
+	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "io_initiated", CTLFLAG_RD, &sls_io_initiated, 0,
+	    "IOs to disk initiated");
+	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "contig_limit", CTLFLAG_RW, &sls_contig_limit, 0,
+	    "Limit of contiguous IOs");
+	(void)SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "drop_io", CTLFLAG_RW, &sls_drop_io, 0, "Drop all IOs immediately");
+	(void)SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "vfs_sync", CTLFLAG_RW, &sls_vfs_sync, 0,
+	    "Sync to the device after finishing dumping");
+	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "ckpt_attempted", CTLFLAG_RW, &sls_ckpt_attempted, 0,
+	    "Checkpoints attempted");
+	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "ckpt_done", CTLFLAG_RW, &sls_ckpt_done, 0,
+	    "Checkpoints successfully done");
+	(void)SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "async_slos", CTLFLAG_RW, &sls_async_slos, 0,
+	    "Asynchronous SLOS writes");
+	(void)SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "objprotect", CTLFLAG_RW, &sls_objprotect, 0,
+	    "Traverse VM objects instead of entries when applying COW");
 
 	return (0);
 }
 
 static int
-sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
-    int flag __unused, struct thread *td)
+sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
+    struct thread *td)
 {
 	int error = 0;
 
@@ -435,35 +433,35 @@ sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	switch (cmd) {
 		/* Attach a process into an SLS partition. */
 	case SLS_ATTACH:
-		error = sls_attach((struct sls_attach_args *) data);
+		error = sls_attach((struct sls_attach_args *)data);
 		break;
 
 		/* Create an empty partition in the SLS. */
 	case SLS_PARTADD:
-		error = sls_partadd((struct sls_partadd_args *) data);
+		error = sls_partadd((struct sls_partadd_args *)data);
 		break;
 
 		/* Detach a partition from the SLS. */
 	case SLS_PARTDEL:
-		error = sls_partdel((struct sls_partdel_args *) data);
+		error = sls_partdel((struct sls_partdel_args *)data);
 		break;
 
 		/* Checkpoint a process already in the SLS. */
 	case SLS_CHECKPOINT:
-		error = sls_checkpoint((struct sls_checkpoint_args *) data);
+		error = sls_checkpoint((struct sls_checkpoint_args *)data);
 		break;
 
 		/* Restore a process from a backend. */
 	case SLS_RESTORE:
-		error = sls_restore((struct sls_restore_args *) data);
+		error = sls_restore((struct sls_restore_args *)data);
 		break;
 
 	case SLS_EPOCHWAIT:
-		error = sls_epochwait((struct sls_epochwait_args *) data);
+		error = sls_epochwait((struct sls_epochwait_args *)data);
 		break;
 
 	case SLS_MEMSNAP:
-		error = sls_memsnap((struct sls_memsnap_args *) data);
+		error = sls_memsnap((struct sls_memsnap_args *)data);
 		break;
 
 	default:
@@ -476,15 +474,14 @@ sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	return (error);
 }
 
-
-
 static struct cdevsw slsmm_cdevsw = {
 	.d_version = D_VERSION,
 	.d_ioctl = sls_ioctl,
 };
 
 static int
-SLSHandler(struct module *inModule, int inEvent, void *inArg) {
+SLSHandler(struct module *inModule, int inEvent, void *inArg)
+{
 	int error = 0;
 	struct vnode __unused *vp = NULL;
 	struct sls_partadd_args partadd_args;
@@ -534,15 +531,16 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		partadd_args.attr.attr_flags = 0;
 		error = sls_partadd(&partadd_args);
 		if (error) {
-			printf("Problem creating default in-memory partition\n");
+			printf(
+			    "Problem creating default in-memory partition\n");
 		}
 
 		/* Commandeer the swap pager. */
 		sls_pager_register();
 
 		/* Make the SLS available to userspace. */
-		slsm.slsm_cdev = make_dev(&slsmm_cdevsw, 0,
-		    UID_ROOT, GID_WHEEL, 0666, "sls");
+		slsm.slsm_cdev = make_dev(
+		    &slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "sls");
 
 #ifdef SLS_TEST
 		printf("Testing slstable component...\n");
@@ -555,7 +553,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		break;
 
 	case MOD_UNLOAD:
-
 
 		/*
 		 * Destroy the device, wait for all ioctls in progress. We do
@@ -574,8 +571,8 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		SLS_UNLOCK();
 
 		/*
-		 * Destroy all partitions. We need to be unlocked because by 
-		 * destroying the partitions we might destroy swap objects, 
+		 * Destroy all partitions. We need to be unlocked because by
+		 * destroying the partitions we might destroy swap objects,
 		 * which take the module lock during deinitialization.
 		 */
 		slsp_delall();
@@ -584,9 +581,9 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 		/* Remove the Aurora swapper, bring all objects back in. */
 		/*
 		 * XXX Make sure swapping is impossible while we are swapping
-		 * off, normally swapoff works by marking the device as 
-		 * unavaliable, but we want the functions themselves to be 
-		 * unavailable at this point. 
+		 * off, normally swapoff works by marking the device as
+		 * unavaliable, but we want the functions themselves to be
+		 * unavailable at this point.
 		 */
 		sls_pager_swapoff();
 		sls_pager_unregister();
@@ -614,13 +611,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg) {
 	return (error);
 }
 
-
-
-static moduledata_t moduleData = {
-	"sls",
-	SLSHandler,
-	NULL
-};
+static moduledata_t moduleData = { "sls", SLSHandler, NULL };
 
 DECLARE_MODULE(sls, moduleData, SI_SUB_DRIVERS, SI_ORDER_MIDDLE);
 MODULE_DEPEND(sls, slsfs, 0, 0, 0);

@@ -5,13 +5,12 @@
 
 #include <fcntl.h>
 #include <getopt.h>
+#include <sls.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-#include <sls.h>
 
 static struct option attach_longopts[] = {
 	{ "memory", no_argument, NULL, 'm' },
@@ -28,7 +27,7 @@ attach_usage(void)
 }
 
 int
-attach_main(int argc, char* argv[])
+attach_main(int argc, char *argv[])
 {
 	int opt;
 	int error;
@@ -39,7 +38,8 @@ attach_main(int argc, char* argv[])
 	pid = 0;
 	oid = 0;
 
-	while ((opt = getopt_long(argc, argv, "o:p:mh", attach_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(
+		    argc, argv, "o:p:mh", attach_longopts, NULL)) != -1) {
 		switch (opt) {
 		case 'o':
 			oid = strtol(optarg, NULL, 10);
@@ -75,5 +75,4 @@ attach_main(int argc, char* argv[])
 		return 1;
 
 	return 0;
-
 }

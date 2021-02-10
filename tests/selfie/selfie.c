@@ -1,15 +1,14 @@
+#include <sys/param.h>
+#include <sys/mman.h>
+
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sls.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-#include <sys/param.h>
-#include <sys/mman.h>
-
-#include <sls.h>
 
 int
 main(int argc, char **argv)

@@ -2,10 +2,13 @@
 #define _SLS_SWAPPER_H_
 
 void slsvm_pager_register(void);
-struct buf *sls_swap_getreadbuf(vm_object_t obj, vm_pindex_t pindex, size_t npages);
+struct buf *sls_swap_getreadbuf(
+    vm_object_t obj, vm_pindex_t pindex, size_t npages);
 void sls_pager_register(void);
-struct buf *sls_pager_readbuf(vm_object_t obj, vm_pindex_t pindex, size_t npages);
-struct buf *sls_pager_writebuf(vm_object_t obj, vm_pindex_t pindex, size_t targetsize);
+struct buf *sls_pager_readbuf(
+    vm_object_t obj, vm_pindex_t pindex, size_t npages);
+struct buf *sls_pager_writebuf(
+    vm_object_t obj, vm_pindex_t pindex, size_t targetsize);
 
 void sls_pager_unregister(void);
 void sls_pager_swapoff(void);

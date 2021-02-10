@@ -1,11 +1,11 @@
 #include <sys/types.h>
-
+#include <sys/param.h>
+#include <sys/systm.h>
 #include <sys/conf.h>
 #include <sys/kernel.h>
 #include <sys/limits.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
-#include <sys/param.h>
 #include <sys/pcpu.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
@@ -13,31 +13,30 @@
 #include <sys/rwlock.h>
 #include <sys/shm.h>
 #include <sys/signalvar.h>
-#include <sys/systm.h>
 #include <sys/syscallsubr.h>
 #include <sys/time.h>
 
-#include <machine/reg.h>
-
 #include <vm/vm.h>
 #include <vm/pmap.h>
+#include <vm/uma.h>
 #include <vm/vm_extern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
 #include <vm/vm_radix.h>
-#include <vm/uma.h>
+
+#include <machine/reg.h>
 
 #include <slos.h>
 #include <slos_inode.h>
 #include <sls_data.h>
 
+#include "debug.h"
 #include "sls_data.h"
 #include "sls_internal.h"
 #include "sls_partition.h"
 #include "sls_table.h"
 #include "sls_vm.h"
-#include "debug.h"
 
 /* XXX Turn this into a zone, this is gonna be a bottleneck for region ckpts. */
 int
@@ -100,7 +99,7 @@ slsckpt_destroy(struct slsckpt_data *sckpt_data, struct slsckpt_data *sckpt_new)
 
 	/* Release all held vnodes. */
 	KVSET_FOREACH_POP(sckpt_data->sckpt_vntable, vp)
-		vrele(vp);
+	vrele(vp);
 	slsset_destroy(sckpt_data->sckpt_vntable);
 
 	sls_free_rectable(sckpt_data->sckpt_rectable);
@@ -116,7 +115,7 @@ slsp_find(uint64_t oid)
 
 	/* XXX LOCKING - See slsp_deref */
 	/* Get the partition if it exists. */
-	if (slskv_find(slsm.slsm_parts, oid, (uintptr_t *) &slsp) != 0)
+	if (slskv_find(slsm.slsm_parts, oid, (uintptr_t *)&slsp) != 0)
 		return (NULL);
 
 	/* We found the process, take a reference to it. */
@@ -138,16 +137,16 @@ slsp_attach(uint64_t oid, pid_t pid)
 		DEBUG("Trying to attach the kernel to a partition");
 		return (EINVAL);
 	}
-	
+
 	/* Make sure the PID isn't in the SLS already. */
 	if (slskv_find(slsm.slsm_procs, pid, &oldoid) == 0)
 		return (EINVAL);
 
 	/* Make sure the partition actually exists. */
-	if (slskv_find(slsm.slsm_parts, oid, (uintptr_t *) &slsp) != 0)
+	if (slskv_find(slsm.slsm_parts, oid, (uintptr_t *)&slsp) != 0)
 		return (EINVAL);
 
-	error = slskv_add(slsm.slsm_procs, pid, (uintptr_t) oid);
+	error = slskv_add(slsm.slsm_procs, pid, (uintptr_t)oid);
 	KASSERT(error == 0, ("PID already in the SLS"));
 
 	error = slsset_add(slsp->slsp_procs, pid);
@@ -165,7 +164,7 @@ slsp_detach(uint64_t oid, pid_t pid)
 	struct slspart *slsp;
 
 	/* Make sure the partition actually exists. */
-	if (slskv_find(slsm.slsm_parts, oid, (uintptr_t *) &slsp) != 0)
+	if (slskv_find(slsm.slsm_parts, oid, (uintptr_t *)&slsp) != 0)
 		return (EINVAL);
 
 	/* Remove the process from both the partition and the SLS. */
@@ -185,7 +184,7 @@ slsp_detachall(struct slspart *slsp)
 
 	/* Go through the PIDs resident in the partition, remove them. */
 	KVSET_FOREACH_POP(slsp->slsp_procs, pid)
-	    slskv_del(slsm.slsm_procs, pid);
+	slskv_del(slsm.slsm_procs, pid);
 
 	return (0);
 }
@@ -193,7 +192,7 @@ slsp_detachall(struct slspart *slsp)
 /*
  * Create a new struct slspart to be entered into the SLS.
  */
-static int 
+static int
 slsp_init(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
 {
 	struct slspart *slsp = NULL;
@@ -252,10 +251,10 @@ slsp_fini(struct slspart *slsp)
 	mtx_destroy(&slsp->slsp_epochmtx);
 
 	/*
-	 * XXX TEMP Remove the partition from the SLOS. This is due to us not 
-	 * importing existing partitions from the SLOS, and thus having 
-	 * collisions on the partition numbers. If we implement sls ps, the user 
-	 * will be able to find which IDs are available. 
+	 * XXX TEMP Remove the partition from the SLOS. This is due to us not
+	 * importing existing partitions from the SLOS, and thus having
+	 * collisions on the partition numbers. If we implement sls ps, the user
+	 * will be able to find which IDs are available.
 	 */
 	slos_iremove(&slos, slsp->slsp_oid);
 
@@ -281,13 +280,14 @@ slsp_add(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
 	struct slspart *slsp;
 	int error;
 
-	/* 
-	 * Try to find if we already have added the process 
+	/*
+	 * Try to find if we already have added the process
 	 * to the SLS, if so we can't add it again.
 	 */
 	slsp = slsp_find(oid);
 	if (slsp != NULL) {
-		/* We got a reference to the process with slsp_find, release it. */
+		/* We got a reference to the process with slsp_find, release it.
+		 */
 
 		slsp_deref(slsp);
 		return (EINVAL);
@@ -299,7 +299,7 @@ slsp_add(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
 		return (error);
 
 	/* Add the partition to the table. */
-	error = slskv_add(slsm.slsm_parts, oid, (uintptr_t) slsp);
+	error = slskv_add(slsm.slsm_parts, oid, (uintptr_t)slsp);
 	if (error != 0) {
 		slsp_fini(slsp);
 		return (error);
@@ -318,14 +318,13 @@ slsp_del(uint64_t oid)
 	struct slspart *slsp;
 
 	/* If the partition doesn't actually exist, we're done. */
-	if (slskv_find(slsm.slsm_parts, oid, (uintptr_t *) &slsp) != 0)
+	if (slskv_find(slsm.slsm_parts, oid, (uintptr_t *)&slsp) != 0)
 		return;
 
 	/* Remove the process from the table, and destroy the struct itself. */
 	slskv_del(slsm.slsm_parts, oid);
 	slsp_fini(slsp);
 }
-
 
 /* Empty the SLS of all processes. */
 void
@@ -339,7 +338,7 @@ slsp_delall(void)
 		return;
 
 	/* Destroy all partitions. */
-	while (slskv_pop(slsm.slsm_parts, &oid, (uintptr_t *) &slsp) == 0)
+	while (slskv_pop(slsm.slsm_parts, &oid, (uintptr_t *)&slsp) == 0)
 		slsp_fini(slsp);
 
 	/* Remove all processes from the global table.  */
@@ -363,7 +362,7 @@ slsp_ref(struct slspart *slsp)
 void
 slsp_deref(struct slspart *slsp)
 {
-	/* 
+	/*
 	 * XXX LOCKING - There currently is a race condition,
 	 * because we an slsp with refcount 0 is still accessible
 	 * via the hashtable. We need a lock to mediate between
@@ -373,7 +372,6 @@ slsp_deref(struct slspart *slsp)
 
 	if (slsp->slsp_refcount == 0)
 		slsp_del(slsp->slsp_oid);
-
 }
 
 int
@@ -448,7 +446,6 @@ slsp_signal(struct slspart *slsp, int retval)
 	slsp->slsp_retval = retval;
 	cv_signal(&slsp->slsp_synccv);
 	mtx_unlock(&slsp->slsp_syncmtx);
-
 }
 
 int

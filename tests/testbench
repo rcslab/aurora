@@ -5,8 +5,8 @@ export TESTLOG="testbench.log"
 
 TIMEOUT=30
 
+export SRCROOT=..
 . aurora
-export SRCROOT
 
 ESC=`printf "\033"`
 CR=`printf "\015"`

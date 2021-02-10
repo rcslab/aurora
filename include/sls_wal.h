@@ -15,7 +15,8 @@ struct sls_wal {
 int sls_wal_open(struct sls_wal *wal, uint64_t oid, size_t size);
 
 /* Perform a transactional memcpy(). */
-void sls_wal_memcpy(struct sls_wal *wal, void *dest, const void *src, size_t size);
+void sls_wal_memcpy(
+    struct sls_wal *wal, void *dest, const void *src, size_t size);
 
 /* Make sure the write-ahead log is persisted. */
 int sls_wal_sync(struct sls_wal *wal);

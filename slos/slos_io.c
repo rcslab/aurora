@@ -1,6 +1,5 @@
 #include <sys/param.h>
-#include <sys/lock.h>
-
+#include <sys/systm.h>
 #include <sys/bio.h>
 #include <sys/buf.h>
 #include <sys/condvar.h>
@@ -12,20 +11,16 @@
 #include <sys/kthread.h>
 #include <sys/libkern.h>
 #include <sys/limits.h>
+#include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/namei.h>
-#include <sys/param.h>
 #include <sys/pcpu.h>
 #include <sys/rwlock.h>
-#include <sys/syscallsubr.h>
 #include <sys/stat.h>
-#include <sys/systm.h>
+#include <sys/syscallsubr.h>
 #include <sys/taskqueue.h>
-#include <sys/vnode.h>
 #include <sys/uio.h>
-
-#include <geom/geom.h>
-#include <geom/geom_vfs.h>
+#include <sys/vnode.h>
 
 #include <vm/vm.h>
 #include <vm/pmap.h>
@@ -37,13 +32,14 @@
 #include <machine/atomic.h>
 #include <machine/vmparam.h>
 
+#include <geom/geom.h>
+#include <geom/geom_vfs.h>
 #include <slos_inode.h>
 #include <slos_io.h>
 #include <slsfs.h>
 
-#include "slos_alloc.h"
-
 #include "debug.h"
+#include "slos_alloc.h"
 
 /* We have only one SLOS currently. */
 struct slos slos;
@@ -67,8 +63,9 @@ struct slos_taskctx {
 int
 slos_io_init(void)
 {
-	slos_taskctx_zone = uma_zcreate("SLOS io task contexts", sizeof(struct slos_taskctx),
-	    NULL, NULL, NULL, NULL, UMA_ALIGNOF(struct slos_taskctx), 0);
+	slos_taskctx_zone = uma_zcreate("SLOS io task contexts",
+	    sizeof(struct slos_taskctx), NULL, NULL, NULL, NULL,
+	    UMA_ALIGNOF(struct slos_taskctx), 0);
 	if (slos_taskctx_zone == NULL)
 		return (ENOMEM);
 
@@ -115,7 +112,8 @@ slos_sbat(struct slos *slos, int index, struct slos_sb *sb)
 {
 	struct buf *bp;
 	int error;
-	error = bread(slos->slos_vp, index, slos->slos_sb->sb_bsize, curthread->td_proc->p_ucred, &bp);
+	error = bread(slos->slos_vp, index, slos->slos_sb->sb_bsize,
+	    curthread->td_proc->p_ucred, &bp);
 	if (error != 0) {
 		free(sb, M_SLOS_SB);
 		printf("bread failed with %d", error);
@@ -128,19 +126,19 @@ slos_sbat(struct slos *slos, int index, struct slos_sb *sb)
 	return (0);
 }
 
-/* 
- * Read the superblock of the SLOS into the in-memory struct.  
+/*
+ * Read the superblock of the SLOS into the in-memory struct.
  * Device lock is held previous to call
  * */
 int
-slos_sbread(struct slos * slos)
+slos_sbread(struct slos *slos)
 {
 	struct slos_sb *sb;
 	struct stat st;
 	struct iovec aiov;
 	struct uio auio;
 	int error;
-	
+
 	uint64_t largestepoch_i = 0;
 	uint64_t largestepoch = 0;
 
@@ -151,11 +149,11 @@ slos_sbread(struct slos * slos)
 		/* Read the first SLOS_FILEBLKSIZE bytes. */
 		aiov.iov_base = sb;
 		aiov.iov_len = SLOS_FILEBLKSIZE;
-		slos_uioinit(&auio, 0,UIO_READ, &aiov, 1);
+		slos_uioinit(&auio, 0, UIO_READ, &aiov, 1);
 
 		/* Issue the read. */
 		error = VOP_READ(slos->slos_vp, &auio, 0, curthread->td_ucred);
-		if (error != 0) 
+		if (error != 0)
 			free(sb, M_SLOS_SB);
 
 		/* Make the superblock visible. */
@@ -164,7 +162,7 @@ slos_sbread(struct slos * slos)
 		return error;
 	}
 
-	/* 
+	/*
 	 * Our read and write routines depend on our superblock
 	 * for information like the block size, so we can't use them.
 	 * We instead do a stat call on the vnode to get it directly.
@@ -210,7 +208,7 @@ slos_sbread(struct slos * slos)
 		    sb->sb_magic, SLOS_MAGIC);
 		free(sb, M_SLOS_SB);
 		return (EINVAL);
-	} 
+	}
 
 	DEBUG1("Largest superblock at %lu", largestepoch_i);
 	DEBUG1("Checksum tree at %lu", sb->sb_cksumtree.offset);
@@ -222,12 +220,13 @@ slos_sbread(struct slos * slos)
 }
 
 /*
- * Trim a new disk pointer that points to the physical blocks backing logical 
- * block bln to start from the physical block pointing to newblkn instead.  
+ * Trim a new disk pointer that points to the physical blocks backing logical
+ * block bln to start from the physical block pointing to newblkn instead.
  * Adjust its size accordingly.
  */
 void
-slos_ptr_trimstart(uint64_t newbln, uint64_t bln, size_t blksize, diskptr_t *ptr) 
+slos_ptr_trimstart(
+    uint64_t newbln, uint64_t bln, size_t blksize, diskptr_t *ptr)
 {
 	int off;
 
@@ -236,19 +235,24 @@ slos_ptr_trimstart(uint64_t newbln, uint64_t bln, size_t blksize, diskptr_t *ptr
 
 	off = newbln - bln;
 
-	KASSERT(off > 0, ("Physical extent %lu of size %lu cannot move to %lu",
-	    bln, ptr->size, newbln));
-	KASSERT(off * blksize < ptr->size, ("Cannot trim %lu bytes off a "
-	    "%lu byte extent (blksize %lu)", off * blksize, ptr->size, blksize));
-	KASSERT(ptr->size % blksize == 0, ("Size of physical extent %lu bytes "
-	    "not aligned to block size %lu", ptr->size, blksize));
+	KASSERT(off > 0,
+	    ("Physical extent %lu of size %lu cannot move to %lu", bln,
+		ptr->size, newbln));
+	KASSERT(off * blksize < ptr->size,
+	    ("Cannot trim %lu bytes off a "
+	     "%lu byte extent (blksize %lu)",
+		off * blksize, ptr->size, blksize));
+	KASSERT(ptr->size % blksize == 0,
+	    ("Size of physical extent %lu bytes "
+	     "not aligned to block size %lu",
+		ptr->size, blksize));
 
 	ptr->offset += off;
 	ptr->size -= off * blksize;
 }
 
 /* Do the necessary btree manipulations before initiating an IO. */
-static int __attribute__ ((noinline))
+static int __attribute__((noinline))
 slos_io_setdaddr(struct slos_node *svp, size_t size, struct buf *bp)
 {
 	struct fbtree *tree = &svp->sn_tree;
@@ -273,8 +277,8 @@ slos_io_setdaddr(struct slos_node *svp, size_t size, struct buf *bp)
 	if (error != 0)
 		goto error;
 
-	KASSERT(ptr.size == size, ("requested %lu bytes on disk, got %lu",
-	    ptr.size, size));
+	KASSERT(ptr.size == size,
+	    ("requested %lu bytes on disk, got %lu", ptr.size, size));
 
 	/* No need to free the block if we fail, it'll get GCed. */
 	error = fbtree_replace(&svp->sn_tree, &bp->b_lblkno, &ptr);
@@ -286,8 +290,8 @@ slos_io_setdaddr(struct slos_node *svp, size_t size, struct buf *bp)
 
 	/* Set the buffer to point to the physical block. */
 	bp->b_blkno = ptr.offset;
-	KASSERT(bp->b_resid <= ptr.size, ("Doing %lu bytes of IO in a %lu segment",
-	    bp->b_resid, ptr.size));
+	KASSERT(bp->b_resid <= ptr.size,
+	    ("Doing %lu bytes of IO in a %lu segment", bp->b_resid, ptr.size));
 
 	return (0);
 
@@ -298,7 +302,6 @@ error:
 	VOP_UNLOCK(tree->bt_backend, 0);
 	BTREE_UNLOCK(tree, 0);
 	return (error);
-
 }
 
 static int
@@ -320,12 +323,15 @@ slos_io_getdaddr(struct slos_node *svp, struct buf *bp)
 
 	/* Adjust the physical pointer to start where the buffer points. */
 	lblkno = ITER_KEY_T(iter, uint64_t);
-	KASSERT(!ITER_ISNULL(iter), ("could not find logical offset %lu on disk", lblkno));
+	KASSERT(!ITER_ISNULL(iter),
+	    ("could not find logical offset %lu on disk", lblkno));
 	ptr = ITER_VAL_T(iter, diskptr_t);
 	slos_ptr_trimstart(bp->b_lblkno, lblkno, SLOS_BSIZE(slos), &ptr);
 
-	KASSERT(bp->b_bcount <= ptr.size, ("Reading %lu bytes from a physical "
-	    "segment with %lu bytes", bp->b_bcount, ptr.size));
+	KASSERT(bp->b_bcount <= ptr.size,
+	    ("Reading %lu bytes from a physical "
+	     "segment with %lu bytes",
+		bp->b_bcount, ptr.size));
 
 	bp->b_blkno = ptr.offset;
 
@@ -343,11 +349,10 @@ error:
 	return (error);
 }
 
-
 /*
  * Set up the physical on-disk address for the IO.
  */
-static void __attribute__ ((noinline))
+static void __attribute__((noinline))
 slos_io_physaddr(struct buf *bp, struct slos *slos)
 {
 	bp->b_flags &= ~B_INVAL;
@@ -372,13 +377,16 @@ slos_io(void *ctx, int __unused pending)
 	int iocmd = bp->b_iocmd;
 	int error;
 
-	KASSERT(iocmd == BIO_READ || iocmd == BIO_WRITE, ("invalid IO type %d", iocmd));
-	KASSERT(IOSIZE(svp) == PAGE_SIZE,  ("IOs are not page-sized (size %lu)", IOSIZE(svp)));
-	KASSERT(SLOS_BSIZE(slos) >= SLOS_DEVBSIZE(slos), ("FS bsize %lu > device bsize %lu",
-	    SLOS_BSIZE(slos), SLOS_DEVBSIZE(slos)));
+	KASSERT(iocmd == BIO_READ || iocmd == BIO_WRITE,
+	    ("invalid IO type %d", iocmd));
+	KASSERT(IOSIZE(svp) == PAGE_SIZE,
+	    ("IOs are not page-sized (size %lu)", IOSIZE(svp)));
+	KASSERT(SLOS_BSIZE(slos) >= SLOS_DEVBSIZE(slos),
+	    ("FS bsize %lu > device bsize %lu", SLOS_BSIZE(slos),
+		SLOS_DEVBSIZE(slos)));
 	KASSERT((SLOS_BSIZE(slos) % SLOS_DEVBSIZE(slos)) == 0,
-	    ("FS bsize %lu not multiple of device bsize %lu",
-	    SLOS_BSIZE(slos), SLOS_DEVBSIZE(slos)));
+	    ("FS bsize %lu not multiple of device bsize %lu", SLOS_BSIZE(slos),
+		SLOS_DEVBSIZE(slos)));
 	KASSERT(bp->b_bcount > 0, ("IO of size 0"));
 
 	BUF_ASSERT_LOCKED(bp);
@@ -393,7 +401,8 @@ slos_io(void *ctx, int __unused pending)
 
 		/* Update the size at the vnode and inode layers. */
 		if (IDX_TO_OFF(bp->b_lblkno) + iosize > SLSINO(svp).ino_size) {
-			SLSINO(svp).ino_size = IDX_TO_OFF(bp->b_lblkno) + iosize;
+			SLSINO(svp).ino_size = IDX_TO_OFF(bp->b_lblkno) +
+			    iosize;
 			vnode_pager_setsize(vp, SLSINO(svp).ino_size);
 		}
 	} else if (iocmd == BIO_READ) {
@@ -403,7 +412,6 @@ slos_io(void *ctx, int __unused pending)
 			printf("ERROR: IO failed with %d\n", error);
 			goto out;
 		}
-
 	}
 
 	slos_io_physaddr(bp, &slos);
@@ -495,8 +503,8 @@ slos_hasblock(struct vnode *vp, uint64_t lblkno_req, int *rbehind, int *rahead)
 	lblkno = ITER_KEY_T(iter, uint64_t);
 	ptr = ITER_VAL_T(iter, diskptr_t);
 	KASSERT(ptr.size > 0, ("found extent of size 0"));
-	KASSERT(lblkno <= lblkstart, ("keymin returned start %lu for lblkstart %lu",
-	    lblkno, lblkstart));
+	KASSERT(lblkno <= lblkstart,
+	    ("keymin returned start %lu for lblkstart %lu", lblkno, lblkstart));
 
 	/* Check if our infimum includes us. */
 	if (lblkno + (ptr.size / PAGE_SIZE) <= lblkno_req) {
@@ -508,7 +516,8 @@ slos_hasblock(struct vnode *vp, uint64_t lblkno_req, int *rbehind, int *rahead)
 	if (rbehind != NULL)
 		*rbehind = imax((lblkno_req - lblkno), 0);
 	if (rahead != NULL)
-		*rahead = imax((lblkno + (ptr.size / PAGE_SIZE) - 1 - lblkno_req), 0);
+		*rahead = imax(
+		    (lblkno + (ptr.size / PAGE_SIZE) - 1 - lblkno_req), 0);
 
 out:
 	BTREE_UNLOCK(tree, 0);

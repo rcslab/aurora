@@ -1,27 +1,26 @@
 
 #include <sys/types.h>
+#include <sys/disk.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
-#include <sys/disk.h>
 #include <sys/vnode.h>
 
 #include <assert.h>
+#include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
-#include <stdbool.h>
-#include <stdio.h> 
-#include <stdlib.h>
-#include <stdint.h>
-#include <string.h>
-#include <strings.h>
-#include <unistd.h>
-#include <uuid.h>
-#include <dirent.h>
-#include <time.h>
-#include <errno.h>
-
 #include <slos.h>
 #include <slsfs.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <time.h>
+#include <unistd.h>
+#include <uuid.h>
 
 int
 main(int argc, const char *argv[])
@@ -32,7 +31,6 @@ main(int argc, const char *argv[])
 	uint32_t bsize = 0;
 	uint32_t ssize = 0;
 	uint64_t size = 0;
-
 
 	if (argc != 2) {
 		printf("Usage: %s DEVICE\n", argv[0]);
@@ -79,24 +77,28 @@ main(int argc, const char *argv[])
 		if (!size || size < st.st_size) {
 			size = st.st_size;
 		}
-		/* 
-		 * Have the block size be equal to the standard 
+		/*
+		 * Have the block size be equal to the standard
 		 * system maximum block size.
 		 */
 		bsize = 64 * 1024;
 	} else {
-		fprintf(stderr, "You can only create an OSD on a device or file\n");
+		fprintf(
+		    stderr, "You can only create an OSD on a device or file\n");
 		exit(1);
 	}
 
-	printf("%s: %lu GiB (%lu sectors), block size %u kiB, sector size %u B\n",
-		argv[1], size / (1024*1024*1024), size / ssize, bsize / 1024, ssize);
+	printf(
+	    "%s: %lu GiB (%lu sectors), block size %u kiB, sector size %u B\n",
+	    argv[1], size / (1024 * 1024 * 1024), size / ssize, bsize / 1024,
+	    ssize);
 
 	// We have to allocate the appropriate super blocks
 
 	printf("creating super blocks\n");
-	struct slos_sb * sb = (struct slos_sb *)malloc(ssize);
-	static_assert(sizeof(struct slos_sb) <= 512, "superblock larger than sector size");
+	struct slos_sb *sb = (struct slos_sb *)malloc(ssize);
+	static_assert(sizeof(struct slos_sb) <= 512,
+	    "superblock larger than sector size");
 	sb->sb_magic = SLOS_MAGIC;
 	sb->sb_epoch = EPOCH_INVAL;
 	sb->sb_ssize = ssize;
@@ -115,4 +117,3 @@ main(int argc, const char *argv[])
 
 	return (0);
 }
-

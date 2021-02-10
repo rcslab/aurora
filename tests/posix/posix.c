@@ -1,16 +1,7 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-#include <assert.h>
-#include <fcntl.h>
-#include <unistd.h>
-
 #include <sys/types.h>
-#include <sys/lock.h>
-
 #include <sys/event.h>
 #include <sys/ipc.h>
+#include <sys/lock.h>
 #include <sys/mman.h>
 #include <sys/shm.h>
 #include <sys/socket.h>
@@ -18,12 +9,18 @@
 #include <sys/time.h>
 #include <sys/un.h>
 
+#include <assert.h>
+#include <fcntl.h>
 #include <sls.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 #define OID (1000)
 #define NUMEVENTS (1024)
-#define SHM_SIZE (4096) 
-#define UNADDR ("localsocket")	
+#define SHM_SIZE (4096)
+#define UNADDR ("localsocket")
 #define UNADDR_MAX (108)
 #define VNODETEST ("vnodetest")
 #define SYSVPATH ("slssysvshm")
@@ -39,7 +36,6 @@ usage(void)
 	exit(0);
 }
 
-
 void
 teardown_sysvshm(void)
 {
@@ -47,7 +43,7 @@ teardown_sysvshm(void)
 
 	error = shmdt(shm);
 	if (error != 0)
-	    perror("shmdt");
+		perror("shmdt");
 
 	error = shmctl(shmid, IPC_RMID, NULL);
 	if (error != 0)
@@ -76,8 +72,8 @@ setup_vnode(void)
 
 	fd = open(VNODETEST, O_RDWR | O_CREAT, 0666);
 	if (fd < 0) {
-	    perror("open");
-	    teardown_and_exit();
+		perror("open");
+		teardown_and_exit();
 	}
 }
 
@@ -95,22 +91,22 @@ setup_unixsocket(void)
 	/* Create the blank socket. */
 	unixfd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (unixfd == -1) {
-	    perror("socket");
-	    teardown_and_exit();
+		perror("socket");
+		teardown_and_exit();
 	}
 
 	/* Bind it to the address given in sockaddr_in. */
-	error = bind(unixfd, (struct sockaddr *) &local, sizeof(local));
+	error = bind(unixfd, (struct sockaddr *)&local, sizeof(local));
 	if (error == -1) {
-	    perror("bind");
-	    teardown_and_exit();
+		perror("bind");
+		teardown_and_exit();
 	}
 
 	error = listen(unixfd, 512);
 
 	if (error == -1) {
-	    perror("listen");
-	    teardown_and_exit();
+		perror("listen");
+		teardown_and_exit();
 	}
 }
 
@@ -120,8 +116,8 @@ setup_socketpair(void)
 	int sv[2];
 
 	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == -1) {
-	    perror("socketpair");
-	    teardown_and_exit();
+		perror("socketpair");
+		teardown_and_exit();
 	}
 }
 
@@ -132,24 +128,24 @@ setup_sysvshm(void)
 
 	key = ftok("/root", 0);
 	if (key < 0) {
-	    perror("ftok");
-	    teardown_and_exit();
+		perror("ftok");
+		teardown_and_exit();
 	}
 
 	shmid = shmget(key, SHM_SIZE, IPC_CREAT | 0666);
 	if (shmid < 0) {
-	    perror("shmget");
-	    teardown_and_exit();
+		perror("shmget");
+		teardown_and_exit();
 	}
 
-	/* 
+	/*
 	 * Temporarily attach the segment to initialize the first byte,
 	 * which we will be using it for arbitrating access to the buffer.
 	 */
-	shm = (char *) shmat(shmid, 0, 0);
-    	if (shm == (void *) -1) {
-	    perror("shmat");
-	    teardown_and_exit();
+	shm = (char *)shmat(shmid, 0, 0);
+	if (shm == (void *)-1) {
+		perror("shmat");
+		teardown_and_exit();
 	}
 }
 
@@ -159,7 +155,7 @@ setup_pipe(void)
 	int error;
 	int ppfd[2];
 
-	error = pipe((int *) &ppfd);
+	error = pipe((int *)&ppfd);
 	if (error != 0) {
 		perror("pipe");
 		teardown_and_exit();
@@ -175,20 +171,21 @@ setup_posixshm(void)
 
 	fd = shm_open(SHM_ANON, O_RDWR | O_CREAT, 0666);
 	if (fd < 0) {
-	    perror("shm_open");
-	    teardown_and_exit();
+		perror("shm_open");
+		teardown_and_exit();
 	}
 
 	error = ftruncate(fd, getpagesize());
 	if (error != 0) {
-	    perror("ftruncate");
-	    teardown_and_exit();
+		perror("ftruncate");
+		teardown_and_exit();
 	}
 
-	shm = (char *) mmap(NULL, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	shm = (char *)mmap(
+	    NULL, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	if (shm == MAP_FAILED) {
-	    perror("mmap");
-	    teardown_and_exit();
+		perror("mmap");
+		teardown_and_exit();
 	}
 }
 
@@ -198,7 +195,6 @@ setup_kqueue(void)
 	struct kevent *kevs;
 	int fd;
 	int i;
-
 
 	fd = kqueue();
 	if (fd < 0)
@@ -227,7 +223,6 @@ setup_pty(void)
 		perror("posix_openpt");
 		teardown_and_exit();
 	}
-
 }
 
 int

@@ -1,14 +1,14 @@
+#include <sys/types.h>
+#include <sys/stat.h>
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
-#include <sys/types.h>
-#include <sys/stat.h>
-
-#define PATH	("testfifo")
-#define MSG	("Message")
+#define PATH ("testfifo")
+#define MSG ("Message")
 char buf[sizeof(MSG)];
 
 int
@@ -31,20 +31,20 @@ main(int argc, char *argv[])
 
 	error = mkfifo(PATH, O_RDWR);
 	if (error < 0 && errno != EEXIST) {
-	    perror("mkfifo");
-	    exit(1);
+		perror("mkfifo");
+		exit(1);
 	}
 
 	fd = open(PATH, O_RDWR);
 	if (fd < 0) {
-	    perror("open");
-	    exit(1);
+		perror("open");
+		exit(1);
 	}
 
 	pid = fork();
 	if (pid < 0) {
-	    perror("fork");
-	    exit(1);
+		perror("fork");
+		exit(1);
 	}
 
 	if (pid == 0) {

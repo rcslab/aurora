@@ -1,61 +1,58 @@
 #include <sys/param.h>
-#include <sys/endian.h>
-#include <sys/queue.h>
-
-#include <machine/param.h>
-
+#include <sys/selinfo.h>
 #include <sys/domain.h>
+#include <sys/endian.h>
 #include <sys/event.h>
 #include <sys/fcntl.h>
 #include <sys/limits.h>
 #include <sys/mman.h>
 #include <sys/mutex.h>
 #include <sys/namei.h>
-#include <sys/param.h>
 #include <sys/proc.h>
 #include <sys/protosw.h>
+#include <sys/queue.h>
 #include <sys/rwlock.h>
 #include <sys/sbuf.h>
-#include <sys/selinfo.h>
 #include <sys/shm.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/stat.h>
 #include <sys/syscallsubr.h>
-#include <sys/unistd.h>
 #include <sys/un.h>
+#include <sys/unistd.h>
 #include <sys/unpcb.h>
 #include <sys/vnode.h>
+
+#include <machine/param.h>
 
 /* XXX Pipe has to be after selinfo */
 #include <sys/pipe.h>
 
-/* 
+/*
  * XXX eventvar should include more headers,
  * it can't be placed alphabetically.
  */
 #include <sys/eventvar.h>
 
-#include <netinet/in.h>
-#include <netinet/in_pcb.h>
-
-#include <vm/pmap.h>
 #include <vm/vm.h>
+#include <vm/pmap.h>
+#include <vm/uma.h>
 #include <vm/vm_extern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
 #include <vm/vm_radix.h>
-#include <vm/uma.h>
+
+#include <netinet/in.h>
+#include <netinet/in_pcb.h>
 
 #include <slos.h>
 #include <slos_inode.h>
 #include <sls_data.h>
 
+#include "debug.h"
 #include "sls_file.h"
 #include "sls_internal.h"
-
-#include "debug.h"
 
 /*
  * XXX Sendfile doesn't work, because there might be pageins in progress that
@@ -70,14 +67,14 @@
  */
 
 /*
- * These socket flags are just set and unset in sosetopt, without any side effects.
- * They are thus easily restorable.
+ * These socket flags are just set and unset in sosetopt, without any side
+ * effects. They are thus easily restorable.
  */
-#define SLS_SO_RESTORABLE (SO_DEBUG | SO_KEEPALIVE | SO_DONTROUTE | SO_USELOOPBACK | \
-		SO_BROADCAST | SO_REUSEADDR | SO_REUSEPORT | SO_REUSEPORT_LB | \
-		SO_OOBINLINE | SO_TIMESTAMP | SO_BINTIME | SO_NOSIGPIPE | SO_NO_DDP | \
-		SO_NO_OFFLOAD)
-
+#define SLS_SO_RESTORABLE                                                  \
+	(SO_DEBUG | SO_KEEPALIVE | SO_DONTROUTE | SO_USELOOPBACK |         \
+	    SO_BROADCAST | SO_REUSEADDR | SO_REUSEPORT | SO_REUSEPORT_LB | \
+	    SO_OOBINLINE | SO_TIMESTAMP | SO_BINTIME | SO_NOSIGPIPE |      \
+	    SO_NO_DDP | SO_NO_OFFLOAD)
 
 #if 0
 static int
@@ -199,8 +196,7 @@ slsckpt_sock_un(struct socket *so, struct slssock *info)
 	if (unpcb->unp_addr != NULL)
 		memcpy(&info->un, unpcb->unp_addr, sizeof(info->un));
 
-
-	/* 
+	/*
 	 * If we are a data socket, get the peer. There are
 	 * two possibilities: Either we are a stream data socket
 	 * or a datagram socket created using socketpair(), in which
@@ -209,9 +205,9 @@ slsckpt_sock_un(struct socket *so, struct slssock *info)
 	 */
 	if (unpcb->unp_conn != NULL) {
 		sopeer = unpcb->unp_conn->unp_socket;
-		info->unpeer = (uint64_t) sopeer;
-		info->peer_rcvid = (uint64_t) &sopeer->so_rcv;
-		info->peer_sndid = (uint64_t) &sopeer->so_snd;
+		info->unpeer = (uint64_t)sopeer;
+		info->peer_rcvid = (uint64_t)&sopeer->so_rcv;
+		info->peer_sndid = (uint64_t)&sopeer->so_snd;
 	}
 	info->bound = (unpcb->unp_vnode != NULL) ? 1 : 0;
 
@@ -224,7 +220,7 @@ slsckpt_sock_in(struct socket *so, struct slssock *info)
 {
 	struct inpcb *inpcb;
 
-	inpcb = (struct inpcb *) so->so_pcb;
+	inpcb = (struct inpcb *)so->so_pcb;
 
 	/* Get the local address. */
 	info->in.sin_family = AF_INET;
@@ -242,8 +238,8 @@ slsckpt_sock_in(struct socket *so, struct slssock *info)
 }
 
 int
-slsckpt_socket(struct proc *p, struct socket *so, 
-    struct sbuf *sb, struct slsckpt_data *sckpt_data)
+slsckpt_socket(struct proc *p, struct socket *so, struct sbuf *sb,
+    struct slsckpt_data *sckpt_data)
 {
 	struct slssock info;
 	int error;
@@ -252,7 +248,7 @@ slsckpt_socket(struct proc *p, struct socket *so,
 	memset(&info, 0, sizeof(info));
 
 	info.magic = SLSSOCKET_ID;
-	info.slsid = (uint64_t) so;
+	info.slsid = (uint64_t)so;
 
 	/* Generic information about the socket type. */
 	info.family = so->so_proto->pr_domain->dom_family;
@@ -272,7 +268,8 @@ slsckpt_socket(struct proc *p, struct socket *so,
 		break;
 
 	default:
-		panic("%s: Unknown protocol family %d\n", __func__, info.family);
+		panic(
+		    "%s: Unknown protocol family %d\n", __func__, info.family);
 	}
 
 	if (error != 0)
@@ -297,13 +294,12 @@ slsckpt_socket(struct proc *p, struct socket *so,
 	 * If this isn't a listening socket, mark it as invalid, because we
 	 * can't restore it yet.
 	 */
-	if ((info.family == AF_INET) &&
-	    (info.type == SOCK_STREAM) &&
+	if ((info.family == AF_INET) && (info.type == SOCK_STREAM) &&
 	    !SOLISTENING(so))
 		info.family = AF_UNSPEC;
 
 	/* Write it out to the SLS record. */
-	error = sbuf_bcat(sb, (void *) &info, sizeof(info));
+	error = sbuf_bcat(sb, (void *)&info, sizeof(info));
 	if (error != 0)
 		return (error);
 #if 0
@@ -333,7 +329,8 @@ slsckpt_socket(struct proc *p, struct socket *so,
 }
 
 static int
-slsrest_sockbuf(struct slskv_table *table, uint64_t sockbufid, struct sockbuf *sb)
+slsrest_sockbuf(
+    struct slskv_table *table, uint64_t sockbufid, struct sockbuf *sb)
 {
 	struct mbuf *m, *recm;
 	int error;
@@ -342,12 +339,12 @@ slsrest_sockbuf(struct slskv_table *table, uint64_t sockbufid, struct sockbuf *s
 	if (sockbufid == 0)
 		return (0);
 
-	/* 
+	/*
 	 * Associate it with the buffer - it should be fully built already.
 	 * Directly set up the sockbuf, we can't risk getting side-effects
-	 * e.g. by internalizing MT_CONTROL, SCM_RIGHTS messages. 
+	 * e.g. by internalizing MT_CONTROL, SCM_RIGHTS messages.
 	 */
-	error = slskv_find(table, sockbufid, (uintptr_t *) &m);
+	error = slskv_find(table, sockbufid, (uintptr_t *)&m);
 	if (error != 0)
 		return (error);
 
@@ -356,31 +353,31 @@ slsrest_sockbuf(struct slskv_table *table, uint64_t sockbufid, struct sockbuf *s
 		return (0);
 
 	sb->sb_mb = m;
-	sb->sb_mbtail= m_last(m);
+	sb->sb_mbtail = m_last(m);
 
 	/* Adjust sockbuf state for the new mbuf chain. */
-	for (recm = m; recm != NULL; recm = m->m_nextpkt)  {
-		/* The final value of the field will be that of the final record. */
+	for (recm = m; recm != NULL; recm = m->m_nextpkt) {
+		/* The final value of the field will be that of the final
+		 * record. */
 		sb->sb_lastrecord = recm;
 
 		/* Adjust bookkeeping.*/
 		sballoc(sb, m);
 	}
 
-
 	return (0);
 }
 
-/* 
+/*
  * Modified version of uipc_bindat() that supposes that the file used for the
- * socket already exists (the original function assumes the opposite). The 
+ * socket already exists (the original function assumes the opposite). The
  * function is also greatly simplified by the fact that the socket is also
  * visible to us, so there are no races (XXX there _are_ new races that arise
  * from the fact that we are binding to an existing file, but we assume
  * that there is no interference from outside the SLS for now while restoring).
  */
 static int
-slsrest_uipc_bindat(struct socket *so, struct sockaddr *nam)
+slsrest_uipc_bindat(struct socket *so, struct sockaddr *name)
 {
 	struct thread *td = curthread;
 	struct sockaddr_un *soun;
@@ -390,28 +387,29 @@ slsrest_uipc_bindat(struct socket *so, struct sockaddr *nam)
 	struct vnode *vp;
 	int error;
 
-	/* 
+	/*
 	 * Checks in the original function are turned into KASSERTs, because
 	 * in our case we know only we can see the new socket, so a lot of
 	 * edge cases are impossible unless something is horribly wrong.
 	 */
-	KASSERT((nam->sa_family == AF_UNIX), ("socket is not unix socket"));
+	KASSERT((name->sa_family == AF_UNIX), ("socket is not unix socket"));
 
 	unp = sotounpcb(so);
 	KASSERT(unp != NULL, ("uipc_bind: unp == NULL"));
 
-	soun = (struct sockaddr_un *)nam;
+	soun = (struct sockaddr_un *)name;
 
-	KASSERT((soun->sun_len <= sizeof(struct sockaddr_un)), 
+	KASSERT((soun->sun_len <= sizeof(struct sockaddr_un)),
 	    ("socket path size too large"));
-	KASSERT((soun->sun_len > offsetof(struct sockaddr_un, sun_path)), 
+	KASSERT((soun->sun_len > offsetof(struct sockaddr_un, sun_path)),
 	    ("socket path size too small"));
 
-	KASSERT(((unp->unp_flags & UNP_BINDING) == 0), ("unix socket already binding"));
+	KASSERT(((unp->unp_flags & UNP_BINDING) == 0),
+	    ("unix socket already binding"));
 	KASSERT((unp->unp_vnode == NULL), ("unix socket already bound"));
 
-	NDINIT_ATRIGHTS(&nd, LOOKUP, FOLLOW | AUDITVNODE1, UIO_SYSSPACE, soun->sun_path,
-	    AT_FDCWD, &rights, td);
+	NDINIT_ATRIGHTS(&nd, LOOKUP, FOLLOW | AUDITVNODE1, UIO_SYSSPACE,
+	    soun->sun_path, AT_FDCWD, &rights, td);
 	error = namei(&nd);
 	vp = nd.ni_vp;
 	NDFREE(&nd, NDF_ONLY_PNBUF);
@@ -425,7 +423,7 @@ slsrest_uipc_bindat(struct socket *so, struct sockaddr *nam)
 
 	/* Finish intializing the socket itself. */
 	unp->unp_vnode = vp;
-	unp->unp_addr = (struct sockaddr_un *) sodupsockaddr(nam, M_WAITOK);
+	unp->unp_addr = (struct sockaddr_un *)sodupsockaddr(name, M_WAITOK);
 	VOP_UNLOCK(vp, 0);
 
 	return (0);
@@ -447,7 +445,7 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 	int error;
 
 	/* We create an inet dummy sockets if we can't properly restore. */
-	family = (info->family == AF_UNSPEC)? AF_INET : info->family;
+	family = (info->family == AF_UNSPEC) ? AF_INET : info->family;
 
 	/* Create the new socket. */
 	error = kern_socket(td, family, info->type, info->proto);
@@ -458,7 +456,7 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 
 	/* Reach into the file descriptor and get the socket. */
 	fp = FDTOFP(td->td_proc, fd);
-	so = (struct socket *) fp->f_data;
+	so = (struct socket *)fp->f_data;
 
 	/* Restore the socket's nonblocking/async state. */
 	if (info->family != AF_UNSPEC) {
@@ -471,8 +469,9 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 
 	/* Set any options we can. */
 	if (info->options & SLS_SO_RESTORABLE) {
-		error = kern_setsockopt(td, fd, SOL_SOCKET, info->options &
-		    SLS_SO_RESTORABLE, &option, UIO_SYSSPACE, sizeof(option));
+		error = kern_setsockopt(td, fd, SOL_SOCKET,
+		    info->options & SLS_SO_RESTORABLE, &option, UIO_SYSSPACE,
+		    sizeof(option));
 		if (error != 0)
 			goto error;
 	}
@@ -484,7 +483,7 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 		break;
 
 	case AF_INET:
-		inaddr = (struct sockaddr_in *) &info->in;
+		inaddr = (struct sockaddr_in *)&info->in;
 
 		/* Check if the socket is bound. */
 		if (info->bound == 0)
@@ -493,29 +492,31 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 		 * We use bind() instead of setting the address directly because
 		 * we need to let the kernel know we are reserving the address.
 		 */
-		error = kern_bindat(td, AT_FDCWD, fd, (struct sockaddr *) inaddr);
+		error = kern_bindat(
+		    td, AT_FDCWD, fd, (struct sockaddr *)inaddr);
 		if (error != 0)
 			goto error;
 
 		break;
 
 	case AF_LOCAL:
-		unaddr = (struct sockaddr_un *) &info->un;
-		/* 
-		 * Check if the socket has a peer. If it does, then it is 
+		unaddr = (struct sockaddr_un *)&info->un;
+		/*
+		 * Check if the socket has a peer. If it does, then it is
 		 * either a UNIX stream data socket, or it is a socket
 		 * created using socketpair(); in both cases, it has a peer,
 		 * so we create it alongside it.
 		 */
 		if (info->unpeer != 0) {
 			/* Create the socket peer. */
-			error = kern_socket(td, info->family, info->type, info->proto);
+			error = kern_socket(
+			    td, info->family, info->type, info->proto);
 			if (error != 0)
 				goto error;
 
 			peerfd = td->td_retval[0];
 			peerfp = FDTOFP(td->td_proc, peerfd);
-			sopeer = (struct socket *) peerfp->f_data;
+			sopeer = (struct socket *)peerfp->f_data;
 
 			/* Connect the two sockets. See kern_socketpair(). */
 			error = soconnect2(so, sopeer);
@@ -531,7 +532,8 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 				if (error != 0)
 					goto error;
 			} else if (so->so_proto->pr_flags & PR_CONNREQUIRED) {
-				/* Use credentials to make the stream socket exclusive to the peer. */
+				/* Use credentials to make the stream socket
+				 * exclusive to the peer. */
 				unpcb = sotounpcb(so);
 				unpeerpcb = sotounpcb(sopeer);
 				unp_copy_peercred(td, unpcb, unpeerpcb, unpcb);
@@ -540,8 +542,8 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 			break;
 		}
 
-		/* 
-		 * We assume it is either a listening socket, or a 
+		/*
+		 * We assume it is either a listening socket, or a
 		 * datagram socket. The only case where we don't bind
 		 * is if it is a datagram client socket, in which case
 		 * we just leave it be.
@@ -549,11 +551,11 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 		if (info->bound == 0)
 			break;
 
-		/* 
-		 * The bind() function for UNIX sockets makes assumptions 
+		/*
+		 * The bind() function for UNIX sockets makes assumptions
 		 * that do not hold here, so we use our own custom version.
 		 */
-		error = slsrest_uipc_bindat(so, (struct sockaddr *) unaddr);
+		error = slsrest_uipc_bindat(so, (struct sockaddr *)unaddr);
 		if (error != 0) {
 			kern_close(td, fd);
 			return (error);
@@ -562,8 +564,8 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 		break;
 
 	default:
-		panic("%s: Unknown protocol family %d\n", __func__, info->family);
-
+		panic(
+		    "%s: Unknown protocol family %d\n", __func__, info->family);
 	}
 
 	/* Check if we need to listen for incoming connections. */
@@ -575,7 +577,7 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 	}
 
 	if (peerfd >= 0) {
-		error = slskv_add(table, info->unpeer, (uintptr_t) peerfp);
+		error = slskv_add(table, info->unpeer, (uintptr_t)peerfp);
 		if (error != 0)
 			goto error;
 

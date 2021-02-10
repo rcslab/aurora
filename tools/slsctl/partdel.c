@@ -5,17 +5,16 @@
 
 #include <fcntl.h>
 #include <getopt.h>
+#include <sls.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-#include <sls.h>
-
 static struct option partdel_longopts[] = {
 	{ "oid", required_argument, NULL, 'o' },
-	{ NULL,	no_argument, NULL, 0},
+	{ NULL, no_argument, NULL, 0 },
 };
 
 void
@@ -25,12 +24,13 @@ partdel_usage(void)
 }
 
 int
-partdel_main(int argc, char* argv[])
+partdel_main(int argc, char *argv[])
 {
 	int oid = -1;
 	int opt;
 
-	while ((opt = getopt_long(argc, argv, "o:", partdel_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "o:", partdel_longopts, NULL)) !=
+	    -1) {
 		switch (opt) {
 		case 'o':
 			oid = strtol(optarg, NULL, 10);

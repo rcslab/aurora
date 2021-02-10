@@ -5,20 +5,19 @@
 
 #include <fcntl.h>
 #include <getopt.h>
+#include <sls.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-#include <sls.h>
-
 static struct option checkpoint_longopts[] = {
 	{ "memory", no_argument, NULL, 'm' },
 	{ "oid", required_argument, NULL, 'o' },
 	{ "recursive", no_argument, NULL, 'r' },
 	{ "help", no_argument, NULL, 'h' },
-	{ NULL,	no_argument, NULL, 0},
+	{ NULL, no_argument, NULL, 0 },
 };
 
 void
@@ -28,14 +27,15 @@ checkpoint_usage(void)
 }
 
 int
-checkpoint_main(int argc, char* argv[])
+checkpoint_main(int argc, char *argv[])
 {
 	int opt;
 	uint64_t oid = SLS_DEFAULT_PARTITION;
 	bool recurse = false;
 	bool synchronous = false;
 
-	while ((opt = getopt_long(argc, argv, "mo:rsh", checkpoint_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(
+		    argc, argv, "mo:rsh", checkpoint_longopts, NULL)) != -1) {
 		switch (opt) {
 		case 'm':
 			if (oid == SLS_DEFAULT_PARTITION) {

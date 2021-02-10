@@ -7,4 +7,3 @@
 #include <sls_debug_common.h>
 
 #endif /* _SLOS_DEBUG_H_ */
-

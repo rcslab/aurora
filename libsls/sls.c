@@ -6,13 +6,12 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <sls.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-#include <sls.h>
 
 #include "sls_private.h"
 
@@ -33,19 +32,20 @@ sls_checkpoint_epoch(uint64_t oid, bool recurse, uint64_t *epoch)
 {
 	struct sls_checkpoint_args args;
 
-	args.oid= oid;
+	args.oid = oid;
 	args.recurse = recurse ? 1 : 0;
 	args.nextepoch = epoch;
 
 	if (sls_ioctl(SLS_CHECKPOINT, &args) < 0) {
-	    perror("sls_checkpoint");
-	    return (-1);
+		perror("sls_checkpoint");
+		return (-1);
 	}
 
 	return (0);
 }
 
-/* Restore a process stored in sls_backend on top of the process with PID pid. */
+/* Restore a process stored in sls_backend on top of the process with PID pid.
+ */
 int
 sls_restore(uint64_t oid, bool daemon, bool rest_stopped)
 {
@@ -56,14 +56,14 @@ sls_restore(uint64_t oid, bool daemon, bool rest_stopped)
 	args.rest_stopped = rest_stopped ? 1 : 0;
 
 	if (sls_ioctl(SLS_RESTORE, &args) < 0) {
-	    perror("sls_restore");
-	    return (-1);
+		perror("sls_restore");
+		return (-1);
 	}
 
 	return (0);
 }
 
-/* 
+/*
  * Insert a process into the SLS. The process will start being checkpointed
  * periodically if the period argument is non-zero, otherwise it has to be
  * checkpointed via explicit calls to sls_checkpoint().
@@ -78,8 +78,8 @@ sls_attach(uint64_t oid, uint64_t pid)
 	args.pid = pid;
 
 	if (sls_ioctl(SLS_ATTACH, &args) != 0) {
-	    perror("sls_attach");
-	    return (-1);
+		perror("sls_attach");
+		return (-1);
 	}
 
 	return (0);
@@ -97,8 +97,8 @@ sls_partadd(uint64_t oid, const struct sls_attr attr)
 	args.oid = oid;
 	args.attr = attr;
 	if (sls_ioctl(SLS_PARTADD, &args) != 0) {
-	    perror("sls_partadd");
-	    return (-1);
+		perror("sls_partadd");
+		return (-1);
 	}
 
 	return (0);
@@ -124,8 +124,8 @@ sls_epochwait(uint64_t oid, uint64_t epoch, bool sync, bool *isdone)
 	args.sync = sync;
 	args.isdone = isdone;
 	if (sls_ioctl(SLS_EPOCHWAIT, &args) != 0) {
-	    perror("sls_epoch");
-	    return (-1);
+		perror("sls_epoch");
+		return (-1);
 	}
 
 	return (0);
@@ -162,8 +162,8 @@ sls_partdel(uint64_t oid)
 
 	args.oid = oid;
 	if (sls_ioctl(SLS_PARTDEL, &args) != 0) {
-	    perror("sls_partdel");
-	    return (-1);
+		perror("sls_partdel");
+		return (-1);
 	}
 
 	return (0);
@@ -188,11 +188,11 @@ sls_memsnap_epoch(uint64_t oid, void *addr, uint64_t *epoch)
 	int ret;
 
 	args.oid = oid;
-	args.addr = (vm_ooffset_t) addr;
+	args.addr = (vm_ooffset_t)addr;
 	args.nextepoch = epoch;
 	if (sls_ioctl(SLS_MEMSNAP, &args) != 0) {
-	    perror("sls_memsnap");
-	    return (-1);
+		perror("sls_memsnap");
+		return (-1);
 	}
 
 	return (0);
@@ -202,9 +202,9 @@ int
 sls_suspend(uint64_t oid)
 {
 	/*
-	 * XXX For suspend, we need to be able to kill every single process in 
-	 * the partition. We can do that easily, just need to implement it. So 
-	 * it's a combination of checkpoint and a hypothetical remove partition 
+	 * XXX For suspend, we need to be able to kill every single process in
+	 * the partition. We can do that easily, just need to implement it. So
+	 * it's a combination of checkpoint and a hypothetical remove partition
 	 * operation.
 	 */
 	errno = ENOSYS;

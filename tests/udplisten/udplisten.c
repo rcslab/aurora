@@ -1,22 +1,21 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <string.h>
-#include <unistd.h>
-
 #include <sys/types.h>
 #include <sys/socket.h>
-
-#include <arpa/inet.h>
 
 #include <netinet/in.h>
 #include <netinet/udp.h>
 
-#define LOCALHOST   ("127.0.0.1")
-#define SOCKET	    (6668)
-#define BACKLOG	    (4)
-#define MSG	    ("message")
-#define BUFSIZE	    (sizeof(MSG))
+#include <arpa/inet.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#define LOCALHOST ("127.0.0.1")
+#define SOCKET (6668)
+#define BACKLOG (4)
+#define MSG ("message")
+#define BUFSIZE (sizeof(MSG))
 
 char buf[BUFSIZE];
 
@@ -31,23 +30,22 @@ main(void)
 
 	sock = socket(AF_INET, SOCK_DGRAM, 0);
 	if (sock == -1) {
-	    perror("socket");
-	    exit(0);
+		perror("socket");
+		exit(0);
 	}
 
 	sockaddr.sin_family = AF_INET;
 	sockaddr.sin_port = htons(SOCKET);
 	error = inet_pton(AF_INET, LOCALHOST, &sockaddr.sin_addr.s_addr);
 	if (error == -1) {
-	    perror("inet_pton");
-	    exit(0);
-
+		perror("inet_pton");
+		exit(0);
 	}
 
-	error = bind(sock, (struct sockaddr *) &sockaddr, sizeof(sockaddr));
+	error = bind(sock, (struct sockaddr *)&sockaddr, sizeof(sockaddr));
 	if (error == -1) {
-	    perror("bind");
-	    exit(0);
+		perror("bind");
+		exit(0);
 	}
 
 	sleep(5);

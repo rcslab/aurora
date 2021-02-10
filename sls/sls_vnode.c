@@ -1,63 +1,52 @@
-#include <sys/param.h>
-#include <sys/endian.h>
-#include <sys/queue.h>
-
-#include <machine/param.h>
-
 #include <sys/cdefs.h>
+#include <sys/param.h>
+#include <sys/selinfo.h>
 #include <sys/conf.h>
 #include <sys/domain.h>
+#include <sys/endian.h>
 #include <sys/event.h>
+#include <sys/eventvar.h>
 #include <sys/fcntl.h>
 #include <sys/limits.h>
 #include <sys/mman.h>
 #include <sys/mutex.h>
 #include <sys/namei.h>
-#include <sys/param.h>
+#include <sys/pipe.h>
 #include <sys/proc.h>
 #include <sys/protosw.h>
+#include <sys/queue.h>
 #include <sys/rwlock.h>
 #include <sys/sbuf.h>
-#include <sys/selinfo.h>
 #include <sys/shm.h>
 #include <sys/socketvar.h>
 #include <sys/stat.h>
 #include <sys/syscallsubr.h>
 #include <sys/tty.h>
-#include <sys/unistd.h>
 #include <sys/un.h>
+#include <sys/unistd.h>
 #include <sys/unpcb.h>
 #include <sys/vnode.h>
 
-/* XXX Pipe has to be after selinfo */
-#include <sys/pipe.h>
-
-/* 
- * XXX eventvar should include more headers,
- * it can't be placed alphabetically.
- */
-#include <sys/eventvar.h>
-
-#include <netinet/in.h>
-#include <netinet/in_pcb.h>
-
-#include <vm/pmap.h>
 #include <vm/vm.h>
+#include <vm/pmap.h>
+#include <vm/uma.h>
 #include <vm/vm_extern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
 #include <vm/vm_radix.h>
-#include <vm/uma.h>
+
+#include <machine/param.h>
+
+#include <netinet/in.h>
+#include <netinet/in_pcb.h>
 
 #include <sls_data.h>
 
-#include "sls_internal.h"
-#include "sls_file.h"
-#include "sls_file.h"
-#include "sls_vnode.h"
-
 #include "debug.h"
+#include "sls_file.h"
+#include "sls_internal.h"
+#include "sls_vnode.h"
 
 SDT_PROBE_DEFINE(sls, , , namestart);
 SDT_PROBE_DEFINE(sls, , , nameend);
@@ -76,7 +65,7 @@ slsckpt_vnode_istty(struct vnode *vp)
 }
 
 /*
- * Check if the vnode can be checkpointed by name. 
+ * Check if the vnode can be checkpointed by name.
  */
 bool
 slsckpt_vnode_ckptbyname(struct vnode *vp)
@@ -93,8 +82,8 @@ slsckpt_vnode_ckptbyname(struct vnode *vp)
 	if (vp->v_type == VDIR)
 		return (true);
 
-	/* 
-	 * If it's a character device, make sure it's not a TTY; TTYs are a 
+	/*
+	 * If it's a character device, make sure it's not a TTY; TTYs are a
 	 * special case handled in an other path.
 	 */
 	if (vp->v_type == VCHR)
@@ -104,8 +93,8 @@ slsckpt_vnode_ckptbyname(struct vnode *vp)
 	return (false);
 }
 
-/* 
- * Store a vnode in memory, without serializing. For disk checkpoints, we 
+/*
+ * Store a vnode in memory, without serializing. For disk checkpoints, we
  * serialize after the partition has resumed.
  */
 int
@@ -113,10 +102,10 @@ slsckpt_vnode(struct vnode *vp, struct slsckpt_data *sckpt_data)
 {
 	int error;
 
-	if (slsset_find(sckpt_data->sckpt_vntable, (uint64_t) vp) == 0)
+	if (slsset_find(sckpt_data->sckpt_vntable, (uint64_t)vp) == 0)
 		return (0);
 
-	error = slsset_add(sckpt_data->sckpt_vntable, (uint64_t) vp);
+	error = slsset_add(sckpt_data->sckpt_vntable, (uint64_t)vp);
 	if (error != 0)
 		return (EINVAL);
 
@@ -129,7 +118,8 @@ slsckpt_vnode(struct vnode *vp, struct slsckpt_data *sckpt_data)
  * Serialize a single vnode into a record, held in an sbuf.
  */
 static int
-slsckpt_vnode_serialize_single(struct vnode *vp, bool allow_unlinked, struct sbuf **sbp)
+slsckpt_vnode_serialize_single(
+    struct vnode *vp, bool allow_unlinked, struct sbuf **sbp)
 {
 	struct thread *td = curthread;
 	char *freepath = NULL;
@@ -148,12 +138,14 @@ slsckpt_vnode_serialize_single(struct vnode *vp, bool allow_unlinked, struct sbu
 	if (vp->v_mount != slos.slsfs_mount) {
 		/* Successfully found a path. */
 		slsvnode.magic = SLSVNODE_ID;
-		slsvnode.slsid = (uint64_t) vp;
+		slsvnode.slsid = (uint64_t)vp;
 		slsvnode.has_path = 1;
 		error = vn_fullpath(td, vp, &fullpath, &freepath);
 		if (error != 0) {
-			DEBUG2("vn_fullpath() failed for vnode %p with error %d", vp, error);
-			if (allow_unlinked) 
+			DEBUG2(
+			    "vn_fullpath() failed for vnode %p with error %d",
+			    vp, error);
+			if (allow_unlinked)
 				panic("Unlinked vnode %p not in the SLOS", vp);
 
 			/* Otherwise clean up as if after an error. */
@@ -164,21 +156,21 @@ slsckpt_vnode_serialize_single(struct vnode *vp, bool allow_unlinked, struct sbu
 
 		/* Write out the struct file. */
 		strncpy(slsvnode.path, fullpath, PATH_MAX);
-		error = sbuf_bcat(sb, (void *) &slsvnode, sizeof(slsvnode));
+		error = sbuf_bcat(sb, (void *)&slsvnode, sizeof(slsvnode));
 		if (error != 0)
 			goto error;
 
 		DEBUG("Checkpointing vnode by path");
 	} else {
 		slsvnode.magic = SLSVNODE_ID;
-		slsvnode.slsid = (uint64_t) vp;
+		slsvnode.slsid = (uint64_t)vp;
 		slsvnode.has_path = 0;
 		slsvnode.ino = INUM(SLSVP(vp));
 		DEBUG1("Checkpointing vnode with inode 0x%lx", slsvnode.ino);
 	}
 
 	/* Write out the struct file. */
-	error = sbuf_bcat(sb, (void *) &slsvnode, sizeof(slsvnode));
+	error = sbuf_bcat(sb, (void *)&slsvnode, sizeof(slsvnode));
 	if (error != 0)
 		goto error;
 
@@ -205,19 +197,22 @@ slsckpt_vnode_serialize(struct slsckpt_data *sckpt_data)
 	struct sbuf *sb;
 	int error;
 
-	KVSET_FOREACH(sckpt_data->sckpt_vntable, iter, vp) {
+	KVSET_FOREACH(sckpt_data->sckpt_vntable, iter, vp)
+	{
 		/* Check if we have already serialized this vnode. */
-		if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t) vp, (uintptr_t *) &rec) == 0)
+		if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t)vp,
+			(uintptr_t *)&rec) == 0)
 			return (0);
 
-		error = slsckpt_vnode_serialize_single(vp,
-		    SLSATTR_ISIGNUNLINKED(sckpt_data->sckpt_attr), &sb);
+		error = slsckpt_vnode_serialize_single(
+		    vp, SLSATTR_ISIGNUNLINKED(sckpt_data->sckpt_attr), &sb);
 		if (error != 0)
 			return (error);
 
 		/* Whether we have a path or not, create the new record. */
-		rec = sls_getrecord(sb, (uint64_t) vp, SLOSREC_VNODE);
-		error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) vp, (uintptr_t) rec);
+		rec = sls_getrecord(sb, (uint64_t)vp, SLOSREC_VNODE);
+		error = slskv_add(
+		    sckpt_data->sckpt_rectable, (uint64_t)vp, (uintptr_t)rec);
 		if (error != 0) {
 			free(rec, M_SLSREC);
 			sbuf_delete(sb);
@@ -226,7 +221,7 @@ slsckpt_vnode_serialize(struct slsckpt_data *sckpt_data)
 	}
 
 	KVSET_FOREACH_POP(sckpt_data->sckpt_vntable, vp)
-	    vrele(vp);
+	vrele(vp);
 
 	return (0);
 }
@@ -293,7 +288,7 @@ slsrest_vnode(struct slsvnode *info, struct slsrest_data *restdata)
 		return (error);
 
 	/* Add it to the table of open vnodes. */
-	error = slskv_add(restdata->vntable, info->slsid, (uintptr_t) vp);
+	error = slskv_add(restdata->vntable, info->slsid, (uintptr_t)vp);
 	if (error != 0) {
 		vrele(vp);
 		return (error);

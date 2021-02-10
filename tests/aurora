@@ -1,4 +1,5 @@
-SRCROOT="/root/sls"
+#!/bin/sh
+
 NEWFS=$SRCROOT/tools/newfs_sls/newfs_sls
 MNT="/testmnt"
 

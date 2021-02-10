@@ -1,12 +1,11 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-
 #include <sys/mman.h>
 #include <sys/time.h>
 
 #include <sls.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 #define OID (1000)
 
@@ -41,8 +40,9 @@ checkpoint_round(int round)
 		exit(0);
 	}
 
-	printf("Time elapsed (%d): %ldus\n", round, (1000 * 1000) * 
-			(ckpt[1].tv_sec - ckpt[0].tv_sec) + (ckpt[1].tv_usec - ckpt[0].tv_usec));
+	printf("Time elapsed (%d): %ldus\n", round,
+	    (1000 * 1000) * (ckpt[1].tv_sec - ckpt[0].tv_sec) +
+		(ckpt[1].tv_usec - ckpt[0].tv_usec));
 
 	sleep(1);
 }
@@ -69,9 +69,10 @@ main(int argc, char *argv[])
 	if (objsize == 0)
 		usage();
 
-	printf("Using %lu objects, %lu bytes (or %lu KB, or %lu MB, or %lu GB) each\n", 
-			objcnt, objsize, objsize / 1024, objsize / (1024 * 1024),
-			objsize / (1024 * 1024 *1024));
+	printf(
+	    "Using %lu objects, %lu bytes (or %lu KB, or %lu MB, or %lu GB) each\n",
+	    objcnt, objsize, objsize / 1024, objsize / (1024 * 1024),
+	    objsize / (1024 * 1024 * 1024));
 
 	mappings = malloc(sizeof(*mappings) * objcnt);
 	if (mappings == NULL) {
@@ -89,7 +90,8 @@ main(int argc, char *argv[])
 		}
 
 		memset(mappings[i], random(), objsize);
-		if (mmap(mappings[i] + objsize, 0x1000, PROT_NONE, 0, -1, 0) == NULL) {
+		if (mmap(mappings[i] + objsize, 0x1000, PROT_NONE, 0, -1, 0) ==
+		    NULL) {
 			perror("mmap");
 			exit(0);
 		}

@@ -1,7 +1,6 @@
 #ifndef _SLSCTL_H_
 #define _SLSCTL_H_
 
-
 void checkpoint_usage(void);
 int checkpoint_main(int argc, char *argv[]);
 
@@ -36,4 +35,3 @@ void spawn_usage(void);
 int spawn_main(int argc, char *argv[]);
 
 #endif /* _SLSCTL_H_ */
-

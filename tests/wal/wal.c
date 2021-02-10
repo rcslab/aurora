@@ -1,10 +1,9 @@
 #include <assert.h>
+#include <sls.h>
+#include <sls_wal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-
-#include <sls.h>
-#include <sls_wal.h>
 
 int
 main()

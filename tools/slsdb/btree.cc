@@ -1,15 +1,15 @@
 
+#include <slos.h>
+#include <slos_inode.h>
 #include <unistd.h>
+
+#include <btree.h>
 
 #include <iostream>
 
-#include <slos.h>
-#include <slos_inode.h>
-#include <btree.h>
-
 #include "btree.h"
-#include "snapshot.h"
 #include "file.h"
+#include "snapshot.h"
 
 void
 printBtreeNode(struct fnode *node)
@@ -25,31 +25,34 @@ printBtreeNode(struct fnode *node)
 		printf("| C %lu |", *p);
 		for (int i = 0; i < NODE_SIZE(node); i++) {
 			p = (bnode_ptr *)fnode_getval(node, i + 1);
-			uint64_t __unused *t = (uint64_t *)fnode_getkey(node, i);
+			uint64_t __unused *t = (uint64_t *)fnode_getkey(
+			    node, i);
 			printf("| K %lu|| C %lu |", *t, *p);
 		}
 	} else if (NODE_TYPE(node) == BT_EXTERNAL) {
 		for (i = 0; i < NODE_SIZE(node); i++) {
 			uint64_t *t = (uint64_t *)fnode_getkey(node, i);
 			if (node->fn_tree->bt_valsize == sizeof(diskptr_t)) {
-				diskptr_t *v = (diskptr_t *)fnode_getval(node, i);
-				printf("| %lu (%u)-> %lu, %lu, %lu |,", *t, node->fn_types[i], v->offset, v->size, v->epoch);
+				diskptr_t *v = (diskptr_t *)fnode_getval(
+				    node, i);
+				printf("| %lu (%u)-> %lu, %lu, %lu |,", *t,
+				    node->fn_types[i], v->offset, v->size,
+				    v->epoch);
 			} else {
 				uint64_t *v = (uint64_t *)fnode_getval(node, i);
-				printf("| %lu (%u)-> %lu|,", *t, node->fn_types[i], *v);
+				printf("| %lu (%u)-> %lu|,", *t,
+				    node->fn_types[i], *v);
 			}
 		}
 	}
 	printf("\n");
-
 }
 
 void *
 fnode_getkey(struct fnode *node, int i)
 {
-	return  (char *)node->fn_keys + (i * node->fn_tree->bt_keysize);
+	return (char *)node->fn_keys + (i * node->fn_tree->bt_keysize);
 }
-
 
 void *
 fnode_getval(struct fnode *node, int i)
@@ -58,7 +61,7 @@ fnode_getval(struct fnode *node, int i)
 }
 
 void
-fnodeSetup(struct fnode *node, struct fbtree *tree, char * buf, long ptr)
+fnodeSetup(struct fnode *node, struct fbtree *tree, char *buf, long ptr)
 {
 	node->fn_dnode = (struct dnode *)buf;
 	node->fn_location = ptr;
@@ -66,20 +69,24 @@ fnodeSetup(struct fnode *node, struct fbtree *tree, char * buf, long ptr)
 	if (NODE_TYPE(node) == BT_INTERNAL) {
 		node->fn_types = NULL;
 		node->fn_keys = (char *)node->fn_dnode->dn_data;
-		node->fn_values = (char *)node->fn_keys + (NODE_MAX(node) * NODE_KS(node));
-	} else if (NODE_TYPE(node) == BT_BUCKET){
+		node->fn_values = (char *)node->fn_keys +
+		    (NODE_MAX(node) * NODE_KS(node));
+	} else if (NODE_TYPE(node) == BT_BUCKET) {
 		node->fn_types = NULL;
 		node->fn_keys = (char *)node->fn_dnode->dn_data;
 		node->fn_values = (char *)node->fn_keys + (NODE_KS(node));
 	} else {
 		node->fn_types = (uint8_t *)node->fn_dnode->dn_data;
-		node->fn_keys = (char *)node->fn_types + (sizeof(uint8_t) * NODE_MAX(node));
-		node->fn_values = (char *)node->fn_keys + (NODE_MAX(node) * NODE_KS(node));
+		node->fn_keys = (char *)node->fn_types +
+		    (sizeof(uint8_t) * NODE_MAX(node));
+		node->fn_values = (char *)node->fn_keys +
+		    (NODE_MAX(node) * NODE_KS(node));
 	}
 }
 
-template<typename K, typename V>
-BtreeNode<K,V> BtreeNode<K, V>::follow(K key)
+template <typename K, typename V>
+BtreeNode<K, V>
+BtreeNode<K, V>::follow(K key)
 {
 	if (NODE_TYPE(&node) != BT_INTERNAL) {
 		return *this;
@@ -94,7 +101,7 @@ BtreeNode<K,V> BtreeNode<K, V>::follow(K key)
 		while (start <= end) {
 			mid = (start + end) / 2;
 			keyt = *(K *)fnode_getkey(&node, mid);
-			if (keyt < key) { 
+			if (keyt < key) {
 				start = mid + 1;
 			} else {
 				index = mid;
@@ -114,8 +121,7 @@ BtreeNode<K,V> BtreeNode<K, V>::follow(K key)
 		keyn = *(K *)fnode_getkey(&node, index);
 		if (keyt != keyn) {
 			break;
-		}
-		else {
+		} else {
 			index--;
 		}
 	}
@@ -131,26 +137,30 @@ BtreeNode<K,V> BtreeNode<K, V>::follow(K key)
 	return next.follow(key);
 }
 
-template<typename K, typename V>
-K BtreeIter<K, V>::key()
+template <typename K, typename V>
+K
+BtreeIter<K, V>::key()
 {
 	return *(K *)fnode_getkey(&node->node, at);
 }
 
-template<typename K, typename V>
-V BtreeIter<K, V>::val()
+template <typename K, typename V>
+V
+BtreeIter<K, V>::val()
 {
 	return *(V *)fnode_getval(&node->node, at);
 }
 
-template<typename K, typename V>
-int BtreeIter<K, V>::valid()
+template <typename K, typename V>
+int
+BtreeIter<K, V>::valid()
 {
 	return (at != -1);
 }
 
-template<typename K, typename V>
-BtreeIter<K,V> BtreeNode<K, V>::follow_to(K key, long blknum)
+template <typename K, typename V>
+BtreeIter<K, V>
+BtreeNode<K, V>::follow_to(K key, long blknum)
 {
 
 	int index, start, end, mid, compare;
@@ -162,7 +172,7 @@ BtreeIter<K,V> BtreeNode<K, V>::follow_to(K key, long blknum)
 		while (start <= end) {
 			mid = (start + end) / 2;
 			keyt = *(K *)fnode_getkey(&node, mid);
-			if (keyt < key) { 
+			if (keyt < key) {
 				start = mid + 1;
 			} else {
 				index = mid;
@@ -182,8 +192,7 @@ BtreeIter<K,V> BtreeNode<K, V>::follow_to(K key, long blknum)
 		keyn = *(K *)fnode_getkey(&node, index);
 		if (keyt != keyn) {
 			break;
-		}
-		else {
+		} else {
 			index--;
 		}
 	}
@@ -204,8 +213,9 @@ BtreeIter<K,V> BtreeNode<K, V>::follow_to(K key, long blknum)
 	}
 }
 
-template<typename K, typename V>
-BtreeIter<K, V> BtreeNode<K,V>::parent()
+template <typename K, typename V>
+BtreeIter<K, V>
+BtreeNode<K, V>::parent()
 {
 	if (parentkey == -1) {
 		return BtreeIter<K, V> {};
@@ -217,8 +227,9 @@ BtreeIter<K, V> BtreeNode<K,V>::parent()
 	return parent;
 }
 
-template<typename K, typename V>
-BtreeIter<K, V> BtreeIter<K, V>::next()
+template <typename K, typename V>
+BtreeIter<K, V>
+BtreeIter<K, V>::next()
 {
 	V val;
 	BtreeIter<K, V> iter;
@@ -230,18 +241,19 @@ BtreeIter<K, V> BtreeIter<K, V>::next()
 
 	if ((at + 1) == NODE_SIZE(&node->node)) {
 		if (node->parentkey != -1) {
-			auto parentIter =  node->parent();
+			auto parentIter = node->parent();
 			parentIter.next();
 			if (!parentIter.valid()) {
 				return BtreeIter<K, V> {};
-			} 
+			}
 
-			bnode_ptr ptr = *(bnode_ptr *)fnode_getval(&parentIter.node->node, parentIter.at);
-			auto n = std::make_shared<BtreeNode<K, V>>(node->btree, node->snap, static_cast<long>(ptr));
-			iter =  BtreeIter<K, V> { n, 0};
+			bnode_ptr ptr = *(bnode_ptr *)fnode_getval(
+			    &parentIter.node->node, parentIter.at);
+			auto n = std::make_shared<BtreeNode<K, V>>(
+			    node->btree, node->snap, static_cast<long>(ptr));
+			iter = BtreeIter<K, V> { n, 0 };
 
 			return iter;
-
 		}
 		return BtreeIter<K, V> {};
 	}
@@ -252,14 +264,13 @@ BtreeIter<K, V> BtreeIter<K, V>::next()
 	return iter;
 }
 
-
-template<typename K, typename V>
-BtreeNode<K,V>::BtreeNode(BtreeNode<K, V> *node)
+template <typename K, typename V>
+BtreeNode<K, V>::BtreeNode(BtreeNode<K, V> *node)
 {
 	this->data = node->data;
 	node->data = nullptr;
 
-	this->btree= node->btree;
+	this->btree = node->btree;
 	this->node = node->node;
 	this->tree = node->tree;
 	this->node.fn_tree = &this->tree;
@@ -268,8 +279,9 @@ BtreeNode<K,V>::BtreeNode(BtreeNode<K, V> *node)
 	this->error = node->error;
 }
 
-template<typename K, typename V>
-BtreeIter<K, V> BtreeNode<K, V>::keymax(K key)
+template <typename K, typename V>
+BtreeIter<K, V>
+BtreeNode<K, V>::keymax(K key)
 {
 	K keyt;
 	int i = 0;
@@ -284,9 +296,10 @@ BtreeIter<K, V> BtreeNode<K, V>::keymax(K key)
 	return BtreeIter<K, V>(node, i);
 }
 
-
-template<typename K, typename V>
-int BtreeNode<K, V>::failed() {
+template <typename K, typename V>
+int
+BtreeNode<K, V>::failed()
+{
 	if (data == nullptr) {
 		return (-1);
 	}
@@ -294,8 +307,9 @@ int BtreeNode<K, V>::failed() {
 	return error;
 }
 
-template<typename K, typename V>
-int BtreeNode<K, V>::init()
+template <typename K, typename V>
+int
+BtreeNode<K, V>::init()
 {
 	size_t blksize = snap->super.sb_bsize;
 	data = (char *)malloc(snap->super.sb_bsize);
@@ -314,23 +328,23 @@ int BtreeNode<K, V>::init()
 	return (0);
 }
 
-template<typename K, typename V>
-BtreeNode<K, V>::~BtreeNode<K, V>()
+template <typename K, typename V> BtreeNode<K, V>::~BtreeNode<K, V>()
 {
 	if (data) {
 		free(data);
 	}
 }
 
-template<typename K, typename V>
-void BtreeNode<K, V>::print()
+template <typename K, typename V>
+void
+BtreeNode<K, V>::print()
 {
 	printBtreeNode(&node);
 }
 
-
-template<typename K, typename V>
-BtreeNode<K, V> Btree<K, V>::getRoot()
+template <typename K, typename V>
+BtreeNode<K, V>
+Btree<K, V>::getRoot()
 {
 	auto root = BtreeNode<K, V>(this, snap, blknum);
 	root.init();
@@ -338,9 +352,9 @@ BtreeNode<K, V> Btree<K, V>::getRoot()
 	return root;
 }
 
-
-template<typename K, typename V>
-BtreeIter<K, V> Btree<K, V>::keymax(K key)
+template <typename K, typename V>
+BtreeIter<K, V>
+Btree<K, V>::keymax(K key)
 {
 	auto root = getRoot();
 	if (root.failed()) {

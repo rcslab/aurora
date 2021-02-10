@@ -5,13 +5,12 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <signal.h>
+#include <sls.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-#include <sls.h>
 
 static struct option spawn_longopts[] = {
 	{ "oid", required_argument, NULL, 'o' },
@@ -21,11 +20,12 @@ static struct option spawn_longopts[] = {
 void
 spawn_usage(void)
 {
-	printf("Usage: slsctl spawn -o <id> -- <command> [<arg> [<arg> ...]]\n");
+	printf(
+	    "Usage: slsctl spawn -o <id> -- <command> [<arg> [<arg> ...]]\n");
 }
 
 int
-spawn_main(int argc, char* argv[])
+spawn_main(int argc, char *argv[])
 {
 	int ret = EXIT_FAILURE;
 	int oid_set;
@@ -40,17 +40,18 @@ spawn_main(int argc, char* argv[])
 	oid = 0;
 	oid_set = 0;
 
-	while ((opt = getopt_long(argc, argv, "o:", spawn_longopts, NULL)) != -1) {
+	while (
+	    (opt = getopt_long(argc, argv, "o:", spawn_longopts, NULL)) != -1) {
 		switch (opt) {
 		case 'o':
-		if (oid_set == 1) {
-			spawn_usage();
-			goto out;
-		}
+			if (oid_set == 1) {
+				spawn_usage();
+				goto out;
+			}
 
-		oid = strtol(optarg, NULL, 10);
-		oid_set = 1;
-		break;
+			oid = strtol(optarg, NULL, 10);
+			oid_set = 1;
+			break;
 
 		default:
 			spawn_usage();
@@ -78,7 +79,9 @@ spawn_main(int argc, char* argv[])
 		close(pipefd[1]);
 
 		// Wait for the parent to attach before execing
-		if (read(pipefd[0], &attached, sizeof(attached)) == sizeof(attached) && attached) {
+		if (read(pipefd[0], &attached, sizeof(attached)) ==
+			sizeof(attached) &&
+		    attached) {
 			execvp(cmd, argv + optind);
 			perror("execvp()");
 		}
@@ -93,7 +96,8 @@ spawn_main(int argc, char* argv[])
 		}
 
 		attached = 1;
-		if (write(pipefd[1], &attached, sizeof(attached)) != sizeof(attached)) {
+		if (write(pipefd[1], &attached, sizeof(attached)) !=
+		    sizeof(attached)) {
 			perror("write()");
 			goto out;
 		}
@@ -104,7 +108,8 @@ spawn_main(int argc, char* argv[])
 		if (WIFEXITED(wstatus)) {
 			ret = WEXITSTATUS(wstatus);
 			if (ret != EXIT_SUCCESS) {
-				fprintf(stderr, "%s exited with status %d\n", cmd, ret);
+				fprintf(stderr, "%s exited with status %d\n",
+				    cmd, ret);
 			}
 		} else if (WIFSIGNALED(wstatus)) {
 			psignal(WTERMSIG(wstatus), cmd);

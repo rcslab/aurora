@@ -13,17 +13,17 @@
 #include <vm/uma.h>
 
 #include <slos.h>
-#include <slos_btree.h>
 #include <slos_bnode.h>
+#include <slos_btree.h>
 #include <slos_inode.h>
 #include <slos_io.h>
 #include <slsfs.h>
 #include <slsfs_buf.h>
 
+#include "debug.h"
 #include "slos_alloc.h"
 #include "slos_subr.h"
 #include "slsfs_buf.h"
-#include "debug.h"
 
 static MALLOC_DEFINE(M_SLOS_INO, "slos inodes", "SLOSI");
 
@@ -90,14 +90,17 @@ slos_init(void)
 	slos.slos_usecnt = 1;
 
 	sysctl_ctx_init(&slos_ctx);
-	root = SYSCTL_ADD_ROOT_NODE(&slos_ctx, OID_AUTO, "aurora_slos", CTLFLAG_RW, 0,
+	root = SYSCTL_ADD_ROOT_NODE(&slos_ctx, OID_AUTO, "aurora_slos",
+	    CTLFLAG_RW, 0,
 	    "Aurora object store statistics and configuration variables");
 
-	(void) SYSCTL_ADD_INT(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "checksum_enabled",
-	    CTLFLAG_RW, &checksum_enabled, 0, "Checksum enabled");
+	(void)SYSCTL_ADD_INT(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "checksum_enabled", CTLFLAG_RW, &checksum_enabled, 0,
+	    "Checksum enabled");
 
-	(void) SYSCTL_ADD_U64(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO, "checkpointtime",
-	    CTLFLAG_RW, &checkpointtime, 0, "Checkpoint every X ms");
+	(void)SYSCTL_ADD_U64(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "checkpointtime", CTLFLAG_RW, &checkpointtime, 0,
+	    "Checkpoint every X ms");
 
 	/* Get a new unique identifier generator. */
 	slsid_unr = new_unrhdr(SLOS_SYSTEM_MAX, INT_MAX, NULL);
@@ -128,8 +131,8 @@ slos_uninit(void)
 static int
 compare_vnode_t(const void *k1, const void *k2)
 {
-	const size_t * key1 = (const size_t *)k1;
-	const size_t * key2 = (const size_t *)k2;
+	const size_t *key1 = (const size_t *)k1;
+	const size_t *key2 = (const size_t *)k2;
 
 	if (*key1 > *key2) {
 		return 1;
@@ -152,7 +155,8 @@ slsfs_root_rc(void *ctx, bnode_ptr p)
  * The inode needs to have no existing vnode in memory.
  */
 int
-slos_svpimport(struct slos *slos, uint64_t svpid, bool system, struct slos_node **svpp)
+slos_svpimport(
+    struct slos *slos, uint64_t svpid, bool system, struct slos_node **svpp)
 {
 	int error;
 	struct slos_node *svp = NULL;
@@ -177,8 +181,8 @@ slos_svpimport(struct slos *slos, uint64_t svpid, bool system, struct slos_node 
 	 */
 	if (system) {
 		change = SLOS_BSIZE(*slos) / SLOS_DEVBSIZE(*slos);
-		error = bread(slos->slos_vp, svpid * change,
-		    BLKSIZE(slos), curthread->td_ucred, &bp);
+		error = bread(slos->slos_vp, svpid * change, BLKSIZE(slos),
+		    curthread->td_ucred, &bp);
 		if (error != 0)
 			goto error;
 	} else {
@@ -204,9 +208,10 @@ slos_svpimport(struct slos *slos, uint64_t svpid, bool system, struct slos_node 
 	 */
 	svp->sn_slos = slos;
 	fbtree_init(svp->sn_fdev, ino->ino_btree.offset, sizeof(uint64_t),
-	    sizeof(diskptr_t), &compare_vnode_t, "VNode Tree", 0, &svp->sn_tree);
+	    sizeof(diskptr_t), &compare_vnode_t, "VNode Tree", 0,
+	    &svp->sn_tree);
 
-	// The root node requires its own update function as generic calls 
+	// The root node requires its own update function as generic calls
 	// update root and we end up with a recursive locking problem of
 	if (system && (svpid == slos->slos_sb->sb_root.offset)) {
 		fbtree_reg_rootchange(&svp->sn_tree, &slsfs_root_rc, svp);
@@ -223,7 +228,6 @@ error:
 	uma_zfree(slos_node_zone, svp);
 	return (error);
 }
-
 
 /* Free an in-memory vnode. */
 void
@@ -292,9 +296,9 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 	VOP_WRITE(root_vp, &io, 0, NULL);
 	VOP_UNLOCK(root_vp, 0);
 
-	// We will use this private pointer as a way to change this ino with 
+	// We will use this private pointer as a way to change this ino with
 	// the proper ino blk number when it syncs
-        DEBUG1("Created inode %lu", svpid);
+	DEBUG1("Created inode %lu", svpid);
 
 	return (0);
 }
@@ -322,14 +326,15 @@ slos_iopen(struct slos *slos, uint64_t oid, struct slos_node **svpp)
 	oid = OIDTOSLSID(oid);
 
 	/*
-	 * We should not hold this essentially global lock in this object. We 
-	 * can run into a scenario where when we search through the btree, we 
+	 * We should not hold this essentially global lock in this object. We
+	 * can run into a scenario where when we search through the btree, we
 	 * end up having to sleep while
 	 * we wait for the buffer, current fix is to allow sleeping on this lock
 	 */
 
 	if (oid == SLOS_INODES_ROOT) {
-		error = slos_svpimport(slos, slos->slos_sb->sb_root.offset, true, &svp);
+		error = slos_svpimport(
+		    slos, slos->slos_sb->sb_root.offset, true, &svp);
 		if (error != 0) {
 			SLOS_UNLOCK(slos);
 			return (error);
@@ -344,7 +349,8 @@ slos_iopen(struct slos *slos, uint64_t oid, struct slos_node **svpp)
 	/* For invalid inodes, erase all data by wiping out the btree root. */
 	if (svp->sn_ino.ino_blk == EPOCH_INVAL) {
 		fdev = svp->sn_fdev;
-		bp = getblk(fdev, svp->sn_ino.ino_btree.offset, BLKSIZE(slos), 0, 0, 0);
+		bp = getblk(
+		    fdev, svp->sn_ino.ino_btree.offset, BLKSIZE(slos), 0, 0, 0);
 		if (bp == NULL) {
 			panic("Could not get fake device block");
 		}
@@ -360,16 +366,15 @@ slos_iopen(struct slos *slos, uint64_t oid, struct slos_node **svpp)
 	return (0);
 }
 
-// We assume that svp is under the VOP_LOCK, we currently just check if the svp 
+// We assume that svp is under the VOP_LOCK, we currently just check if the svp
 // being updated is the root itself
-int 
+int
 slos_updatetime(struct slos_inode *ino)
 {
 	struct timespec ts;
 
-
 	if ((ino->ino_flags & (IN_ACCESS | IN_CHANGE | IN_UPDATE)) == 0) {
-	    return (0);
+		return (0);
 	}
 
 	vfs_timestamp(&ts);
@@ -399,7 +404,7 @@ slos_updatetime(struct slos_inode *ino)
 	return (0);
 }
 
-int 
+int
 slos_update(struct slos_node *svp)
 {
 	int error;
@@ -409,7 +414,8 @@ slos_update(struct slos_node *svp)
 
 	vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
 
-	error = slsfs_bread(slos.slsfs_inodes, svp->sn_pid, IOSIZE(svp), NULL, 0, &bp);
+	error = slsfs_bread(
+	    slos.slsfs_inodes, svp->sn_pid, IOSIZE(svp), NULL, 0, &bp);
 	if (error) {
 		VOP_UNLOCK(slos.slsfs_inodes, 0);
 		return (error);
@@ -444,7 +450,7 @@ initialize_inode(struct slos *slos, uint64_t pid, diskptr_t *p)
 	ino.ino_pid = pid;
 	ino.ino_gid = 0;
 	ino.ino_uid = 0;
-	
+
 	bp = getblk(fdev, ino.ino_blk, BLKSIZE(slos), 0, 0, 0);
 	MPASS(bp);
 
@@ -461,4 +467,3 @@ initialize_inode(struct slos *slos, uint64_t pid, diskptr_t *p)
 
 	return (0);
 }
-

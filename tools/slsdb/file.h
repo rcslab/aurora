@@ -1,5 +1,5 @@
 #ifndef __SLSFILE_H__
-#define __SLSFILE_H__ 
+#define __SLSFILE_H__
 
 class SFile;
 class InodeFile;
@@ -7,7 +7,7 @@ class InodeFile;
 enum class SType { INODE_ROOT, SREG, SDIR, CKSUM, SBLK, SCHR };
 
 class SFile {
-public:
+    public:
 	SFile();
 	SFile(Snapshot *snap, slos_inode &ino, SType type);
 	virtual ~SFile() {};
@@ -20,7 +20,8 @@ public:
 	void hexdump();
 
 	friend std::shared_ptr<SFile> createFile(Snapshot *sb, long blknum);
-protected:
+
+    protected:
 	void writeData(std::ostream &where);
 
 	struct slos_inode ino;
@@ -33,8 +34,9 @@ protected:
 };
 
 class SReg : public SFile {
-public:
-	SReg() : SFile() {};
+    public:
+	SReg()
+	    : SFile() {};
 	SReg(Snapshot *sb, slos_inode &ino);
 	~SReg() {};
 
@@ -42,7 +44,7 @@ public:
 };
 
 class InodeFile : public SFile {
-public:
+    public:
 	InodeFile(Snapshot *sb, slos_inode &ino);
 	~InodeFile() {};
 

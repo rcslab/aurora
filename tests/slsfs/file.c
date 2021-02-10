@@ -1,11 +1,13 @@
-#include <stdio.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <string.h>
-#include <errno.h>
 #include <sys/stat.h>
 
-int main()
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+
+int
+main()
 {
 	int error;
 
@@ -22,7 +24,7 @@ int main()
 	char ding[255];
 	size = pread(fd, ding, 255, 0);
 	printf("%zd read\n", size);
-	if (size == -1 ) {
+	if (size == -1) {
 		printf("%s - uh oh", strerror(errno));
 		return -1;
 	}

@@ -1,25 +1,23 @@
 #include <sys/param.h>
-#include <sys/queue.h>
-#include <sys/lock.h>
-
 #include <sys/bio.h>
 #include <sys/buf.h>
+#include <sys/lock.h>
+#include <sys/queue.h>
 #include <sys/rwlock.h>
 #include <sys/uio.h>
 
 #include <vm/vm.h>
-#include <vm/vm_object.h>
 #include <vm/swap_pager.h>
+#include <vm/vm_object.h>
 #include <vm/vm_page.h>
 #include <vm/vm_pager.h>
 #include <vm/vm_param.h>
 
 #include <slos_io.h>
 
+#include "debug.h"
 #include "sls_internal.h"
 #include "sls_pager.h"
-
-#include "debug.h"
 
 #define SLS_SWAPOFF_RETRIES (100)
 #define SLS_VMOBJ_SWAPVP(obj) ((obj)->un_pager.swp.swp_tmpfs)
@@ -42,7 +40,8 @@ sls_pager_done(struct buf *bp)
 		VM_OBJECT_WLOCK(obj);
 
 		for (i = 0; i < bp->b_npages; i++) {
-			KASSERT((bp->b_flags & B_INVAL) == 0, ("paging failed"));
+			KASSERT(
+			    (bp->b_flags & B_INVAL) == 0, ("paging failed"));
 
 			m = bp->b_pages[i];
 			m->oflags &= ~VPO_SWAPINPROG;
@@ -50,11 +49,13 @@ sls_pager_done(struct buf *bp)
 				m->oflags &= ~VPO_SWAPSLEEP;
 				wakeup(&obj->paging_in_progress);
 			}
-			KASSERT((bp->b_ioflags & BIO_ERROR)== 0, ("swap failed"));
-			KASSERT(bp->b_iocmd == BIO_READ || bp->b_iocmd == BIO_WRITE,
+			KASSERT(
+			    (bp->b_ioflags & BIO_ERROR) == 0, ("swap failed"));
+			KASSERT(
+			    bp->b_iocmd == BIO_READ || bp->b_iocmd == BIO_WRITE,
 			    ("invalid BIO operation %d", bp->b_iocmd));
 
-			if (bp->b_iocmd  == BIO_READ) {
+			if (bp->b_iocmd == BIO_READ) {
 				m->valid = VM_PAGE_BITS_ALL;
 
 				/* If speculatively paged in, deactivate. */
@@ -62,9 +63,9 @@ sls_pager_done(struct buf *bp)
 				    i >= bp->b_npages - bp->b_pgafter)
 					vm_page_readahead_finish(m);
 			} else if (bp->b_iocmd == BIO_WRITE) {
-				/* 
+				/*
 				 * Apply the same heuristics as the swapper.
-				 * Lots of room for optimization here, depending 
+				 * Lots of room for optimization here, depending
 				 * on what we do with the page lists!
 				 */
 				vm_page_undirty(m);
@@ -148,29 +149,32 @@ sls_pager_writebuf(vm_object_t obj, vm_pindex_t pindex, size_t targetsize)
 	vm_page_t m;
 
 	KASSERT(targetsize <= sls_contig_limit,
-	    ("page %lx is larger than sls_contig_limit %lx",
-	    targetsize, sls_contig_limit));
-	KASSERT((targetsize / PAGE_SIZE) < btoc(MAXPHYS), ("target IO too large"));
+	    ("page %lx is larger than sls_contig_limit %lx", targetsize,
+		sls_contig_limit));
+	KASSERT(
+	    (targetsize / PAGE_SIZE) < btoc(MAXPHYS), ("target IO too large"));
 	KASSERT(obj->ref_count >= obj->shadow_count + 1,
-	    ("object has %d references and %d shadows",
-	    obj->ref_count, obj->shadow_count));
+	    ("object has %d references and %d shadows", obj->ref_count,
+		obj->shadow_count));
 
 	bp = getpbuf(&slos_pbufcnt);
 	KASSERT(bp != NULL, ("did not get new physical buffer"));
 
 	VM_OBJECT_WLOCK(obj);
-	for (m = vm_page_find_least(obj, pindex); m != NULL; m = vm_page_next(m)) {
+	for (m = vm_page_find_least(obj, pindex); m != NULL;
+	     m = vm_page_next(m)) {
 		if (npages == 0)
 			pindex_init = m->pindex;
 
 		KASSERT(npages < btoc(MAXPHYS), ("overran b_pages[] array"));
-		KASSERT(m->object == obj, ("page %p in object %p "
-		    "associated with object %p",
-		    m, obj, m->object));
+		KASSERT(m->object == obj,
+		    ("page %p in object %p "
+		     "associated with object %p",
+			m, obj, m->object));
 		KASSERT(pindex_init + npages == m->pindex,
 		    ("pages in the buffer are not consecutive "
-		    "(pindex should be %ld, is %ld)",
-		    pindex_init + npages, m->pindex));
+		     "(pindex should be %ld, is %ld)",
+			pindex_init + npages, m->pindex));
 		KASSERT(pagesizes[m->psind] <= PAGE_SIZE,
 		    ("dumping page %p with size %ld", m, pagesizes[m->psind]));
 
@@ -211,7 +215,7 @@ sls_pager_writebuf(vm_object_t obj, vm_pindex_t pindex, size_t targetsize)
 }
 
 /*
- * Turn an Aurora object into a swap object. To be called both from the swapping 
+ * Turn an Aurora object into a swap object. To be called both from the swapping
  * code and the Aurora shadowing code.
  */
 int
@@ -224,8 +228,7 @@ sls_pager_obj_init(vm_object_t obj)
 	VM_OBJECT_ASSERT_WLOCKED(obj);
 
 	/* If it's already prepared, nothing else to do. */
-	if ((obj->type == OBJT_SWAP) &&
-	    ((obj->flags & OBJ_AURORA) != 0))
+	if ((obj->type == OBJT_SWAP) && ((obj->flags & OBJ_AURORA) != 0))
 		return (0);
 
 	if (sls_swapref())
@@ -235,16 +238,16 @@ sls_pager_obj_init(vm_object_t obj)
 	KASSERT(obj->handle == NULL, ("object has a handle"));
 
 	/*
-	 * Even if the object was a swap object that was initialized before we 
-	 * inserted the SLS, the pctrie is empty. There is no state to clean up.  
-	 * The only edge case here is if the object is part of tmpfs, in which 
-	 * case we can do nothing but crash; we are reusing the pointer for 
+	 * Even if the object was a swap object that was initialized before we
+	 * inserted the SLS, the pctrie is empty. There is no state to clean up.
+	 * The only edge case here is if the object is part of tmpfs, in which
+	 * case we can do nothing but crash; we are reusing the pointer for
 	 * Aurora right now.
 	 */
 	KASSERT((obj->flags & OBJ_TMPFS) == 0, ("paging tmpfs object"));
 
 	/*
-	 * We reuse the pointer to the tmpfs already in the object for our own 
+	 * We reuse the pointer to the tmpfs already in the object for our own
 	 * purposes. We can create a new field if this gets confusing.
 	 */
 
@@ -253,7 +256,8 @@ sls_pager_obj_init(vm_object_t obj)
 	KASSERT(error == 0, ("error %d when allocating SLOS inode", error));
 
 	error = VFS_VGET(slos.slsfs_mount, oid, 0, &vp);
-	KASSERT(error == 0, ("error %d when getting newly created SLOS inode", error));
+	KASSERT(error == 0,
+	    ("error %d when getting newly created SLOS inode", error));
 
 	obj->type = OBJT_SWAP;
 	obj->flags |= OBJ_AURORA;
@@ -261,17 +265,17 @@ sls_pager_obj_init(vm_object_t obj)
 	VOP_UNLOCK(vp, 0);
 
 	/*
-	 * We have the following problem: Top level objects are not in Aurora. 
-	 * If they start swapping, where do we put the data? The answer is that 
-	 * the top level object DOES have a backer in the SLOS, that of its 
-	 * parent, even if it isn't in Aurora. As long as it has a parent in 
-	 * Aurora, it can be swapped. 
+	 * We have the following problem: Top level objects are not in Aurora.
+	 * If they start swapping, where do we put the data? The answer is that
+	 * the top level object DOES have a backer in the SLOS, that of its
+	 * parent, even if it isn't in Aurora. As long as it has a parent in
+	 * Aurora, it can be swapped.
 	 *
-	 * Now, does it ALWAYS have a parent in Aurora? Possibly not, and in 
-	 * this case we prioritize swapping out pages in objects that are. If 
-	 * we're at a point where we don't have any easily dumpable pages, we're 
-	 * under such extreme memory pressure that Aurora's dumping cannot keep 
-	 * up and the system would go down if it was using regular swapping 
+	 * Now, does it ALWAYS have a parent in Aurora? Possibly not, and in
+	 * this case we prioritize swapping out pages in objects that are. If
+	 * we're at a point where we don't have any easily dumpable pages, we're
+	 * under such extreme memory pressure that Aurora's dumping cannot keep
+	 * up and the system would go down if it was using regular swapping
 	 * anyway.
 	 */
 
@@ -288,8 +292,8 @@ sls_pager_haspage(vm_object_t obj, vm_pindex_t pindex, int *before, int *after)
 }
 
 static void
-sls_pager_putpages(vm_object_t obj, vm_page_t *ma, int count,
-    int flags, int *rtvals)
+sls_pager_putpages(
+    vm_object_t obj, vm_page_t *ma, int count, int flags, int *rtvals)
 {
 	struct buf *bp;
 	int error, i;
@@ -360,8 +364,8 @@ sls_pager_clip_read(int count, int *rbehind, int *rahead)
 }
 
 static int
-sls_pager_getpages(vm_object_t obj, vm_page_t *ma, int count,
-    int *rbehind, int *rahead)
+sls_pager_getpages(
+    vm_object_t obj, vm_page_t *ma, int count, int *rbehind, int *rahead)
 {
 	int maxahead, maxbehind, npages;
 	vm_page_t mpred, msucc, m;
@@ -388,19 +392,19 @@ sls_pager_getpages(vm_object_t obj, vm_page_t *ma, int count,
 		/* We are bound by the first resident page to the right. */
 		msucc = TAILQ_NEXT(ma[count - 1], listq);
 		if (msucc != NULL) {
-			*rahead = imin(*rahead, msucc->pindex -
-			    ma[count - 1]->pindex - 1);
+			*rahead = imin(
+			    *rahead, msucc->pindex - ma[count - 1]->pindex - 1);
 		}
 	}
-	if (rbehind!= NULL) {
+	if (rbehind != NULL) {
 		/* The size of the extent not covered by the page array. */
 		*rbehind = imin(*rbehind, maxbehind);
 
 		/* Bound by the first resident page to the left. */
 		mpred = TAILQ_PREV(ma[0], pglist, listq);
 		if (mpred != NULL)
-			*rbehind = imin(*rbehind, ma[0]->pindex -
-			    mpred->pindex - 1);
+			*rbehind = imin(
+			    *rbehind, ma[0]->pindex - mpred->pindex - 1);
 	}
 
 	/* Bound readahead and readbehind so that the IO fits in one buffer. */
@@ -430,7 +434,7 @@ sls_pager_getpages(vm_object_t obj, vm_page_t *ma, int count,
 		}
 
 		*rahead = i - 1;
-		npages +=  *rahead;
+		npages += *rahead;
 	}
 
 	/*
@@ -461,8 +465,8 @@ sls_pager_getpages(vm_object_t obj, vm_page_t *ma, int count,
 	while ((ma[0]->oflags & VPO_SWAPINPROG) != 0) {
 		ma[0]->oflags |= VPO_SWAPSLEEP;
 		if (VM_OBJECT_SLEEP(obj, &obj->paging_in_progress, PSWP,
-		    "swread", hz * 20)) {
-		    printf("sls_pager: waiting for buffer %p\n", bp);
+			"swread", hz * 20)) {
+			printf("sls_pager: waiting for buffer %p\n", bp);
 		}
 	}
 
@@ -501,7 +505,7 @@ sls_pager_alloc(void *handle, vm_offset_t size, vm_prot_t prot,
 	 * we can reuse the field freely.
 	 */
 	oldid = obj->objid;
-	obj->objid = (uint64_t) handle;
+	obj->objid = (uint64_t)handle;
 
 	VM_OBJECT_WLOCK(obj);
 	if (sls_pager_obj_init(obj))
@@ -564,7 +568,8 @@ sls_pager_fini(vm_object_t obj)
  * Destroy an Aurora object.
  */
 static void
-sls_pager_dealloc(vm_object_t obj) {
+sls_pager_dealloc(vm_object_t obj)
+{
 	VM_OBJECT_ASSERT_LOCKED(obj);
 	KASSERT((obj->flags & OBJ_DEAD) != 0, ("dealloc of reachable object"));
 
@@ -626,7 +631,7 @@ sls_pager_register(void)
 }
 
 /*
- * Restore the original swap methods during module destruction, allow swapping 
+ * Restore the original swap methods during module destruction, allow swapping
  * on regular swap devices.
  */
 void
@@ -638,7 +643,6 @@ sls_pager_unregister(void)
 	if (slspagerops.pgo_alloc == sls_pager_alloc)
 		swappagerops = swappagerops_old;
 	sx_xunlock(&swdev_syscall_lock);
-
 }
 
 static void
@@ -647,14 +651,13 @@ sls_pager_swapoff_one(void)
 	vm_object_t obj;
 
 	/*
-	 * XXX For now just change the object back and damn the consequences 
-	 * (i.e. have the processes crash since we pulled their data from under 
+	 * XXX For now just change the object back and damn the consequences
+	 * (i.e. have the processes crash since we pulled their data from under
 	 * them).
 	 */
 	mtx_lock(&vm_object_list_mtx);
-	TAILQ_FOREACH(obj, &vm_object_list, object_list) {
-		if ((obj->type != OBJT_SWAP) ||
-		    (obj->flags & OBJ_AURORA) == 0)
+	TAILQ_FOREACH (obj, &vm_object_list, object_list) {
+		if ((obj->type != OBJT_SWAP) || (obj->flags & OBJ_AURORA) == 0)
 			continue;
 
 		mtx_unlock(&vm_object_list_mtx);
@@ -667,7 +670,7 @@ sls_pager_swapoff_one(void)
 			goto next_object;
 
 		sls_pager_fini(obj);
-next_object:
+	next_object:
 		VM_OBJECT_WUNLOCK(obj);
 		mtx_lock(&vm_object_list_mtx);
 	}
@@ -687,7 +690,8 @@ sls_pager_swapoff(void)
 
 		retries += 1;
 		if (retries == SLS_SWAPOFF_RETRIES)
-			panic("failed to destroy %d objects", slsm.slsm_swapobjs);
+			panic(
+			    "failed to destroy %d objects", slsm.slsm_swapobjs);
 
 		SLS_UNLOCK();
 		pause("slsswp", hz / 20);

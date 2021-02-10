@@ -5,7 +5,8 @@
 
 #define SIGMSG ("SIGUSR1 handler called successfully.\n")
 
-void handle_sigusr(int signal)
+void
+handle_sigusr(int signal)
 {
 	char *msg = SIGMSG;
 
@@ -13,7 +14,8 @@ void handle_sigusr(int signal)
 	exit(0);
 }
 
-int main()
+int
+main()
 {
 	struct sigaction sa;
 	int i;

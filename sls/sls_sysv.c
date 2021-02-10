@@ -1,5 +1,4 @@
 #include <sys/types.h>
-
 #include <sys/shm.h>
 #include <sys/uio.h>
 
@@ -10,12 +9,11 @@
 #include <slos_inode.h>
 #include <sls_data.h>
 
+#include "debug.h"
 #include "sls_internal.h"
 #include "sls_sysv.h"
 #include "sls_vmobject.h"
 #include "sysv_internal.h"
-
-#include "debug.h"
 
 SDT_PROBE_DEFINE(sls, , , sysvstart);
 SDT_PROBE_DEFINE(sls, , , sysvend);
@@ -48,13 +46,13 @@ slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 
 		/* Dump the metadata to the records table. */
 		slssysvshm.magic = SLSSYSVSHM_ID;
-		slssysvshm.slsid = (uint64_t) shmsegs[i].object->objid;
+		slssysvshm.slsid = (uint64_t)shmsegs[i].object->objid;
 		slssysvshm.key = shmsegs[i].u.shm_perm.key;
 		slssysvshm.shm_segsz = shmsegs[i].u.shm_segsz;
 		slssysvshm.mode = shmsegs[i].u.shm_perm.mode;
 		slssysvshm.segnum = i;
 
-		error = sbuf_bcat(sb, (void *) &slssysvshm, sizeof(slssysvshm));
+		error = sbuf_bcat(sb, (void *)&slssysvshm, sizeof(slssysvshm));
 		if (error != 0)
 			goto error;
 
@@ -62,7 +60,6 @@ slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 		error = slsckpt_vmobject_shm(&shmsegs[i].object, sckpt_data);
 		if (error != 0)
 			goto error;
-
 	}
 
 	/* If we have no SYSV segments, don't store any data at all. */
@@ -75,8 +72,9 @@ slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 	if (error != 0)
 		goto error;
 
-	rec = sls_getrecord(sb, (uint64_t) shmsegs, SLOSREC_SYSVSHM);
-	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) shmsegs, (uintptr_t) rec);
+	rec = sls_getrecord(sb, (uint64_t)shmsegs, SLOSREC_SYSVSHM);
+	error = slskv_add(
+	    sckpt_data->sckpt_rectable, (uint64_t)shmsegs, (uintptr_t)rec);
 	if (error != 0) {
 		free(rec, M_SLSREC);
 		goto error;
@@ -93,7 +91,6 @@ error:
 	return (error);
 }
 
-
 int
 slsrest_sysvshm(struct slssysvshm *slssysvshm, struct slskv_table *objtable)
 {
@@ -102,34 +99,35 @@ slsrest_sysvshm(struct slssysvshm *slssysvshm, struct slskv_table *objtable)
 	vm_object_t obj;
 	int error;
 
-	/* 
-	 * The segments have to have the exact same segment number 
+	/*
+	 * The segments have to have the exact same segment number
 	 * they originally used to have when restored. XXX We could
 	 * fix that up by having a translation table, but having a
 	 * clean slate to work with shared memory-wise is a reasonable
 	 * assumption.
 	 */
-	KASSERT(shmalloced > slssysvshm->segnum, ("shmalloced %d, segnum %d",
-	    shmalloced, slssysvshm->segnum));
+	KASSERT(shmalloced > slssysvshm->segnum,
+	    ("shmalloced %d, segnum %d", shmalloced, slssysvshm->segnum));
 	shmseg = &shmsegs[slssysvshm->segnum];
 	if ((shmseg->u.shm_perm.mode & SHMSEG_ALLOCATED) != 0)
 		return (EINVAL);
 
 	/* Get the restored object for the segment. */
-	error = slskv_find(objtable, slssysvshm->slsid, (uintptr_t *) &obj);
+	error = slskv_find(objtable, slssysvshm->slsid, (uintptr_t *)&obj);
 	if (error != 0)
 		return (EINVAL);
 
-	/* 
-	 * Recreate the segment, similarly to how it's done 
-	 * in shmget_allocate_segment(). 
+	/*
+	 * Recreate the segment, similarly to how it's done
+	 * in shmget_allocate_segment().
 	 */
 
 	vm_object_reference(obj);
 	shmseg->object = obj;
 	shmseg->u.shm_perm.cuid = shmseg->u.shm_perm.uid = cred->cr_uid;
 	shmseg->u.shm_perm.cgid = shmseg->u.shm_perm.gid = cred->cr_gid;
-	shmseg->u.shm_perm.mode = (slssysvshm->mode & ACCESSPERMS) | SHMSEG_ALLOCATED;
+	shmseg->u.shm_perm.mode = (slssysvshm->mode & ACCESSPERMS) |
+	    SHMSEG_ALLOCATED;
 	shmseg->u.shm_perm.key = slssysvshm->key;
 	shmseg->u.shm_perm.seq = (shmseg->u.shm_perm.seq + 1) & 0x7fff;
 	shmseg->cred = crhold(cred);

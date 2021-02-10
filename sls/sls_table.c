@@ -1,6 +1,5 @@
 #include <sys/param.h>
-#include <sys/queue.h>
-
+#include <sys/systm.h>
 #include <sys/bio.h>
 #include <sys/buf.h>
 #include <sys/conf.h>
@@ -10,51 +9,49 @@
 #include <sys/malloc.h>
 #include <sys/mman.h>
 #include <sys/module.h>
-#include <sys/param.h>
 #include <sys/pcpu.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
+#include <sys/queue.h>
 #include <sys/rwlock.h>
 #include <sys/shm.h>
 #include <sys/signalvar.h>
-#include <sys/systm.h>
 #include <sys/syscallsubr.h>
 #include <sys/taskqueue.h>
 #include <sys/time.h>
 #include <sys/uio.h>
 
-#include <machine/param.h>
-#include <machine/reg.h>
-#include <machine/vmparam.h>
-
-#include <vm/vm_param.h>
-#include <vm/pmap.h>
 #include <vm/vm.h>
+#include <vm/pmap.h>
+#include <vm/uma.h>
 #include <vm/vm_extern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
 #include <vm/vm_pager.h>
+#include <vm/vm_param.h>
 #include <vm/vm_radix.h>
-#include <vm/uma.h>
+
+#include <machine/param.h>
+#include <machine/reg.h>
+#include <machine/vmparam.h>
 
 #include <slos.h>
 #include <slos_inode.h>
 #include <slos_io.h>
-#include <slsfs.h>
 #include <sls_data.h>
+#include <slsfs.h>
 
+#include "debug.h"
 #include "sls_internal.h"
 #include "sls_kv.h"
-#include "sls_partition.h"
 #include "sls_pager.h"
+#include "sls_partition.h"
 #include "sls_table.h"
-#include "debug.h"
 
 #ifdef SLS_TEST
 #include "slstable_test.h"
 #endif /* SLS_TEST */
-
 
 /* The maximum size of a single data transfer */
 uint64_t sls_contig_limit = MAXBCACHEBUF;
@@ -71,10 +68,10 @@ unsigned int sls_async_slos = 1;
  * A list of info structs which can hold data,
  * along with the size of their metadata.
  */
-static uint64_t sls_datastructs[] =  { 
-	SLOSREC_VMOBJ, 
+static uint64_t sls_datastructs[] = {
+	SLOSREC_VMOBJ,
 #ifdef SLS_TEST
-	SLOSREC_TESTDATA, 
+	SLOSREC_TESTDATA,
 #endif
 };
 
@@ -151,7 +148,8 @@ sls_isdata(uint64_t type)
 {
 	int i;
 
-	for (i = 0; i < sizeof(sls_datastructs) / sizeof(*sls_datastructs); i++) {
+	for (i = 0; i < sizeof(sls_datastructs) / sizeof(*sls_datastructs);
+	     i++) {
 		if (sls_datastructs[i] == type)
 			return (1);
 	}
@@ -208,7 +206,8 @@ sls_readrec_sbuf(char *buf, size_t len, struct sbuf **sbp)
 		return (error);
 	}
 
-	KASSERT((sb->s_flags & SBUF_FINISHED) == SBUF_FINISHED, ("buffer not finished?"));
+	KASSERT((sb->s_flags & SBUF_FINISHED) == SBUF_FINISHED,
+	    ("buffer not finished?"));
 	KASSERT(sbuf_done(sb), ("sbuf is not done"));
 	KASSERT(sbuf_len(sb) == len, ("buffer returns wrong length"));
 
@@ -293,7 +292,8 @@ sls_readrec_slos(struct vnode *vp, uint64_t slsid, struct sls_record **recp)
 		return (error);
 	}
 
-	KASSERT(st.len != 0, ("record of type %lx with SLS ID %lx is empty\n", st.type, slsid));
+	KASSERT(st.len != 0,
+	    ("record of type %lx with SLS ID %lx is empty\n", st.type, slsid));
 
 	error = sls_readrec_buf(vp, st.len, &sb);
 	if (error != 0)
@@ -320,7 +320,7 @@ sls_readmeta_slos(struct vnode *vp, uint64_t slsid, struct slskv_table *table)
 		return (error);
 
 	/* Add the record to the table to be parsed into info structs later. */
-	error = slskv_add(table, slsid, (uintptr_t) rec);
+	error = slskv_add(table, slsid, (uintptr_t)rec);
 	if (error != 0) {
 		sls_record_destroy(rec);
 		return (error);
@@ -343,7 +343,7 @@ sls_readdata_slos_vmobj(struct slskv_table *table, uint64_t slsid,
 	int error;
 
 	/* Add the record to the table to be parsed later. */
-	error = slskv_add(table, slsid, (uintptr_t) rec);
+	error = slskv_add(table, slsid, (uintptr_t)rec);
 	if (error != 0) {
 		sls_record_destroy(rec);
 		return (error);
@@ -353,12 +353,12 @@ sls_readdata_slos_vmobj(struct slskv_table *table, uint64_t slsid,
 #ifdef SLS_TEST
 	switch (rec->srec_type) {
 	case SLOSREC_VMOBJ:
-		info = (struct slsvmobject *) sbuf_data(rec->srec_sb);
+		info = (struct slsvmobject *)sbuf_data(rec->srec_sb);
 		type = info->type;
 		size = info->size;
 		break;
 	case SLOSREC_TESTDATA:
-		dinfo = (struct data_info *) sbuf_data(rec->srec_sb);
+		dinfo = (struct data_info *)sbuf_data(rec->srec_sb);
 		type = OBJT_DEFAULT;
 		size = dinfo->size;
 		break;
@@ -368,9 +368,9 @@ sls_readdata_slos_vmobj(struct slskv_table *table, uint64_t slsid,
 
 #else
 
-	KASSERT(rec->srec_type == SLOSREC_VMOBJ, ("invalid record type %lx",
-	    rec->srec_type));
-	info = (struct slsvmobject *) sbuf_data(rec->srec_sb);
+	KASSERT(rec->srec_type == SLOSREC_VMOBJ,
+	    ("invalid record type %lx", rec->srec_type));
+	info = (struct slsvmobject *)sbuf_data(rec->srec_sb);
 	type = info->type;
 	size = info->size;
 
@@ -383,7 +383,7 @@ sls_readdata_slos_vmobj(struct slskv_table *table, uint64_t slsid,
 	}
 
 	/* Allocate a new object. */
-	*objp = vm_pager_allocate(OBJT_SWAP, (void *) slsid, IDX_TO_OFF(size),
+	*objp = vm_pager_allocate(OBJT_SWAP, (void *)slsid, IDX_TO_OFF(size),
 	    VM_PROT_DEFAULT, 0, NULL);
 
 	return (0);
@@ -408,16 +408,16 @@ sls_readpages_slos(struct vnode *vp, vm_object_t obj, struct slos_extent sxt)
 	KASSERT(obj->ref_count == 1, ("object under reconstruction is in use"));
 	VM_OBJECT_WLOCK(obj);
 
-	/* 
-	 * Some of the pages we are trying to read might already be in the 
-	 * process of being paged in. Make all necessary IOs to bring in any 
+	/*
+	 * Some of the pages we are trying to read might already be in the
+	 * process of being paged in. Make all necessary IOs to bring in any
 	 * pages not currently being paged in.
 	 */
 	pindex = sxt.sxt_lblkno - SLOS_OBJOFF;
 	for (pgleft = sxt.sxt_cnt; pgleft > 0; pgleft -= npages) {
 		msucc = vm_page_find_least(obj, pindex);
 		npages = (msucc != NULL) ? msucc->pindex - pindex : pgleft;
-		if (npages == 0)  {
+		if (npages == 0) {
 			pindex += 1;
 			continue;
 		}
@@ -440,8 +440,9 @@ sls_readpages_slos(struct vnode *vp, vm_object_t obj, struct slos_extent sxt)
 		VM_OBJECT_WLOCK(obj);
 
 		for (i = 0; i < npages; i++) {
-			KASSERT(ma[i]->object == obj, ("page belongs to wrong"
-			    "object"));
+			KASSERT(ma[i]->object == obj,
+			    ("page belongs to wrong"
+			     "object"));
 			vm_page_xunbusy(ma[i]);
 		}
 
@@ -556,9 +557,8 @@ sls_readdata(struct vnode *vp, uint64_t slsid, uint64_t type,
 			goto error;
 	}
 
-
 	/* Add the object to the table. */
-	error = slskv_add(objtable, slsid, (uintptr_t) obj);
+	error = slskv_add(objtable, slsid, (uintptr_t)obj);
 	if (error != 0)
 		goto error;
 
@@ -580,7 +580,7 @@ sls_free_rectable(struct slskv_table *rectable)
 		return;
 
 	KV_FOREACH_POP(rectable, slsid, rec)
-	    sls_record_destroy(rec);
+	sls_record_destroy(rec);
 
 	slskv_destroy(rectable);
 }
@@ -615,7 +615,6 @@ sls_read_slos_manifest(uint64_t oid, uint64_t **ids, size_t *idlen)
 		return (error);
 	}
 
-
 	buf = malloc(st.len, M_SLSMM, M_WAITOK);
 	error = sls_readrec_raw(vp, st.len, buf);
 	if (error != 0) {
@@ -624,7 +623,7 @@ sls_read_slos_manifest(uint64_t oid, uint64_t **ids, size_t *idlen)
 		return (error);
 	}
 
-	*ids = (uint64_t *) buf;
+	*ids = (uint64_t *)buf;
 	*idlen = st.len / sizeof(**ids);
 
 	close_error = VOP_CLOSE(vp, mode, NULL, td);
@@ -668,13 +667,14 @@ sls_read_slos_record(uint64_t oid, struct slskv_table *rectable,
 		return (error);
 	}
 
-	/* 
-	 * If the record can hold data, "typecast" it to look like it only has 
+	/*
+	 * If the record can hold data, "typecast" it to look like it only has
 	 * metadata. We will manually read the data later.
 	 */
 	DEBUG1("Read record of type %d", st.type);
 	if (sls_isdata(st.type)) {
-		ret = sls_readdata(vp, oid, st.type, rectable, objtable, lazyrest);
+		ret = sls_readdata(
+		    vp, oid, st.type, rectable, objtable, lazyrest);
 		if (ret != 0)
 			goto out;
 	} else {
@@ -714,11 +714,10 @@ sls_read_slos(struct slspart *slsp, struct slskv_table **rectablep,
 		goto error;
 
 	for (i = 0; i < idlen; i++) {
-		error = sls_read_slos_record(ids[i], rectable, objtable,
-		    SLSPART_LAZYREST(slsp));
+		error = sls_read_slos_record(
+		    ids[i], rectable, objtable, SLSPART_LAZYREST(slsp));
 		if (error != 0)
 			goto error;
-
 	}
 
 	*rectablep = rectable;
@@ -740,7 +739,7 @@ error:
  *
  * This function is not inlined in order to be able to use DTrace on it.
  */
-static int __attribute__ ((noinline))
+static int __attribute__((noinline))
 sls_writeobj_data(struct vnode *vp, vm_object_t obj)
 {
 	vm_pindex_t pindex;
@@ -875,7 +874,8 @@ error:
 	if (vp != NULL) {
 		close_error = VOP_CLOSE(vp, mode, NULL, td);
 		if (close_error != 0)
-			SLS_DBG("error %d, could not close SLSFS vnode\n", close_error);
+			SLS_DBG("error %d, could not close SLSFS vnode\n",
+			    close_error);
 
 		vput(vp);
 	}
@@ -923,15 +923,15 @@ sls_writedata_slos(struct sls_record *rec, struct slskv_table *objtable)
 	 * that's why we are in this function in the first place.
 	 */
 	if (rec->srec_type == SLOSREC_VMOBJ) {
-		vminfo = (struct slsvmobject *) sbuf_data(sb);
+		vminfo = (struct slsvmobject *)sbuf_data(sb);
 		/* Get the object itself. */
-		obj = (vm_object_t) vminfo->objptr;
+		obj = (vm_object_t)vminfo->objptr;
 	}
 #ifdef SLS_TEST
 	else if (rec->srec_type == SLOSREC_TESTDATA) {
-		datainfo = (struct data_info*) sbuf_data(sb);
+		datainfo = (struct data_info *)sbuf_data(sb);
 		/* The slsid is always a pointer for data objects. */
-		obj = (vm_object_t) datainfo->slsid;
+		obj = (vm_object_t)datainfo->slsid;
 	}
 #endif /* SLS_TEST */
 	else {
@@ -978,8 +978,8 @@ sls_write_slos_manifest(uint64_t oid, struct sbuf *sb)
 	/* Write out the manifest to the vnode. */
 	rec = (struct sls_record) {
 		.srec_id = oid,
-		    .srec_type = SLOSREC_MANIFEST,
-		    .srec_sb = sb,
+		.srec_type = SLOSREC_MANIFEST,
+		.srec_sb = sb,
 	};
 
 	error = sls_writemeta_slos(&rec, NULL, true);
@@ -997,10 +997,11 @@ sls_write_slos_dataregion(struct slsckpt_data *sckpt_data)
 	uint64_t slsid;
 	int error;
 
-	KV_FOREACH(sckpt_data->sckpt_rectable, iter, slsid, rec) {
+	KV_FOREACH(sckpt_data->sckpt_rectable, iter, slsid, rec)
+	{
 		/* We only dump VM objects. */
-		KASSERT(sls_isdata(rec->srec_type), ("dumping non object %ld", \
-		    rec->srec_type));
+		KASSERT(sls_isdata(rec->srec_type),
+		    ("dumping non object %ld", rec->srec_type));
 		error = sls_writedata_slos(rec, sckpt_data->sckpt_objtable);
 		if (error != 0) {
 			KV_ABORT(iter);
@@ -1028,13 +1029,15 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 
 	sb_manifest = sbuf_new_auto();
 
-	KV_FOREACH(sckpt_data->sckpt_rectable, iter, slsid, rec) {
+	KV_FOREACH(sckpt_data->sckpt_rectable, iter, slsid, rec)
+	{
 		/*
 		 * VM object records are special, since we need to dump
 		 * actual memory along with the metadata.
 		 */
 		if (sls_isdata(rec->srec_type))
-			error = sls_writedata_slos(rec, sckpt_data->sckpt_objtable);
+			error = sls_writedata_slos(
+			    rec, sckpt_data->sckpt_objtable);
 		else
 			error = sls_writemeta_slos(rec, NULL, true);
 		if (error != 0) {
@@ -1044,7 +1047,8 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 		}
 
 		/* Attach the new record to the checkpoint manifest. */
-		error = sbuf_bcat(sb_manifest, &rec->srec_id, sizeof(rec->srec_id));
+		error = sbuf_bcat(
+		    sb_manifest, &rec->srec_id, sizeof(rec->srec_id));
 		if (error != 0) {
 			KV_ABORT(iter);
 			goto error;
@@ -1053,10 +1057,10 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 
 	error = sls_write_slos_manifest(oid, sb_manifest);
 	if (error != 0) {
-		printf("Writing the manifest to the SLOS failed with %d\n", error);
+		printf(
+		    "Writing the manifest to the SLOS failed with %d\n", error);
 		goto error;
 	}
-
 
 	sbuf_delete(sb_manifest);
 
@@ -1067,7 +1071,6 @@ error:
 	sbuf_delete(sb_manifest);
 	return (error);
 }
-
 
 /* ---------------------- TESTING ---------------------- */
 
@@ -1084,7 +1087,8 @@ slstable_mkinfo_meta(uint64_t slsid, meta_info **minfop, uint64_t type)
 
 	/*
 	 * This buffer doesn't get inserted to any table, however it is
-	 * where we construct the meta_info object before copying over to the sbuf.
+	 * where we construct the meta_info object before copying over to the
+	 * sbuf.
 	 */
 
 	/* Set up the metadata struct, including random data. */
@@ -1099,7 +1103,6 @@ slstable_mkinfo_meta(uint64_t slsid, meta_info **minfop, uint64_t type)
 
 	return (0);
 }
-
 
 /*
  * Create a new sbuf and populate it with the contents of a buffer.
@@ -1132,12 +1135,12 @@ slstable_mkinfo_sbuf(struct sbuf **sbp, meta_info *minfo)
 	return (0);
 }
 
-
 /*
  * Add a buffer to a table as a record with the given id.
  */
 static int
-slstable_mkinfo_addrec(struct slskv_table *table, uint64_t slsid, meta_info *minfo, uint64_t type)
+slstable_mkinfo_addrec(
+    struct slskv_table *table, uint64_t slsid, meta_info *minfo, uint64_t type)
 {
 	struct sls_record *rec;
 	struct sbuf *sb;
@@ -1150,7 +1153,7 @@ slstable_mkinfo_addrec(struct slskv_table *table, uint64_t slsid, meta_info *min
 
 	/* Add the sbuf to the table. */
 	rec = sls_getrecord(sb, slsid, type);
-	error = slskv_add(table, slsid, (uint64_t) rec);
+	error = slskv_add(table, slsid, (uint64_t)rec);
 	if (error != 0) {
 		free(rec, M_SLSREC);
 		sbuf_delete(sb);
@@ -1166,8 +1169,8 @@ slstable_mkinfo_addrec(struct slskv_table *table, uint64_t slsid, meta_info *min
  * are structurally equivalent.
  */
 static int
-slstable_mkinfo(struct slsckpt_data *sckpt_data, struct slsckpt_data *sckpt_tmpdata,
-    vm_object_t obj)
+slstable_mkinfo(struct slsckpt_data *sckpt_data,
+    struct slsckpt_data *sckpt_tmpdata, vm_object_t obj)
 {
 	meta_info *minfo;
 	uint64_t slsid;
@@ -1175,7 +1178,7 @@ slstable_mkinfo(struct slsckpt_data *sckpt_data, struct slsckpt_data *sckpt_tmpd
 	int error;
 
 	type = (obj != NULL) ? SLOSREC_TESTDATA : SLOSREC_TESTMETA;
-	slsid = (obj != NULL) ? (uint64_t) obj : random();
+	slsid = (obj != NULL) ? (uint64_t)obj : random();
 
 	/* Create the metadata info struct to be added. */
 	error = slstable_mkinfo_meta(slsid, &minfo, type);
@@ -1183,11 +1186,13 @@ slstable_mkinfo(struct slsckpt_data *sckpt_data, struct slsckpt_data *sckpt_tmpd
 		return (error);
 
 	/* Add it to both tables. */
-	error = slstable_mkinfo_addrec(sckpt_data->sckpt_rectable, slsid, minfo, type);
+	error = slstable_mkinfo_addrec(
+	    sckpt_data->sckpt_rectable, slsid, minfo, type);
 	if (error != 0)
 		goto out;
 
-	error = slstable_mkinfo_addrec(sckpt_tmpdata->sckpt_rectable, slsid, minfo, type);
+	error = slstable_mkinfo_addrec(
+	    sckpt_tmpdata->sckpt_rectable, slsid, minfo, type);
 	if (error != 0)
 		goto out;
 out:
@@ -1210,9 +1215,10 @@ slstable_testmeta(struct slskv_table *origtable, struct sls_record *rec)
 	int error = 0;
 
 	/* Find the sbuf that corresponds to the new element. */
-	error = slskv_find(origtable, rec->srec_id, (uintptr_t *) &origrec);
+	error = slskv_find(origtable, rec->srec_id, (uintptr_t *)&origrec);
 	if (error != 0) {
-		printf("ERROR: Retrieved element not found in the original table\n");
+		printf(
+		    "ERROR: Retrieved element not found in the original table\n");
 		return (EINVAL);
 	}
 
@@ -1230,7 +1236,7 @@ slstable_testmeta(struct slskv_table *origtable, struct sls_record *rec)
 	}
 
 	/* Unpack the original record from the sbuf. */
-	minfo = (meta_info *) sbuf_data(rec->srec_sb);
+	minfo = (meta_info *)sbuf_data(rec->srec_sb);
 	mlen = sbuf_len(rec->srec_sb);
 	if (minfo == NULL) {
 		printf("No retrieved metadata buffer\n");
@@ -1238,7 +1244,7 @@ slstable_testmeta(struct slskv_table *origtable, struct sls_record *rec)
 	}
 
 	/* Unpack the original record from the sbuf. */
-	origminfo = (meta_info *) sbuf_data(origrec->srec_sb);
+	origminfo = (meta_info *)sbuf_data(origrec->srec_sb);
 	origmlen = sbuf_len(origrec->srec_sb);
 	if (origminfo == NULL) {
 		printf("No original metadata buffer\n");
@@ -1251,7 +1257,8 @@ slstable_testmeta(struct slskv_table *origtable, struct sls_record *rec)
 		return (EINVAL);
 	}
 
-	/* Compare the original and retrieved records. They should be identical. */
+	/* Compare the original and retrieved records. They should be identical.
+	 */
 	if (memcmp(origminfo->data, minfo->data, INFO_SIZE)) {
 		printf("ERROR: Retrieved record differs from the original\n");
 		printf("data: %.*s\n", INFO_SIZE, origminfo->data);
@@ -1261,7 +1268,6 @@ slstable_testmeta(struct slskv_table *origtable, struct sls_record *rec)
 
 	return (0);
 }
-
 
 /*
  * Fill a VM object page with data.
@@ -1282,11 +1288,11 @@ slstable_mkdata_populate(vm_object_t obj, vm_pindex_t pindex)
 	 */
 	m = vm_page_alloc(obj, pindex, VM_ALLOC_NORMAL | VM_ALLOC_WAITOK);
 	KASSERT(m != NULL, ("vm_page_alloc failed"));
-	KASSERT(m->pindex == pindex, ("asked for pindex %lx, got %lx", pindex, m->pindex));
+	KASSERT(m->pindex == pindex,
+	    ("asked for pindex %lx, got %lx", pindex, m->pindex));
 
 	/* Map it into the kernel, fill it with data. */
-	data = (char *) pmap_map(NULL, m->phys_addr,
-	    m->phys_addr + PAGE_SIZE,
+	data = (char *)pmap_map(NULL, m->phys_addr, m->phys_addr + PAGE_SIZE,
 	    VM_PROT_READ | VM_PROT_WRITE);
 
 	for (i = 0; i < PAGE_SIZE; i++)
@@ -1296,7 +1302,6 @@ slstable_mkdata_populate(vm_object_t obj, vm_pindex_t pindex)
 
 	VM_OBJECT_WUNLOCK(obj);
 }
-
 
 /*
  * Create a VM object and add data to it.
@@ -1335,8 +1340,8 @@ slstable_mkdata_object(vm_object_t *objp)
 }
 
 static int
-slstable_mkdata(struct slsckpt_data *sckpt_data, struct slsckpt_data *sckpt_tmpdata,
-    vm_object_t *objp)
+slstable_mkdata(struct slsckpt_data *sckpt_data,
+    struct slsckpt_data *sckpt_tmpdata, vm_object_t *objp)
 {
 	vm_object_t obj;
 	int error;
@@ -1345,14 +1350,16 @@ slstable_mkdata(struct slsckpt_data *sckpt_data, struct slsckpt_data *sckpt_tmpd
 	if (error != 0)
 		return (error);
 
-	error = slskv_add(sckpt_data->sckpt_objtable, (uint64_t) obj, (uintptr_t) obj);
+	error = slskv_add(
+	    sckpt_data->sckpt_objtable, (uint64_t)obj, (uintptr_t)obj);
 	if (error != 0) {
 		vm_object_deallocate(obj);
 		return (error);
 	}
 
 	vm_object_reference(obj);
-	error = slskv_add(sckpt_tmpdata->sckpt_objtable, (uint64_t) obj, (uintptr_t) obj);
+	error = slskv_add(
+	    sckpt_tmpdata->sckpt_objtable, (uint64_t)obj, (uintptr_t)obj);
 	if (error != 0) {
 		vm_object_deallocate(obj);
 		return (error);
@@ -1369,13 +1376,13 @@ slstable_testpage_valid(vm_page_t m)
 	char c;
 	int i;
 
-	buf = (char *) PHYS_TO_DMAP(m->phys_addr);
+	buf = (char *)PHYS_TO_DMAP(m->phys_addr);
 	for (i = 0; i < PAGE_SIZE; i++) {
 		c = buf[i];
 		if (c < 'a' || c > 'z') {
 			printf("Object illegal value 0x%x "
-				"in page with pindex %ld, offset %d\n",
-				c, m->pindex, i);
+			       "in page with pindex %ld, offset %d\n",
+			    c, m->pindex, i);
 			return (EINVAL);
 		}
 	}
@@ -1389,11 +1396,10 @@ slstable_testobj_valid(vm_object_t obj)
 {
 	vm_page_t m;
 
-	KASSERT(obj->type == OBJT_SWAP || 
-	    obj->type == OBJT_DEFAULT, ("object %p has illegal type %d",
-	    obj, obj->type));
+	KASSERT(obj->type == OBJT_SWAP || obj->type == OBJT_DEFAULT,
+	    ("object %p has illegal type %d", obj, obj->type));
 	KASSERT(obj->ref_count > 0, ("object %p has no references", obj));
-	TAILQ_FOREACH(m, &obj->memq, listq) {
+	TAILQ_FOREACH (m, &obj->memq, listq) {
 		if (slstable_testpage_valid(m) != 0)
 			return (EINVAL);
 	}
@@ -1409,7 +1415,8 @@ slstable_testobjtable_valid(struct slskv_table *objtable)
 	vm_object_t obj;
 	int error;
 
-	KV_FOREACH(objtable, iter, slsid, obj) {
+	KV_FOREACH(objtable, iter, slsid, obj)
+	{
 		error = slstable_testobj_valid(obj);
 		if (error != 0)
 			return (error);
@@ -1419,7 +1426,8 @@ slstable_testobjtable_valid(struct slskv_table *objtable)
 }
 
 static int
-slstable_testdata(struct slskv_table *objtable, uint64_t slsid, vm_object_t oldobj)
+slstable_testdata(
+    struct slskv_table *objtable, uint64_t slsid, vm_object_t oldobj)
 {
 	const int cmpsize = 32;
 	vm_page_t m, oldm;
@@ -1428,7 +1436,7 @@ slstable_testdata(struct slskv_table *objtable, uint64_t slsid, vm_object_t oldo
 	char *buf, *oldbuf;
 
 	/* Find the object in the table. */
-	error = slskv_find(objtable, slsid, (uintptr_t *) &obj);
+	error = slskv_find(objtable, slsid, (uintptr_t *)&obj);
 	if (error != 0) {
 		printf("Restored object not found\n");
 		vm_object_deallocate(oldobj);
@@ -1451,28 +1459,29 @@ slstable_testdata(struct slskv_table *objtable, uint64_t slsid, vm_object_t oldo
 
 	/* Compare all pages one by one. */
 	VM_OBJECT_WLOCK(obj);
-	TAILQ_FOREACH(oldm, &oldobj->memq, listq) {
+	TAILQ_FOREACH (oldm, &oldobj->memq, listq) {
 		/* Check if we found a page in the same index. */
 		m = vm_page_find_least(obj, oldm->pindex);
 		if (m->pindex != oldm->pindex) {
 			printf("Page with pindex %ld not found "
-			    "in new object (minimal index %ld)\n",
+			       "in new object (minimal index %ld)\n",
 			    oldm->pindex, m->pindex);
 			VM_OBJECT_WUNLOCK(obj);
 			goto out;
 		}
 
-		KASSERT(m->psind == oldm->psind, ("pages have different sizes"));
+		KASSERT(
+		    m->psind == oldm->psind, ("pages have different sizes"));
 
 		/* Compare the data itself. */
-		buf = (char *) PHYS_TO_DMAP(m->phys_addr);
-		oldbuf = (char *) PHYS_TO_DMAP(oldm->phys_addr);
+		buf = (char *)PHYS_TO_DMAP(m->phys_addr);
+		oldbuf = (char *)PHYS_TO_DMAP(oldm->phys_addr);
 		if (memcmp(buf, oldbuf, PAGE_SIZE) != 0) {
-			printf("Pages with pindex %lx have different data\n", oldm->pindex);
+			printf("Pages with pindex %lx have different data\n",
+			    oldm->pindex);
 			printf("Old: %.*s\n", cmpsize, oldbuf);
 			printf("New: %.*s\n", cmpsize, buf);
 		}
-
 
 		/* Remove page from the object, free to the queues if unwired */
 
@@ -1486,9 +1495,10 @@ slstable_testdata(struct slskv_table *objtable, uint64_t slsid, vm_object_t oldo
 
 	/* Check if the new object has any pages not in the original. */
 	if (obj->resident_page_count != 0) {
-		printf("New object has %d extra pages at indices:", obj->resident_page_count);
-		TAILQ_FOREACH(m, &obj->memq, listq)
-		    printf("%lx ", m->pindex);
+		printf("New object has %d extra pages at indices:",
+		    obj->resident_page_count);
+		TAILQ_FOREACH (m, &obj->memq, listq)
+			printf("%lx ", m->pindex);
 		printf("\n");
 	}
 
@@ -1500,7 +1510,7 @@ out:
 int
 slstable_test(void)
 {
-	struct slskv_table *objtable= NULL, *rectable= NULL;
+	struct slskv_table *objtable = NULL, *rectable = NULL;
 	struct slsckpt_data *sckpt_data = NULL, *sckpt_tmpdata = NULL;
 	struct slspart *slsp = NULL;
 	struct sls_record *rec;
@@ -1516,9 +1526,9 @@ slstable_test(void)
 
 	attr = (struct sls_attr) {
 		.attr_target = SLS_OSD,
-		    .attr_mode = SLS_FULL,
-		    .attr_period = 0,
-		    .attr_flags = 0,
+		.attr_mode = SLS_FULL,
+		.attr_period = 0,
+		.attr_flags = 0,
 	};
 
 	/*
@@ -1527,7 +1537,6 @@ slstable_test(void)
 	old_async = sls_async_slos;
 
 	sls_async_slos = 1;
-
 
 	error = slsp_add(TEST_PARTID, attr, &slsp);
 	if (error != 0)
@@ -1550,8 +1559,9 @@ slstable_test(void)
 	}
 
 	/*
-	 * Create the pure metadata objects. These are straightforward, because they
-	 * are just binary blobs - they don't have actual user data that needs saving.
+	 * Create the pure metadata objects. These are straightforward, because
+	 * they are just binary blobs - they don't have actual user data that
+	 * needs saving.
 	 */
 	for (i = 0; i < META_INFOS; i++) {
 		error = slstable_mkinfo(sckpt_data, sckpt_tmpdata, NULL);
@@ -1582,7 +1592,6 @@ slstable_test(void)
 		goto out;
 	}
 
-
 	/* Write the data generated to the SLOS. */
 	error = sls_write_slos(TEST_PARTID, sckpt_tmpdata);
 	if (error != 0) {
@@ -1609,7 +1618,6 @@ slstable_test(void)
 		goto out;
 	}
 
-
 	/* Read the data back. */
 	error = sls_read_slos(slsp, &rectable, &objtable);
 	if (error != 0) {
@@ -1631,12 +1639,14 @@ slstable_test(void)
 	 * - Is the struct identical to the one in the original table?
 	 * - If the entry is a data entry, also check its data.
 	 */
-	KV_FOREACH(rectable, iter, slsid, rec) {
+	KV_FOREACH(rectable, iter, slsid, rec)
+	{
 		switch (rec->srec_type) {
 		case SLOSREC_TESTMETA:
 		case SLOSREC_TESTDATA:
 			/* Test only the metadata, since there is no data. */
-			error = slstable_testmeta(sckpt_data->sckpt_rectable, rec);
+			error = slstable_testmeta(
+			    sckpt_data->sckpt_rectable, rec);
 			if (error != 0) {
 				KV_ABORT(iter);
 				SLS_ERROR(slstable_testmeta, error);
@@ -1646,17 +1656,19 @@ slstable_test(void)
 			break;
 
 		default:
-			printf("ERROR: Invalid type found: %ld.\n", rec->srec_type);
-			printf("Valid types: %x, %x\n", SLOSREC_TESTMETA, SLOSREC_TESTDATA);
+			printf("ERROR: Invalid type found: %ld.\n",
+			    rec->srec_type);
+			printf("Valid types: %x, %x\n", SLOSREC_TESTMETA,
+			    SLOSREC_TESTDATA);
 			KV_ABORT(iter);
 			goto out;
-
 		}
 	}
 
 	/* Check if all objects have been restored correctly. */
-	KV_FOREACH_POP(sckpt_data->sckpt_objtable, slsid, obj) {
-		error = slstable_testdata(objtable,  slsid, obj);
+	KV_FOREACH_POP(sckpt_data->sckpt_objtable, slsid, obj)
+	{
+		error = slstable_testdata(objtable, slsid, obj);
 		if (error != 0) {
 			SLS_ERROR(slstable_testdata, error);
 			goto out;
@@ -1664,13 +1676,16 @@ slstable_test(void)
 	}
 
 	lost_elements = 0;
-	KV_FOREACH_POP(sckpt_data->sckpt_objtable, sb, type) {
+	KV_FOREACH_POP(sckpt_data->sckpt_objtable, sb, type)
+	{
 		sbuf_delete(sb);
 		lost_elements += 1;
 	}
 
 	if (lost_elements != 0) {
-		printf("ERROR: Lost %lu objects between checkpoint and restore\n", lost_elements);
+		printf(
+		    "ERROR: Lost %lu objects between checkpoint and restore\n",
+		    lost_elements);
 		goto out;
 	}
 
@@ -1683,7 +1698,8 @@ out:
 		slsckpt_destroy(sckpt_data, NULL);
 	}
 
-	/* The backup table has the same data as the original - all sbufs have been destroyed. */
+	/* The backup table has the same data as the original - all sbufs have
+	 * been destroyed. */
 	if (sckpt_tmpdata != NULL)
 		slsckpt_destroy(sckpt_tmpdata, NULL);
 
@@ -1699,4 +1715,4 @@ out:
 	return (error);
 }
 
-#endif /* SLS_TEST */ 
+#endif /* SLS_TEST */

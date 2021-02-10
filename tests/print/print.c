@@ -1,13 +1,15 @@
+#include <memory.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <memory.h>
 #include <unistd.h>
 
 #define CYCLES (100 * 1000 * 1000L)
 
 #define BOGUS_CONSTANT (0xFF5)
-		
-int main() {
+
+int
+main()
+{
 	long long i, j;
 	int bogus;
 

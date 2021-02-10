@@ -2,43 +2,41 @@
 #define _SLS_DATA_H_
 
 #include <sys/param.h>
-
+#include <sys/selinfo.h>
 #include <sys/pcpu.h>
+#include <sys/pipe.h>
 #include <sys/proc.h>
 #include <sys/sbuf.h>
-#include <sys/selinfo.h>
 #include <sys/socket.h>
 #include <sys/tty.h>
 #include <sys/ttycom.h>
 #include <sys/un.h>
 
-#include <sys/pipe.h>
+#include <vm/vm.h>
+#include <vm/pmap.h>
+#include <vm/vm_map.h>
 
 #include <machine/param.h>
 #include <machine/pcb.h>
 #include <machine/reg.h>
-
-#include <vm/pmap.h>
-#include <vm/vm.h>
-#include <vm/vm_map.h>
 
 #include <netinet/in.h>
 #include <netinet/in_pcb.h>
 
 #define SLSPROC_ID 0x736c7301
 struct slsproc {
-	uint64_t	magic;	    /* Magic value */
-	uint64_t	slsid;	    /* Unique object ID */
-	size_t		nthreads;   /* Threads in a process */
-	pid_t		pid;	    /* PID of the process */
-	pid_t		pgid;	    /* ID of the process group */
-	uint64_t	pptr;	    /* Unique object ID of the parent proc */
-	uint64_t	pgrpwait;   /* Should we wait for the process group
-				       to be rebuilt? */
-	pid_t		sid;	    /* Session ID */
-	uint64_t	textvp;	    /* ID of the text vnode */
-	struct sigacts sigacts;	    /* Signal handling info */
-	char	    name[MAXCOMLEN + 1]; /* Name of the process */
+	uint64_t magic;		  /* Magic value */
+	uint64_t slsid;		  /* Unique object ID */
+	size_t nthreads;	  /* Threads in a process */
+	pid_t pid;		  /* PID of the process */
+	pid_t pgid;		  /* ID of the process group */
+	uint64_t pptr;		  /* Unique object ID of the parent proc */
+	uint64_t pgrpwait;	  /* Should we wait for the process group
+				     to be rebuilt? */
+	pid_t sid;		  /* Session ID */
+	uint64_t textvp;	  /* ID of the text vnode */
+	struct sigacts sigacts;	  /* Signal handling info */
+	char name[MAXCOMLEN + 1]; /* Name of the process */
 };
 
 #define SLSTHREAD_ID 0x736c7302
@@ -84,14 +82,14 @@ struct slssession {
 #define SLSVMOBJECT_ID 0x7abc7303
 struct slsvmobject {
 	uint64_t magic;
-	vm_object_t objptr;		/* The object pointer itself */
+	vm_object_t objptr; /* The object pointer itself */
 	uint64_t slsid;
 	vm_pindex_t size;
 	enum obj_type type;
 	/* Used for objects that are shadows of others */
 	uint64_t backer;
 	vm_ooffset_t backer_off;
-	uint64_t vnode;  /* Backing SLS vnode */
+	uint64_t vnode; /* Backing SLS vnode */
 };
 
 #define SLSVNODE_ID 0xbaba9001
@@ -100,7 +98,7 @@ struct slsvnode {
 	uint64_t slsid;
 	int has_path;
 	uint64_t ino;
-	char path[PATH_MAX];	/* Filesystem path for vnode VM objects. */
+	char path[PATH_MAX]; /* Filesystem path for vnode VM objects. */
 };
 
 #define SLSVMENTRY_ID 0x736c7304
@@ -133,10 +131,11 @@ struct slsfile {
 	off_t offset;
 	uint64_t backer;
 	uint64_t ino;
-	/* 
-	* Let's not bother with this flag from the filedescent struct.
-	* It's only about autoclosing on exec, and we don't really care right now 
-	*/
+	/*
+	 * Let's not bother with this flag from the filedescent struct.
+	 * It's only about autoclosing on exec, and we don't really care right
+	 * now
+	 */
 	/* uint8_t fde_flags; */
 };
 
@@ -153,73 +152,72 @@ struct slsfiledesc {
 	int fd_holdcnt;
 };
 
-#define SLSPIPE_ID  0x736c7499
+#define SLSPIPE_ID 0x736c7499
 struct slspipe {
-	uint64_t	magic;	    /* Magic value */
-	uint64_t	slsid;	    /* Unique SLS ID */
-	uint64_t	iswriteend; /* Is this the write end? */
-	uint64_t	peer;	    /* The SLS ID of the other end */
-	struct pipebuf	pipebuf;    /* The pipe's buffer. */
+	uint64_t magic;		/* Magic value */
+	uint64_t slsid;		/* Unique SLS ID */
+	uint64_t iswriteend;	/* Is this the write end? */
+	uint64_t peer;		/* The SLS ID of the other end */
+	struct pipebuf pipebuf; /* The pipe's buffer. */
 	/* XXX Valid only at restore time */
 	void *data;
 };
 
-#define SLSKQUEUE_ID  0x736c7265
+#define SLSKQUEUE_ID 0x736c7265
 struct slskqueue {
-	uint64_t    magic;
-	uint64_t    slsid;	/* Unique SLS ID */
+	uint64_t magic;
+	uint64_t slsid; /* Unique SLS ID */
 };
 
 #define SLSKNOTE_ID 0x736c7115
 struct slsknote {
-	uint64_t	magic;	/* Magic value */
-	uint64_t	slsid;	/* Unique SLS ID */
-	int		kn_status;
-	struct kevent	kn_kevent;
-	int		kn_sfflags;
-	int64_t		kn_sdata;
+	uint64_t magic; /* Magic value */
+	uint64_t slsid; /* Unique SLS ID */
+	int kn_status;
+	struct kevent kn_kevent;
+	int kn_sfflags;
+	int64_t kn_sdata;
 };
 
-#define SLSSOCKET_ID  0x736c7268
+#define SLSSOCKET_ID 0x736c7268
 struct slssock {
 	/* SLS Object options */
-	uint64_t    magic;
-	uint64_t    slsid;	/* Unique SLS ID */
-	uint64_t    state ;	/* Flags */
+	uint64_t magic;
+	uint64_t slsid; /* Unique SLS ID */
+	uint64_t state; /* Flags */
 
 	/* Socket-wide options */
-	int16_t	    family;
-	int16_t	    type;
-	int16_t	    proto;
-	uint32_t    options;
+	int16_t family;
+	int16_t type;
+	int16_t proto;
+	uint32_t options;
 
 	/* UNIX or INET addresses */
 	union {
-	    struct sockaddr_un un;
-	    struct sockaddr_in in;
+		struct sockaddr_un un;
+		struct sockaddr_in in;
 	};
 
-	uint64_t    unpeer;	/* UNIX socket peer */
-	uint64_t    bound;	/* Is the socket bound? */	
+	uint64_t unpeer; /* UNIX socket peer */
+	uint64_t bound;	 /* Is the socket bound? */
 
 	/* XXX Maybe encapsulate INET state? */
 	struct in_conninfo in_conninfo;
-	uint64_t    backlog;
+	uint64_t backlog;
 
-	uint64_t    rcvid;	/* SLS ID for receive buffer */
-	uint64_t    sndid;	/* SLS ID for send buffer */
+	uint64_t rcvid; /* SLS ID for receive buffer */
+	uint64_t sndid; /* SLS ID for send buffer */
 
-	uint64_t    peer_rcvid; /* SLS ID for peer's receive buffer */
-	uint64_t    peer_sndid; /* SLS ID for peer's send buffer */
+	uint64_t peer_rcvid; /* SLS ID for peer's receive buffer */
+	uint64_t peer_sndid; /* SLS ID for peer's send buffer */
 };
 
-
-#define SLSPTS_ID  0x736c7269
+#define SLSPTS_ID 0x736c7269
 struct slspts {
 	uint64_t magic;
 	uint64_t slsid;
 
-	/* 
+	/*
 	 * Find out if it's the master or the
 	 * slave side. If it's the slave side
 	 * we only need the peer's ID.
@@ -244,7 +242,7 @@ struct slspts {
 	void *outq;
 };
 
-#define SLSSYSVSHM_ID  0x736c7232
+#define SLSSYSVSHM_ID 0x736c7232
 struct slssysvshm {
 	uint64_t magic;
 	uint64_t slsid;
@@ -254,24 +252,23 @@ struct slssysvshm {
 	int segnum;
 };
 
-#define SLSPOSIXSHM_ID  0x736c7230
+#define SLSPOSIXSHM_ID 0x736c7230
 struct slsposixshm {
-	uint64_t    magic;
-	uint64_t    slsid;
-	mode_t	    mode;
-	uint64_t    object;
-	bool	    is_named;
-	char	    path[PATH_MAX];
+	uint64_t magic;
+	uint64_t slsid;
+	mode_t mode;
+	uint64_t object;
+	bool is_named;
+	char path[PATH_MAX];
 };
 
-#define SLSMBUF_ID  0x736c7245
+#define SLSMBUF_ID 0x736c7245
 struct slsmbuf {
-	uint64_t    slsid;	/* Unique identifier for the sockbuf mbufs  */
-	uint64_t    magic;	/* Magic for helping debug parsing */
-	uint8_t	    type;	/* Type of mbuf (data, control...) */
-	uint64_t    flags;	/* Data-related flags */
-	size_t	    len;	/* Size of data */
+	uint64_t slsid; /* Unique identifier for the sockbuf mbufs  */
+	uint64_t magic; /* Magic for helping debug parsing */
+	uint8_t type;	/* Type of mbuf (data, control...) */
+	uint64_t flags; /* Data-related flags */
+	size_t len;	/* Size of data */
 };
-
 
 #endif /* _SLS_DATA_H_ */

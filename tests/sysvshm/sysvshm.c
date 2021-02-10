@@ -1,15 +1,15 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <memory.h>
-#include <unistd.h>
-
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
 
 #include <machine/atomic.h>
 
-#define SHM_SIZE    (4096)
+#include <memory.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+#define SHM_SIZE (4096)
 
 char *
 getsysvshm(key_t key, int *shmid, int flag)
@@ -27,8 +27,8 @@ getsysvshm(key_t key, int *shmid, int flag)
 	 * Temporarily attach the segment to initialize the first byte,
 	 * which we will be using it for arbitrating access to the buffer.
 	 */
-	shm = (char *) shmat(*shmid, 0, 0);
-	if (shm == (void *) -1) {
+	shm = (char *)shmat(*shmid, 0, 0);
+	if (shm == (void *)-1) {
 		perror("shmat");
 		shmctl(*shmid, IPC_RMID, NULL);
 		exit(1);
@@ -36,7 +36,6 @@ getsysvshm(key_t key, int *shmid, int flag)
 
 	return (shm);
 }
-
 
 int
 main()

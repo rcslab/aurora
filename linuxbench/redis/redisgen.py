@@ -8,8 +8,8 @@ if __name__ == "__main__":
         exit(0)
 
     for i in range(0, 1024 * int(argv[1])):
-        cmd="SET"
+        cmd = "SET"
         key = str(i)
         value = key * (4096 // len(key))
         stdout.write("*{}\r\n${}\r\n{}\r\n${}\r\n{}\r\n${}\r\n*{}\r\n".
-                format(3, len(cmd), cmd, len(key), key, len(value), value))
+                     format(3, len(cmd), cmd, len(key), key, len(value), value))

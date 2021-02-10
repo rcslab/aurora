@@ -1,3 +1,5 @@
+#include <sys/mman.h>
+
 #include <assert.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -5,14 +7,13 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <sys/mman.h>
-
 #define min(a, b) ((a < b) ? (a) : (b))
 
 #define PAGE_SIZE (4096)
 #define FILE_SIZE (PAGE_SIZE * 64)
 
-void testoffset(int fd, int start)
+void
+testoffset(int fd, int start)
 {
 	int i, j, newi;
 	int res;
@@ -23,7 +24,7 @@ void testoffset(int fd, int start)
 	for (i = start; i < FILE_SIZE; i += sizeof(i)) {
 		res = 0;
 		for (j = 0; j < sizeof(i); j += res) {
-			res = read(fd,  ((char *) &newi) + res, sizeof(newi) - j);
+			res = read(fd, ((char *)&newi) + res, sizeof(newi) - j);
 			if (res < 0) {
 				perror("read");
 				exit(1);
@@ -65,7 +66,7 @@ main(int argc, char **argv)
 	for (i = 0; i < FILE_SIZE; i += sizeof(i)) {
 		res = 0;
 		for (j = 0; j < sizeof(i); j += res) {
-			res = write(fd, ((char *) &i) + res, sizeof(i));
+			res = write(fd, ((char *)&i) + res, sizeof(i));
 			if (res < 0) {
 				perror("write");
 				exit(1);

@@ -21,29 +21,29 @@ ping()
 	printf("%d\n", getpid());
 
 	for (;;) {
-	    sleep(1);
+		sleep(1);
 
-	    while (atomic_cmpset_int((u_int *) sharemap, 0, 1) == 0)
-		    ;
+		while (atomic_cmpset_int((u_int *)sharemap, 0, 1) == 0)
+			;
 
-	    printf("ping\n");
+		printf("ping\n");
 	}
 }
 
 void
 pong()
 {
-	int ret; 
+	int ret;
 
 	printf("%d\n", getpid());
 
 	for (;;) {
-	    sleep(1);
+		sleep(1);
 
-	    while (atomic_cmpset_int((u_int *) sharemap, 1, 0) == 0)
-		    ;
+		while (atomic_cmpset_int((u_int *)sharemap, 1, 0) == 0)
+			;
 
-	    printf("pong\n");
+		printf("pong\n");
 	}
 }
 
@@ -59,26 +59,25 @@ main(int argc, char **argv)
 	}
 
 	sharemap = mmap(NULL, FILE_SIZE, PROT_READ | PROT_WRITE,
-		 MAP_SHARED | MAP_ANON, -1, 0);
+	    MAP_SHARED | MAP_ANON, -1, 0);
 
 	if (sharemap == MAP_FAILED) {
-	    perror("mmap");
-	    return (0);
+		perror("mmap");
+		return (0);
 	}
 
 	printf("%p\n", sharemap);
-	printf("%d\n", *((int *) sharemap));
-
+	printf("%d\n", *((int *)sharemap));
 
 	*((int *)sharemap) = 0;
 
 	pid = fork();
 	if (pid == 0)
-	    pong();
+		pong();
 	else if (pid > 0)
-	    ping();
+		ping();
 	else
-	    perror("fork");
+		perror("fork");
 
 	return (0);
 }

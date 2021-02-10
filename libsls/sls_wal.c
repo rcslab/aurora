@@ -54,10 +54,12 @@ static struct sls_wal_block *
 sls_wal_first(struct sls_wal *wal)
 {
 	struct sls_wal_header *header = sls_wal_header(wal);
-	size_t offset = atomic_load_explicit(&header->offset, memory_order_relaxed);
+	size_t offset = atomic_load_explicit(
+	    &header->offset, memory_order_relaxed);
 
 	if (offset > sizeof(struct sls_wal_header))
-		return ((struct sls_wal_block *)(wal->mapping + sizeof(*header)));
+		return (
+		    (struct sls_wal_block *)(wal->mapping + sizeof(*header)));
 	else
 		return (NULL);
 }
@@ -114,7 +116,8 @@ sls_wal_full_checkpoint(struct sls_wal *wal)
 
 	offset = atomic_load_explicit(&header->offset, memory_order_relaxed);
 	if (offset >= wal->size) {
-		memset(wal->mapping + sizeof(*header), 0, wal->size - sizeof(*header));
+		memset(wal->mapping + sizeof(*header), 0,
+		    wal->size - sizeof(*header));
 		atomic_store(&header->offset, sizeof(*header));
 	}
 
@@ -137,7 +140,8 @@ sls_wal_open(struct sls_wal *wal, uint64_t oid, size_t size)
 	if (mapping == MAP_FAILED)
 		goto err;
 
-	wal->mapping = mmap(mapping + PAGE_SIZE, size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+	wal->mapping = mmap(mapping + PAGE_SIZE, size, PROT_READ | PROT_WRITE,
+	    MAP_ANON | MAP_PRIVATE, -1, 0);
 	if (wal->mapping == MAP_FAILED)
 		goto err_munmap;
 
@@ -148,7 +152,8 @@ sls_wal_open(struct sls_wal *wal, uint64_t oid, size_t size)
 		goto err_munmap;
 
 	header = sls_wal_header(wal);
-	atomic_store_explicit(&header->offset, sizeof(*header), memory_order_relaxed);
+	atomic_store_explicit(
+	    &header->offset, sizeof(*header), memory_order_relaxed);
 
 	memset(wal->mapping + sizeof(*header), 0, size - sizeof(*header));
 
@@ -211,7 +216,8 @@ sls_wal_replay(struct sls_wal *wal)
 	while (block) {
 		size = atomic_load_explicit(&block->size, memory_order_relaxed);
 		if (size == 0)
-			// A snapshot was taken with an incomplete block, so stop here
+			// A snapshot was taken with an incomplete block, so
+			// stop here
 			break;
 
 		memcpy(block->dest, block->data, size);

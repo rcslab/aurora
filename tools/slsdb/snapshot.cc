@@ -1,26 +1,25 @@
 
 #include <sys/stat.h>
 
-#include <unistd.h>
-#include <fcntl.h>
 #include <dirent.h>
-#include <uuid.h>
-
-#include <string>
-#include <sstream>
-#include <fstream>
-#include <algorithm>
-#include <iostream>
-#include <vector>
-
+#include <fcntl.h>
 #include <slos.h>
 #include <slos_btree.h>
 #include <slos_inode.h>
+#include <unistd.h>
+#include <uuid.h>
+
+#include <algorithm>
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <vector>
 
 #include "btree.h"
-#include "snapshot.h"
-#include "file.h"
 #include "directory.h"
+#include "file.h"
+#include "snapshot.h"
 #include "util.h"
 
 std::string
@@ -29,11 +28,13 @@ Snapshot::toString(int verbose)
 	std::stringstream ss;
 	char *uuidstr;
 
-	ss << "Snapshot " << super.sb_index << " - Epoch " << super.sb_epoch << std::endl;
+	ss << "Snapshot " << super.sb_index << " - Epoch " << super.sb_epoch
+	   << std::endl;
 	if (verbose) {
-		ss << "Version: " << super.sb_majver << "." << super.sb_minver << std::endl;
+		ss << "Version: " << super.sb_majver << "." << super.sb_minver
+		   << std::endl;
 		ss << "Features: 0x" << std::setw(8) << std::setfill('0')
-				     << std::setbase(16) << super.sb_flags << std::endl;
+		   << std::setbase(16) << super.sb_flags << std::endl;
 		uuid_to_string(&super.sb_uuid, &uuidstr, NULL);
 		ss << "UUID: " << uuidstr << std::endl;
 		ss << "Volume Name: " << super.sb_name << std::endl;
@@ -42,20 +43,29 @@ Snapshot::toString(int verbose)
 		ss << "Allocation Size: " << super.sb_asize << std::endl;
 		ss << "Size: " << super.sb_size << std::endl;
 		ss << "Inode Tree: " << super.sb_root.offset << std::endl;
-		ss << "Attempted Checkpoints: " << super.sb_attempted_checkpoints << std::endl;
-		ss << "Checksum Tree: " << super.sb_cksumtree.offset << std::endl;
-		ss << "Allocator Size Tree: " << super.sb_allocsize.offset << std::endl;
-		ss << "Allocator Offset Tree: " << super.sb_allocoffset.offset << std::endl;
-		ss << "Time: " << time_to_string(super.sb_time, super.sb_time_nsec) << std::endl;
-		ss << "Last Mounted Time: " << time_to_string(super.sb_mtime, 0) << std::endl;
-		ss << "Dirty Meta Synced: " << super.sb_meta_synced << std::endl;
-		ss << "Dirty Data Synced: " << super.sb_data_synced << std::endl;
+		ss << "Attempted Checkpoints: "
+		   << super.sb_attempted_checkpoints << std::endl;
+		ss << "Checksum Tree: " << super.sb_cksumtree.offset
+		   << std::endl;
+		ss << "Allocator Size Tree: " << super.sb_allocsize.offset
+		   << std::endl;
+		ss << "Allocator Offset Tree: " << super.sb_allocoffset.offset
+		   << std::endl;
+		ss << "Time: "
+		   << time_to_string(super.sb_time, super.sb_time_nsec)
+		   << std::endl;
+		ss << "Last Mounted Time: " << time_to_string(super.sb_mtime, 0)
+		   << std::endl;
+		ss << "Dirty Meta Synced: " << super.sb_meta_synced
+		   << std::endl;
+		ss << "Dirty Data Synced: " << super.sb_data_synced
+		   << std::endl;
 	}
 
 	return ss.str();
 }
 
-std::shared_ptr<SFile> 
+std::shared_ptr<SFile>
 createFile(Snapshot *sb, long blknum)
 {
 	struct slos_inode ino;
@@ -97,7 +107,6 @@ createFile(Snapshot *sb, long blknum)
 	}
 
 	return nullptr;
-
 }
 
 std::shared_ptr<InodeFile>
@@ -109,4 +118,3 @@ Snapshot::getInodeFile()
 	}
 	return std::dynamic_pointer_cast<InodeFile>(f);
 }
-

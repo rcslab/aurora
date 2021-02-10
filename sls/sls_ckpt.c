@@ -1,50 +1,49 @@
 #include <sys/types.h>
-#include <sys/endian.h>
-#include <sys/lock.h>
-#include <sys/queue.h>
-
+#include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/selinfo.h>
 #include <sys/capsicum.h>
 #include <sys/conf.h>
+#include <sys/endian.h>
 #include <sys/fcntl.h>
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/kernel.h>
 #include <sys/kthread.h>
 #include <sys/limits.h>
+#include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
-#include <sys/param.h>
 #include <sys/pcpu.h>
+#include <sys/pipe.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
+#include <sys/queue.h>
 #include <sys/rwlock.h>
-#include <sys/selinfo.h>
 #include <sys/shm.h>
 #include <sys/signalvar.h>
 #include <sys/stat.h>
-#include <sys/systm.h>
 #include <sys/syscallsubr.h>
 #include <sys/taskqueue.h>
 #include <sys/time.h>
 #include <sys/uio.h>
 
-#include <sys/pipe.h>
-
-#include <vm/pmap.h>
 #include <vm/vm.h>
+#include <vm/pmap.h>
+#include <vm/uma.h>
 #include <vm/vm_extern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
 #include <vm/vm_radix.h>
-#include <vm/uma.h>
 
 #include <slos.h>
 #include <slos_inode.h>
 #include <sls_data.h>
 
-#include "sls_internal.h"
+#include "debug.h"
 #include "sls_file.h"
+#include "sls_internal.h"
 #include "sls_ioctl.h"
 #include "sls_proc.h"
 #include "sls_sysv.h"
@@ -53,14 +52,12 @@
 #include "sls_vmobject.h"
 #include "sls_vmspace.h"
 #include "sls_vnode.h"
-#include "debug.h"
 
 #define SLS_PROCALIVE(proc) \
-    (((proc)->p_state != PRS_ZOMBIE) && !((proc)->p_flag & P_WEXIT))
+	(((proc)->p_state != PRS_ZOMBIE) && !((proc)->p_flag & P_WEXIT))
 
 #define SLS_RUNNABLE(proc, slsp) \
-    (atomic_load_int(&slsp->slsp_status) != 0 && \
-	SLS_PROCALIVE(proc))
+	(atomic_load_int(&slsp->slsp_status) != 0 && SLS_PROCALIVE(proc))
 
 int sls_vfs_sync = 0;
 uint64_t sls_ckpt_attempted;
@@ -76,7 +73,7 @@ SDT_PROBE_DEFINE0(sls, , , stopclock_start);
 SDT_PROBE_DEFINE0(sls, , , stopclock_finish);
 
 /*
- * Stop the processes, and wait until they are truly not running. 
+ * Stop the processes, and wait until they are truly not running.
  */
 static void
 slsckpt_stop(slsset *procset, struct proc *pcaller)
@@ -84,7 +81,8 @@ slsckpt_stop(slsset *procset, struct proc *pcaller)
 	struct slskv_iter iter;
 	struct proc *p;
 
-	KVSET_FOREACH(procset, iter, p) {
+	KVSET_FOREACH(procset, iter, p)
+	{
 		/* The caller is already single threaded. */
 		if (p == pcaller)
 			continue;
@@ -105,7 +103,8 @@ slsckpt_cont(slsset *procset, struct proc *pcaller)
 	struct slskv_iter iter;
 	struct proc *p;
 
-	KVSET_FOREACH(procset, iter, p) {
+	KVSET_FOREACH(procset, iter, p)
+	{
 		/* The caller ends single threading themselves. */
 		if (p == pcaller)
 			continue;
@@ -120,8 +119,8 @@ slsckpt_cont(slsset *procset, struct proc *pcaller)
 /*
  * Get all the metadata of a process.
  */
-static int __attribute__ ((noinline))
-slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_data)
+static int __attribute__((noinline)) slsckpt_metadata(
+    struct proc *p, slsset *procset, struct slsckpt_data *sckpt_data)
 {
 	struct sls_record *rec;
 	struct sbuf *sb;
@@ -145,7 +144,8 @@ slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_dat
 
 	error = slsckpt_vmspace(p->p_vmspace, sb, sckpt_data);
 	if (error != 0) {
-		SLS_DBG("Error: slsckpt_vmspace failed with error code %d\n", error);
+		SLS_DBG("Error: slsckpt_vmspace failed with error code %d\n",
+		    error);
 		goto out;
 	}
 
@@ -153,16 +153,18 @@ slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_dat
 
 	error = slsckpt_proc(p, sb, procset, sckpt_data);
 	if (error != 0) {
-		SLS_DBG("Error: slsckpt_proc failed with error code %d\n", error);
+		SLS_DBG(
+		    "Error: slsckpt_proc failed with error code %d\n", error);
 		goto out;
 	}
 
 	SDT_PROBE1(sls, , slsckpt_metadata, , "Getting process state");
-	/* XXX This has to be last right now, because the filedesc is not in its 
+	/* XXX This has to be last right now, because the filedesc is not in its
 	 * own record. */
 	error = slsckpt_filedesc(p, sckpt_data, sb);
 	if (error != 0) {
-		SLS_DBG("Error: slsckpt_filedesc failed with error code %d\n", error);
+		SLS_DBG("Error: slsckpt_filedesc failed with error code %d\n",
+		    error);
 		goto out;
 	}
 
@@ -172,8 +174,9 @@ slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_dat
 	if (error != 0)
 		goto out;
 
-	rec = sls_getrecord(sb, (uint64_t) p, SLOSREC_PROC);
-	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) p, (uintptr_t) rec);
+	rec = sls_getrecord(sb, (uint64_t)p, SLOSREC_PROC);
+	error = slskv_add(
+	    sckpt_data->sckpt_rectable, (uint64_t)p, (uintptr_t)rec);
 	if (error != 0) {
 		free(rec, M_SLSREC);
 		goto out;
@@ -182,7 +185,7 @@ slsckpt_metadata(struct proc *p, slsset *procset, struct slsckpt_data *sckpt_dat
 out:
 
 	if (error != 0) {
-		slskv_del(sckpt_data->sckpt_rectable, (uint64_t) sb);
+		slskv_del(sckpt_data->sckpt_rectable, (uint64_t)sb);
 		sbuf_delete(sb);
 	}
 
@@ -210,17 +213,19 @@ slsckpt_compact_single(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 	    ("Invalid single object compaction"));
 
 	/* Replace any metadata records we have in the old table. */
-	KV_FOREACH_POP(sckpt_data->sckpt_rectable, slsid, rec) {
-		slskv_pop(slsp->slsp_sckpt->sckpt_rectable, &slsid, (uintptr_t *) &oldrec);
+	KV_FOREACH_POP(sckpt_data->sckpt_rectable, slsid, rec)
+	{
+		slskv_pop(slsp->slsp_sckpt->sckpt_rectable, &slsid,
+		    (uintptr_t *)&oldrec);
 		free(oldrec, M_SLSREC);
-		error = slskv_add(slsp->slsp_sckpt->sckpt_rectable, slsid, 
-		    (uintptr_t) rec);
+		error = slskv_add(
+		    slsp->slsp_sckpt->sckpt_rectable, slsid, (uintptr_t)rec);
 		KASSERT(error == 0, ("Could not add new record"));
 	}
 
 	/* Collapse the new table into the old one. */
-	slsvm_objtable_collapsenew(slsp->slsp_sckpt->sckpt_objtable, 
-	    sckpt_data->sckpt_objtable);
+	slsvm_objtable_collapsenew(
+	    slsp->slsp_sckpt->sckpt_objtable, sckpt_data->sckpt_objtable);
 	slsckpt_destroy(sckpt_data, NULL);
 }
 
@@ -235,8 +240,9 @@ slsckpt_compact(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 	}
 
 	/* Compact the ful checkpoint. */
-	KASSERT(slsp->slsp_mode == SLS_FULL, ("invalid mode %d\n", slsp->slsp_mode));
-		/* Destroy the shadows. We don't keep any between iterations. */
+	KASSERT(slsp->slsp_mode == SLS_FULL,
+	    ("invalid mode %d\n", slsp->slsp_mode));
+	/* Destroy the shadows. We don't keep any between iterations. */
 	DEBUG("Compacting full checkpoint");
 	KASSERT(slsp->slsp_sckpt == NULL, ("Full disk checkpoint has data"));
 	slsckpt_destroy(sckpt_data, NULL);
@@ -251,8 +257,8 @@ slsckpt_initio(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 
 	/* Create a record for every vnode. */
 	/*
-	 * Actually serializing vnodes proves costly for applications with 
-	 * hundreds of vnodes. We avoid it completely for in-memory checkponts, 
+	 * Actually serializing vnodes proves costly for applications with
+	 * hundreds of vnodes. We avoid it completely for in-memory checkponts,
 	 * and defer it to after the partition has resumed if using disk.
 	 */
 	error = slsckpt_vnode_serialize(sckpt_data);
@@ -275,8 +281,8 @@ slsckpt_initio(struct slspart *slsp, struct slsckpt_data *sckpt_data)
  * it properly, as well as shadowing any VM objects directly accessible
  * by the partition's processes.
  */
-static int __attribute__ ((noinline))
-sls_ckpt(slsset *procset, struct proc *pcaller, struct slspart *slsp, uint64_t nextepoch)
+static int __attribute__((noinline)) sls_ckpt(slsset *procset,
+    struct proc *pcaller, struct slspart *slsp, uint64_t nextepoch)
 {
 	struct slsckpt_data *sckpt_data;
 	struct slskv_iter iter;
@@ -286,9 +292,7 @@ sls_ckpt(slsset *procset, struct proc *pcaller, struct slspart *slsp, uint64_t n
 
 	DEBUG("Process stopped");
 #ifdef KTR
-	KVSET_FOREACH(procset, iter, p) {
-		slsvm_print_vmspace(p->p_vmspace);
-	}
+	KVSET_FOREACH(procset, iter, p) { slsvm_print_vmspace(p->p_vmspace); }
 #endif
 	error = slsckpt_create(&sckpt_data, &slsp->slsp_attr);
 	if (error != 0)
@@ -307,9 +311,10 @@ sls_ckpt(slsset *procset, struct proc *pcaller, struct slspart *slsp, uint64_t n
 	SDT_PROBE1(sls, , sls_ckpt, , "Getting System V memory");
 
 	/* Get the data from all processes in the partition. */
-	KVSET_FOREACH(procset, iter, p) {
+	KVSET_FOREACH(procset, iter, p)
+	{
 		error = slsckpt_metadata(p, procset, sckpt_data);
-		if(error != 0) {
+		if (error != 0) {
 			DEBUG2("Checkpointing process %d failed with %d\n",
 			    p->p_pid, error);
 			KV_ABORT(iter);
@@ -320,15 +325,17 @@ sls_ckpt(slsset *procset, struct proc *pcaller, struct slspart *slsp, uint64_t n
 
 	SDT_PROBE1(sls, , sls_ckpt, , "Getting the metadata");
 
-	KVSET_FOREACH(procset, iter, p) {
+	KVSET_FOREACH(procset, iter, p)
+	{
 		KASSERT(P_SHOULDSTOP(p), ("process not stopped"));
-		FOREACH_THREAD_IN_PROC(p, td)
-			KASSERT(TD_IS_INHIBITED(td), ("thread is not inhibited"));
+		FOREACH_THREAD_IN_PROC (p, td)
+			KASSERT(
+			    TD_IS_INHIBITED(td), ("thread is not inhibited"));
 	}
 
 	/* Shadow the objects to be dumped. */
-	error = slsvm_procset_shadow(procset, sckpt_data->sckpt_objtable,
-	    slsckpt_isfullckpt(slsp));
+	error = slsvm_procset_shadow(
+	    procset, sckpt_data->sckpt_objtable, slsckpt_isfullckpt(slsp));
 	if (error != 0) {
 		DEBUG1("shadowing failed with %d\n", error);
 		slsckpt_cont(procset, pcaller);
@@ -358,7 +365,8 @@ sls_ckpt(slsset *procset, struct proc *pcaller, struct slspart *slsp, uint64_t n
 	if (slsp->slsp_target == SLS_OSD) {
 		taskqueue_drain_all(slos.slos_tq);
 		/* XXX Using MNT_WAIT is causing a deadlock right now. */
-		VFS_SYNC(slos.slsfs_mount, (sls_vfs_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
+		VFS_SYNC(slos.slsfs_mount,
+		    (sls_vfs_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
 	}
 
 	SDT_PROBE1(sls, , sls_ckpt, , "Draining taskqueue");
@@ -366,20 +374,19 @@ sls_ckpt(slsset *procset, struct proc *pcaller, struct slspart *slsp, uint64_t n
 	/* Advance the current major epoch. */
 	slsp_epoch_advance(slsp, nextepoch);
 
-	/* 
-	 * Collapse the shadows. Do it before making the partition available to 
+	/*
+	 * Collapse the shadows. Do it before making the partition available to
 	 * safely execute with region checkpoints.
 	 */
 	slsckpt_compact(slsp, sckpt_data);
 
-	/* 
-	 * Mark the partition as available. We don't have pipelining, so we wait 
-	 * for the taskqueue to drain before making the partition available 
+	/*
+	 * Mark the partition as available. We don't have pipelining, so we wait
+	 * for the taskqueue to drain before making the partition available
 	 * again.
 	 */
 	error = slsp_setstate(slsp, SLSP_CHECKPOINTING, SLSP_AVAILABLE, false);
 	KASSERT(error == 0, ("partition not in ckpt state"));
-
 
 	DEBUG("Checkpointed partition once");
 
@@ -398,8 +405,8 @@ error:
  */
 static int
 slsckpt_dataregion_getvm(struct slspart *slsp, struct proc *p,
-	vm_ooffset_t addr, struct slsckpt_data *sckpt_data,
-	vm_map_entry_t *entryp, vm_object_t *objp)
+    vm_ooffset_t addr, struct slsckpt_data *sckpt_data, vm_map_entry_t *entryp,
+    vm_object_t *objp)
 {
 	vm_map_entry_t entry;
 	boolean_t contained;
@@ -449,12 +456,14 @@ slsckpt_dataregion_fillckpt(struct slspart *slsp, struct proc *p,
 	int error;
 
 	/* Get the VM entities that hold the relevant information. */
-	error = slsckpt_dataregion_getvm(slsp, p, addr, sckpt_data, &entry, &obj);
+	error = slsckpt_dataregion_getvm(
+	    slsp, p, addr, sckpt_data, &entry, &obj);
 	if (error != 0)
 		return (error);
 
 	SDT_PROBE1(sls, , slsckpt_dataregion_fillckpt, , "Getting the object");
-	KASSERT(OBJT_ISANONYMOUS(obj), ("getting metadata for non anonymous obj"));
+	KASSERT(
+	    OBJT_ISANONYMOUS(obj), ("getting metadata for non anonymous obj"));
 
 	/* Only objects referenced only by the entry can be shadowed. */
 	if (obj->ref_count > 1)
@@ -465,10 +474,11 @@ slsckpt_dataregion_fillckpt(struct slspart *slsp, struct proc *p,
 	if (error != 0)
 		return (error);
 
-	SDT_PROBE1(sls, , slsckpt_dataregion_fillckpt, , "Object checkpointing");
+	SDT_PROBE1(
+	    sls, , slsckpt_dataregion_fillckpt, , "Object checkpointing");
 	/* Get the data and shadow it for the entry. */
-	error = slsvm_entry_shadow(p, sckpt_data->sckpt_objtable, entry,
-	    slsckpt_isfullckpt(slsp));
+	error = slsvm_entry_shadow(
+	    p, sckpt_data->sckpt_objtable, entry, slsckpt_isfullckpt(slsp));
 	if (error != 0)
 		return (error);
 
@@ -484,8 +494,9 @@ slsckpt_proc_in_part(struct slspart *slsp, struct proc *p)
 	uint64_t pid;
 
 	/* Make sure the process is in the partition. */
-	KVSET_FOREACH(slsp->slsp_procs, iter, pid) {
-		if (p->p_pid == (pid_t) pid) {
+	KVSET_FOREACH(slsp->slsp_procs, iter, pid)
+	{
+		if (p->p_pid == (pid_t)pid) {
 			KV_ABORT(iter);
 			return (true);
 		}
@@ -517,7 +528,7 @@ slsckpt_dataregion_dump(struct slsckpt_dataregion_dump_args *args)
 	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Writing out the data");
 
 	/*
-	 * We compact before turning the checkpoint available, because we modify 
+	 * We compact before turning the checkpoint available, because we modify
 	 * the partition's current checkpoint data.
 	 */
 	if ((slsp->slsp_target == SLS_MEM) || (slsp->slsp_target == SLS_DELTA))
@@ -531,7 +542,8 @@ slsckpt_dataregion_dump(struct slsckpt_dataregion_dump_args *args)
 	if (slsp->slsp_target == SLS_OSD) {
 		taskqueue_drain_all(slos.slos_tq);
 		/* XXX Using MNT_WAIT is causing a deadlock right now. */
-		VFS_SYNC(slos.slsfs_mount, (sls_vfs_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
+		VFS_SYNC(slos.slsfs_mount,
+		    (sls_vfs_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
 	}
 
 	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Draining the taskqueue");
@@ -540,7 +552,8 @@ slsckpt_dataregion_dump(struct slsckpt_dataregion_dump_args *args)
 
 	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Advancing the epoch");
 
-	stateerr = slsp_setstate(slsp, SLSP_CHECKPOINTING, SLSP_AVAILABLE, false);
+	stateerr = slsp_setstate(
+	    slsp, SLSP_CHECKPOINTING, SLSP_AVAILABLE, false);
 	KASSERT(stateerr == 0, ("partition not in ckpt state"));
 
 	slsp_deref(slsp);
@@ -553,19 +566,20 @@ slsckpt_dataregion_dump(struct slsckpt_dataregion_dump_args *args)
 
 /*
  * Persist an area of memory of the process. The process must be in a partition.
- * At restore time, the data region has the data grabbed here, instead of the 
+ * At restore time, the data region has the data grabbed here, instead of the
  * ones created during the previous checkpoint.
  */
 int
-slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr, uint64_t *nextepoch)
+slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
+    uint64_t *nextepoch)
 {
 	struct slsckpt_dataregion_dump_args *dump_args;
 	struct slsckpt_data *sckpt_data = NULL;
 	int stateerr, error;
 
 	/*
-	 * Unless doing full checkpoints (which are there just for benchmarking 
-	 * purposes), we have to have checkpointed the whole partition before 
+	 * Unless doing full checkpoints (which are there just for benchmarking
+	 * purposes), we have to have checkpointed the whole partition before
 	 * checkpointing individual regions.
 	 */
 	if ((slsp->slsp_target == SLS_MEM) || (slsp->slsp_target == SLS_DELTA))
@@ -573,22 +587,23 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr, uint
 			return (EINVAL);
 
 	/* Wait till we can start checkpointing. */
-	if (slsp_setstate(slsp, SLSP_AVAILABLE, SLSP_CHECKPOINTING, true) != 0) {
+	if (slsp_setstate(slsp, SLSP_AVAILABLE, SLSP_CHECKPOINTING, true) !=
+	    0) {
 
 		/* Once a partition is detached its state cannot change.  */
 		KASSERT(slsp->slsp_status == SLSP_DETACHED,
-			("Blocking slsp_setstate() on live partition failed"));
+		    ("Blocking slsp_setstate() on live partition failed"));
 
 		/* Tried to checkpoint a removed partition. */
 		return (EINVAL);
 	}
 
 	/*
-	 * Once a process is in a partition it is there forever, so there can be 
+	 * Once a process is in a partition it is there forever, so there can be
 	 * no races with the call below.
 	 */
 	if (!slsckpt_proc_in_part(slsp, p)) {
-		error  = EINVAL;
+		error = EINVAL;
 		goto error_single;
 	}
 
@@ -608,7 +623,7 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr, uint
 	SDT_PROBE1(sls, , slsckpt_dataregion, , "Single threading");
 
 	/* Add the data and metadata. This also shadows the object. */
-	error =  slsckpt_dataregion_fillckpt(slsp, p, addr, sckpt_data);
+	error = slsckpt_dataregion_fillckpt(slsp, p, addr, sckpt_data);
 	if (error != 0) {
 		error = EINVAL;
 		goto error;
@@ -636,10 +651,11 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr, uint
 		.sckpt_data = sckpt_data,
 		.nextepoch = *nextepoch,
 	};
-	error = kthread_add((void(*)(void *)) slsckpt_dataregion_dump,
+	error = kthread_add((void (*)(void *))slsckpt_dataregion_dump,
 	    dump_args, NULL, NULL, 0, 0, "slsckpt_dataregion_dump");
 	if (error != 0) {
-		DEBUG1("ERROR: Calling sls_dataregion_dump failed with %d", error);
+		DEBUG1(
+		    "ERROR: Calling sls_dataregion_dump failed with %d", error);
 		slsp_epoch_advance(slsp, *nextepoch);
 		return (error);
 	}
@@ -655,7 +671,8 @@ error:
 
 error_single:
 
-	stateerr = slsp_setstate(slsp, SLSP_CHECKPOINTING, SLSP_AVAILABLE, false);
+	stateerr = slsp_setstate(
+	    slsp, SLSP_CHECKPOINTING, SLSP_AVAILABLE, false);
 	KASSERT(stateerr == 0, ("partition not in ckpt state"));
 
 	slsckpt_destroy(sckpt_data, NULL);
@@ -667,7 +684,8 @@ error_single:
 }
 
 static int
-slsckpt_gather_processes(struct slspart *slsp, struct proc *pcaller, slsset *procset)
+slsckpt_gather_processes(
+    struct slspart *slsp, struct proc *pcaller, slsset *procset)
 {
 	struct slskv_iter iter;
 	uint64_t deadpid = 0;
@@ -675,7 +693,8 @@ slsckpt_gather_processes(struct slspart *slsp, struct proc *pcaller, slsset *pro
 	uint64_t pid;
 	int error;
 
-	KVSET_FOREACH(slsp->slsp_procs, iter, pid) {
+	KVSET_FOREACH(slsp->slsp_procs, iter, pid)
+	{
 
 		/* Remove the PID of the unavailable process from the set. */
 		if (deadpid != 0) {
@@ -698,7 +717,7 @@ slsckpt_gather_processes(struct slspart *slsp, struct proc *pcaller, slsset *pro
 		}
 
 		/* Add it to the set of processes to be checkpointed. */
-		error = slsset_add_unlocked(procset, (uint64_t) p);
+		error = slsset_add_unlocked(procset, (uint64_t)p);
 		if (error != 0) {
 			KV_ABORT(iter);
 			return (error);
@@ -714,7 +733,8 @@ slsckpt_gather_processes(struct slspart *slsp, struct proc *pcaller, slsset *pro
 
 /* Gather the children of the processes currently in the working set. */
 static int
-slsckpt_gather_children_once(slsset *procset, struct proc *pcaller, int *new_procs)
+slsckpt_gather_children_once(
+    slsset *procset, struct proc *pcaller, int *new_procs)
 {
 	struct proc *p, *pchild;
 	struct slskv_iter iter;
@@ -726,10 +746,12 @@ slsckpt_gather_children_once(slsset *procset, struct proc *pcaller, int *new_pro
 	/* Assume there are no new children. */
 	new_procs = 0;
 
-	KVSET_FOREACH(procset, iter, p) {
+	KVSET_FOREACH(procset, iter, p)
+	{
 		/* Check for new children. */
-		LIST_FOREACH(pchild, &p->p_children, p_sibling) {
-			if (slsset_find_unlocked(procset, (uint64_t) pchild) != 0) {
+		LIST_FOREACH (pchild, &p->p_children, p_sibling) {
+			if (slsset_find_unlocked(procset, (uint64_t)pchild) !=
+			    0) {
 				/* We found a child that didn't exist before. */
 				if (!SLS_PROCALIVE(pchild))
 					continue;
@@ -737,12 +759,12 @@ slsckpt_gather_children_once(slsset *procset, struct proc *pcaller, int *new_pro
 				new_procs += 1;
 
 				PHOLD(pchild);
-				error = slsset_add_unlocked(procset, (uint64_t) pchild);
+				error = slsset_add_unlocked(
+				    procset, (uint64_t)pchild);
 				if (error != 0) {
 					KV_ABORT(iter);
 					return (error);
 				}
-
 			}
 		}
 	}
@@ -758,7 +780,8 @@ slsckpt_gather_children(slsset *procset, struct proc *pcaller)
 	int error;
 
 	do {
-		error = slsckpt_gather_children_once(procset, pcaller, &new_procs);
+		error = slsckpt_gather_children_once(
+		    procset, pcaller, &new_procs);
 		if (error != 0)
 			return (error);
 	} while (new_procs > 0);
@@ -769,7 +792,7 @@ slsckpt_gather_children(slsset *procset, struct proc *pcaller)
 /*
  * System process that continuously checkpoints a partition.
  */
-void __attribute__ ((noinline))
+void __attribute__((noinline))
 sls_checkpointd(struct sls_checkpointd_args *args)
 {
 	uint64_t *nextepoch = args->nextepoch;
@@ -794,13 +817,15 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		sls_ckpt_attempted += 1;
 
 		/*
-		 * Check if the partition is available for checkpointing. If the 
-		 * operation fails, the partition is detached. Note that this 
+		 * Check if the partition is available for checkpointing. If the
+		 * operation fails, the partition is detached. Note that this
 		 * allows multiple checkpoint daemons on the same partition.
 		 */
-		if (slsp_setstate(slsp, SLSP_AVAILABLE, SLSP_CHECKPOINTING, true) != 0) {
+		if (slsp_setstate(
+			slsp, SLSP_AVAILABLE, SLSP_CHECKPOINTING, true) != 0) {
 
-			/* Once a partition is detached its state cannot change.  */
+			/* Once a partition is detached its state cannot change.
+			 */
 			KASSERT(slsp->slsp_status == SLSP_DETACHED,
 			    ("Blocking slsp_setstate() on live partition failed"));
 
@@ -828,12 +853,13 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 			break;
 
 		/*
-		 * If we recursively checkpoint, we don't actually enter the children
-		 * into the SLS permanently, but only checkpoint them in this iteration.
-		 * This only matters if the parent dies, in which case the children will
-		 * not be checkpointed anymore; this makes sense because we mainly want
-		 * the children because they might be part of the state of the parent,
-		 * if we actually care about them we can add them to the SLS.
+		 * If we recursively checkpoint, we don't actually enter the
+		 * children into the SLS permanently, but only checkpoint them
+		 * in this iteration. This only matters if the parent dies, in
+		 * which case the children will not be checkpointed anymore;
+		 * this makes sense because we mainly want the children because
+		 * they might be part of the state of the parent, if we actually
+		 * care about them we can add them to the SLS.
 		 */
 
 		/* If we're not recursively checkpointing, abort the search. */
@@ -867,22 +893,25 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 
 		/* Release all checkpointed processes. */
 		KVSET_FOREACH_POP(procset, p)
-		    PRELE(p);
+		PRELE(p);
 
-		/* If the interval is 0, checkpointing is non-periodic. Finish up. */
+		/* If the interval is 0, checkpointing is non-periodic. Finish
+		 * up. */
 		if (slsp->slsp_attr.attr_period == 0)
 			goto out;
 
-		/* Else compute how long we need to wait until we need to checkpoint again. */
+		/* Else compute how long we need to wait until we need to
+		 * checkpoint again. */
 		msec_elapsed = (TONANO(tend) - TONANO(tstart)) / (1000 * 1000);
 		msec_left = slsp->slsp_attr.attr_period - msec_elapsed;
 		if (msec_left > 0)
-			pause_sbt("slscpt", SBT_1MS * msec_left, 0, C_HARDCLOCK | C_CATCH);
+			pause_sbt("slscpt", SBT_1MS * msec_left, 0,
+			    C_HARDCLOCK | C_CATCH);
 
 		DEBUG("Woke up");
-		/* 
-		 * The sls_ckpt() process has marked the partition as 
-		 * available after it was done initiating dumping to disk. 
+		/*
+		 * The sls_ckpt() process has marked the partition as
+		 * available after it was done initiating dumping to disk.
 		 */
 	}
 
@@ -890,8 +919,8 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	 * If we exited normally, and the process is still in the SLOS,
 	 * mark the process as available for checkpointing.
 	 */
-	stateerr = slsp_setstate(slsp, SLSP_CHECKPOINTING,
-	    SLSP_AVAILABLE, false);
+	stateerr = slsp_setstate(
+	    slsp, SLSP_CHECKPOINTING, SLSP_AVAILABLE, false);
 
 	KASSERT(stateerr == 0, ("partition in state %d", slsp->slsp_status));
 
@@ -913,7 +942,7 @@ out:
 	if (procset != NULL) {
 		/* Release any process references gained. */
 		KVSET_FOREACH_POP(procset, p)
-		    PRELE(p);
+		PRELE(p);
 		slskv_destroy(procset);
 	}
 
@@ -923,4 +952,3 @@ out:
 
 	kthread_exit();
 }
-

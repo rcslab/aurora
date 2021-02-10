@@ -1,0 +1,30 @@
+{
+  "linters": {
+    "clang-format": {
+      "type": "clang-format",
+      "include": "(\\.(c|cc|cpp|h)$)",
+      "bin": [ "/usr/local/bin/clang-format11", "/usr/local/bin/clang-format10" ]
+    },
+    "python": {
+      "type": "pep8",
+      "include": "(\\.py$)"
+    },
+    "spelling": {
+      "type": "spelling"
+    },
+    "chmod": {
+      "type": "chmod"
+    },
+    "merge-conflict": {
+      "type": "merge-conflict",
+      "exclude": "(\\.md$)"
+    },
+    "filename": {
+      "type": "filename"
+    },
+    "json": {
+      "type": "json",
+      "include": "(\\.arclint|\\.json$)"
+    }
+  }
+}

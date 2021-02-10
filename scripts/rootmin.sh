@@ -3,7 +3,6 @@
 # Script that creates a minimal root for benchmarks
 
 # Import the configuration
-SRCROOT="/root/sls"
 . "$SRCROOT/tests/aurora"
 
 TMPSRC="/mnt/src"

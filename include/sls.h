@@ -20,9 +20,9 @@ int sls_partadd(uint64_t oid, const struct sls_attr attr);
 int sls_partdel(uint64_t oid);
 
 struct sls_stat {
-    int type;
-    int streamid;
-    uint64_t ckptid;
+	int type;
+	int streamid;
+	uint64_t ckptid;
 };
 
 int sls_epochdone(uint64_t oid, uint64_t epoch, bool *isdone);

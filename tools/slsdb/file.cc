@@ -1,31 +1,28 @@
 
 #include <sys/stat.h>
 
-#include <unistd.h>
-#include <fcntl.h>
 #include <dirent.h>
-#include <uuid.h>
-
-#include <string>
-#include <sstream>
-#include <fstream>
-#include <algorithm>
-#include <iostream>
-#include <vector>
-
+#include <fcntl.h>
 #include <slos.h>
 #include <slos_inode.h>
+#include <unistd.h>
+#include <uuid.h>
 
-#include "snapshot.h"
+#include <algorithm>
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <vector>
+
 #include "btree.h"
-#include "file.h"
 #include "directory.h"
+#include "file.h"
+#include "snapshot.h"
 #include "util.h"
 
 InodeFile::InodeFile(Snapshot *sb, slos_inode &i)
-    : SFile(sb, i, SType::INODE_ROOT)
-{
-};
+    : SFile(sb, i, SType::INODE_ROOT) {};
 
 std::shared_ptr<SFile>
 InodeFile::getFile(uint64_t pid)
@@ -58,21 +55,22 @@ SReg::SReg(Snapshot *sb, slos_inode &i)
 {
 }
 
-
 SFile::SFile()
     : snap(nullptr)
 {
 }
 
 SFile::SFile(Snapshot *snap, slos_inode &ino, SType type)
-    : snap(snap), ino(ino), type(type)
+    : snap(snap)
+    , ino(ino)
+    , type(type)
 {
 	tree = Btree<uint64_t, diskptr_t>(snap, ino.ino_btree.offset);
 }
 std::string
 rec_to_string(uint64_t type)
 {
-    switch (type) {
+	switch (type) {
 	case SLOSREC_INVALID:
 		return "Invalid";
 	case SLOSREC_PROC:
@@ -95,7 +93,7 @@ rec_to_string(uint64_t type)
 		return "Manifest";
 	default:
 		return "Unknown Type";
-    }
+	}
 }
 
 std::string
@@ -114,29 +112,35 @@ SFile::toString()
 		ss << "Type: VREG" << std::endl;
 	}
 	ss << "Btree Root " << ino.ino_btree.offset << std::endl;
-	ss << "aSize: " << ino.ino_asize << std:: endl;
-	ss << "Size: " << ino.ino_size << std:: endl;
-	ss << "Links: " << ino.ino_nlink << std:: endl;
+	ss << "aSize: " << ino.ino_asize << std::endl;
+	ss << "Size: " << ino.ino_size << std::endl;
+	ss << "Links: " << ino.ino_nlink << std::endl;
 	ss << "Inode #/PID: " << ino.ino_pid << std::endl;
 	ss << "UID: " << ino.ino_uid << std::endl;
 	ss << "GID: " << ino.ino_gid << std::endl;
-	ss << "Creation Time: " << time_to_string(ino.ino_ctime, ino.ino_ctime_nsec) << std::endl;
-	ss << "Modification Time: " << time_to_string(ino.ino_mtime, ino.ino_mtime_nsec) << std::endl;
-	ss << "Access Time: " << time_to_string(ino.ino_atime, ino.ino_atime_nsec) << std::endl;
-	ss << "Birthday Time: " << time_to_string(ino.ino_birthtime, ino.ino_birthtime_nsec) << std::endl;
+	ss << "Creation Time: "
+	   << time_to_string(ino.ino_ctime, ino.ino_ctime_nsec) << std::endl;
+	ss << "Modification Time: "
+	   << time_to_string(ino.ino_mtime, ino.ino_mtime_nsec) << std::endl;
+	ss << "Access Time: "
+	   << time_to_string(ino.ino_atime, ino.ino_atime_nsec) << std::endl;
+	ss << "Birthday Time: "
+	   << time_to_string(ino.ino_birthtime, ino.ino_birthtime_nsec)
+	   << std::endl;
 	ss << "Record Type: " << rec_to_string(ino.ino_rstat.type) << std::endl;
 	ss << "Record Length: " << ino.ino_rstat.len << std::endl;
 
 	return ss.str();
 }
 
-int 
-SFile::failed() {
+int
+SFile::failed()
+{
 	if (snap == nullptr || error == (-1)) {
 		std::cout << "Uninitialized file" << std::endl;
 		return (-1);
-	} 
-	
+	}
+
 	return (error);
 }
 
@@ -146,7 +150,7 @@ SFile::writeData(std::ostream &where)
 	auto iter = tree.keymax(0);
 	size_t file_off = iter.key() * snap->super.sb_bsize;
 	size_t past_off = file_off;
-	char zeroes[SECTOR_SIZE] =  {};
+	char zeroes[SECTOR_SIZE] = {};
 
 	while (iter.valid()) {
 		/*
@@ -154,24 +158,28 @@ SFile::writeData(std::ostream &where)
 		 */
 		file_off = iter.key() * snap->super.sb_bsize;
 		size_t offset = iter.val().offset * snap->super.sb_bsize;
-		size_t size = std::min(ino.ino_size - file_off, iter.val().size);
+		size_t size = std::min(
+		    ino.ino_size - file_off, iter.val().size);
 		/*
-		 * Since the file desscriptor is a device, we have a minimum 
-		 * block size we have to maintain which is why for small reads 
+		 * Since the file desscriptor is a device, we have a minimum
+		 * block size we have to maintain which is why for small reads
 		 * and writes we need to bump up the buffer
 		 */
-		size_t bufsize = ROUNDUP(MAX(size, snap->super.sb_ssize), snap->super.sb_ssize);
-		void * buf = malloc(bufsize);
+		size_t bufsize = ROUNDUP(
+		    MAX(size, snap->super.sb_ssize), snap->super.sb_ssize);
+		void *buf = malloc(bufsize);
 		int readin = pread(snap->dev, buf, bufsize, offset);
 		if (readin != bufsize) {
 			std::cout << strerror(errno) << std::endl;
-			std::cout << "Problem reading in off device" << std::endl;
+			std::cout << "Problem reading in off device"
+				  << std::endl;
 			exit(-1);
 		}
 
 		// Write zeroes
 		size_t zesize = 0;
-		for (size_t x = 0; x < (file_off - past_off); x += SECTOR_SIZE) {
+		for (size_t x = 0; x < (file_off - past_off);
+		     x += SECTOR_SIZE) {
 			zesize = MIN(file_off - (past_off + x), SECTOR_SIZE);
 			where.write(zeroes, size);
 		}
@@ -199,7 +207,7 @@ SFile::hexdump()
 	auto iter = tree.keymax(0);
 	size_t file_off = iter.key() * snap->super.sb_bsize;
 	size_t past_off = file_off;
-	char zeroes[512] =  {};
+	char zeroes[512] = {};
 
 	if (ino.ino_size == 0) {
 		printf("Empty file\n");
@@ -212,18 +220,21 @@ SFile::hexdump()
 		 */
 		file_off = iter.key() * snap->super.sb_bsize;
 		size_t offset = iter.val().offset * snap->super.sb_bsize;
-		size_t size = std::min(ino.ino_size - file_off, iter.val().size);
+		size_t size = std::min(
+		    ino.ino_size - file_off, iter.val().size);
 		/*
-		 * Since the file desscriptor is a device, we have a minimum 
-		 * block size we have to maintain which is why for small reads 
+		 * Since the file desscriptor is a device, we have a minimum
+		 * block size we have to maintain which is why for small reads
 		 * and writes we need to bump up the buffer
 		 */
-		size_t bufsize = ROUNDUP(MAX(size, snap->super.sb_ssize), snap->super.sb_ssize);
-		void * buf = malloc(bufsize);
+		size_t bufsize = ROUNDUP(
+		    MAX(size, snap->super.sb_ssize), snap->super.sb_ssize);
+		void *buf = malloc(bufsize);
 		int readin = pread(snap->dev, buf, bufsize, offset);
 		if (readin != bufsize) {
 			std::cout << strerror(errno) << std::endl;
-			std::cout << "Problem reading in off device" << std::endl;
+			std::cout << "Problem reading in off device"
+				  << std::endl;
 			exit(-1);
 		}
 
@@ -247,11 +258,10 @@ SFile::hexdump()
 int
 SFile::dumpTo(std::string path)
 {
-	std::ofstream file; 
+	std::ofstream file;
 	file.open(path);
 	writeData(file);
 	file.close();
 
 	return (0);
 }
-

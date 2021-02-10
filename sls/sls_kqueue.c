@@ -1,11 +1,8 @@
 #include <sys/param.h>
-#include <sys/endian.h>
-#include <sys/queue.h>
-
-#include <machine/param.h>
-
+#include <sys/selinfo.h>
 #include <sys/capsicum.h>
 #include <sys/domain.h>
+#include <sys/endian.h>
 #include <sys/event.h>
 #include <sys/fcntl.h>
 #include <sys/ktr.h>
@@ -13,12 +10,11 @@
 #include <sys/mman.h>
 #include <sys/mutex.h>
 #include <sys/namei.h>
-#include <sys/param.h>
 #include <sys/proc.h>
 #include <sys/protosw.h>
+#include <sys/queue.h>
 #include <sys/rwlock.h>
 #include <sys/sbuf.h>
-#include <sys/selinfo.h>
 #include <sys/shm.h>
 #include <sys/socketvar.h>
 #include <sys/stat.h>
@@ -26,31 +22,32 @@
 #include <sys/unistd.h>
 #include <sys/vnode.h>
 
-/* 
+#include <machine/param.h>
+
+/*
  * XXX eventvar should include more headers,
  * it can't be placed alphabetically.
  */
 #include <sys/eventvar.h>
 
-#include <netinet/in.h>
-#include <netinet/in_pcb.h>
-
-#include <vm/pmap.h>
 #include <vm/vm.h>
+#include <vm/pmap.h>
+#include <vm/uma.h>
 #include <vm/vm_extern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
 #include <vm/vm_radix.h>
-#include <vm/uma.h>
+
+#include <netinet/in.h>
+#include <netinet/in_pcb.h>
 
 #include <slos.h>
 #include <sls_data.h>
 
+#include "debug.h"
 #include "sls_file.h"
 #include "sls_internal.h"
-
-#include "debug.h"
 
 /*
  * All kqueues belong to exactly one file table, and have a backpointer to it.
@@ -66,7 +63,6 @@ slsrest_kqdetach(struct kqueue *kq)
 	kq->kq_fdp = NULL;
 	FILEDESC_XUNLOCK(fdp);
 }
-
 
 void
 slsrest_kqattach_locked(struct proc *p, struct kqueue *kq)
@@ -109,24 +105,28 @@ slsckpt_knote(struct knote *kn, struct sbuf *sb)
 		return (0);
 
 	/*
-	 * The AIO subsystem stores kernel pointers in knotes' private data, which we 
-	 * obviously can't do anything about. Fail when we come across this situation.
+	 * The AIO subsystem stores kernel pointers in knotes' private data,
+	 * which we obviously can't do anything about. Fail when we come across
+	 * this situation.
 	 */
-	KASSERT((kn->kn_kevent.filter != EVFILT_AIO), ("unhandled AIO filter detected"));
+	KASSERT((kn->kn_kevent.filter != EVFILT_AIO),
+	    ("unhandled AIO filter detected"));
 
-	/* XXX Check the kevent's flags in case there is an illegal operation in progress. */
-	DEBUG2("Checkpointing (%lx, %d)", kn->kn_kevent.ident, kn->kn_kevent.filter);
+	/* XXX Check the kevent's flags in case there is an illegal operation in
+	 * progress. */
+	DEBUG2("Checkpointing (%lx, %d)", kn->kn_kevent.ident,
+	    kn->kn_kevent.filter);
 
 	/* Write each kevent to the sbuf. */
 	/* Get all relevant fields, mostly the identifier a*/
 	slskn.magic = SLSKNOTE_ID;
-	slskn.slsid = (uint64_t) kn;
+	slskn.slsid = (uint64_t)kn;
 	slskn.kn_status = kn->kn_status;
 	slskn.kn_kevent = kn->kn_kevent;
 	slskn.kn_sfflags = kn->kn_sfflags;
 	slskn.kn_sdata = kn->kn_sdata;
 
-	error = sbuf_bcat(sb, (void *) &slskn, sizeof(slskn));
+	error = sbuf_bcat(sb, (void *)&slskn, sizeof(slskn));
 	if (error != 0)
 		return (error);
 
@@ -148,10 +148,10 @@ slsckpt_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
 	 * the array of knotes that succeed it.
 	 */
 	slskq.magic = SLSKQUEUE_ID;
-	slskq.slsid = (uint64_t) kq;
+	slskq.slsid = (uint64_t)kq;
 
 	/* Write the kqueue itself to the sbuf. */
-	error = sbuf_bcat(sb, (void *) &slskq, sizeof(slskq));
+	error = sbuf_bcat(sb, (void *)&slskq, sizeof(slskq));
 	if (error != 0)
 		return (error);
 
@@ -166,7 +166,7 @@ slsckpt_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
 
 	/* Get all knotes in the dynamic array. */
 	for (i = 0; i < kq->kq_knlistsize; i++) {
-		SLIST_FOREACH(kn, &kq->kq_knlist[i], kn_link) {
+		SLIST_FOREACH (kn, &kq->kq_knlist[i], kn_link) {
 			error = slsckpt_knote(kn, sb);
 			if (error != 0)
 				return (error);
@@ -175,7 +175,7 @@ slsckpt_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
 
 	/* Do the exact same thing for the hashtable. */
 	for (i = 0; i < kq->kq_knhashmask; i++) {
-		SLIST_FOREACH(kn, &kq->kq_knhash[i], kn_link) {
+		SLIST_FOREACH (kn, &kq->kq_knhash[i], kn_link) {
 			error = slsckpt_knote(kn, sb);
 			if (error != 0)
 				return (error);
@@ -197,7 +197,7 @@ slsckpt_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
  * entities using the file abstraction, in that they need the rest
  * of the files in the process' table to be restored before we can
  * fully restore it. More specifically, while we create the kqueue
- * here, in order for it to be inserted to the proper place in the 
+ * here, in order for it to be inserted to the proper place in the
  * file table, we do not populate it with kevents. This is because
  * each kevent targets an fd, and so it can't be done while the
  * files are being restored. We wait until that step is done before
@@ -220,8 +220,8 @@ slsrest_kqueue(struct slskqueue *slskq, int *fdp)
 	kq = FDTOFP(p, fd)->f_data;
 
 	/*
-	 * Right now we are creating the kqueue outside the file table in which 
-	 * it will ultimately end up. We need to remove it from its current one, 
+	 * Right now we are creating the kqueue outside the file table in which
+	 * it will ultimately end up. We need to remove it from its current one,
 	 * we'll attach it to the currect table when that is created.
 	 */
 	slsrest_kqdetach(kq);
@@ -231,7 +231,6 @@ slsrest_kqueue(struct slskqueue *slskq, int *fdp)
 
 	return (0);
 }
-
 
 /*
  * Find a given knote specified by (kqueue, ident, filter).
@@ -244,21 +243,20 @@ slsrest_knfind(struct kqueue *kq, __uintptr_t ident, short filter)
 
 	/* Traversal same as in kqueue_register(). */
 	if (ident < kq->kq_knlistsize) {
-		SLIST_FOREACH(kn, &kq->kq_knlist[ident], kn_link) {
+		SLIST_FOREACH (kn, &kq->kq_knlist[ident], kn_link) {
 			if (filter == kn->kn_filter)
 				return (kn);
 		}
 	}
 
 	if (kq->kq_knhashmask != 0) {
-		list = &kq->kq_knhash[KN_HASH((u_long)ident, kq->kq_knhashmask)];
-		SLIST_FOREACH(kn, list, kn_link) {
-			if (ident == kn->kn_id &&
-			    filter == kn->kn_filter)
+		list =
+		    &kq->kq_knhash[KN_HASH((u_long)ident, kq->kq_knhashmask)];
+		SLIST_FOREACH (kn, list, kn_link) {
+			if (ident == kn->kn_id && filter == kn->kn_filter)
 				return (kn);
 		}
 	}
-
 
 	return (NULL);
 }
@@ -274,7 +272,8 @@ slsrest_kqregister(int fd, struct kqueue *kq, slsset *slskns)
 	struct kevent kev;
 	int error;
 
-	KVSET_FOREACH(slskns, iter, slskn) {
+	KVSET_FOREACH(slskns, iter, slskn)
+	{
 		kev = slskn->kn_kevent;
 		DEBUG2("Registering knote (%lx, %d)", kev.ident, kev.filter);
 		/*
@@ -287,8 +286,10 @@ slsrest_kqregister(int fd, struct kqueue *kq, slsset *slskns)
 		kev.flags = EV_ADD | EV_DISABLE;
 		error = kqueue_register(kq, &kev, curthread, M_WAITOK);
 		if (error != 0) {
-			SLS_DBG("(BUG) Error %d by restoring knote for fd %d\n", error, fd);
-			SLS_DBG("(BUG) Ident %lx Filter %d\n", kev.ident, kev.filter);
+			SLS_DBG("(BUG) Error %d by restoring knote for fd %d\n",
+			    error, fd);
+			SLS_DBG("(BUG) Ident %lx Filter %d\n", kev.ident,
+			    kev.filter);
 		}
 		/* XXX See if we can handle/return the error. */
 	}
@@ -320,7 +321,7 @@ slsrest_kq_sockhack(struct proc *p, struct kqueue *kq)
 		if (fp->f_type != DTYPE_SOCKET)
 			continue;
 
-		so = (struct socket *) fp->f_data;
+		so = (struct socket *)fp->f_data;
 		if (so->so_proto->pr_domain->dom_family != AF_INET)
 			continue;
 
@@ -331,11 +332,11 @@ slsrest_kq_sockhack(struct proc *p, struct kqueue *kq)
 		 * Find all knotes for the identifier, set them as EOF.
 		 * The knote identifier is the fd of the file.
 		 */
-		SLIST_FOREACH(kn, &kq->kq_knlist[fd], kn_link) {
-		DEBUG4("Restoring knote ident = %d, filter = %d "
-				"flags = 0x%x status = 0x%x",
-				kn->kn_id, kn->kn_filter,
-				kn->kn_flags, kn->kn_status);
+		SLIST_FOREACH (kn, &kq->kq_knlist[fd], kn_link) {
+			DEBUG4("Restoring knote ident = %d, filter = %d "
+			       "flags = 0x%x status = 0x%x",
+			    kn->kn_id, kn->kn_filter, kn->kn_flags,
+			    kn->kn_status);
 
 			if ((kn->kn_status & KN_QUEUED) == 0) {
 				kn->kn_status |= (KN_ACTIVE | KN_QUEUED);
@@ -390,30 +391,32 @@ slsrest_knotes(int fd, slsset *slskns)
 
 	KQ_LOCK(kq);
 	/* Traverse the kqueue, fixing up each knote as we go. */
-	KVSET_FOREACH_POP(slskns, slskn) {
+	KVSET_FOREACH_POP(slskns, slskn)
+	{
 		/* First try to find the knote in the fd-related array. */
 		kev = &slskn->kn_kevent;
 
 		/*
-		 * Find the right knote. Some files like non-listening IP 
-		 * sockets and IPv6 sockets of all kinds do not get restored, so 
+		 * Find the right knote. Some files like non-listening IP
+		 * sockets and IPv6 sockets of all kinds do not get restored, so
 		 * a knote might be missing.
 		 */
 		kn = slsrest_knfind(kq, kev->ident, kev->filter);
 		if (kn == NULL) {
-			SLS_DBG("Missing knote (%lx, %x)\n", kev->ident, kev->filter);
+			SLS_DBG("Missing knote (%lx, %x)\n", kev->ident,
+			    kev->filter);
 			continue;
 		}
 
-		KASSERT(kn != NULL, ("Missing knote (fd, id, ident) = (%d, %lx ,%d))",
-		    fd, kev->ident, kev->filter));
+		KASSERT(kn != NULL,
+		    ("Missing knote (fd, id, ident) = (%d, %lx ,%d))", fd,
+			kev->ident, kev->filter));
 
 		SLS_DBG("Restoring (%lx, %d)\n", kev->ident, kev->filter);
 		/*
 		 * We are holding the kqueue lock here, so we do not need to
 		 * mark the knote as being in flux while modifying.
 		 */
-
 
 		/*
 		 * If the knote is supposed to be active, put it in the active
@@ -432,9 +435,8 @@ slsrest_knotes(int fd, slsset *slskns)
 		kn->kn_sfflags = slskn->kn_sfflags;
 		kn->kn_sdata = slskn->kn_sdata;
 		DEBUG4("Restoring knote ident = %d, filter = %d"
-			"flags = 0x%x status = 0x%x",
-			kn->kn_id, kn->kn_filter,
-			kn->kn_flags, kn->kn_status);
+		       "flags = 0x%x status = 0x%x",
+		    kn->kn_id, kn->kn_filter, kn->kn_flags, kn->kn_status);
 	}
 
 	/* XXX Temporary hack. Send an EOF event to any non-restored sockets. */

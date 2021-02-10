@@ -1,10 +1,10 @@
+#include <sys/types.h>
+#include <sys/wait.h>
+
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-
-#include <sys/types.h>
-#include <sys/wait.h>
 
 void
 childfunction(void)
@@ -15,7 +15,8 @@ childfunction(void)
 }
 
 int
-main() {
+main()
+{
 	int pid, status;
 	int childpid;
 
@@ -33,13 +34,15 @@ main() {
 		perror("wait");
 		exit(1);
 	} else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
-		fprintf(stderr, "Process exited with status %d\n", WEXITSTATUS(status));
+		fprintf(stderr, "Process exited with status %d\n",
+		    WEXITSTATUS(status));
 		exit(2);
 	} else if (WIFSIGNALED(status)) {
-		fprintf(stderr, "Process terminated with signal %d\n", WTERMSIG(status));
+		fprintf(stderr, "Process terminated with signal %d\n",
+		    WTERMSIG(status));
 		exit(4);
 	}
 
 	printf("Successfully waited\n");
-	return(0);
+	return (0);
 }

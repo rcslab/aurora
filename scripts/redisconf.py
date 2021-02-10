@@ -3,11 +3,13 @@
 import sys
 import csv
 
+
 def tuple_generate(conf_file):
     lines = conf_file.readlines()
     for line in lines:
         if not line.strip().startswith("#"):
             yield line.strip().split()
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:

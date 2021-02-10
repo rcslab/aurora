@@ -1,10 +1,13 @@
 #include <sys/types.h>
-
+#include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/selinfo.h>
 #include <sys/capsicum.h>
 #include <sys/condvar.h>
 #include <sys/conf.h>
-#include <sys/fcntl.h>
 #include <sys/event.h>
+#include <sys/eventvar.h>
+#include <sys/fcntl.h>
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/kernel.h>
@@ -12,8 +15,6 @@
 #include <sys/limits.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
-#include <sys/queue.h>
-#include <sys/param.h>
 #include <sys/pcpu.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
@@ -23,14 +24,20 @@
 #include <sys/shm.h>
 #include <sys/signalvar.h>
 #include <sys/stat.h>
-#include <sys/systm.h>
 #include <sys/syscallsubr.h>
 #include <sys/time.h>
 #include <sys/tty.h>
 #include <sys/uio.h>
 #include <sys/unistd.h>
 
-#include <sys/eventvar.h>
+#include <vm/vm.h>
+#include <vm/pmap.h>
+#include <vm/uma.h>
+#include <vm/vm_extern.h>
+#include <vm/vm_map.h>
+#include <vm/vm_object.h>
+#include <vm/vm_page.h>
+#include <vm/vm_radix.h>
 
 #include <machine/param.h>
 #include <machine/reg.h>
@@ -38,20 +45,13 @@
 
 #include <netinet/in.h>
 
-#include <vm/pmap.h>
-#include <vm/vm.h>
-#include <vm/vm_extern.h>
-#include <vm/vm_map.h>
-#include <vm/vm_object.h>
-#include <vm/vm_page.h>
-#include <vm/vm_radix.h>
-#include <vm/uma.h>
-
 #include <slos.h>
 #include <slos_inode.h>
 
+#include "debug.h"
 #include "sls_data.h"
 #include "sls_file.h"
+#include "sls_internal.h"
 #include "sls_ioctl.h"
 #include "sls_kv.h"
 #include "sls_load.h"
@@ -63,9 +63,7 @@
 #include "sls_vmobject.h"
 #include "sls_vmspace.h"
 #include "sls_vnode.h"
-#include "sls_internal.h"
 #include "sysv_internal.h"
-#include "debug.h"
 
 SDT_PROBE_DEFINE1(sls, , sls_rest, , "char *");
 SDT_PROBE_DEFINE1(sls, , slsrest_metadata, , "char *");
@@ -75,7 +73,7 @@ static uma_zone_t slsrest_zone;
 static int
 slsrest_zone_ctor(void *mem, int size, void *args __unused, int flags __unused)
 {
-	struct slsrest_data *restdata = (struct slsrest_data *) mem;
+	struct slsrest_data *restdata = (struct slsrest_data *)mem;
 
 	restdata->proctds = 0;
 
@@ -85,7 +83,7 @@ slsrest_zone_ctor(void *mem, int size, void *args __unused, int flags __unused)
 static void
 slsrest_zone_dtor(void *mem, int size, void *args __unused)
 {
-	struct slsrest_data *restdata = (struct slsrest_data *) mem;
+	struct slsrest_data *restdata = (struct slsrest_data *)mem;
 	struct mbuf *m, *headm;
 	struct session *sess;
 	struct kqueue *kq;
@@ -98,15 +96,16 @@ slsrest_zone_dtor(void *mem, int size, void *args __unused)
 	struct file *fp;
 	struct proc *p;
 
-	KV_FOREACH_POP(restdata->fptable, slsid, fp) {
+	KV_FOREACH_POP(restdata->fptable, slsid, fp)
+	{
 		/*
 		 * Kqueues in the file table do not have an associated file
 		 * table, contrary to what kqueue_close() assumes.
-		 * Attach the kqueue to this process' file table before 
+		 * Attach the kqueue to this process' file table before
 		 * destroying it.
 		 */
 		if (fp->f_type == DTYPE_KQUEUE) {
-			kq = (struct kqueue *) fp->f_data;
+			kq = (struct kqueue *)fp->f_data;
 			if (kq->kq_fdp == NULL)
 				slsrest_kqattach(curproc, kq);
 		}
@@ -114,18 +113,21 @@ slsrest_zone_dtor(void *mem, int size, void *args __unused)
 		fdrop(fp, curthread);
 	}
 
-	KV_FOREACH_POP(restdata->objtable, slsid, obj) {
+	KV_FOREACH_POP(restdata->objtable, slsid, obj)
+	{
 		if (obj != NULL)
 			vm_object_deallocate(obj);
 	}
 
-	KV_FOREACH_POP(restdata->kevtable, slskn, kevset) {
+	KV_FOREACH_POP(restdata->kevtable, slskn, kevset)
+	{
 		KVSET_FOREACH_POP(kevset, slskev)
-			free(slskev, M_SLSMM);
+		free(slskev, M_SLSMM);
 
 		slsset_destroy(kevset);
 	}
-	KV_FOREACH_POP(restdata->mbuftable, slsid, headm) {
+	KV_FOREACH_POP(restdata->mbuftable, slsid, headm)
+	{
 		while (headm != NULL) {
 			m = headm;
 			headm = headm->m_nextpkt;
@@ -134,10 +136,10 @@ slsrest_zone_dtor(void *mem, int size, void *args __unused)
 	}
 
 	KVSET_FOREACH_POP(restdata->vntable, vp)
-		vrele(vp);
+	vrele(vp);
 
 	KV_FOREACH_POP(restdata->sesstable, slsid, sess)
-	    sess_release(sess);
+	sess_release(sess);
 
 	/*
 	 * We do not clean up the process groups because each one belongs to at
@@ -146,13 +148,14 @@ slsrest_zone_dtor(void *mem, int size, void *args __unused)
 	 */
 
 	KV_FOREACH_POP(restdata->proctable, slsid, p)
-		PRELE(p);
+	PRELE(p);
 }
 
 static int
 slsrest_zone_init(void *mem, int size, int flags __unused)
 {
-	struct slsrest_data *restdata = (struct slsrest_data *) mem;;
+	struct slsrest_data *restdata = (struct slsrest_data *)mem;
+	;
 	int error;
 
 	mtx_init(&restdata->procmtx, "SLS proc mutex", NULL, MTX_DEF);
@@ -225,7 +228,7 @@ error:
 static void
 slsrest_zone_fini(void *mem, int size)
 {
-	struct slsrest_data *restdata = (struct slsrest_data *) mem;
+	struct slsrest_data *restdata = (struct slsrest_data *)mem;
 
 	slskv_destroy(restdata->vntable);
 	slskv_destroy(restdata->mbuftable);
@@ -238,7 +241,6 @@ slsrest_zone_fini(void *mem, int size)
 
 	cv_destroy(&restdata->proccv);
 	mtx_destroy(&restdata->procmtx);
-
 }
 
 int
@@ -248,16 +250,15 @@ slsrest_zoneinit(void)
 	int error;
 	int i;
 
-	slsrest_zone = uma_zcreate("SLS tables",
-	    sizeof(struct slsrest_data), slsrest_zone_ctor, slsrest_zone_dtor,
-	    slsrest_zone_init, slsrest_zone_fini,
-	    UMA_ALIGNOF(struct slsrest_data), 0);
+	slsrest_zone = uma_zcreate("SLS tables", sizeof(struct slsrest_data),
+	    slsrest_zone_ctor, slsrest_zone_dtor, slsrest_zone_init,
+	    slsrest_zone_fini, UMA_ALIGNOF(struct slsrest_data), 0);
 	if (slsrest_zone == NULL)
 		return (ENOMEM);
 
 	/* Warm up the zone by creating and then freeing structures. */
-	warmdata = malloc(sizeof(**warmdata) * SLSREST_ZONEWARM, M_SLSMM,
-	    M_WAITOK | M_ZERO);
+	warmdata = malloc(
+	    sizeof(**warmdata) * SLSREST_ZONEWARM, M_SLSMM, M_WAITOK | M_ZERO);
 
 	/* Initialize a certain number of items in the zone. */
 	for (i = 0; i < SLSREST_ZONEWARM; i++) {
@@ -281,7 +282,6 @@ slsrest_zonefini(void)
 {
 	if (slsrest_zone != NULL)
 		uma_zdestroy(slsrest_zone);
-
 }
 
 static int
@@ -306,22 +306,23 @@ slsrest_dothread(struct proc *p, char **bufp, size_t *buflenp)
 }
 
 static int
-slsrest_doproc(struct proc *p, uint64_t daemon, char **bufp, 
-    size_t *buflenp, struct slsrest_data *restdata)
+slsrest_doproc(struct proc *p, uint64_t daemon, char **bufp, size_t *buflenp,
+    struct slsrest_data *restdata)
 {
-	struct slsproc slsproc; 
+	struct slsproc slsproc;
 	int error, i;
 
 	error = slsload_proc(&slsproc, bufp, buflenp);
 	if (error != 0)
 		return (error);
 
-	/* 
+	/*
 	 * Save the old process - new process pairs.
 	 */
 	DEBUG("Adding id to slskv table");
 	PHOLD(p);
-	error = slskv_add(restdata->proctable, (uint64_t) slsproc.slsid, (uintptr_t) p);
+	error = slskv_add(
+	    restdata->proctable, (uint64_t)slsproc.slsid, (uintptr_t)p);
 	if (error != 0) {
 		PRELE(p);
 		SLS_DBG("Error: Could not add process %p to table\n", p);
@@ -392,15 +393,14 @@ slsrest_dofile(struct slsrest_data *restdata, char *buf, size_t buflen)
 
 	default:
 		panic("Tried to restore file type %d", slsfile.type);
-
 	}
 
 	return (error);
 }
 
 static int
-slsrest_dofiledesc(struct proc *p, char **bufp, size_t *buflenp, 
-    struct slsrest_data *restdata)
+slsrest_dofiledesc(
+    struct proc *p, char **bufp, size_t *buflenp, struct slsrest_data *restdata)
 {
 	int error = 0;
 	struct slsfiledesc slsfiledesc;
@@ -417,8 +417,8 @@ slsrest_dofiledesc(struct proc *p, char **bufp, size_t *buflenp,
 }
 
 static int
-slsrest_dovmspace(struct proc *p, char **bufp, size_t *buflenp, 
-    struct slsrest_data *restdata)
+slsrest_dovmspace(
+    struct proc *p, char **bufp, size_t *buflenp, struct slsrest_data *restdata)
 {
 	struct slsvmentry slsvmentry;
 	struct slsvmspace slsvmspace;
@@ -427,7 +427,7 @@ slsrest_dovmspace(struct proc *p, char **bufp, size_t *buflenp,
 	int error, i;
 
 	/*
-	 * Restore the VM space and its map. We need to read the state even if 
+	 * Restore the VM space and its map. We need to read the state even if
 	 * we are restoring from a cached vmspace.
 	 */
 	error = slsload_vmspace(&slsvmspace, &shmstate, bufp, buflenp);
@@ -464,13 +464,14 @@ slsrest_dosysvshm(char *buf, size_t bufsize, struct slskv_table *objtable)
 	int error, i;
 
 	/*
-	 * The buffer only has segments in it, so its size must 
-	 * be a multiple of the struct we read into. 
+	 * The buffer only has segments in it, so its size must
+	 * be a multiple of the struct we read into.
 	 */
 	if (((bufsize % sizeof(slssysvshm)) != 0))
 		return (EINVAL);
 
-	/* Read each segment in, restoring metadata and attaching to the object. */
+	/* Read each segment in, restoring metadata and attaching to the object.
+	 */
 	numsegs = bufsize / sizeof(slssysvshm);
 	for (i = 0; i < numsegs; i++) {
 		error = slsload_sysvshm(&slssysvshm, &buf, &bufsize);
@@ -497,8 +498,7 @@ slsrest_dosockbuf(char *buf, size_t bufsize, struct slskv_table *table)
 	if (error != 0)
 		return (error);
 
-
-	error = slskv_add(table, sbid, (uintptr_t) m);
+	error = slskv_add(table, sbid, (uintptr_t)m);
 	if (error != 0) {
 		errm = m;
 		while (errm != NULL) {
@@ -532,7 +532,8 @@ slsrest_doknotes(struct proc *p, struct slskv_table *kevtable)
 			continue;
 
 		/* If we're a kqueue, we _have_ to have a set, even if empty. */
-		error = slskv_find(kevtable, (uint64_t) fp->f_data, (uintptr_t *) &kevset);
+		error = slskv_find(
+		    kevtable, (uint64_t)fp->f_data, (uintptr_t *)&kevset);
 		if (error != 0)
 			return (error);
 
@@ -557,7 +558,8 @@ slsrest_ttyrelease(struct slsrest_data *restdata)
 	uint64_t slsid;
 
 	/* We can remove elements while iterating. */
-	KV_FOREACH(restdata->fptable, iter, slsid, fp) {
+	KV_FOREACH(restdata->fptable, iter, slsid, fp)
+	{
 		if (fp->f_type == DTYPE_PTS) {
 			slskv_del_unlocked(restdata->fptable, slsid);
 			fdrop(fp, curthread);
@@ -585,8 +587,7 @@ slsrest_ttyfixup(struct proc *p)
 	strlcat(path, ttyname, PATH_MAX);
 
 	/* Open the device and grab the file. */
-	error = kern_openat(td, AT_FDCWD, path, UIO_SYSSPACE,
-	    O_RDWR, S_IRWXU);
+	error = kern_openat(td, AT_FDCWD, path, UIO_SYSSPACE, O_RDWR, S_IRWXU);
 	free(path, M_SLSMM);
 	if (error != 0)
 		return (error);
@@ -596,7 +597,7 @@ slsrest_ttyfixup(struct proc *p)
 	ret = fhold(pttyfp);
 	error = kern_close(td, fd);
 	if (error != 0)
-		DEBUG1("Error %d when closing TTY\n", error); 
+		DEBUG1("Error %d when closing TTY\n", error);
 	if (ret == 0)
 		return (EBADF);
 
@@ -613,8 +614,8 @@ slsrest_ttyfixup(struct proc *p)
 
 		/* If we're a tty, see if the master side is still there.  */
 		fp = FDTOFP(p, fd);
-		if ((fp->f_type == DTYPE_VNODE) && 
-		    (fp->f_vnode->v_type == VCHR) && 
+		if ((fp->f_type == DTYPE_VNODE) &&
+		    (fp->f_vnode->v_type == VCHR) &&
 		    (fp->f_vnode->v_rdev->si_devsw->d_flags & D_TTY) != 0) {
 
 			tp = fp->f_vnode->v_rdev->si_drv1;
@@ -672,11 +673,11 @@ slsrest_metadata(void *args)
 	 * struct we used to carry them to the new process.
 	 */
 
-	buf = ((struct slsrest_metadata_args *) args)->buf;
-	buflen = ((struct slsrest_metadata_args *) args)->buflen;
-	daemon = ((struct slsrest_metadata_args *) args)->daemon;
-	rest_stopped = ((struct slsrest_metadata_args *) args)->rest_stopped;
-	restdata = ((struct slsrest_metadata_args *) args)->restdata;
+	buf = ((struct slsrest_metadata_args *)args)->buf;
+	buflen = ((struct slsrest_metadata_args *)args)->buflen;
+	daemon = ((struct slsrest_metadata_args *)args)->daemon;
+	rest_stopped = ((struct slsrest_metadata_args *)args)->rest_stopped;
+	restdata = ((struct slsrest_metadata_args *)args)->restdata;
 
 	free(args, M_SLSMM);
 
@@ -693,38 +694,38 @@ slsrest_metadata(void *args)
 
 	error = slsrest_dovmspace(p, &buf, &buflen, restdata);
 	if (error != 0)
-		goto error; 
+		goto error;
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Restoring vm state");
 	/*
 	 * Restore CPU state, file state, and memory
-	 * state, parsing the buffer at each step. 
+	 * state, parsing the buffer at each step.
 	 */
 	error = slsrest_doproc(p, daemon, &buf, &buflen, restdata);
 	if (error != 0)
-		goto error; 
+		goto error;
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Restoring process state");
 	error = slsrest_dofiledesc(p, &buf, &buflen, restdata);
 	if (error != 0)
-		goto error; 
+		goto error;
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Restoring file table");
 	error = slsrest_doknotes(p, restdata->kevtable);
 	if (error != 0)
-		goto error; 
+		goto error;
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Restoring kqueues");
 	/* We're done restoring. If we are the last, notify the parent. */
 	mtx_lock(&restdata->procmtx);
 
 	/*
-	 * The value of proctds can only be -1 after all restored threads are 
-	 * stuck waiting for the main one. This thread isn't stuck yet, so the 
+	 * The value of proctds can only be -1 after all restored threads are
+	 * stuck waiting for the main one. This thread isn't stuck yet, so the
 	 * value can't be 0 here.
 	 */
-	KASSERT(restdata->proctds > 0, ("invalid proctds value %d",
-	    restdata->proctds));
+	KASSERT(restdata->proctds > 0,
+	    ("invalid proctds value %d", restdata->proctds));
 	restdata->proctds -= 1;
 
 	/* Wake up the main thread if it's the only one waiting. */
@@ -733,7 +734,7 @@ slsrest_metadata(void *args)
 
 	/*
 	 * Sleep until all sessions and controlling terminals are restored.
-	 * The value -1 for proctds is used to denote that the main restore 
+	 * The value -1 for proctds is used to denote that the main restore
 	 * thread is done calling slsrest_ttyrelease.
 	 */
 	while (restdata->proctds >= 0)
@@ -783,8 +784,8 @@ error:
 
 	DEBUG1("Error %d while restoring process\n", error);
 	mtx_lock(&restdata->procmtx);
-	KASSERT(restdata->proctds > 0, ("invalid proctds value %d",
-	    restdata->proctds));
+	KASSERT(restdata->proctds > 0,
+	    ("invalid proctds value %d", restdata->proctds));
 
 	restdata->proctds -= 1;
 	if (restdata->proctds == 0)
@@ -806,8 +807,8 @@ slsrest_fork(uint64_t daemon, uint64_t rest_stopped, char *buf, size_t buflen,
 
 	bzero(&fr, sizeof(fr));
 
-	/* 
-	 * Copy the file table to the new process, 
+	/*
+	 * Copy the file table to the new process,
 	 * and do not schedule it just yet.
 	 */
 	fr.fr_flags = RFFDG | RFPROC | RFSTOPPED;
@@ -836,7 +837,7 @@ slsrest_fork(uint64_t daemon, uint64_t rest_stopped, char *buf, size_t buflen,
 	mtx_unlock(&restdata->procmtx);
 
 	/* Set the starting point of execution for the new process. */
-	cpu_fork_kthread_handler(td, slsrest_metadata, (void *) args);
+	cpu_fork_kthread_handler(td, slsrest_metadata, (void *)args);
 
 	/* Set the thread to be runnable, specify its priorities. */
 	TD_SET_CAN_RUN(td);
@@ -851,8 +852,8 @@ slsrest_fork(uint64_t daemon, uint64_t rest_stopped, char *buf, size_t buflen,
 }
 
 /*
- * The same as vm_object_shadow, with different refcount handling and return values.
- * We also always create a shadow, regardless of the refcount.
+ * The same as vm_object_shadow, with different refcount handling and return
+ * values. We also always create a shadow, regardless of the refcount.
  */
 static void
 slsrest_shadow(vm_object_t shadow, vm_object_t source, vm_ooffset_t offset)
@@ -863,7 +864,6 @@ slsrest_shadow(vm_object_t shadow, vm_object_t source, vm_ooffset_t offset)
 	 */
 	shadow->backing_object = source;
 	shadow->backing_object_offset = offset;
-
 
 	VM_OBJECT_WLOCK(source);
 	shadow->domain = source->domain;
@@ -891,15 +891,16 @@ slsrest_dovmobjects(struct slskv_table *rectable, struct slsrest_data *restdata)
 	int error;
 
 	/* First pass; create of find all objects to be used. */
-	KV_FOREACH(rectable, iter, slsid, rec) {
-		buf = (char *) sbuf_data(rec->srec_sb);
+	KV_FOREACH(rectable, iter, slsid, rec)
+	{
+		buf = (char *)sbuf_data(rec->srec_sb);
 		buflen = sbuf_len(rec->srec_sb);
 
 		if (rec->srec_type != SLOSREC_VMOBJ)
 			continue;
 
 		/* Get the data associated with the object in the table. */
-		error =  slsload_vmobject(&slsvmobject, &buf, &buflen);
+		error = slsload_vmobject(&slsvmobject, &buf, &buflen);
 		if (error != 0) {
 			KV_ABORT(iter);
 			return (error);
@@ -911,11 +912,11 @@ slsrest_dovmobjects(struct slskv_table *rectable, struct slsrest_data *restdata)
 			KV_ABORT(iter);
 			return (error);
 		}
-
 	}
 
 	/* Second pass; link up the objects to their shadows. */
-	KV_FOREACH(rectable, iter, slsid, rec) {
+	KV_FOREACH(rectable, iter, slsid, rec)
+	{
 
 		if (rec->srec_type != SLOSREC_VMOBJ)
 			continue;
@@ -926,20 +927,20 @@ slsrest_dovmobjects(struct slskv_table *rectable, struct slsrest_data *restdata)
 		 * struct is the first thing in the record to typecast
 		 * the latter into the former, skipping the parse function.
 		 */
-		slsvmobjectp = (struct slsvmobject *) sbuf_data(rec->srec_sb);
+		slsvmobjectp = (struct slsvmobject *)sbuf_data(rec->srec_sb);
 		if (slsvmobjectp->backer == 0)
 			continue;
 
 		error = slskv_find(restdata->objtable, slsvmobjectp->slsid,
-		    (uintptr_t *) &object);
+		    (uintptr_t *)&object);
 		if (error != 0) {
 			KV_ABORT(iter);
 			return (error);
 		}
 
 		/* Find a parent for the restored object, if it exists. */
-		error = slskv_find(restdata->objtable, (uint64_t) slsvmobjectp->backer,
-		    (uintptr_t *) &parent);
+		error = slskv_find(restdata->objtable,
+		    (uint64_t)slsvmobjectp->backer, (uintptr_t *)&parent);
 		if (error != 0) {
 			KV_ABORT(iter);
 			return (error);
@@ -961,12 +962,13 @@ slsrest_dofiles(struct slskv_table *rectable, struct slsrest_data *restdata)
 	uint64_t slsid;
 	int error;
 
-	KV_FOREACH(rectable, iter, slsid, rec) {
+	KV_FOREACH(rectable, iter, slsid, rec)
+	{
 		if (rec->srec_type != SLOSREC_FILE)
 			continue;
 
-		error = slsrest_dofile(restdata, sbuf_data(rec->srec_sb),
-		    sbuf_len(rec->srec_sb));
+		error = slsrest_dofile(
+		    restdata, sbuf_data(rec->srec_sb), sbuf_len(rec->srec_sb));
 		if (error != 0) {
 			KV_ABORT(iter);
 			return (error);
@@ -975,7 +977,6 @@ slsrest_dofiles(struct slskv_table *rectable, struct slsrest_data *restdata)
 
 	return (0);
 }
-
 
 /*
  * Shadow the objects provided by the in-memory checkpoint. That way we
@@ -989,7 +990,8 @@ slsrest_ckptshadow(struct slsrest_data *restdata, struct slskv_table *objtable)
 	vm_ooffset_t offset;
 	int error;
 
-	KV_FOREACH(objtable, iter, obj, shadow) {
+	KV_FOREACH(objtable, iter, obj, shadow)
+	{
 		DEBUG2("Object %p has ID %lx", obj, obj->objid);
 		vm_object_reference(obj);
 
@@ -997,7 +999,8 @@ slsrest_ckptshadow(struct slsrest_data *restdata, struct slskv_table *objtable)
 		offset = 0;
 		vm_object_shadow(&shadow, &offset, ptoa(obj->size));
 
-		error = slskv_add(restdata->objtable, (uint64_t) obj->objid, (uintptr_t) shadow);
+		error = slskv_add(restdata->objtable, (uint64_t)obj->objid,
+		    (uintptr_t)shadow);
 		if (error != 0) {
 			DEBUG1("Tried to add object %lx twice", obj->objid);
 			vm_object_deallocate(shadow);
@@ -1009,7 +1012,7 @@ slsrest_ckptshadow(struct slsrest_data *restdata, struct slskv_table *objtable)
 	return (0);
 }
 
-static int __attribute__ ((noinline))
+static int __attribute__((noinline))
 sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
 {
 	struct slskv_table *rectable = NULL;
@@ -1037,7 +1040,7 @@ sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
 	if (error != 0) {
 		/* The partition might have been detached. */
 		KASSERT(slsp->slsp_status == SLSP_DETACHED,
-			("Blocking slsp_setstate() on live partition failed"));
+		    ("Blocking slsp_setstate() on live partition failed"));
 
 		uma_zfree(slsrest_zone, restdata);
 		return (error);
@@ -1056,7 +1059,8 @@ sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
 		}
 
 		/* We already have the vnodes for memory checkpoints. */
-		KV_FOREACH(rectable, iter, slsid, rec) {
+		KV_FOREACH(rectable, iter, slsid, rec)
+		{
 			if (rec->srec_type != SLOSREC_VNODE)
 				continue;
 
@@ -1082,7 +1086,8 @@ sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
 		/* Replace the vnode table with that of the checkpoint. */
 		oldvntable = restdata->vntable;
 		restdata->vntable = slsp->slsp_sckpt->sckpt_vntable;
-		error = slsrest_ckptshadow(restdata, slsp->slsp_sckpt->sckpt_objtable);
+		error = slsrest_ckptshadow(
+		    restdata, slsp->slsp_sckpt->sckpt_objtable);
 		if (error != 0)
 			goto out;
 
@@ -1095,8 +1100,9 @@ sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
 	}
 
 	/*
-	 * Recreate the VM object tree. When restoring from the SLOS we recreate everything, while
-	 * when restoring from memory all anonymous objects are already there.
+	 * Recreate the VM object tree. When restoring from the SLOS we recreate
+	 * everything, while when restoring from memory all anonymous objects
+	 * are already there.
 	 */
 	error = slsrest_dovmobjects(rectable, restdata);
 	if (error != 0)
@@ -1104,7 +1110,7 @@ sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
 
 	SDT_PROBE1(sls, , sls_rest, , "Restoring vmobjects");
 	/*
-	 * Iterate through the metadata; each entry represents either 
+	 * Iterate through the metadata; each entry represents either
 	 * a process, complete with threads, FDs, and a VM map, a VM
 	 * object together with its data, or a vnode/kqueue pipe or
 	 * socket. Switching on the type, we use the appropriate
@@ -1117,7 +1123,8 @@ sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
 	 */
 
 	/* Recreate all mbufs (to be inserted into socket buffers later). */
-	KV_FOREACH(rectable, iter, slsid, rec) {
+	KV_FOREACH(rectable, iter, slsid, rec)
+	{
 		if (rec->srec_type != SLOSREC_SOCKBUF)
 			continue;
 
@@ -1140,7 +1147,8 @@ sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
 	SDT_PROBE1(sls, , sls_rest, , "Restoring files");
 
 	/* Restore all memory segments. */
-	KV_FOREACH(rectable, iter, slsid, rec) {
+	KV_FOREACH(rectable, iter, slsid, rec)
+	{
 		if (rec->srec_type != SLOSREC_SYSVSHM)
 			continue;
 
@@ -1154,27 +1162,27 @@ sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
 		}
 	}
 
-
 	SDT_PROBE1(sls, , sls_rest, , "Restoring SYSV shared memory");
 
 	/*
 	 * Fourth pass; restore processes. These depend on the objects
 	 * restored above, which we pass through the object table.
 	 */
-	KV_FOREACH(rectable, iter, slsid, rec) {
+	KV_FOREACH(rectable, iter, slsid, rec)
+	{
 		if (rec->srec_type != SLOSREC_PROC)
 			continue;
 
 		buf = sbuf_data(rec->srec_sb);
 		buflen = sbuf_len(rec->srec_sb);
 
-		error = slsrest_fork(daemon, rest_stopped, buf, buflen, restdata);
+		error = slsrest_fork(
+		    daemon, rest_stopped, buf, buflen, restdata);
 		if (error != 0) {
 			KV_ABORT(iter);
 			goto out;
 		}
 	}
-
 
 out:
 	/* Wait until all processes are done restoring. */
@@ -1203,8 +1211,8 @@ out:
 		if (oldvntable != NULL)
 			restdata->vntable = oldvntable;
 
-		KASSERT(restdata->proctds == -1, ("proctds is %d at free",
-		    restdata->proctds));
+		KASSERT(restdata->proctds == -1,
+		    ("proctds is %d at free", restdata->proctds));
 		uma_zfree(slsrest_zone, restdata);
 	}
 

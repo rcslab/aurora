@@ -3,7 +3,6 @@
 # Main script, creates the root image
 
 # Import the configuration
-SRCROOT="/root/sls"
 . "$SRCROOT/tests/aurora"
 
 SCRIPTS="/tmp/slsinstall-script-"

@@ -1,7 +1,8 @@
 #ifndef _SLOS_SUBR_H_
 #define _SLOS_SUBR_H_
 
-int slos_remove_node(struct vnode *dvp, struct vnode *vp, struct componentname *name);
+int slos_remove_node(
+    struct vnode *dvp, struct vnode *vp, struct componentname *name);
 int slos_destroy_node(struct slos_node *vp);
 
 int slos_truncate(struct vnode *vp, size_t size);

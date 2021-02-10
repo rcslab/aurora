@@ -1,19 +1,17 @@
 #include <sys/types.h>
-
 #include <sys/ioctl.h>
 #include <sys/sbuf.h>
 #include <sys/wait.h>
 
+#include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <sls.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <errno.h>
-
-#include <sls.h>
 
 static struct option restore_longopts[] = {
 	{ "daemon", no_argument, NULL, 'd' },
@@ -29,7 +27,8 @@ restore_usage(void)
 }
 
 int
-restore_main(int argc, char* argv[]) {
+restore_main(int argc, char *argv[])
+{
 	int error;
 	int status;
 	uint64_t oid = SLS_DEFAULT_PARTITION;
@@ -38,8 +37,9 @@ restore_main(int argc, char* argv[]) {
 	bool rest_stopped = false;
 	int opt;
 
-	while ((opt = getopt_long(argc, argv, "dmo:s", restore_longopts, NULL)) != -1) {
-		switch(opt) {
+	while ((opt = getopt_long(
+		    argc, argv, "dmo:s", restore_longopts, NULL)) != -1) {
+		switch (opt) {
 		case 'd':
 			/*
 			 * The proceses are restored as a daemon, detached from
@@ -49,7 +49,7 @@ restore_main(int argc, char* argv[]) {
 			break;
 		case 'm':
 			if (oid == SLS_DEFAULT_PARTITION)
-			    oid = SLS_DEFAULT_MPARTITION;
+				oid = SLS_DEFAULT_MPARTITION;
 			break;
 
 		case 'o':

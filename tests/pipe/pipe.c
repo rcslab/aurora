@@ -1,13 +1,13 @@
+#include <sys/types.h>
+#include <sys/stat.h>
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
-#include <sys/types.h>
-#include <sys/stat.h>
-
-#define MSG	("Message")
+#define MSG ("Message")
 char buf[sizeof(MSG)];
 
 int
@@ -19,14 +19,14 @@ main(int argc, char *argv[])
 
 	error = pipe(pipes);
 	if (error < 0) {
-	    perror("pipe");
-	    exit(1);
+		perror("pipe");
+		exit(1);
 	}
 
 	pid = fork();
 	if (pid < 0) {
-	    perror("fork");
-	    exit(1);
+		perror("fork");
+		exit(1);
 	}
 
 	if (pid == 0) {
