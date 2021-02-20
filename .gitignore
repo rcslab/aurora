@@ -16,6 +16,7 @@ tests/llist/llist
 tests/main/main
 tests/memory/memory
 tests/memsnap/memsnap
+tests/metropolis/metropolis
 tests/mmap/mmap
 tests/multithread/multithread
 tests/pipe/pipe

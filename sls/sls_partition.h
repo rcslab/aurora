@@ -3,6 +3,10 @@
 
 #include <sys/param.h>
 #include <sys/sbuf.h>
+#include <sys/socket.h>
+#include <sys/socketvar.h>
+#include <sys/un.h>
+#include <sys/unpcb.h>
 
 #include <vm/vm.h>
 #include <vm/pmap.h>
@@ -10,10 +14,14 @@
 
 #include <machine/pmap.h>
 
+#include <netinet/in.h>
+#include <netinet/in_pcb.h>
+
 #include <sls_ioctl.h>
 
 #include "sls_internal.h"
 #include "sls_kv.h"
+#include "sls_metropolis.h"
 
 #define SLSPART_EPOCHINIT 1 /* Initial epoch for each partition */
 
@@ -44,10 +52,11 @@ struct slspart {
 
 	struct mtx slsp_epochmtx; /* Mutex used for guarding the epoch */
 	struct cv slsp_epochcv;	  /* CV used for epoch events */
-	uint64_t
-	    slsp_epoch; /* Current epoch, incremented after ckpt is on disk */
+	uint64_t slsp_epoch;	  /* Current epoch, for ckpt on disk */
 	uint64_t slsp_nextepoch; /* Epoch the caller's operations will be in
 				    after completion*/
+
+	struct slsmetr slsp_metr; /* Local Metropolis state */
 
 	LIST_ENTRY(slspart) slsp_parts; /* List of active SLS partitions */
 #define slsp_target slsp_attr.attr_target
@@ -80,6 +89,7 @@ int slsp_setstate(
     struct slspart *slsp, int curstate, int nextstate, bool sleep);
 int slsp_getstate(struct slspart *slsp);
 
+bool slsp_hasproc(struct slspart *slsp, pid_t pid);
 #define SLSPART_IGNUNLINKED(slsp) (SLSATTR_ISIGNUNLINKED((slsp)->slsp_attr))
 #define SLSPART_LAZYREST(slsp) (SLSATTR_ISLAZYREST((slsp)->slsp_attr))
 

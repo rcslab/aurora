@@ -443,6 +443,8 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 	int option = 1;
 	int family;
 	int error;
+	int mask;
+	int i;
 
 	/* We create an inet dummy sockets if we can't properly restore. */
 	family = (info->family == AF_UNSPEC) ? AF_INET : info->family;
@@ -469,11 +471,16 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 
 	/* Set any options we can. */
 	if (info->options & SLS_SO_RESTORABLE) {
-		error = kern_setsockopt(td, fd, SOL_SOCKET,
-		    info->options & SLS_SO_RESTORABLE, &option, UIO_SYSSPACE,
-		    sizeof(option));
-		if (error != 0)
-			goto error;
+		for (i = 0; i < sizeof(int) * 8; i++) {
+			mask = 1 << i;
+			if ((mask & SLS_SO_RESTORABLE) == 0)
+				continue;
+
+			error = kern_setsockopt(td, fd, SOL_SOCKET, mask,
+			    &option, UIO_SYSSPACE, sizeof(option));
+			if (error != 0)
+				goto error;
+		}
 	}
 
 	DEBUG1("Restoring socket of family %d", info->family);

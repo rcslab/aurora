@@ -3,7 +3,7 @@
     "clang-format": {
       "type": "clang-format",
       "include": "(\\.(c|cc|cpp|h)$)",
-      "bin": [ "/usr/local/bin/clang-format11", "/usr/local/bin/clang-format10" ]
+      "bin": ["/usr/local/bin/clang-format11", "/usr/local/bin/clang-format10"]
     },
     "python": {
       "type": "pep8",

@@ -1,9 +1,7 @@
-#include <sys/types.h>
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/capsicum.h>
 #include <sys/conf.h>
-#include <sys/fcntl.h>
+#include <sys/domain.h>
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/kernel.h>
@@ -13,38 +11,21 @@
 #include <sys/malloc.h>
 #include <sys/module.h>
 #include <sys/mutex.h>
-#include <sys/pcpu.h>
-#include <sys/proc.h>
-#include <sys/ptrace.h>
+#include <sys/protosw.h>
 #include <sys/queue.h>
 #include <sys/rwlock.h>
 #include <sys/sbuf.h>
-#include <sys/shm.h>
-#include <sys/signalvar.h>
 #include <sys/stat.h>
-#include <sys/syscallsubr.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
 #include <sys/uio.h>
 #include <sys/vnode.h>
 
-#include <vm/vm.h>
-#include <vm/pmap.h>
-#include <vm/uma.h>
-#include <vm/vm_extern.h>
-#include <vm/vm_map.h>
-#include <vm/vm_object.h>
-#include <vm/vm_page.h>
-#include <vm/vm_radix.h>
-
-#include <machine/atomic.h>
-#include <machine/param.h>
-#include <machine/reg.h>
-
 #include "debug.h"
 #include "sls_internal.h"
 #include "sls_ioctl.h"
 #include "sls_kv.h"
+#include "sls_metropolis.h"
 #include "sls_pager.h"
 #include "sls_table.h"
 #include "sls_vm.h"
@@ -65,7 +46,7 @@ struct sysctl_ctx_list aurora_ctx;
  * has been set, then the partition gets periodically
  * checkpointed, otherwise it's a one-off.
  */
-static int
+int
 sls_checkpoint(struct sls_checkpoint_args *args)
 {
 	struct sls_checkpointd_args *ckptd_args;
@@ -151,7 +132,7 @@ error:
 	return (error);
 }
 
-static int
+int
 sls_restore(struct sls_restore_args *args)
 {
 	struct sls_restored_args *restd_args;
@@ -205,7 +186,7 @@ error:
 }
 
 /* Add a process to an SLS partition, allowing it to be checkpointed. */
-static int
+int
 sls_attach(struct sls_attach_args *args)
 {
 	struct proc *p;
@@ -222,6 +203,10 @@ sls_attach(struct sls_attach_args *args)
 		PRELE(p);
 		return (error);
 	}
+
+	PROC_LOCK(p);
+	p->p_auroid = args->oid;
+	PROC_UNLOCK(p);
 
 	PRELE(p);
 	return (0);
@@ -370,6 +355,46 @@ sls_memsnap(struct sls_memsnap_args *args)
 }
 
 static int
+sls_insls(struct sls_insls_args *args)
+{
+	struct proc *p = curproc;
+	struct slspart *slsp;
+	uint64_t oid;
+	bool insls;
+	int error;
+
+	insls = false;
+	oid = 0;
+
+	/*
+	 * Find the partition, if it exists. If not, the process is not in the
+	 * SLS and we can return.
+	 */
+	slsp = slsp_find(p->p_auroid);
+	if (slsp == NULL)
+		goto out;
+
+	/* Look for the process inside the partition. */
+	if (slsp_hasproc(slsp, p->p_pid)) {
+		insls = true;
+		oid = slsp->slsp_oid;
+	}
+
+	slsp_deref(slsp);
+
+out:
+	error = copyout(&oid, args->oid, sizeof(oid));
+	if (error != 0)
+		return (error);
+
+	error = copyout(&insls, args->insls, sizeof(insls));
+	if (error != 0)
+		return (error);
+
+	return (0);
+}
+
+static int
 sls_sysctl_init(void)
 {
 	struct sysctl_oid *root;
@@ -464,6 +489,19 @@ sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
 		error = sls_memsnap((struct sls_memsnap_args *)data);
 		break;
 
+	case SLS_METROPOLIS:
+		error = sls_metropolis((struct sls_metropolis_args *)data);
+		break;
+
+	case SLS_INSLS:
+		error = sls_insls((struct sls_insls_args *)data);
+		break;
+
+	case SLS_METROPOLIS_SPAWN:
+		error = sls_metropolis_spawn(
+		    (struct sls_metropolis_spawn_args *)data);
+		break;
+
 	default:
 		error = EINVAL;
 		break;
@@ -489,6 +527,9 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 	switch (inEvent) {
 	case MOD_LOAD:
 		bzero(&slsm, sizeof(slsm));
+
+		/* Construct the system call vector. */
+		sls_initsysvec();
 
 		mtx_init(&slsm.slsm_mtx, "slsm", NULL, MTX_DEF);
 		cv_init(&slsm.slsm_exitcv, "slsm");
@@ -601,6 +642,8 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 
 		cv_destroy(&slsm.slsm_exitcv);
 		mtx_destroy(&slsm.slsm_mtx);
+
+		sls_finisysvec();
 
 		break;
 	default:

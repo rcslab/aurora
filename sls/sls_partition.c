@@ -124,6 +124,18 @@ slsp_find(uint64_t oid)
 	return slsp;
 }
 
+bool
+slsp_hasproc(struct slspart *slsp, pid_t pid)
+{
+	uint64_t oid;
+
+	if (slskv_find(slsm.slsm_procs, pid, &oid) != 0)
+		return (false);
+
+	KASSERT(slsp->slsp_oid == oid, ("Process is in the wrong partition"));
+	return (true);
+}
+
 /* Attach a process to the partition. */
 int
 slsp_attach(uint64_t oid, pid_t pid)

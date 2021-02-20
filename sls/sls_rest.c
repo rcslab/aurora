@@ -25,6 +25,7 @@
 #include <sys/signalvar.h>
 #include <sys/stat.h>
 #include <sys/syscallsubr.h>
+#include <sys/sysent.h>
 #include <sys/time.h>
 #include <sys/tty.h>
 #include <sys/uio.h>
@@ -645,6 +646,71 @@ error:
 	return (EBADF);
 }
 
+static int
+slsrest_metrsocket(struct proc *p, struct slsrest_data *restdata)
+{
+	struct slsmetr *slsmetr = &restdata->slsmetr;
+	struct thread *td = curthread;
+	struct proc *metrproc;
+	int error;
+	int fd;
+
+	/* Check if the process is the partition's Metropolis process. */
+	error = slskv_find(
+	    restdata->proctable, slsmetr->slsmetr_proc, (uintptr_t *)&metrproc);
+	if (error != 0)
+		return (0);
+
+	if (p != metrproc)
+		return (0);
+
+	/* Attach the file into the file table. */
+	error = fdalloc(td, AT_FDCWD, &fd);
+	if (error != 0)
+		return (error);
+
+	_finstall(p->p_fd, slsmetr->slsmetr_sockfp, fd, O_CLOEXEC, NULL);
+
+	if (slsmetr->slsmetr_addrsa != NULL) {
+		error = copyout(slsmetr->slsmetr_sa, slsmetr->slsmetr_addrsa,
+		    slsmetr->slsmetr_namelen);
+		if (error != 0)
+			printf("Could not write out socket address\n");
+
+		copyout(&slsmetr->slsmetr_namelen, slsmetr->slsmetr_addrlen,
+		    sizeof(slsmetr->slsmetr_namelen));
+		if (error != 0)
+			printf("Could not write out socket address length\n");
+	}
+
+	td->td_retval[0] = fd;
+
+	return (0);
+}
+
+static int
+slsrest_metrfixup(struct proc *p, struct slsrest_data *restdata)
+{
+	struct thread *td;
+	int error;
+
+	/* Attach the socket into this process. */
+	error = slsrest_metrsocket(p, restdata);
+	if (error != 0)
+		return (error);
+
+	/* Find the thread that originally did the call. */
+	FOREACH_THREAD_IN_PROC (p, td) {
+		if (restdata->slsmetr.slsmetr_td == td->td_oldtid) {
+			/* Forward the fd to it. */
+			td->td_retval[0] = curthread->td_retval[0];
+			(p->p_sysent->sv_set_syscall_retval)(td, 0);
+		}
+	}
+
+	return (0);
+}
+
 /* Struct used to set the arguments after forking. */
 struct slsrest_metadata_args {
 	char *buf;
@@ -662,8 +728,8 @@ slsrest_metadata(void *args)
 {
 	struct slsrest_data *restdata;
 	struct proc *p = curproc;
-	uint64_t daemon;
 	uint64_t rest_stopped;
+	uint64_t daemon;
 	size_t buflen;
 	int error;
 	char *buf;
@@ -716,6 +782,12 @@ slsrest_metadata(void *args)
 		goto error;
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Restoring kqueues");
+
+	if (restdata->slsmetr.slsmetr_proc != 0)
+		slsrest_metrfixup(p, restdata);
+
+	SDT_PROBE1(sls, , slsrest_metadata, , "Metropolis fixup");
+
 	/* We're done restoring. If we are the last, notify the parent. */
 	mtx_lock(&restdata->procmtx);
 
@@ -1032,6 +1104,11 @@ sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
 	restdata = uma_zalloc(slsrest_zone, M_WAITOK);
 	if (restdata == NULL)
 		return (ENOMEM);
+	/*
+	 * Shallow copy all Metropolis state. No need for reference counting,
+	 * since the partition is guaranteed to be alive.
+	 */
+	restdata->slsmetr = slsp->slsp_metr;
 
 	SDT_PROBE1(sls, , sls_rest, , "Creating restore data tables");
 

@@ -27,6 +27,9 @@ struct sls_stat {
 
 int sls_epochdone(uint64_t oid, uint64_t epoch, bool *isdone);
 int sls_untilepoch(uint64_t oid, uint64_t epoch);
+int sls_metropolis(uint64_t oid);
+int sls_metropolis_spawn(uint64_t oid, int s);
+int sls_insls(uint64_t *oid, bool *insls);
 
 /* Storage Control APIs */
 int slos_openvol(const char *dev);

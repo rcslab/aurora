@@ -290,6 +290,9 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 	struct proc *p;
 	int error = 0;
 
+	/* Zero out the Metropolis process ID. It will be set if needed. */
+	slsp->slsp_metr.slsmetr_proc = 0;
+
 	DEBUG("Process stopped");
 #ifdef KTR
 	KVSET_FOREACH(procset, iter, p) { slsvm_print_vmspace(p->p_vmspace); }

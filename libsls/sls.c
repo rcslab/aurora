@@ -198,6 +198,63 @@ sls_memsnap_epoch(uint64_t oid, void *addr, uint64_t *epoch)
 	return (0);
 }
 
+/*
+ * Enter the function and all its subsequent children into the SLS as a
+ * Metropolis function.
+ */
+int
+sls_metropolis(uint64_t oid)
+{
+	struct sls_metropolis_args args;
+
+	args.oid = oid;
+
+	if (sls_ioctl(SLS_METROPOLIS, &args) < 0) {
+		perror("sls_metropolis");
+		return (-1);
+	}
+
+	return (0);
+}
+
+/*
+ * Enter the function and all its subsequent children into Metropolis.
+ */
+int
+sls_insls(uint64_t *oid, bool *insls)
+{
+	struct sls_insls_args args;
+
+	args.oid = oid;
+	args.insls = insls;
+
+	if (sls_ioctl(SLS_INSLS, &args) < 0) {
+		perror("sls_insls");
+		return (-1);
+	}
+
+	return (0);
+}
+
+/*
+ * Create a new Metropolis function
+ */
+int
+sls_metropolis_spawn(uint64_t oid, int s)
+{
+	struct sls_metropolis_spawn_args args;
+
+	args.oid = oid;
+	args.s = s;
+
+	if (sls_ioctl(SLS_METROPOLIS_SPAWN, &args) < 0) {
+		perror("sls_metropolis_spawn");
+		return (-1);
+	}
+
+	return (0);
+}
+
 int
 sls_suspend(uint64_t oid)
 {

@@ -127,6 +127,7 @@ sls_thread_create(struct thread *td, void *thunk)
 	    td->td_frame->tf_rsp, td->td_frame->tf_err, td->td_frame->tf_addr,
 	    td->td_frame->tf_trapno, td->td_frame->tf_flags);
 
+	td->td_oldtid = slsthread->slsid;
 done:
 
 	/* Have the thread check itself for suspension at the kernel boundary.

@@ -53,6 +53,20 @@ struct sls_memsnap_args {
 	    *nextepoch; /* Epoch at which the checkpoint will be persistent */
 };
 
+struct sls_metropolis_args {
+	uint64_t oid; /* The OID of the partition for Metropolis mode */
+};
+
+struct sls_insls_args {
+	uint64_t *oid; /* The OID of the partition, if in one */
+	bool *insls;   /* Is the process in a partition? */
+};
+
+struct sls_metropolis_spawn_args {
+	uint64_t oid; /* The OID of the Metropolis partition */
+	int s;	      /* The socket to be connected */
+};
+
 #define SLS_CHECKPOINT _IOW('d', 1, struct sls_checkpoint_args)
 #define SLS_RESTORE _IOW('d', 2, struct sls_restore_args)
 #define SLS_ATTACH _IOW('d', 3, struct sls_attach_args)
@@ -60,6 +74,9 @@ struct sls_memsnap_args {
 #define SLS_PARTDEL _IOW('d', 5, struct sls_partdel_args)
 #define SLS_EPOCHWAIT _IOWR('d', 6, struct sls_epochwait_args)
 #define SLS_MEMSNAP _IOWR('d', 7, struct sls_memsnap_args)
+#define SLS_METROPOLIS _IOWR('d', 8, struct sls_metropolis_args)
+#define SLS_INSLS _IOWR('d', 9, struct sls_insls_args)
+#define SLS_METROPOLIS_SPAWN _IOWR('d', 10, struct sls_metropolis_spawn_args)
 
 #define SLS_DEFAULT_PARTITION 5115
 #define SLS_DEFAULT_MPARTITION 5116

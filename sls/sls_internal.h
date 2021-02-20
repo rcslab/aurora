@@ -75,6 +75,7 @@ struct slsrest_data {
 	struct cv proccv;   /* Used for synchronization during restores */
 	struct mtx procmtx; /* Used alongside the cv above */
 	int proctds;	    /* Same, used to create a restore time barrier */
+	struct slsmetr slsmetr; /* Metropolis state */
 };
 
 extern struct sls_metadata slsm;
@@ -238,6 +239,10 @@ sls_swapderef(void)
 #define SLSREST_ZONEWARM (1024)
 int slsrest_zoneinit(void);
 void slsrest_zonefini(void);
+
+int sls_checkpoint(struct sls_checkpoint_args *args);
+int sls_attach(struct sls_attach_args *args);
+int sls_restore(struct sls_restore_args *args);
 
 MALLOC_DECLARE(M_SLSMM);
 MALLOC_DECLARE(M_SLSREC);
