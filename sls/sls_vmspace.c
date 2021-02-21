@@ -330,64 +330,25 @@ int
 slsrest_vmspace(
     struct proc *p, struct slsvmspace *info, struct shmmap_state *shmstate)
 {
-	struct vmspace *vmspace;
-	vm_offset_t sv_minuser;
-	struct sysentvec *sv;
-	vm_map_t map;
-	int error;
-	int map_at_zero;
-	ssize_t size;
+	struct vmspace *vm;
 
-	/* Shorthands */
-	vmspace = p->p_vmspace;
-	map = &vmspace->vm_map;
-	sv = p->p_sysent;
+	/* Allocate a brand new vmspace, remove ourselves from the old one. */
+	vm = vmspace_alloc(
+	    p->p_sysent->sv_minuser, p->p_sysent->sv_maxuser, pmap_pinit);
+	atomic_add_int(&p->p_vmspace->vm_refcnt, -1);
+	p->p_vmspace = vm;
 
-	size = sizeof(map_at_zero);
-	error = kernel_sysctlbyname(curthread, "security.bsd.map_at_zero",
-	    &map_at_zero, &size, NULL, 0, NULL, 0);
-
-	/* Blow away the old address space, as done in exec_new_vmspace. */
-	if (error == 0 && map_at_zero)
-		sv_minuser = sv->sv_minuser;
-	else
-		sv_minuser = MAX(sv->sv_minuser, PAGE_SIZE);
-	if (vmspace->vm_refcnt == 1 && vm_map_min(map) == sv_minuser &&
-	    vm_map_max(map) == sv->sv_maxuser &&
-	    cpu_exec_vmspace_reuse(p, map)) {
-
-		shmexit(vmspace);
-		pmap_remove_pages(vmspace_pmap(vmspace));
-		vm_map_remove(map, vm_map_min(map), vm_map_max(map));
-		/*
-		 * An exec terminates mlockall(MCL_FUTURE), ASLR state
-		 * must be re-evaluated.
-		 */
-		vm_map_lock(map);
-		vm_map_modflags(
-		    map, 0, MAP_WIREFUTURE | MAP_ASLR | MAP_ASLR_IGNSTART);
-		vm_map_unlock(map);
-	} else {
-		error = vmspace_exec(p, sv_minuser, sv->sv_maxuser);
-		if (error)
-			return (error);
-		vmspace = p->p_vmspace;
-	}
-
-	/* Refresh the value of vmspace in case it changed above */
-	vmspace = p->p_vmspace;
-
-	/* Copy vmspace state to the existing vmspace */
-	vmspace->vm_swrss = info->vm_swrss;
-	vmspace->vm_tsize = info->vm_tsize;
-	vmspace->vm_dsize = info->vm_dsize;
-	vmspace->vm_ssize = info->vm_ssize;
-	vmspace->vm_taddr = info->vm_taddr;
-	vmspace->vm_taddr = info->vm_daddr;
-	vmspace->vm_maxsaddr = info->vm_maxsaddr;
+	/* Copy vmspace state to the fresh instance. */
+	vm->vm_swrss = info->vm_swrss;
+	vm->vm_tsize = info->vm_tsize;
+	vm->vm_dsize = info->vm_dsize;
+	vm->vm_ssize = info->vm_ssize;
+	vm->vm_taddr = info->vm_taddr;
+	vm->vm_daddr = info->vm_daddr;
+	vm->vm_maxsaddr = info->vm_maxsaddr;
 
 	if (shmstate != NULL)
-		vmspace->vm_shm = shmstate;
+		vm->vm_shm = shmstate;
 
 	return (0);
 }

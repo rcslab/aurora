@@ -883,7 +883,7 @@ slsrest_fork(uint64_t daemon, uint64_t rest_stopped, char *buf, size_t buflen,
 	 * Copy the file table to the new process,
 	 * and do not schedule it just yet.
 	 */
-	fr.fr_flags = RFFDG | RFPROC | RFSTOPPED;
+	fr.fr_flags = RFFDG | RFPROC | RFSTOPPED | RFMEM;
 	fr.fr_procp = &p2;
 
 	error = fork1(curthread, &fr);
