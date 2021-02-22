@@ -664,12 +664,16 @@ slsrest_metrsocket(struct proc *p, struct slsrest_data *restdata)
 	if (p != metrproc)
 		return (0);
 
+	FILEDESC_XLOCK(p->p_fd);
 	/* Attach the file into the file table. */
 	error = fdalloc(td, AT_FDCWD, &fd);
-	if (error != 0)
+	if (error != 0) {
+		FILEDESC_XUNLOCK(p->p_fd);
 		return (error);
+	}
 
 	_finstall(p->p_fd, slsmetr->slsmetr_sockfp, fd, O_CLOEXEC, NULL);
+	FILEDESC_XUNLOCK(p->p_fd);
 
 	if (slsmetr->slsmetr_addrsa != NULL) {
 		error = copyout(slsmetr->slsmetr_sa, slsmetr->slsmetr_addrsa,

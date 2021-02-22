@@ -52,7 +52,7 @@ slsm_procadd(struct proc *p)
 
 	/* Check if we're already in Aurora. */
 	LIST_FOREACH (aurp, &slsm.slsm_plist, p_aurlist) {
-		if (aurp != p)
+		if (aurp == p)
 			return;
 	}
 
@@ -81,7 +81,7 @@ static void
 slsm_prockillall(void)
 {
 	struct thread *td = curthread;
-	int error, status;
+	int status;
 	struct proc *p, *tmp;
 
 	/* Wait for all the children to be done. */
@@ -102,10 +102,9 @@ slsm_prockillall(void)
 		 * could very well be an assertion, since there is no good
 		 * reason that this can fail.
 		 */
-		error = kern_wait(td, p->p_pid, &status, WEXITED, NULL);
-		if (error != 0)
-			printf("Error %d on waiting for process %d\n", error,
-			    p->p_pid);
+		while (kern_wait(
+			   td, p->p_pid, &status, WNOWAIT | WEXITED, NULL) != 0)
+			pause_sbt("slspka", SBT_1MS, 0, C_HARDCLOCK);
 
 		/*
 		 * There is no need to remove the processes from the list, they

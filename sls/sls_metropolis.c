@@ -241,9 +241,11 @@ slsmetr_exit(struct thread *td, void *data)
 	struct proc *p = td->td_proc;
 
 	/* Detach ourselves from Aurora before exiting. */
+	SLS_LOCK();
 	PROC_LOCK(p);
 	slsm_procremove(p);
 	PROC_UNLOCK(p);
+	SLS_UNLOCK();
 
 	exit1(td, uap->rval, 0);
 	/* NOTREACHED*/
