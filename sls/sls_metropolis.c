@@ -100,7 +100,6 @@ slsmetr_setproc(uint64_t oid)
 static int
 slsmetr_accept(struct thread *td, void *data)
 {
-	struct accept_args *uap = (struct accept_args *)data;
 	struct sls_checkpoint_args checkpoint_args;
 	struct proc *p = td->td_proc;
 	int error;
@@ -124,7 +123,11 @@ slsmetr_accept(struct thread *td, void *data)
 		return (error);
 
 	/* Follow up with the actual accept() call. */
-	return (sys_accept(td, uap));
+	exit1(td, 0, 0);
+
+	panic("Process failed to exit");
+
+	return (0);
 }
 
 /*

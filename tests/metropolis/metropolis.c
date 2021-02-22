@@ -231,26 +231,7 @@ testaccept_parent(int readfd, struct sockaddr_in *sa)
 	int error, i;
 	pid_t pid;
 
-	datasock = socket(AF_INET, SOCK_STREAM, 0);
-	if (datasock < 0) {
-		perror("socket");
-		exit(EX_OSERR);
-	}
-
-	/* Wait for the child to set up. */
-	testaccept_waitfor(readfd);
-	close(readfd);
-
-	/* Ready to go, time to connect. */
-	error = connect(datasock, (struct sockaddr *)sa, sizeof(*sa));
-	if (error == -1) {
-		perror("connect");
-		exit(EX_OSERR);
-	}
-
-	/* Wait for the child to notify that it's done. */
-	testaccept_waitfor(datasock);
-	close(datasock);
+	/* Wait for the child to exit due to checkpointing itself. */
 	wait_child();
 
 	/* The child is done, set up the listening socket for ourselves. */
