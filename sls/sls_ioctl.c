@@ -1,9 +1,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/conf.h>
-#include <sys/domain.h>
 #include <sys/file.h>
-#include <sys/filedesc.h>
 #include <sys/kernel.h>
 #include <sys/kthread.h>
 #include <sys/limits.h>
@@ -16,10 +14,12 @@
 #include <sys/rwlock.h>
 #include <sys/sbuf.h>
 #include <sys/stat.h>
+#include <sys/sx.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
 #include <sys/uio.h>
 #include <sys/vnode.h>
+#include <sys/wait.h>
 
 #include "debug.h"
 #include "sls_internal.h"
@@ -40,6 +40,79 @@ extern int sls_objprotect;
 
 struct sls_metadata slsm;
 struct sysctl_ctx_list aurora_ctx;
+
+/* Add a process into Aurora. */
+void
+slsm_procadd(struct proc *p)
+{
+	struct proc *aurp;
+
+	SLS_ASSERT_LOCKED();
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+
+	/* Check if we're already in Aurora. */
+	LIST_FOREACH (aurp, &slsm.slsm_plist, p_aurlist) {
+		if (aurp != p)
+			return;
+	}
+
+	LIST_INSERT_HEAD(&slsm.slsm_plist, p, p_aurlist);
+}
+
+/* Remove a process from Aurora. */
+void
+slsm_procremove(struct proc *p)
+{
+	struct proc *aurp, *tmp;
+
+	SLS_ASSERT_LOCKED();
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+
+	/* Check if we're already in Aurora. */
+	LIST_FOREACH_SAFE (aurp, &slsm.slsm_plist, p_aurlist, tmp) {
+		if (aurp == p) {
+			LIST_REMOVE(p, p_aurlist);
+			return;
+		}
+	}
+}
+
+static void
+slsm_prockillall(void)
+{
+	struct thread *td = curthread;
+	int error, status;
+	struct proc *p, *tmp;
+
+	/* Wait for all the children to be done. */
+	LIST_FOREACH_SAFE (p, &slsm.slsm_plist, p_aurlist, tmp) {
+		/*
+		 * Kill the process and reparent it to us. That way we can wait
+		 * for it to be destroyed.
+		 */
+		PROC_LOCK(p);
+		kern_psignal(p, SIGKILL);
+		sx_xlock(&proctree_lock);
+		proc_reparent(p, curproc, true);
+		sx_xunlock(&proctree_lock);
+		PROC_UNLOCK(p);
+
+		/*
+		 * On an error there is not much we can do but move on. This
+		 * could very well be an assertion, since there is no good
+		 * reason that this can fail.
+		 */
+		error = kern_wait(td, p->p_pid, &status, WEXITED, NULL);
+		if (error != 0)
+			printf("Error %d on waiting for process %d\n", error,
+			    p->p_pid);
+
+		/*
+		 * There is no need to remove the processes from the list, they
+		 * remove themselves when exiting.
+		 */
+	}
+}
 
 /*
  * Start checkpointing a partition. If a checkpointing period
@@ -602,6 +675,9 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		if (slsm.slsm_cdev != NULL)
 			destroy_dev(slsm.slsm_cdev);
 
+		/* Kill all processes currently in Aurora. */
+		slsm_prockillall();
+
 		SLS_LOCK();
 		/* Signal that we're exiting and wait for threads to finish. */
 		slsm.slsm_exiting = 1;
@@ -621,10 +697,9 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		SLS_LOCK();
 		/* Remove the Aurora swapper, bring all objects back in. */
 		/*
-		 * XXX Make sure swapping is impossible while we are swapping
-		 * off, normally swapoff works by marking the device as
-		 * unavaliable, but we want the functions themselves to be
-		 * unavailable at this point.
+		 * XXX Kill all Aurora processes when we remove the module. This
+		 * greatly simplifies reference counting with regards to the
+		 * pager.
 		 */
 		sls_pager_swapoff();
 		sls_pager_unregister();

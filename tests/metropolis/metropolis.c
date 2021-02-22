@@ -26,17 +26,54 @@
 char buf[sizeof(MSG)];
 
 static struct option metropolis_longopts[] = {
+	{ "accept4", no_argument, NULL, '4' },
 	{ "accept", no_argument, NULL, 'a' },
 	{ "execve", no_argument, NULL, 'e' },
 	{ "fork", no_argument, NULL, 'f' },
+	{ "exit", no_argument, NULL, 'x' },
 	{ NULL, no_argument, NULL, 0 },
 };
+
+/* Test whether we're in Metropolis mode. */
+void
+testsls(uint64_t oid, bool expected)
+{
+	uint64_t realoid;
+	bool insls;
+	int error;
+
+	error = sls_insls(&realoid, &insls);
+	if (error != 0) {
+		perror("sls_insls");
+		exit(EX_OSERR);
+	}
+
+	if (insls != expected) {
+		if (!insls)
+			fprintf(stderr,
+			    "Metropolis process %d not in the SLS\n", getpid());
+		else
+			fprintf(stderr, "Parent process %d is in the SLS\n",
+			    getpid());
+		exit(EX_OSERR);
+	}
+
+	if (!insls)
+		return;
+
+	if (realoid != OID) {
+		fprintf(
+		    stderr, "Metropolis process is in the wrong partition\n");
+		exit(EX_OSERR);
+	}
+}
 
 void
 wait_child(void)
 {
 	int error;
 	int wstatus;
+	int status;
 
 	error = wait(&wstatus);
 	if (error < 0) {
@@ -49,8 +86,10 @@ wait_child(void)
 		exit(EX_SOFTWARE);
 	}
 
-	if (WEXITSTATUS(wstatus) != 0) {
-		fprintf(stderr, "Child failed to exit normally\n");
+	status = WEXITSTATUS(wstatus);
+	if (status != 0) {
+		fprintf(stderr, "Child failed to exit normally (status %d)\n",
+		    status);
 		exit(EX_SOFTWARE);
 	}
 }
@@ -164,9 +203,10 @@ testaccept_listening(struct sockaddr_in *sa, int *fd)
  * Test the overloaded accept() call with a child calling accept().
  */
 void
-testaccept_child(int writefd, struct sockaddr_in *sa)
+testaccept_child(int writefd, struct sockaddr_in *sa, bool isaccept4)
 {
 	struct sockaddr dataaddr;
+	bool flags = O_NONBLOCK;
 	int listsock, datasock;
 	socklen_t addrlen;
 	void *mapping;
@@ -182,10 +222,20 @@ testaccept_child(int writefd, struct sockaddr_in *sa)
 
 	/* Trigger a Metropolis checkpoint by accepting. */
 	datasock = -1;
-	datasock = accept(listsock, (struct sockaddr *)&dataaddr, &addrlen);
-	if (datasock == -1) {
-		perror("accept");
-		exit(EX_OSERR);
+	if (isaccept4) {
+		datasock = accept4(listsock, (struct sockaddr *)&dataaddr,
+		    &addrlen, SOCK_NONBLOCK);
+		if (datasock == -1) {
+			perror("accept");
+			exit(EX_OSERR);
+		}
+	} else {
+		datasock = accept(
+		    listsock, (struct sockaddr *)&dataaddr, &addrlen);
+		if (datasock == -1) {
+			perror("accept");
+			exit(EX_OSERR);
+		}
 	}
 
 	/* Notify the parent to keep executing through the new socket. */
@@ -262,57 +312,66 @@ testaccept_parent(int readfd, struct sockaddr_in *sa)
 	exit(EX_OK);
 }
 
-/* Test whether we're in Metropolis mode. */
 void
-testmetropolis(uint64_t oid, bool expected)
+testexit(void)
 {
-	uint64_t realoid;
-	bool insls;
 	int error;
+	pid_t pid;
 
-	error = sls_insls(&realoid, &insls);
+	/*
+	 * Fork. Each process enters Metropolis independently, with
+	 * one exiting immediately and testing the instrumented exit,
+	 * while the other one should be killed during module teardown.
+	 */
+
+	pid = fork();
+	if (pid < 0) {
+		perror("pid");
+		exit(EX_OSERR);
+	}
+
+	error = sls_metropolis(OID);
 	if (error != 0) {
-		perror("sls_insls");
+		perror("sls_metropolis");
 		exit(EX_OSERR);
 	}
 
-	if (insls != expected) {
-		if (!insls)
-			fprintf(stderr,
-			    "Metropolis process %d not in the SLS\n", getpid());
-		else
-			fprintf(stderr, "Parent process %d is in the SLS\n",
-			    getpid());
-		exit(EX_OSERR);
-	}
+	/* The exiting process. */
+	if (pid == 0)
+		exit(EX_OK);
 
-	if (!insls)
-		return;
+	/* The stalling process. */
+	for (;;)
+		sleep(1);
 
-	if (realoid != OID) {
-		fprintf(
-		    stderr, "Metropolis process is in the wrong partition\n");
-		exit(EX_OSERR);
-	}
+	printf("Should never reach this");
+	exit(EX_SOFTWARE);
 }
 
 int
 main(int argc, char **argv)
 {
 	const char *args[] = { argv[0], "-E", NULL };
-	bool testexec = false, testexeced = false;
+	bool testexec = false, testexeced = false, tesexit = false;
 	bool testaccept = false, testfork = false;
 	struct sockaddr_in sa;
+	bool isaccept4;
 	int pipefd[2];
 	int error;
 	pid_t pid;
 	long opt;
 
 	while ((opt = getopt_long(
-		    argc, argv, "aefE", metropolis_longopts, NULL)) != -1) {
+		    argc, argv, "4aefEx", metropolis_longopts, NULL)) != -1) {
 		switch (opt) {
+		case '4':
+			testaccept = true;
+			isaccept4 = true;
+			break;
+
 		case 'a':
 			testaccept = true;
+			isaccept4 = false;
 			break;
 		/*
 		 * The way we test after an exec() is by doing the fork() test.
@@ -331,6 +390,12 @@ main(int argc, char **argv)
 			testfork = true;
 			break;
 
+		case 'x':
+			testexit();
+			/* NOTREACHED */
+			exit(EX_SOFTWARE);
+			break;
+
 		default:
 			printf("Usage:./metropolis [-ef]\n");
 			exit(EX_USAGE);
@@ -340,7 +405,7 @@ main(int argc, char **argv)
 
 	/* Do a full checkpoint, unless we already did and called exec(). */
 	if (!testexeced) {
-		error = sls_metropolis(SLS_DEFAULT_PARTITION);
+		error = sls_metropolis(OID);
 		if (error != 0) {
 			perror("sls_metropolis");
 			exit(EX_OSERR);
@@ -370,10 +435,13 @@ main(int argc, char **argv)
 			exit(EX_OSERR);
 		}
 
-		testmetropolis(OID, pid == 0);
-	} else {
-		testmetropolis(OID, false);
 	}
+
+	/*
+	 * We don't get into Metropolis from the child when using fork(), but
+	 * when calling accept().
+	 */
+	testsls(OID, false);
 
 	/*
 	 * If we are testing accept(), have the child open a connection and
@@ -385,7 +453,7 @@ main(int argc, char **argv)
 
 		if (pid == 0) {
 			close(pipefd[0]);
-			testaccept_child(pipefd[1], &sa);
+			testaccept_child(pipefd[1], &sa, isaccept4);
 		} else {
 			close(pipefd[1]);
 			testaccept_parent(pipefd[0], &sa);

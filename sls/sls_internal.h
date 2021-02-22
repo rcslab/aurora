@@ -6,6 +6,7 @@
 #include <sys/fcntl.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
+#include <sys/queue.h>
 #include <sys/sdt.h>
 #include <sys/stat.h>
 #include <sys/syscallsubr.h>
@@ -38,6 +39,7 @@ struct sls_metadata {
 	struct cv slsm_exitcv; /* CV for waiting on users to exit */
 	int slsm_swapobjs;     /* Number of Aurora swap objects */
 	int slsm_inprog;       /* Operations in progress */
+	LIST_HEAD(, proc) slsm_plist; /* List of processes in Aurora */
 };
 
 struct slsckpt_data {
@@ -243,6 +245,9 @@ void slsrest_zonefini(void);
 int sls_checkpoint(struct sls_checkpoint_args *args);
 int sls_attach(struct sls_attach_args *args);
 int sls_restore(struct sls_restore_args *args);
+
+void slsm_procadd(struct proc *p);
+void slsm_procremove(struct proc *p);
 
 MALLOC_DECLARE(M_SLSMM);
 MALLOC_DECLARE(M_SLSREC);

@@ -28,18 +28,26 @@ static struct sysentvec slsmetr_sysvec;
  * allows us to use it to set up a new environment for each new Metropolis
  * instance.
  */
-/* XXX For correctness we must also increment the module's use count, and use
- * hook exit() for Metropolis processes to decrement it. That way we avoid
- * removing the syster call vector from underneath running processes.
- */
 int
 sls_metropolis(struct sls_metropolis_args *args)
 {
 	struct proc *p = curthread->td_proc;
 
+	SLS_LOCK();
+	if (SLS_EXITING()) {
+		SLS_UNLOCK();
+		return (ENODEV);
+	}
+
 	/* Even though the process isn't in the SLS, it has an ID. */
 	p->p_auroid = args->oid;
 	p->p_sysent = &slsmetr_sysvec;
+
+	/* Add the process in Aurora. */
+	PROC_LOCK(p);
+	slsm_procadd(p);
+	PROC_UNLOCK(p);
+	SLS_UNLOCK();
 
 	return (0);
 }
@@ -62,8 +70,9 @@ sls_metropolis_spawn(struct sls_metropolis_spawn_args *args)
 	 * Get the new connected socket, save it in the partition. This call
 	 * also fills in any information the restore process might need.
 	 */
-	error = kern_accept(td, args->s, &slsmetr->slsmetr_sa,
-	    &slsmetr->slsmetr_namelen, &slsmetr->slsmetr_sockfp);
+	error = kern_accept4(td, args->s, &slsmetr->slsmetr_sa,
+	    &slsmetr->slsmetr_namelen, slsmetr->slsmetr_flags,
+	    &slsmetr->slsmetr_sockfp);
 	slsp_deref(slsp);
 	if (error != 0)
 		return (error);
@@ -79,7 +88,7 @@ sls_metropolis_spawn(struct sls_metropolis_spawn_args *args)
 }
 
 static int
-slsmetr_setproc(uint64_t oid)
+slsmetr_set(uint64_t oid, int flags)
 {
 	struct proc *p = curproc;
 	struct slspart *slsp;
@@ -91,6 +100,7 @@ slsmetr_setproc(uint64_t oid)
 	/* Save the SLS ID. */
 	slsp->slsp_metr.slsmetr_proc = (uint64_t)p;
 	slsp->slsp_metr.slsmetr_td = (uint64_t)curthread;
+	slsp->slsp_metr.slsmetr_flags = flags;
 
 	slsp_deref(slsp);
 
@@ -98,36 +108,74 @@ slsmetr_setproc(uint64_t oid)
 }
 
 static int
-slsmetr_accept(struct thread *td, void *data)
+slsmetr_register(struct thread *td, int flags)
 {
 	struct sls_checkpoint_args checkpoint_args;
+	struct sls_attach_args attach_args;
 	struct proc *p = td->td_proc;
 	int error;
 
+	/* Lock to avoid races with the slsmetr_fork() call that created us. */
+	SLS_LOCK();
+	if (SLS_EXITING()) {
+		SLS_UNLOCK();
+		return (EINTR);
+	}
+
+	/*
+	 * We have the PID of the new process, add it to the partition. We find
+	 * the PID of our partition based on our PID.
+	 */
+	attach_args = (struct sls_attach_args) {
+		.oid = p->p_auroid,
+		.pid = p->p_pid,
+	};
+
+	/* We got our Aurora ID, no need to hold the lock anymore. */
+	SLS_UNLOCK();
+
+	/* Attach the new process into the partition, and Aurora in general. */
+	error = sls_attach(&attach_args);
+	if (error != 0)
+		return (error);
+
+	/*
+	 * Trigger the checkpoint. Since we are in the call, the accept() call
+	 * is not restarted after we're done (that would cause a loop, anyway).
+	 */
 	checkpoint_args = (struct sls_checkpoint_args) {
 		.oid = p->p_auroid,
 		.recurse = true,
 	};
 
-	/*
-	 * Trigger the checkpoint. Since we are the call, the accept() call is
-	 * not restarted after we're done (that would cause a loop, anyway).
-	 */
 	error = sls_checkpoint(&checkpoint_args);
 	if (error != 0)
 		return (error);
 
 	/* Set the partition's assigned Metropolis process. */
-	error = slsmetr_setproc(p->p_auroid);
+	error = slsmetr_set(p->p_auroid, flags);
 	if (error != 0)
 		return (error);
 
-	/* Follow up with the actual accept() call. */
+	/* Have the process exit. */
 	exit1(td, 0, 0);
-
 	panic("Process failed to exit");
 
 	return (0);
+}
+
+static int
+slsmetr_accept4(struct thread *td, void *data)
+{
+	struct accept4_args *uap = (struct accept4_args *)data;
+
+	return (slsmetr_register(td, uap->flags));
+}
+
+static int
+slsmetr_accept(struct thread *td, void *data __unused)
+{
+	return (slsmetr_register(td, ACCEPT4_INHERIT));
 }
 
 /*
@@ -147,33 +195,60 @@ slsmetr_execve(struct thread *td, void *data)
 	return (error);
 }
 
-/* Simple wrapper around fork(). */
 static int
 slsmetr_fork(struct thread *td, void *data)
 {
 	struct fork_args *uap = (struct fork_args *)data;
-	struct proc *p = curthread->td_proc;
-	struct sls_attach_args attach_args;
+	struct proc *p;
 	int error;
+	pid_t pid;
 
-	/* Simply wrap the regular fork call. */
+	/* Don't race with an exiting module when adding the child to Aurora. */
+	SLS_LOCK();
+	if (SLS_EXITING()) {
+		SLS_UNLOCK();
+		return (EAGAIN);
+	}
+
 	error = sys_fork(td, uap);
-	if (error != 0)
+	if (error != 0) {
+		SLS_UNLOCK();
 		return (error);
+	}
 
-	/*
-	 * We have the PID of the new process, add it to the partition. We find
-	 * the PID of our partition based on our PID.
-	 */
-	attach_args = (struct sls_attach_args) {
-		.oid = p->p_auroid,
-		.pid = td->td_retval[0],
-	};
+	pid = td->td_retval[0];
 
-	/* Attach the new process into the partition. */
-	error = sls_attach(&attach_args);
-	if (error != 0)
-		return (error);
+	/* Try to find the new process and lock (it might have died already). */
+	p = pfind(pid);
+	if (p == NULL) {
+		SLS_UNLOCK();
+		return (0);
+	}
+
+	p->p_auroid = curproc->p_auroid;
+	slsm_procadd(p);
+	PROC_UNLOCK(p);
+
+	SLS_UNLOCK();
+
+	return (0);
+}
+
+static int
+slsmetr_exit(struct thread *td, void *data)
+{
+	struct sys_exit_args *uap = (struct sys_exit_args *)data;
+	struct proc *p = td->td_proc;
+
+	/* Detach ourselves from Aurora before exiting. */
+	PROC_LOCK(p);
+	slsm_procremove(p);
+	PROC_UNLOCK(p);
+
+	exit1(td, uap->rval, 0);
+	/* NOTREACHED*/
+
+	panic("Metropolis process %d did not exit", p->p_pid);
 
 	return (0);
 }
@@ -201,9 +276,11 @@ sls_initsysvec(void)
 	memcpy(slsmetr_sysent, elf64_freebsd_sysvec->sv_table,
 	    sizeof(*slsmetr_sysent) * slsmetr_sysvec.sv_size);
 
-	slsmetr_sysent[SYS_fork].sy_call = &slsmetr_fork;
 	slsmetr_sysent[SYS_execve].sy_call = &slsmetr_execve;
+	slsmetr_sysent[SYS_fork].sy_call = &slsmetr_fork;
 	slsmetr_sysent[SYS_accept].sy_call = &slsmetr_accept;
+	slsmetr_sysent[SYS_accept4].sy_call = &slsmetr_accept4;
+	slsmetr_sysent[SYS_exit].sy_call = &slsmetr_exit;
 
 	slsmetr_sysvec.sv_table = slsmetr_sysent;
 }
