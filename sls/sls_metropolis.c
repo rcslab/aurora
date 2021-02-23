@@ -152,12 +152,19 @@ slsmetr_register(struct thread *td, int flags)
 	if (error != 0)
 		return (error);
 
-	/* Set the partition's assigned Metropolis process. */
+	/* Set the partition's Metropolis process ID (not a pointer).  */
 	error = slsmetr_set(p->p_auroid, flags);
 	if (error != 0)
 		return (error);
 
-	/* Have the process exit. */
+	/* Have the process exit. This also means exiting Metropolis mode. */
+	SLS_LOCK();
+	PROC_LOCK(p);
+	slsm_procremove(p);
+	PROC_UNLOCK(p);
+	SLS_UNLOCK();
+
+	printf("Registered!\n");
 	exit1(td, 0, 0);
 	panic("Process failed to exit");
 

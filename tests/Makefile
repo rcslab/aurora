@@ -1,7 +1,7 @@
 SUBDIR = array compute fd fifo fork forkwait llist main memsnap \
 	 metropolis mmap multithread register pipe posix posixshm \
-	 print sharemap selfie signal sleep slsfs socketpair sysvshm \
-	 tcplisten udplisten unixlisten vmobject unlink wal
+	 print pymetro sharemap selfie signal sleep slsfs socketpair \
+	 sysvshm tcplisten udplisten unixlisten vmobject unlink wal
 
 .include <bsd.subdir.mk>
 

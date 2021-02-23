@@ -23,6 +23,7 @@ tests/pipe/pipe
 tests/posixshm/posixshm
 tests/posix/posix
 tests/print/print
+tests/pymetro/pymetro
 tests/register/register
 tests/selfie/selfie
 tests/sharemap/sharemap
