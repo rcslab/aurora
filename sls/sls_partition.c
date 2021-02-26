@@ -333,6 +333,13 @@ slsp_del(uint64_t oid)
 	if (slskv_find(slsm.slsm_parts, oid, (uintptr_t *)&slsp) != 0)
 		return;
 
+	/*
+	 * XXX When destroying a partition, kill all processes associated with
+	 * it. These may be Aurora processes, Metropolis processes, or restored
+	 * processes. A partition is a long lived entity that spans reboot, so
+	 * destroying it should be a very rare event.
+	 */
+
 	/* Remove the process from the table, and destroy the struct itself. */
 	slskv_del(slsm.slsm_parts, oid);
 	slsp_fini(slsp);

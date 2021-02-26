@@ -77,12 +77,13 @@ slsm_procremove(struct proc *p)
 	}
 }
 
-static void
+static int
 slsm_prockillall(void)
 {
 	struct thread *td = curthread;
-	int status;
 	struct proc *p, *tmp;
+	int status;
+	int error;
 
 	/* Wait for all the children to be done. */
 	LIST_FOREACH_SAFE (p, &slsm.slsm_plist, p_aurlist, tmp) {
@@ -90,27 +91,29 @@ slsm_prockillall(void)
 		 * Kill the process and reparent it to us. That way we can wait
 		 * for it to be destroyed.
 		 */
-		PROC_LOCK(p);
-		kern_psignal(p, SIGKILL);
 		sx_xlock(&proctree_lock);
+		PROC_LOCK(p);
 		proc_reparent(p, curproc, true);
-		sx_xunlock(&proctree_lock);
+		kern_psignal(p, SIGKILL);
 		PROC_UNLOCK(p);
+		sx_xunlock(&proctree_lock);
 
-		/*
-		 * On an error there is not much we can do but move on. This
-		 * could very well be an assertion, since there is no good
-		 * reason that this can fail.
-		 */
-		while (kern_wait(
-			   td, p->p_pid, &status, WNOWAIT | WEXITED, NULL) != 0)
-			pause_sbt("slspka", SBT_1MS, 0, C_HARDCLOCK);
+		/* Poll for the process to exit. Can't do much if it fails.  */
+		error = kern_wait(
+		    td, p->p_pid, &status, WEXITED | WNOHANG, NULL);
+		if (error != 0) {
+			printf("Error %d\n", error);
+			return (error);
+		}
 
+		KASSERT(WIFEXITED(status), ("Process did not exit"));
 		/*
 		 * There is no need to remove the processes from the list, they
 		 * remove themselves when exiting.
 		 */
 	}
+
+	return (0);
 }
 
 /*
@@ -159,16 +162,15 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 		ckptd_args->pcaller = p;
 	}
 
-	mtx_lock(&slsp->slsp_syncmtx);
-
 	/* Create the daemon. */
 	error = kthread_add((void (*)(void *))sls_checkpointd, ckptd_args, NULL,
 	    NULL, 0, 0, "sls_checkpointd");
 	if (error != 0) {
-		mtx_unlock(&slsp->slsp_syncmtx);
 		free(ckptd_args, M_SLSMM);
 		goto error;
 	}
+
+	mtx_lock(&slsp->slsp_syncmtx);
 
 	/* If it's a periodic daemon, don't wait for it. */
 	if (slsp->slsp_attr.attr_period != 0) {
@@ -235,16 +237,16 @@ sls_restore(struct sls_restore_args *args)
 	restd_args->daemon = args->daemon;
 	restd_args->rest_stopped = args->rest_stopped;
 
-	mtx_lock(&slsp->slsp_syncmtx);
 
 	/* Create the daemon. */
 	error = kthread_add((void (*)(void *))sls_restored, restd_args, curproc,
 	    NULL, 0, 0, "sls_restored");
 	if (error != 0) {
-		mtx_unlock(&slsp->slsp_syncmtx);
 		free(restd_args, M_SLSMM);
 		goto error;
 	}
+
+	mtx_lock(&slsp->slsp_syncmtx);
 
 	return (slsp_waitfor(slsp));
 
@@ -600,9 +602,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 	case MOD_LOAD:
 		bzero(&slsm, sizeof(slsm));
 
-		/* Construct the system call vector. */
-		sls_initsysvec();
-
 		mtx_init(&slsm.slsm_mtx, "slsm", NULL, MTX_DEF);
 		cv_init(&slsm.slsm_exitcv, "slsm");
 
@@ -651,6 +650,10 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		/* Commandeer the swap pager. */
 		sls_pager_register();
 
+		/* Construct the system call vector. */
+		sls_initsysvec();
+		slsmetr_exit_hook = slsmetr_exit_procremove;
+
 		/* Make the SLS available to userspace. */
 		slsm.slsm_cdev = make_dev(
 		    &slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "sls");
@@ -667,46 +670,64 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 
 	case MOD_UNLOAD:
 
+		SLS_LOCK();
+		/* Signal that we're exiting and wait for threads to finish. */
+		slsm.slsm_exiting = 1;
+
+		/* Wait for all operations to end. */
+		while (slsm.slsm_inprog > 0)
+			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
+
+		SLS_UNLOCK();
+
+		/* Kill all processes in Aurora. This call can sleep. */
+		error = slsm_prockillall();
+		if (error != 0)
+			return (EBUSY);
+
+		SLS_LOCK();
+		/* Wait for all operations to end. */
+		while (!LIST_EMPTY(&slsm.slsm_plist))
+			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
+		SLS_UNLOCK();
+
+		/* Destroy all partitions. */
+		slsp_delall();
+
+		/*
+		 * Swap off the Aurora swapper.  XXX Ideally we'd like to kill
+		 * every single process that could conceivably use Aurora swap
+		 * objects; this includes processes created from restored Aurora
+		 * processes using fork(), and processes that have been orphaned
+		 * and given to init(). If runnin a partition in a container, as
+		 * we should, this is easy; we traverse the process tree of the
+		 * container init process. If not, we need to override the
+		 * system call vectors of all processes in Aurora to add
+		 * themselves to the process list.
+		 */
+		SLS_LOCK();
+		sls_pager_swapoff();
+
+		while (slsm.slsm_swapobjs > 0)
+			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
+
+		SLS_UNLOCK();
+
+		sls_pager_unregister();
+
+		/* We need to have powered Aurora off. */
+		if (slsm.slsm_exiting == 0)
+			return (EINVAL);
+
+		slsmetr_exit_hook = NULL;
+		sls_finisysvec();
+
 		/*
 		 * Destroy the device, wait for all ioctls in progress. We do
 		 * this without the non-sleepable module lock.
 		 */
 		if (slsm.slsm_cdev != NULL)
 			destroy_dev(slsm.slsm_cdev);
-
-		/* Kill all processes currently in Aurora. */
-		slsm_prockillall();
-
-		SLS_LOCK();
-		/* Signal that we're exiting and wait for threads to finish. */
-		slsm.slsm_exiting = 1;
-
-		while (slsm.slsm_inprog > 0)
-			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
-
-		SLS_UNLOCK();
-
-		/*
-		 * Destroy all partitions. We need to be unlocked because by
-		 * destroying the partitions we might destroy swap objects,
-		 * which take the module lock during deinitialization.
-		 */
-		slsp_delall();
-
-		SLS_LOCK();
-		/* Remove the Aurora swapper, bring all objects back in. */
-		/*
-		 * XXX Kill all Aurora processes when we remove the module. This
-		 * greatly simplifies reference counting with regards to the
-		 * pager.
-		 */
-		sls_pager_swapoff();
-		sls_pager_unregister();
-
-		/* Wait for all swap objects to be detached.  */
-		while (slsm.slsm_swapobjs > 0)
-			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
-		SLS_UNLOCK();
 
 		if (sysctl_ctx_free(&aurora_ctx))
 			printf("Failed to destroy sysctl\n");
@@ -716,8 +737,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 
 		cv_destroy(&slsm.slsm_exitcv);
 		mtx_destroy(&slsm.slsm_mtx);
-
-		sls_finisysvec();
 
 		break;
 	default:

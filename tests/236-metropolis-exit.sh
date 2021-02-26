@@ -19,8 +19,8 @@ fi
 # Wait for the run to finish. The restore happens internally.
 wait $PID
 EXIT=$?
-if [ $EXIT -ne 128 ];
+if [ $(( $EXIT & 127 )) -ne 0 -a $EXIT -ne $(( 128 | 9 )) ];
 then
-    echo "Process exited with $EXIT, should have exited with 128 (SIGKILL)"
+    echo "Process exited with $EXIT, should have exited with 0 or SIG{KILL, TERM}"
     exit 1
 fi

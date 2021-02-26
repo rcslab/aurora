@@ -323,7 +323,10 @@ slsrest_proc_signals(struct slsproc *slsproc, struct slsrest_data *restdata)
 	struct proc *p = curproc;
 
 	/* We bcopy the exact way it's done in sigacts_copy(). */
+	PROC_UNLOCK(p);
 	newsigacts = sigacts_alloc();
+	PROC_LOCK(p);
+
 	bcopy(
 	    &slsproc->sigacts, newsigacts, offsetof(struct sigacts, ps_refcnt));
 

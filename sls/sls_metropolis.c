@@ -16,6 +16,32 @@
 /* The Metropolis system call vector. */
 static struct sysentvec slsmetr_sysvec;
 
+void
+slsmetr_exit_procremove(struct proc *p)
+{
+#ifdef INVARIANTS
+	struct slspart *slsp;
+
+	KASSERT(p->p_auroid != 0, ("Process not in Metropolis mode"));
+	slsp = slsp_find(p->p_auroid);
+	KASSERT(slsp != NULL,
+	    ("Process in nonexistent partition %lu", p->p_auroid));
+	if (slsp == NULL)
+		return;
+
+	slsp_deref(slsp);
+
+#endif /* INVARIANTS*/
+
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+
+	SLS_LOCK();
+	slsm_procremove(p);
+	p->p_auroid = 0;
+	cv_signal(&slsm.slsm_exitcv);
+	SLS_UNLOCK();
+}
+
 /*
  * Called by the initial Metropolis function. Replaces the syscall vector with
  * one that has overloaded execve() and accept() calls. The accept() call is
@@ -32,12 +58,22 @@ int
 sls_metropolis(struct sls_metropolis_args *args)
 {
 	struct proc *p = curthread->td_proc;
+	struct slspart *slsp;
 
 	SLS_LOCK();
 	if (SLS_EXITING()) {
 		SLS_UNLOCK();
 		return (ENODEV);
 	}
+
+	/* Check if the partition actually exists. */
+	slsp = slsp_find(args->oid);
+	if (slsp == NULL) {
+		SLS_UNLOCK();
+		return (ENODEV);
+	}
+
+	slsp_deref(slsp);
 
 	/* Even though the process isn't in the SLS, it has an ID. */
 	p->p_auroid = args->oid;
@@ -88,7 +124,7 @@ sls_metropolis_spawn(struct sls_metropolis_spawn_args *args)
 }
 
 static int
-slsmetr_set(uint64_t oid, int flags)
+slsmetr_set(uint64_t oid, struct file *fp, int flags)
 {
 	struct proc *p = curproc;
 	struct slspart *slsp;
@@ -101,6 +137,7 @@ slsmetr_set(uint64_t oid, int flags)
 	slsp->slsp_metr.slsmetr_proc = (uint64_t)p;
 	slsp->slsp_metr.slsmetr_td = (uint64_t)curthread;
 	slsp->slsp_metr.slsmetr_flags = flags;
+	slsp->slsp_metr.slsmetr_sockid = (uint64_t)fp->f_data;
 
 	slsp_deref(slsp);
 
@@ -108,11 +145,12 @@ slsmetr_set(uint64_t oid, int flags)
 }
 
 static int
-slsmetr_register(struct thread *td, int flags)
+slsmetr_register(struct thread *td, int s, int flags)
 {
 	struct sls_checkpoint_args checkpoint_args;
 	struct sls_attach_args attach_args;
 	struct proc *p = td->td_proc;
+	struct file *fp;
 	int error;
 
 	/* Lock to avoid races with the slsmetr_fork() call that created us. */
@@ -152,8 +190,11 @@ slsmetr_register(struct thread *td, int flags)
 	if (error != 0)
 		return (error);
 
+	/* Get the socket ID for the socket. */
+	fp = FDTOFP(p, s);
+
 	/* Set the partition's Metropolis process ID (not a pointer).  */
-	error = slsmetr_set(p->p_auroid, flags);
+	error = slsmetr_set(p->p_auroid, fp, flags);
 	if (error != 0)
 		return (error);
 
@@ -164,7 +205,6 @@ slsmetr_register(struct thread *td, int flags)
 	PROC_UNLOCK(p);
 	SLS_UNLOCK();
 
-	printf("Registered!\n");
 	exit1(td, 0, 0);
 	panic("Process failed to exit");
 
@@ -176,13 +216,15 @@ slsmetr_accept4(struct thread *td, void *data)
 {
 	struct accept4_args *uap = (struct accept4_args *)data;
 
-	return (slsmetr_register(td, uap->flags));
+	return (slsmetr_register(td, uap->s, uap->flags));
 }
 
 static int
 slsmetr_accept(struct thread *td, void *data __unused)
 {
-	return (slsmetr_register(td, ACCEPT4_INHERIT));
+	struct accept_args *uap = (struct accept_args *)data;
+
+	return (slsmetr_register(td, uap->s, ACCEPT4_INHERIT));
 }
 
 /*
@@ -241,27 +283,6 @@ slsmetr_fork(struct thread *td, void *data)
 	return (0);
 }
 
-static int
-slsmetr_exit(struct thread *td, void *data)
-{
-	struct sys_exit_args *uap = (struct sys_exit_args *)data;
-	struct proc *p = td->td_proc;
-
-	/* Detach ourselves from Aurora before exiting. */
-	SLS_LOCK();
-	PROC_LOCK(p);
-	slsm_procremove(p);
-	PROC_UNLOCK(p);
-	SLS_UNLOCK();
-
-	exit1(td, uap->rval, 0);
-	/* NOTREACHED*/
-
-	panic("Metropolis process %d did not exit", p->p_pid);
-
-	return (0);
-}
-
 void
 sls_initsysvec(void)
 {
@@ -289,7 +310,6 @@ sls_initsysvec(void)
 	slsmetr_sysent[SYS_fork].sy_call = &slsmetr_fork;
 	slsmetr_sysent[SYS_accept].sy_call = &slsmetr_accept;
 	slsmetr_sysent[SYS_accept4].sy_call = &slsmetr_accept4;
-	slsmetr_sysent[SYS_exit].sy_call = &slsmetr_exit;
 
 	slsmetr_sysvec.sv_table = slsmetr_sysent;
 }

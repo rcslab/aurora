@@ -142,11 +142,12 @@ slsvm_objtable_collapsenew(
 			KASSERT(
 			    child != NULL, ("found shadow with no children"));
 			slskv_del(objtable, (uint64_t)ancestor);
+			VM_OBJECT_RUNLOCK(shadow);
+
 			error = slskv_add(
 			    objtable, (uint64_t)ancestor, (uintptr_t)child);
 			KASSERT(error == 0,
 			    ("Reinserting parent into table failed"));
-			VM_OBJECT_RUNLOCK(shadow);
 			vm_object_deallocate(shadow);
 
 			break;

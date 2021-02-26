@@ -15,6 +15,7 @@ struct slsmetr {
 	struct file *slsmetr_sockfp; /* File pointer to connected socket */
 	struct sockaddr *slsmetr_sa; /* Address of the connected socket */
 	socklen_t slsmetr_namelen;   /* Size of the above address */
+	uint64_t slsmetr_sockid;     /* Socket ID of the problematic socket. */
 	int slsmetr_flags;	     /* flags for accept4() */
 };
 

@@ -316,6 +316,15 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 	/* Get the data from all processes in the partition. */
 	KVSET_FOREACH(procset, iter, p)
 	{
+
+		/* Insert the process into Aurora. */
+		SLS_LOCK();
+		PROC_LOCK(p);
+		p->p_auroid = slsp->slsp_oid;
+		slsm_procadd(p);
+		PROC_UNLOCK(p);
+		SLS_UNLOCK();
+
 		error = slsckpt_metadata(p, procset, sckpt_data);
 		if (error != 0) {
 			DEBUG2("Checkpointing process %d failed with %d\n",

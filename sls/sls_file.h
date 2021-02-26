@@ -16,8 +16,8 @@
 
 int slsckpt_socket(struct proc *p, struct socket *so, struct sbuf *sb,
     struct slsckpt_data *sckpt_data);
-int slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
-    struct slssock *info, struct slsfile *finfo, int *fdp);
+int slsrest_socket(struct slsrest_data *restdata, struct slssock *info,
+    struct slsfile *finfo, int *fdp);
 
 int slsckpt_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb);
 int slsrest_kqueue(struct slskqueue *kqinfo, int *fdp);

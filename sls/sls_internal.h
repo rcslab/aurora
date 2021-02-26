@@ -186,6 +186,10 @@ sls_startop(bool allow_concurrent)
 		return (EBUSY);
 	}
 
+	/* Check if we're exiting. */
+	if (slsm.slsm_exiting)
+		return (EBUSY);
+
 	slsm.slsm_inprog += 1;
 	SLS_UNLOCK();
 	return (0);
@@ -248,6 +252,8 @@ int sls_restore(struct sls_restore_args *args);
 
 void slsm_procadd(struct proc *p);
 void slsm_procremove(struct proc *p);
+void slsmetr_exit_procremove(struct proc *p);
+extern void (*slsmetr_exit_hook)(struct proc *p);
 
 MALLOC_DECLARE(M_SLSMM);
 MALLOC_DECLARE(M_SLSREC);

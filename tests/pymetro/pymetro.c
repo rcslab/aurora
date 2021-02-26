@@ -19,10 +19,12 @@
 
 #define OID (SLS_DEFAULT_PARTITION)
 #define LOCALHOST ("127.0.0.1")
-#define SOCKET (7778)
-#define SOCKETSTR ("7778")
-#define PROXYSOCKET (7779)
-#define PROXYSOCKETSTR ("7779")
+#define ORIGSOCKET (7776)
+#define ORIGSOCKETSTR ("7776")
+#define SOCKET (7777)
+#define SOCKETSTR ("7777")
+#define SOCKSTRSIZE (256)
+#define SCALING (5)
 #define BACKLOG (4)
 #define REPEATS (1)
 #define MSG ("ready")
@@ -30,6 +32,7 @@ char buf[sizeof(MSG)];
 
 static struct option pymetro_longopts[] = {
 	{ "accept4", no_argument, NULL, '4' },
+	{ "scale", no_argument, NULL, 's' },
 	{ NULL, no_argument, NULL, 0 },
 };
 
@@ -162,12 +165,13 @@ testaccept_listening(struct sockaddr_in *sa, int *fd)
  * instance.
  */
 void
-testaccept_parent(void)
+testaccept_parent(bool scale)
 {
 	char *args[] = { "python3", "pymetro/client.py", SOCKETSTR, NULL };
 	struct sockaddr_in sa;
 	int listsock, datasock;
-	int error, i;
+	int error, i, j;
+	int forks;
 	pid_t pid;
 
 	/* Wait for the child to exit due to checkpointing itself. */
@@ -179,28 +183,36 @@ testaccept_parent(void)
 
 	/* Create a new socket. We will connect to a new instance. */
 	for (i = 0; i < REPEATS; i++) {
-		pid = fork();
-		if (pid < 0) {
-			perror("fork");
-			exit(EX_OSERR);
+		forks = (scale) ? SCALING : 1;
+		for (j = 0; j < forks; j++) {
+			pid = fork();
+			if (pid < 0) {
+				perror("fork");
+				exit(EX_OSERR);
+			}
+
+			if (pid == 0) {
+				error = execve(
+				    "/usr/local/bin/python3", args, NULL);
+				if (error < 0) {
+					perror("execve");
+					exit(EX_OSERR);
+				}
+			}
 		}
 
-		if (pid == 0) {
-			error = execve("/usr/local/bin/python3", args, NULL);
-			if (error < 0) {
-				perror("execve");
+		/* Create as many forks as we need. */
+		for (j = 0; j < forks; j++) {
+			error = sls_metropolis_spawn(OID, listsock);
+			if (error != 0) {
+				perror("sls_metropolis_spawn");
 				exit(EX_OSERR);
 			}
 		}
 
-		error = sls_metropolis_spawn(OID, listsock);
-		if (error != 0) {
-			perror("sls_metropolis_spawn");
-			exit(EX_OSERR);
-		}
-
-		/* Wait for both children. */
-		wait_child();
+		/* Wait for all children. */
+		for (j = 0; j < forks; j++)
+			wait_child();
 		wait_child();
 	}
 
@@ -210,17 +222,22 @@ testaccept_parent(void)
 int
 main(int argc, char **argv)
 {
-	char *args[] = { "python3", "pymetro/server.py", PROXYSOCKETSTR, NULL };
+	char *args[] = { "python3", "pymetro/server.py", ORIGSOCKETSTR, NULL };
+	bool scale = false;
 	bool isaccept4;
 	pid_t pid;
 	int error;
 	long opt;
 
-	while ((opt = getopt_long(argc, argv, "4", pymetro_longopts, NULL)) !=
+	while ((opt = getopt_long(argc, argv, "4s", pymetro_longopts, NULL)) !=
 	    -1) {
 		switch (opt) {
 		case '4':
 			isaccept4 = true;
+			break;
+
+		case 's':
+			scale = true;
 			break;
 
 		default:
@@ -256,7 +273,7 @@ main(int argc, char **argv)
 		}
 	}
 
-	testaccept_parent();
+	testaccept_parent(scale);
 
 	return (0);
 }

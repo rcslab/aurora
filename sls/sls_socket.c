@@ -54,6 +54,8 @@
 #include "sls_file.h"
 #include "sls_internal.h"
 
+#define METROPOLIS_RETRIES (1000)
+
 /*
  * XXX Sendfile doesn't work, because there might be pageins in progress that
  * cannot be tracked across restarts. We could fix this by monitoring pageins
@@ -430,9 +432,10 @@ slsrest_uipc_bindat(struct socket *so, struct sockaddr *name)
 }
 
 int
-slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
-    struct slssock *info, struct slsfile *finfo, int *fdp)
+slsrest_socket(struct slsrest_data *restdata, struct slssock *info,
+    struct slsfile *finfo, int *fdp)
 {
+	struct slskv_table *table = restdata->fptable;
 	struct thread *td = curthread;
 	struct sockaddr_un *unaddr;
 	struct sockaddr_in *inaddr;
@@ -495,14 +498,37 @@ slsrest_socket(struct slskv_table *table, struct slskv_table *sockbuftable,
 		/* Check if the socket is bound. */
 		if (info->bound == 0)
 			break;
+
 		/*
-		 * We use bind() instead of setting the address directly because
-		 * we need to let the kernel know we are reserving the address.
+		 * If this is a listening socket for a Metropolis function,
+		 * assign it a random port, much like accept() does.
+		 *  Try randomly picking a number from 1024 to 65535
 		 */
-		error = kern_bindat(
-		    td, AT_FDCWD, fd, (struct sockaddr *)inaddr);
-		if (error != 0)
-			goto error;
+		if (restdata->slsmetr.slsmetr_sockid == info->slsid) {
+
+			for (i = 0; i < METROPOLIS_RETRIES; i++) {
+				inaddr->sin_port = 1024 +
+				    (random() % (65545 - 1024));
+				error = kern_bindat(td, AT_FDCWD, fd,
+				    (struct sockaddr *)inaddr);
+				if (error == 0)
+					break;
+			}
+
+			if (error != 0)
+				goto error;
+
+		} else {
+			/*
+			 * We use bind() instead of setting the address directly
+			 * because we need to let the kernel know we are
+			 * reserving the address.
+			 */
+			error = kern_bindat(
+			    td, AT_FDCWD, fd, (struct sockaddr *)inaddr);
+			if (error != 0)
+				goto error;
+		}
 
 		break;
 

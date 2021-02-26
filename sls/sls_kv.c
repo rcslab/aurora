@@ -132,7 +132,7 @@ slskv_fini(void)
 int
 slskv_create(struct slskv_table **tablep)
 {
-	*tablep = uma_zalloc(slskv_zone, M_WAITOK);
+	*tablep = uma_zalloc(slskv_zone, M_NOWAIT);
 	if (*tablep == NULL)
 		return (ENOMEM);
 

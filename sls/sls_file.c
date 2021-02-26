@@ -574,8 +574,7 @@ slsrest_file(
 		if (slskv_find(restdata->fptable, slsid, &peer) == 0)
 			return (0);
 
-		error = slsrest_socket(restdata->fptable, restdata->mbuftable,
-		    slsbacker, info, &fd);
+		error = slsrest_socket(restdata, slsbacker, info, &fd);
 		if (error != 0)
 			return (error);
 

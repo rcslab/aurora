@@ -36,8 +36,7 @@ struct slspart {
 
 	slsset *slsp_procs; /* The processes that belong to this partition */
 	int slsp_status;    /* Status of checkpoint */
-	struct sls_attr
-	    slsp_attr;	   /* Parameters for checkpointing the process */
+	struct sls_attr slsp_attr; /* Checkpointing paramaters */
 	int slsp_refcount; /* Reference count for the partition. */
 
 	struct slskv_table *slsp_objects; /* VM Objects created for the SLS */

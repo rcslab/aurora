@@ -538,6 +538,7 @@ error:
 static void
 sls_pager_fini(vm_object_t obj)
 {
+	SLS_ASSERT_UNLOCKED();
 	VM_OBJECT_ASSERT_LOCKED(obj);
 	KASSERT(obj->handle == NULL, ("object has handle"));
 	/* Dead objects are cleaned up by calling sls_pager_dealloc(). */
@@ -560,8 +561,9 @@ sls_pager_fini(vm_object_t obj)
 	obj->type = OBJT_DEFAULT;
 	obj->flags &= ~OBJ_AURORA;
 
-	SLS_ASSERT_LOCKED();
+	SLS_LOCK();
 	sls_swapderef_unlocked();
+	SLS_UNLOCK();
 }
 
 /*
@@ -648,15 +650,16 @@ sls_pager_unregister(void)
 static void
 sls_pager_swapoff_one(void)
 {
-	vm_object_t obj;
+	vm_object_t obj, tmp;
 
 	/*
 	 * XXX For now just change the object back and damn the consequences
 	 * (i.e. have the processes crash since we pulled their data from under
-	 * them).
+	 * them). The right solution is to rig the module to kill all processes
+	 * before exiting.
 	 */
 	mtx_lock(&vm_object_list_mtx);
-	TAILQ_FOREACH (obj, &vm_object_list, object_list) {
+	TAILQ_FOREACH_SAFE (obj, &vm_object_list, object_list, tmp) {
 		if ((obj->type != OBJT_SWAP) || (obj->flags & OBJ_AURORA) == 0)
 			continue;
 
@@ -686,6 +689,7 @@ sls_pager_swapoff(void)
 
 	/* We assume the only references left belong to the */
 	while (slsm.slsm_swapobjs > 0) {
+		SLS_UNLOCK();
 		sls_pager_swapoff_one();
 
 		retries += 1;
@@ -693,7 +697,6 @@ sls_pager_swapoff(void)
 			panic(
 			    "failed to destroy %d objects", slsm.slsm_swapobjs);
 
-		SLS_UNLOCK();
 		pause("slsswp", hz / 20);
 		SLS_LOCK();
 	}

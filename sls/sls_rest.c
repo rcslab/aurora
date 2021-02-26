@@ -581,6 +581,8 @@ slsrest_ttyfixup(struct proc *p)
 	int error, ret;
 	int fd;
 
+	PROC_LOCK_ASSERT(p, MA_NOTOWNED);
+
 	/* Construct the controlling terminal's name. */
 	ttyname = __DECONST(char *, tty_devname(p->p_session->s_ttyp));
 	path = malloc(2 * PATH_MAX, M_SLSMM, M_WAITOK);
@@ -627,9 +629,7 @@ slsrest_ttyfixup(struct proc *p)
 			 * The master is gone, replace the file with the
 			 * parent's tty device and adjust hold counts.
 			 */
-			PROC_UNLOCK(p);
 			fdrop(fp, curthread);
-			PROC_LOCK(p);
 
 			if (!fhold(pttyfp))
 				goto error;
@@ -752,8 +752,14 @@ slsrest_metadata(void *args)
 	free(args, M_SLSMM);
 
 	/* We always work on the current process. */
+	SLS_LOCK();
 	PROC_LOCK(p);
 	thread_single(p, SINGLE_BOUNDARY);
+
+	/* Insert new process into Aurora. */
+	p->p_auroid = restdata->slsp->slsp_oid;
+	slsm_procadd(p);
+	SLS_UNLOCK();
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Single threading");
 	/* Restore the process in a stopped state if needed. */
@@ -815,10 +821,9 @@ slsrest_metadata(void *args)
 	 */
 	while (restdata->proctds >= 0)
 		cv_wait(&restdata->proccv, &restdata->procmtx);
+	mtx_unlock(&restdata->procmtx);
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Process wakeup");
-
-	PROC_LOCK(p);
 
 	DEBUG("SLS Restore ttyfixup");
 
@@ -834,9 +839,9 @@ slsrest_metadata(void *args)
 	 * we instead pass the original restore process' terminal as an
 	 * argument.
 	 */
-	mtx_unlock(&restdata->procmtx);
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Fixing up the tty");
+	PROC_LOCK(p);
 	thread_single_end(p, SINGLE_BOUNDARY);
 	PROC_UNLOCK(p);
 
@@ -903,14 +908,14 @@ slsrest_fork(uint64_t daemon, uint64_t rest_stopped, char *buf, size_t buflen,
 	args->buflen = buflen;
 	args->restdata = restdata;
 
-	/* Set the function to be executed in the kernel for the new kthread. */
-	td = FIRST_THREAD_IN_PROC(p2);
-	thread_lock(td);
-
 	/* Note down the fact that one more process is being restored. */
 	mtx_lock(&restdata->procmtx);
 	restdata->proctds += 1;
 	mtx_unlock(&restdata->procmtx);
+
+	/* Set the function to be executed in the kernel for the new kthread. */
+	td = FIRST_THREAD_IN_PROC(p2);
+	thread_lock(td);
 
 	/* Set the starting point of execution for the new process. */
 	cpu_fork_kthread_handler(td, slsrest_metadata, (void *)args);
