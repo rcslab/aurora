@@ -70,7 +70,7 @@ sls_metropolis(struct sls_metropolis_args *args)
 	slsp = slsp_find(args->oid);
 	if (slsp == NULL) {
 		SLS_UNLOCK();
-		return (ENODEV);
+		return (EINVAL);
 	}
 
 	slsp_deref(slsp);

@@ -275,6 +275,7 @@ slsp_fini(struct slspart *slsp)
 
 	/* Remove any references to VM objects we may have. */
 	if (slsp->slsp_objects != NULL) {
+		printf("Collapsing the table\n");
 		slsvm_objtable_collapse(slsp->slsp_objects, NULL);
 		slskv_destroy(slsp->slsp_objects);
 	}

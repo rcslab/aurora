@@ -1179,16 +1179,25 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	 * XXX Why? This means we would get a different vnode every time
 	 * we try to open the metanode.
 	 */
+	*vpp = NULL;
 	if (ino != SLOS_INODES_ROOT) {
-		error = vfs_hash_insert(vp, ino, 0, td, &none, NULL, NULL);
-		if (error || none != NULL) {
-			DEBUG("Problem with vfs hash insert");
+		/*
+		 * Try to insert the new node into the table. We might have been
+		 * beaten to it by another process, in which case we reuse their
+		 * fresh vnode for the inode.
+		 */
+		error = vfs_hash_insert(
+		    vp, ino, LK_EXCLUSIVE, td, vpp, NULL, NULL);
+		if (error != 0) {
 			*vpp = NULL;
 			return (error);
 		}
 	}
 	DEBUG2("vget(%p) ino = %ld", vp, ino);
-	*vpp = vp;
+	/* If we weren't beaten to it, propagate the new node to the caller. */
+	if (*vpp == NULL)
+		*vpp = vp;
+
 	return (0);
 }
 

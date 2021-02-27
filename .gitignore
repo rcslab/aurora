@@ -24,6 +24,7 @@ tests/posixshm/posixshm
 tests/posix/posix
 tests/print/print
 tests/pymetro/pymetro
+tests/pymetro-partition/pymetro-partition
 tests/register/register
 tests/selfie/selfie
 tests/sharemap/sharemap
