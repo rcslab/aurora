@@ -101,20 +101,29 @@ slskv_zone_fini(void *mem, int size)
 int
 slskv_init(void)
 {
-	slskv_zone = uma_zcreate("SLS tables", sizeof(struct slskv_table),
+	int error;
+
+	slskv_zone = uma_zcreate("slstable", sizeof(struct slskv_table),
 	    slskv_zone_ctor, slskv_zone_dtor, slskv_zone_init, slskv_zone_fini,
 	    UMA_ALIGNOF(struct slskv_table), 0);
 	if (slskv_zone == NULL)
 		return (ENOMEM);
 
-	slskvpair_zone = uma_zcreate("SLS table pairs",
-	    sizeof(struct slskv_pair), NULL, NULL, NULL, NULL,
-	    UMA_ALIGNOF(struct slskv_pair), 0);
+	error = sls_zonewarm(slskv_zone);
+	if (error != 0)
+		printf("WARNING: Zone slstable not warmed up\n");
+
+	slskvpair_zone = uma_zcreate("slkvpair", sizeof(struct slskv_pair),
+	    NULL, NULL, NULL, NULL, UMA_ALIGNOF(struct slskv_pair), 0);
 	if (slskvpair_zone == NULL) {
 		uma_zdestroy(slskv_zone);
 		slskv_zone = NULL;
 		return (ENOMEM);
 	}
+
+	error = sls_zonewarm(slskvpair_zone);
+	if (error != 0)
+		printf("WARNING: Zone slskvpair not warmed up\n");
 
 	return (0);
 }

@@ -242,7 +242,9 @@ sls_swapderef(void)
 	SLS_UNLOCK();
 }
 
-#define SLSREST_ZONEWARM (1024)
+#define SLS_ZONEWARM (1024)
+int sls_zonewarm(uma_zone_t zone);
+
 int slsrest_zoneinit(void);
 void slsrest_zonefini(void);
 

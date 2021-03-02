@@ -247,33 +247,17 @@ slsrest_zone_fini(void *mem, int size)
 int
 slsrest_zoneinit(void)
 {
-	struct slsrest_data **warmdata;
 	int error;
-	int i;
 
-	slsrest_zone = uma_zcreate("SLS tables", sizeof(struct slsrest_data),
+	slsrest_zone = uma_zcreate("slsrest", sizeof(struct slsrest_data),
 	    slsrest_zone_ctor, slsrest_zone_dtor, slsrest_zone_init,
 	    slsrest_zone_fini, UMA_ALIGNOF(struct slsrest_data), 0);
 	if (slsrest_zone == NULL)
 		return (ENOMEM);
 
-	/* Warm up the zone by creating and then freeing structures. */
-	warmdata = malloc(
-	    sizeof(**warmdata) * SLSREST_ZONEWARM, M_SLSMM, M_WAITOK | M_ZERO);
-
-	/* Initialize a certain number of items in the zone. */
-	for (i = 0; i < SLSREST_ZONEWARM; i++) {
-		warmdata[i] = uma_zalloc(slsrest_zone, M_WAITOK);
-		if (warmdata[i] == NULL) {
-			error = ENOMEM;
-			break;
-		}
-	}
-
-	/* Free them. The items are still warm after freeing. */
-	for (i = 0; i < SLSREST_ZONEWARM; i++)
-		uma_zfree(slsrest_zone, warmdata[i]);
-	free(warmdata, M_SLSMM);
+	error = sls_zonewarm(slsrest_zone);
+	if (error != 0)
+		printf("WARNING: Zone slsrest not warmed up\n");
 
 	return (0);
 }
