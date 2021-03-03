@@ -746,9 +746,6 @@ slsrest_metadata(void *args)
 	SLS_UNLOCK();
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Single threading");
-	/* Restore the process in a stopped state if needed. */
-	if (rest_stopped == 1)
-		kern_psignal(p, SIGSTOP);
 
 	PROC_UNLOCK(p);
 
@@ -827,8 +824,11 @@ slsrest_metadata(void *args)
 	SDT_PROBE1(sls, , slsrest_metadata, , "Fixing up the tty");
 	PROC_LOCK(p);
 	thread_single_end(p, SINGLE_BOUNDARY);
+	if (rest_stopped == 1)
+		kern_psignal(p, SIGSTOP);
 	PROC_UNLOCK(p);
 
+	/* Restore the process in a stopped state if needed. */
 	SDT_PROBE1(sls, , slsrest_metadata, , "Ending single threading");
 	kthread_exit();
 
@@ -884,7 +884,6 @@ slsrest_fork(uint64_t daemon, uint64_t rest_stopped, char *buf, size_t buflen,
 		return (error);
 
 	/* The code below is executed only by the original thread. */
-
 	args = malloc(sizeof(*args), M_SLSMM, M_WAITOK);
 	args->buf = buf;
 	args->daemon = daemon;

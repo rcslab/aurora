@@ -57,15 +57,41 @@ run_test()
     else
 	print_fail $NAME
 	ktrdump >> $KTRLOG
-	exit 0
+	exit 1
     fi
 }
 
+stress_test()
+{
+    NAME=`basename $1`
+    print_running $NAME
+    tstart=`date +%s`
+    for i in `seq -s " " 1 100`; do
+	$1 >> $TESTLOG
+	RETVAL=$?
+	if [ $RETVAL -ne 0 ]; then
+	    print_fail $NAME
+	    ktrdump >> $KTRLOG
+	    exit 1
+	fi
+	tstop=`date +%s`
+	echo -n $CLEAR
+	printf "$TFORMAT" $NAME $GREEN "success" `expr $tstop - $tstart`
+    done
+    printf "\n"
+}
+
+
 test_banner()
 {
+    STRESS_SWITCH="OFF"
+    if [ ! -z $STRESS_TEST ]; then
+	STRESS_SWITCH="ON"
+    fi
     echo Build: `uname -sri`
     echo Host: `hostname`
     echo Test started: `date`
+    echo Stress testing: $STRESS_SWITCH
     printf "%-40s   %-9s   %-10s\n" "Test" "Status" "Time"
     echo "-----------------------------------------------------------"
 }
@@ -78,7 +104,7 @@ run_all_tests()
 
     test_banner
     for t in `find $SRCROOT/tests -maxdepth 1 -name \*.sh | sort -n`; do
-	run_test $t
+	    run_test $t
     done
 }
 
@@ -95,7 +121,11 @@ run_tests()
 
     test_banner
     for t in $1; do
-	run_test "$SRCROOT/tests/$t"
+	if [ -z "$STRESS_TEST" ]; then
+	    run_test "$SRCROOT/tests/$t"
+	else
+	    stress_test "$SRCROOT/tests/$t"
+	fi
     done
 }
 

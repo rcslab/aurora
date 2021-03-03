@@ -45,4 +45,6 @@ void slsvm_print_vmspace(struct vmspace *space);
 void slsvm_print_chain(vm_object_t shadow);
 void slsvm_object_scan(void);
 
+void slsvm_pages_dump(struct vmspace *vm, struct slskv_table *table);
+void slsvm_pages_check(struct vmspace *vm, struct slskv_table *table);
 #endif /* _SLSVM_H_ */

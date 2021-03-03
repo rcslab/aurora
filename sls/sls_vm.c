@@ -584,3 +584,72 @@ slsvm_object_scan(void)
 	mtx_unlock(&vm_object_list_mtx);
 	printf("---------\n");
 }
+
+void
+slsvm_pages_dump(struct vmspace *vm, struct slskv_table *table)
+{
+	vm_map_entry_t entry;
+	vm_page_t m;
+	vm_object_t obj;
+	vm_ooffset_t addr, last = 0;
+	vm_map_t map = &vm->vm_map;
+	int error;
+	uintptr_t value;
+
+	for (entry = map->header.next; entry != &map->header;
+	     entry = entry->next) {
+		obj = entry->object.vm_object;
+		if (!OBJT_ISANONYMOUS(obj))
+			continue;
+		TAILQ_FOREACH (m, &obj->memq, listq) {
+			addr = IDX_TO_OFF(m->pindex) - entry->offset +
+			    entry->start;
+
+			if (addr <= last)
+				break;
+			last = addr;
+			value = *((uint64_t *)PHYS_TO_DMAP(m->phys_addr) + 64);
+			error = slskv_add(table, addr, value);
+			if (error != 0)
+				printf("Inserted page %lx twice\n", addr);
+		}
+	}
+}
+
+void
+slsvm_pages_check(struct vmspace *vm, struct slskv_table *table)
+{
+	vm_map_entry_t entry;
+	vm_page_t m;
+	vm_object_t obj;
+	vm_ooffset_t addr, last;
+	vm_map_t map = &vm->vm_map;
+	uintptr_t expected, val;
+	int error;
+
+	for (entry = map->header.next; entry != &map->header;
+	     entry = entry->next) {
+		obj = entry->object.vm_object;
+		if (!OBJT_ISANONYMOUS(obj))
+			continue;
+		TAILQ_FOREACH (m, &obj->memq, listq) {
+			addr = IDX_TO_OFF(m->pindex) - entry->offset +
+			    entry->start;
+			if (addr <= last)
+				break;
+			last = addr;
+			error = slskv_find(table, addr, &val);
+			if (error != 0) {
+				printf("Didn't find page %lx\n", addr);
+				continue;
+			}
+			expected = *(
+			    (uint64_t *)PHYS_TO_DMAP(m->phys_addr) + 64);
+			if (expected != val)
+				printf(
+				    "ERROR: Address %lx should have had %lx, has %lx\n",
+				    addr, val, expected);
+			slskv_del(table, addr);
+		}
+	}
+}

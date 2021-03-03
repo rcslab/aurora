@@ -12,7 +12,7 @@ wait $PID
 if [ $? -ne 0 ];
 then
 	echo "Metropolis mode failed"
-	aurteardown 
+	aurteardown
 	exit 1
 fi
 

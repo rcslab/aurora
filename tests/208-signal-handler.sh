@@ -7,7 +7,7 @@ aursetup
 PID=$!
 sleep 1
 
-slscheckpoint $PID
+slsosdcheckpoint $PID
 if [ $? -ne 0 ];
 then
     echo "Checkpoint failed"
@@ -18,7 +18,7 @@ sleep 1
 kill -SIGUSR1 $PID
 killandwait $PID
 
-slsrestore
+slsosdrestore
 if [ $? -ne 0 ];
 then
     echo "Restore failed"

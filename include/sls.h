@@ -46,4 +46,6 @@ int sls_ffork(int fd);
 int sls_stat(int streamid, struct sls_stat *st);
 int sls_barrier(int streamid);
 
+extern struct slskv_table *megatable;
+
 #endif

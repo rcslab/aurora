@@ -38,10 +38,13 @@ sls_pager_done(struct buf *bp)
 	if (bp->b_npages > 0) {
 		obj = bp->b_pages[0]->object;
 		VM_OBJECT_WLOCK(obj);
+		KASSERT(obj->type != OBJT_DEAD, ("object is dead"));
 
 		for (i = 0; i < bp->b_npages; i++) {
 			KASSERT(
 			    (bp->b_flags & B_INVAL) == 0, ("paging failed"));
+			KASSERT(
+			    bp->b_pages[i]->object == obj, ("wrong object"));
 
 			m = bp->b_pages[i];
 			m->oflags &= ~VPO_SWAPINPROG;
@@ -127,10 +130,9 @@ sls_pager_readbuf(vm_object_t obj, vm_pindex_t pindex, size_t npages)
 	bp->b_data = unmapped_buf;
 	bp->b_npages = npages;
 	bp->b_resid = bp->b_npages * PAGE_SIZE;
-	bp->b_bcount = bp->b_bufsize = bp->b_runningbufspace = bp->b_resid;
+	bp->b_bcount = bp->b_bufsize = bp->b_resid;
 	bp->b_lblkno = pindex + SLOS_OBJOFF;
 	bp->b_iocmd = BIO_READ;
-	atomic_add_long(&runningbufspace, bp->b_runningbufspace);
 
 	sls_pager_done_setup(bp);
 
@@ -192,16 +194,11 @@ sls_pager_writebuf(vm_object_t obj, vm_pindex_t pindex, size_t targetsize)
 		return (NULL);
 	}
 
-	/*
-	 * XXX Check if doing runningbufspace accounting causes performance
-	 * problems. If so, increase it.
-	 */
 	bp->b_data = unmapped_buf;
 	bp->b_npages = npages;
-	bp->b_bcount = bp->b_bufsize = bp->b_runningbufspace = bp->b_resid;
+	bp->b_bcount = bp->b_bufsize = bp->b_resid;
 	bp->b_lblkno = pindex_init + SLOS_OBJOFF;
 	bp->b_iocmd = BIO_WRITE;
-	atomic_add_long(&runningbufspace, bp->b_runningbufspace);
 
 	/* Update stats. */
 	sls_pages_grabbed += bp->b_npages;

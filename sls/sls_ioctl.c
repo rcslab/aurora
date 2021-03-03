@@ -693,14 +693,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		slsm.slsm_cdev = make_dev(
 		    &slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "sls");
 
-#ifdef SLS_TEST
-		printf("Testing slstable component...\n");
-		error = slstable_test();
-		if (error != 0)
-			return (error);
-
-#endif /* SLS_TEST */
-
+		KASSERT(error == 0, ("megatable creation failed"));
 		break;
 
 	case MOD_UNLOAD:
@@ -708,7 +701,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		SLS_LOCK();
 		/* Signal that we're exiting and wait for threads to finish. */
 		slsm.slsm_exiting = 1;
-
 		/* Wait for all operations to end. */
 		while (slsm.slsm_inprog > 0)
 			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);

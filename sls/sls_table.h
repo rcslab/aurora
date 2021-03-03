@@ -29,8 +29,4 @@ void sls_free_rectable(struct slskv_table *rectable);
 
 extern unsigned int sls_async_slos;
 
-#ifdef SLS_TEST
-int slstable_test(void);
-#endif /* SLS_TEST */
-
 #endif /* _SLSTABLE_H_ */
