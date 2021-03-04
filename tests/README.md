@@ -14,7 +14,8 @@ test number, The categories are as follows:
 | :---: | :---------------------------------------------------: |
 | 0	| Basic module insertion and removal			|
 | 1	| SLFS filesystem					|
-| 2	| SLS checkpointing					|
-| 3	| SLOS object store					|
-| 4	| Macro workloads					|
-| 5	| Aurora integrated workloads API usage			|
+| 2	| SLS microbenchmarks					|
+| 3	| Metropolis microbenchmarks				|
+| 4	| Performance microbenchmarks				|
+| 5	| Aurora macrobenchmarks				|
+| 6	| Metropolis macrobenchmarks				|

@@ -1,6 +1,9 @@
+#!/usr/sbin/dtrace -s
+
 #pragma D option quiet
 int restore_start, last_restore_event;
 int proc_restore_start, proc_last_restore_event;
+int restore_start;
 
 BEGIN
 {
@@ -26,6 +29,16 @@ sls::sls_rest:
 {
     printf("%s\t%d ns\n", stringof(arg0), timestamp - last_restore_event);
     last_restore_event = timestamp;
+}
+
+sls::slsrest_start:
+{
+    restore_start = timestamp;
+}
+
+sls::slsrest_end:
+{
+    printf("Restore latency %d ns\n", timestamp - restore_start);
 }
 
 END

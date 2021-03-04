@@ -68,6 +68,8 @@
 
 SDT_PROBE_DEFINE1(sls, , sls_rest, , "char *");
 SDT_PROBE_DEFINE1(sls, , slsrest_metadata, , "char *");
+SDT_PROBE_DEFINE0(sls, , slsrest_start, );
+SDT_PROBE_DEFINE0(sls, , slsrest_end, );
 
 static uma_zone_t slsrest_zone;
 
@@ -713,8 +715,7 @@ struct slsrest_metadata_args {
 /*
  * Restore a process' local data (threads, VM map, file descriptor table).
  */
-static void
-slsrest_metadata(void *args)
+static void __attribute__((noinline)) slsrest_metadata(void *args)
 {
 	struct slsrest_data *restdata;
 	struct proc *p = curproc;
@@ -829,6 +830,7 @@ slsrest_metadata(void *args)
 	if (rest_stopped == 1)
 		kern_psignal(p, SIGSTOP);
 	PROC_UNLOCK(p);
+	SDT_PROBE0(sls, , slsrest_end, );
 
 	/* Restore the process in a stopped state if needed. */
 	SDT_PROBE1(sls, , slsrest_metadata, , "Ending single threading");
@@ -1093,6 +1095,7 @@ sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
 	int error;
 
 	/* Get the record table from the appropriate backend. */
+	SDT_PROBE0(sls, , slsrest_start, );
 
 	/* Bring in the checkpoints from the backend. */
 	restdata = uma_zalloc(slsrest_zone, M_WAITOK);
