@@ -6,7 +6,7 @@ installminroot
 
 # Like test 206 (file), but using the SLOS as a root filesystem.
 cp "./mmap/mmap" "$MNT/mmap"
-chroot "$MNT" "/mmap" / file > /dev/null 2> /dev/null &
+chroot "$MNT" "/mmap" / anon > /dev/null 2> /dev/null &
 PID=$!
 sleep 1
 
@@ -38,7 +38,6 @@ then
     exit 1
 fi
 
-rm "$MNT/testfile"
 aurteardown
 if [ $? -ne 0 ]; then
     echo "Failed to tear down Aurora"

@@ -623,6 +623,8 @@ slsrest_ttyfixup(struct proc *p)
 	}
 	FILEDESC_XUNLOCK(p->p_fd);
 
+	fdrop(pttyfp, td);
+
 	return (0);
 
 error:

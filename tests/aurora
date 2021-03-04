@@ -92,15 +92,19 @@ aurunstripe()
 
 aursetup()
 {
-    loadmod
+    loadslos
     #finddisk
     slsnewfs
     slsmount
+    mkdir -p $MNT/dev
+    mount -t devfs devfs $MNT/dev
+    loadsls
 }
 
 aurteardown()
 {
     unloadsls
+    umount $MNT/dev
     slsunmount
     unloadslos
 }

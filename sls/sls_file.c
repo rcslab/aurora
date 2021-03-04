@@ -860,12 +860,6 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc *info,
 
 	/* Go into the new root and set it as such. */
 	VOP_LOCK(rdir, LK_EXCLUSIVE);
-	error = change_dir(rdir, td);
-	if (error != 0) {
-		VOP_UNLOCK(rdir, 0);
-		return error;
-	}
-
 	error = pwd_chroot(td, rdir);
 	VOP_UNLOCK(rdir, 0);
 	if (error != 0)

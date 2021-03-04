@@ -2,9 +2,21 @@
 
 . aurora
 
-aursetup
+loadslos
 if [ $? -ne 0 ]; then
-    echo "Failed to set up Aurora"
+    echo "Failed to load the SLOS"
+    exit 1
+fi
+
+slsnewfs
+if [ $? -ne 0 ]; then
+    echo "Failed to create the SLSFS"
+    exit 1
+fi
+
+slsmount
+if [ $? -ne 0 ]; then
+    echo "Failed to mount Aurora"
     exit 1
 fi
 
@@ -23,9 +35,15 @@ do
 	fi
 done
 
-aurteardown
+slsunmount
 if [ $? -ne 0 ]; then
-    echo "Failed to tear down Aurora"
+    echo "Failed to unmount the SLSFS"
+    exit 1
+fi
+
+unloadslos
+if [ $? -ne 0 ]; then
+    echo "Failed to unload the SLOS"
     exit 1
 fi
 
