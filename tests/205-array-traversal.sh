@@ -30,16 +30,9 @@ then
     exit 1
 fi
 
-sleep 1
-killandwait $!
+REST=$!
 
-EXIT=$?
-# Code 143 is exiting with SIGTERM
-if [ $EXIT -ne 0 -a $EXIT -ne 143 ];
-then
-    echo "Process exited with $EXIT"
-    exit 1
-fi
+sleep 1
 
 aurteardown
 if [ $? -ne 0 ]; then
@@ -47,4 +40,12 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-exit $?
+wait $REST
+EXIT=$?
+if [ $EXIT -ne 0 -a $EXIT -ne 9 ];
+then
+    echo "Process exited with $EXIT"
+    exit 1
+fi
+
+exit 0

@@ -28,20 +28,21 @@ then
     exit 1
 fi
 
-sleep 1
-killall dd
-wait $!
+REST=$!
 
-EXIT=$?
-if [ $EXIT -ne 0 -a $EXIT -ne 15 ];
-then
-    echo "Process exited with $EXIT"
-    exit 1
-fi
+sleep 1
 
 aurteardown
 if [ $? -ne 0 ]; then
     echo "Failed to tear down Aurora"
+    exit 1
+fi
+
+wait $REST
+EXIT=$?
+if [ $EXIT -ne 0 -a $EXIT -ne 9 ];
+then
+    echo "Process exited with $EXIT"
     exit 1
 fi
 

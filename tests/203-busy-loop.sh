@@ -25,21 +25,21 @@ then
     exit 1
 fi
 
+REST=$!
 
 sleep 1
-pkill compute
-wait $!
-EXIT=$?
-# 15 is exiting with SIGTERM
-if [ $EXIT -ne 0 -a $EXIT -ne 15 ];
-then
-    echo "Process exited with $EXIT"
-    exit 1
-fi
 
 aurteardown
 if [ $? -ne 0 ]; then
     echo "Failed to tear down Aurora"
+    exit 1
+fi
+
+wait $REST
+EXIT=$?
+if [ $EXIT -ne 0 -a $EXIT -ne 9 ];
+then
+    echo "Process exited with $EXIT"
     exit 1
 fi
 

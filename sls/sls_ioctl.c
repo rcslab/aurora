@@ -27,6 +27,7 @@
 #include "sls_kv.h"
 #include "sls_metropolis.h"
 #include "sls_pager.h"
+#include "sls_syscall.h"
 #include "sls_table.h"
 #include "sls_vm.h"
 
@@ -76,72 +77,74 @@ sls_zonewarm(uma_zone_t zone)
 	return (error);
 }
 
-/* Add a process into Aurora. */
-void
-slsm_procadd(struct proc *p)
+static bool
+sls_proc_insls(struct proc *p)
 {
 	struct proc *aurp;
 
 	SLS_ASSERT_LOCKED();
-	PROC_LOCK_ASSERT(p, MA_OWNED);
 
 	/* Check if we're already in Aurora. */
 	LIST_FOREACH (aurp, &slsm.slsm_plist, p_aurlist) {
 		if (aurp == p)
-			return;
+			return (true);
 	}
+
+	return (false);
+}
+
+/* Add a process into Aurora. */
+void
+sls_procadd(uint64_t oid, struct proc *p, bool metropolis)
+{
+	SLS_ASSERT_LOCKED();
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+
+	/* Check if we're already in Aurora. */
+	if (sls_proc_insls(p))
+		return;
+
+	p->p_auroid = oid;
+	p->p_sysent = &slssyscall_sysvec;
+	if (metropolis)
+		p->p_sysent = &slsmetropolis_sysvec;
 
 	LIST_INSERT_HEAD(&slsm.slsm_plist, p, p_aurlist);
 }
 
 /* Remove a process from Aurora. */
 void
-slsm_procremove(struct proc *p)
+sls_procremove(struct proc *p)
 {
-	struct proc *aurp, *tmp;
 
 	SLS_ASSERT_LOCKED();
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 
 	/* Check if we're already in Aurora. */
-	LIST_FOREACH_SAFE (aurp, &slsm.slsm_plist, p_aurlist, tmp) {
-		if (aurp == p) {
-			LIST_REMOVE(p, p_aurlist);
-			return;
-		}
-	}
+	if (!sls_proc_insls(p))
+		return;
+
+	LIST_REMOVE(p, p_aurlist);
+	p->p_auroid = 0;
+
+	return;
 }
 
 static int
-slsm_prockillall(void)
+sls_prockillall(void)
 {
-	struct thread *td = curthread;
 	struct proc *p, *tmp;
-	int status;
-	int error;
 
 	/* Wait for all the children to be done. */
 	LIST_FOREACH_SAFE (p, &slsm.slsm_plist, p_aurlist, tmp) {
-		/*
-		 * Kill the process and reparent it to us. That way we can wait
-		 * for it to be destroyed.
-		 */
-		sx_xlock(&proctree_lock);
+		/* Kill the process and wait for it. */
 		PROC_LOCK(p);
-		proc_reparent(p, curproc, true);
 		kern_psignal(p, SIGKILL);
 		PROC_UNLOCK(p);
-		sx_xunlock(&proctree_lock);
 
-		/* Poll for the process to exit. Can't do much if it fails.  */
-		error = kern_wait(
-		    td, p->p_pid, &status, WEXITED | WNOHANG, NULL);
-		if (error != 0) {
-			printf("Error %d\n", error);
-			return (error);
-		}
+		while (sls_proc_insls(p))
+			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
 
-		KASSERT(WIFEXITED(status), ("Process did not exit"));
 		/*
 		 * There is no need to remove the processes from the list, they
 		 * remove themselves when exiting.
@@ -149,6 +152,88 @@ slsm_prockillall(void)
 	}
 
 	return (0);
+}
+
+/*
+ * Called by the initial Metropolis function. Replaces the syscall vector with
+ * one that has overloaded execve() and accept() calls. The accept() call is
+ * really what we are after here, since it is used to demarcate the point in
+ * which we checkpoint the function. We also overload execve(), which normally
+ * override the system call vector, and fork(), so that new processes
+ * dynamically enter themselves into the partition.
+ *
+ * The initial process entering Metropolis mode is NOT in Metropolis. This
+ * allows us to use it to set up a new environment for each new Metropolis
+ * instance.
+ */
+static int
+sls_metropolis(struct sls_metropolis_args *args)
+{
+	struct proc *p = curthread->td_proc;
+	struct slspart *slsp;
+
+	SLS_LOCK();
+	if (SLS_EXITING()) {
+		SLS_UNLOCK();
+		return (ENODEV);
+	}
+
+	/* Check if the partition actually exists. */
+	slsp = slsp_find(args->oid);
+	if (slsp == NULL) {
+		SLS_UNLOCK();
+		return (EINVAL);
+	}
+
+	slsp_deref(slsp);
+
+	/* Add the process in Aurora. */
+	PROC_LOCK(p);
+	/* The process isn't being checkpointed, but is in the SLS. */
+	sls_procadd(args->oid, p, true);
+	PROC_UNLOCK(p);
+	SLS_UNLOCK();
+
+	return (0);
+}
+
+/*
+ * Create a new Metropolis process, handing it off a connected socket in the
+ * process.
+ */
+static int
+sls_metropolis_spawn(struct sls_metropolis_spawn_args *args)
+{
+	struct sls_restore_args rest_args;
+	struct thread *td = curthread;
+	struct slsmetr *slsmetr;
+	struct slspart *slsp;
+	int error;
+
+	slsp = slsp_find(args->oid);
+	if (slsp == NULL)
+		return (EINVAL);
+	slsmetr = &slsp->slsp_metr;
+
+	/*
+	 * Get the new connected socket, save it in the partition. This call
+	 * also fills in any information the restore process might need.
+	 */
+	error = kern_accept4(td, args->s, &slsmetr->slsmetr_sa,
+	    &slsmetr->slsmetr_namelen, slsmetr->slsmetr_flags,
+	    &slsmetr->slsmetr_sockfp);
+	slsp_deref(slsp);
+	if (error != 0)
+		return (error);
+
+	rest_args = (struct sls_restore_args) {
+		.oid = args->oid,
+		.daemon = 0,
+		.rest_stopped = 0,
+	};
+
+	/* Fully restore the partition. */
+	return (sls_restore(&rest_args));
 }
 
 /*
@@ -313,9 +398,11 @@ sls_attach(struct sls_attach_args *args)
 		return (error);
 	}
 
+	SLS_LOCK();
 	PROC_LOCK(p);
-	p->p_auroid = args->oid;
+	sls_procadd(args->oid, p, false);
 	PROC_UNLOCK(p);
+	SLS_UNLOCK();
 
 	PRELE(p);
 	return (0);
@@ -686,8 +773,9 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		sls_pager_register();
 
 		/* Construct the system call vector. */
-		sls_initsysvec();
-		slsmetr_exit_hook = slsmetr_exit_procremove;
+		slssyscall_initsysvec();
+		slsmetropolis_initsysvec();
+		sls_exit_hook = sls_exit_procremove;
 
 		/* Make the SLS available to userspace. */
 		slsm.slsm_cdev = make_dev(
@@ -705,14 +793,12 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		while (slsm.slsm_inprog > 0)
 			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
 
-		SLS_UNLOCK();
 
 		/* Kill all processes in Aurora. This call can sleep. */
-		error = slsm_prockillall();
+		error = sls_prockillall();
 		if (error != 0)
 			return (EBUSY);
 
-		SLS_LOCK();
 		/* Wait for all operations to end. */
 		while (!LIST_EMPTY(&slsm.slsm_plist))
 			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
@@ -746,8 +832,9 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		if (slsm.slsm_exiting == 0)
 			return (EINVAL);
 
-		slsmetr_exit_hook = NULL;
-		sls_finisysvec();
+		sls_exit_hook = NULL;
+		slsmetropolis_finisysvec();
+		slssyscall_finisysvec();
 
 		/*
 		 * Destroy the device, wait for all ioctls in progress. We do

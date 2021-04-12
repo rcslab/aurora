@@ -738,19 +738,19 @@ static void __attribute__((noinline)) slsrest_metadata(void *args)
 
 	free(args, M_SLSMM);
 
-	/* We always work on the current process. */
 	SLS_LOCK();
 	PROC_LOCK(p);
+
+	/* We always work on the current process. */
 	thread_single(p, SINGLE_BOUNDARY);
 
-	/* Insert new process into Aurora. */
-	p->p_auroid = restdata->slsp->slsp_oid;
-	slsm_procadd(p);
-	SLS_UNLOCK();
+	/* Insert the new process into Aurora. */
+	sls_procadd(restdata->slsp->slsp_oid, p, false);
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Single threading");
 
 	PROC_UNLOCK(p);
+	SLS_UNLOCK();
 
 	error = slsrest_dovmspace(p, &buf, &buflen, restdata);
 	if (error != 0)

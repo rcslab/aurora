@@ -29,16 +29,9 @@ then
     exit 1
 fi
 
+REST=$!
+
 sleep 1
-pkill print
-wait $!
-EXIT=$?
-# 15, exiting with SIGTERM
-if [ $EXIT -ne 0 -a $EXIT -ne 15 ];
-then
-    echo "Process exited with $EXIT"
-    exit 1
-fi
 
 aurteardown
 if [ $? -ne 0 ]; then
@@ -46,4 +39,12 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-exit $?
+wait $REST
+EXIT=$?
+if [ $EXIT -ne 0 -a $EXIT -ne 9 ];
+then
+    echo "Process exited with $EXIT"
+    exit 1
+fi
+
+exit 0

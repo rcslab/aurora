@@ -252,10 +252,8 @@ int sls_checkpoint(struct sls_checkpoint_args *args);
 int sls_attach(struct sls_attach_args *args);
 int sls_restore(struct sls_restore_args *args);
 
-void slsm_procadd(struct proc *p);
-void slsm_procremove(struct proc *p);
-void slsmetr_exit_procremove(struct proc *p);
-extern void (*slsmetr_exit_hook)(struct proc *p);
+void sls_procadd(uint64_t oid, struct proc *p, bool metropolis);
+void sls_procremove(struct proc *p);
 
 MALLOC_DECLARE(M_SLSMM);
 MALLOC_DECLARE(M_SLSREC);
