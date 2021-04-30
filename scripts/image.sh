@@ -99,5 +99,6 @@ return
 pkg install -y bash;
 pkg install -y python;
 pkg install -y redis;
+pkg install -y memcached;
 
 exit;
