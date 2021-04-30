@@ -48,10 +48,6 @@
 #include "sls_internal.h"
 #include "sls_vnode.h"
 
-SDT_PROBE_DEFINE(sls, , , namestart);
-SDT_PROBE_DEFINE(sls, , , nameend);
-SDT_PROBE_DEFINE(sls, , , nameerr);
-
 /*
  * Check if the vnode is a TTY.
  */

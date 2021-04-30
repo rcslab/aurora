@@ -98,7 +98,7 @@ main(int argc, char *argv[])
 	}
 
 	attr = (struct sls_attr) {
-		.attr_target = SLS_MEM,
+		.attr_target = SLS_OSD,
 		.attr_mode = SLS_FULL,
 		.attr_period = 0,
 		.attr_flags = SLSATTR_IGNUNLINKED,
@@ -115,18 +115,10 @@ main(int argc, char *argv[])
 		exit(0);
 	}
 
-	for (i = 0; i < 2; i++) {
+	for (i = 0; i < 1; i++) {
 		checkpoint_round(i);
 		sleep(3);
 	}
-
-	/*
-	error = sls_partdel(OID);
-	if (error != 0) {
-		fprintf(stderr, "sls_partdel returned %d\n", error);
-		exit(0);
-	}
-	*/
 
 	return (0);
 }

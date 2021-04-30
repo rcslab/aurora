@@ -37,7 +37,7 @@ int slsrest_pts(struct slskv_table *fptable, struct slspts *slspts, int *fdp);
 int slsckpt_filedesc(
     struct proc *p, struct slsckpt_data *sckpt_data, struct sbuf *sb);
 int slsrest_filedesc(struct proc *p, struct slsfiledesc *slsfiledesc,
-    struct slskv_table *fdtable, struct slsrest_data *restdata);
+    struct slsrest_data *restdata);
 
 int slsrest_file(
     void *slsbacker, struct slsfile *info, struct slsrest_data *restdata);

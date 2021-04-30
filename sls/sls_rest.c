@@ -389,18 +389,18 @@ static int
 slsrest_dofiledesc(
     struct proc *p, char **bufp, size_t *buflenp, struct slsrest_data *restdata)
 {
+	struct slsfiledesc *slsfiledesc;
 	int error = 0;
-	struct slsfiledesc slsfiledesc;
-	struct slskv_table *fdtable;
+	int ret;
 
-	error = slsload_filedesc(&slsfiledesc, bufp, buflenp, &fdtable);
+	error = slsload_filedesc(&slsfiledesc, bufp, buflenp);
 	if (error != 0)
 		return (error);
 
-	error = slsrest_filedesc(p, &slsfiledesc, fdtable, restdata);
-	slskv_destroy(fdtable);
+	ret = slsrest_filedesc(p, slsfiledesc, restdata);
+	free(slsfiledesc, M_SLSMM);
 
-	return (error);
+	return (ret);
 }
 
 static int

@@ -39,6 +39,7 @@ struct sls_metadata {
 	struct cv slsm_exitcv; /* CV for waiting on users to exit */
 	int slsm_swapobjs;     /* Number of Aurora swap objects */
 	int slsm_inprog;       /* Operations in progress */
+	struct taskqueue *slsm_tabletq; /* Write taskqueue */
 	LIST_HEAD(, proc) slsm_plist; /* List of processes in Aurora */
 };
 

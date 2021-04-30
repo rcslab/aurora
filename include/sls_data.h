@@ -149,7 +149,9 @@ struct slsfiledesc {
 	/* TODO jdir */
 
 	u_short fd_cmask;
-	int fd_holdcnt;
+	uint64_t fd_lastfile;
+	/* Needs to be last to ease (de)serialization is trivial. */
+	uint64_t fd_table[0];
 };
 
 #define SLSPIPE_ID 0x736c7499

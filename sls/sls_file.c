@@ -233,9 +233,8 @@ slsckpt_getposixshm(
  * belong to exactly one open file when anonymous. That means
  * that we can safely store them together.
  */
-static int
-slsckpt_file(struct proc *p, struct file *fp, uint64_t *fpslsid,
-    struct slsckpt_data *sckpt_data)
+static int __attribute__((noinline)) slsckpt_file(struct proc *p,
+    struct file *fp, uint64_t *fpslsid, struct slsckpt_data *sckpt_data)
 {
 	struct sbuf *sb, *oldsb;
 	struct sls_record *rec;
@@ -708,9 +707,15 @@ slsckpt_file_supported(struct file *fp)
 		so = (struct socket *)fp->f_data;
 
 		/* IPv4 and UNIX sockets are allowed. */
-		if ((so->so_proto->pr_domain->dom_family == AF_INET) ||
-		    (so->so_proto->pr_domain->dom_family == AF_UNIX))
+		if (so->so_proto->pr_domain->dom_family == AF_UNIX)
 			return (1);
+
+		/* XXX Do the fast thing for connected sockets for now. */
+		if (so->so_proto->pr_domain->dom_family == AF_INET) {
+			if (so->so_type == SOCK_STREAM)
+				return (SOLISTENING(so));
+			return (1);
+		}
 
 		/* Anything else isn't. */
 		return (0);
@@ -753,23 +758,13 @@ int
 slsckpt_filedesc(
     struct proc *p, struct slsckpt_data *sckpt_data, struct sbuf *sb)
 {
-	struct slsfiledesc slsfdp;
-	struct slskv_table *fdtable;
-	struct filedesc *fdp;
-	uint64_t slsid;
+	struct filedesc *fdp = p->p_fd;
+	struct slsfiledesc *slsfdp;
+	uint64_t fd_size;
 	struct file *fp;
 	int error = 0;
 	int fd;
 
-	/*
-	 * The table of file descriptors to be created. We use this instead
-	 * of an array for the file descriptor table.
-	 */
-	error = slskv_create(&fdtable);
-	if (error != 0)
-		return (error);
-
-	fdp = p->p_fd;
 
 	error = slsckpt_vnode(fdp->fd_cdir, sckpt_data);
 	if (error != 0)
@@ -779,57 +774,59 @@ slsckpt_filedesc(
 	if (error != 0)
 		goto done;
 
-	slsfdp.cdir = (uint64_t)fdp->fd_cdir;
-	slsfdp.rdir = (uint64_t)fdp->fd_rdir;
-	slsfdp.fd_cmask = fdp->fd_cmask;
-	slsfdp.magic = SLSFILEDESC_ID;
+	/* The end of the struct is a variable length array. */
+	fd_size = sizeof(*slsfdp) * sizeof(uint64_t) * (fdp->fd_lastfile - 1);
+	slsfdp = malloc(fd_size, M_SLSMM, M_WAITOK | M_ZERO);
+
+	slsfdp->cdir = (uint64_t)fdp->fd_cdir;
+	slsfdp->rdir = (uint64_t)fdp->fd_rdir;
+	slsfdp->fd_cmask = fdp->fd_cmask;
+	slsfdp->fd_lastfile = fdp->fd_lastfile;
+	slsfdp->magic = SLSFILEDESC_ID;
 
 	FILEDESC_XLOCK(fdp);
 
-	error = sbuf_bcat(sb, (void *)&slsfdp, sizeof(slsfdp));
-	if (error != 0)
-		goto done;
-
 	/* Scan the entries of the table for active file descriptors. */
 	for (fd = 0; fd <= fdp->fd_lastfile; fd++) {
-		if (!fdisused(fdp, fd))
+		if (fd >= 20)
+			break;
+		if (!fdisused(fdp, fd)) {
 			continue;
+		}
 
 		DEBUG1("Checkpointing fd %d", fd);
 		KASSERT((fdp == p->p_fd), ("wrong file descriptor table"));
 		fp = FDTOFP(p, fd);
 
 		/* Check if the file is currently supported by SLS. */
-		if (!slsckpt_file_supported(fp))
+		if (!slsckpt_file_supported(fp)) {
 			continue;
+		}
 
 		/* Checkpoint the file structure itself. */
-		error = slsckpt_file(p, fp, &slsid, sckpt_data);
-		if (error != 0)
-			goto done;
-
-		/* Add the fd - slsid pair to the table. */
-		error = slskv_add(fdtable, fd, (uintptr_t)slsid);
+		error = slsckpt_file(p, fp, &slsfdp->fd_table[fd], sckpt_data);
 		if (error != 0)
 			goto done;
 	}
 
-	/* Add the table to the descriptor table record. */
-	error = slskv_serial(fdtable, sb);
+	/* Add the size of the struct before the struct itself. */
+	error = sbuf_bcat(sb, (void *)&fd_size, sizeof(fd_size));
+	if (error != 0)
+		goto done;
+
+	error = sbuf_bcat(sb, (void *)slsfdp, fd_size);
 	if (error != 0)
 		goto done;
 
 done:
 	FILEDESC_XUNLOCK(fdp);
 
-	slskv_destroy(fdtable);
-
 	return (error);
 }
 
 int
-slsrest_filedesc(struct proc *p, struct slsfiledesc *info,
-    struct slskv_table *fdtable, struct slsrest_data *restdata)
+slsrest_filedesc(
+    struct proc *p, struct slsfiledesc *info, struct slsrest_data *restdata)
 {
 	struct thread *td = curthread;
 	struct filedesc *newfdp;
@@ -876,8 +873,10 @@ slsrest_filedesc(struct proc *p, struct slsfiledesc *info,
 	newfdp->fd_cmask = info->fd_cmask;
 
 	/* Attach the appropriate open files to the descriptor table. */
-	KV_FOREACH_POP(fdtable, fd, slsid)
-	{
+	for (fd = 0; fd <= info->fd_lastfile; fd++) {
+		slsid = info->fd_table[fd];
+		if (slsid == 0)
+			continue;
 
 		/* Get the restored open file from the ID. */
 		error = slskv_find(restdata->fptable, slsid, (uint64_t *)&fp);
