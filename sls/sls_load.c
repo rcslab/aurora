@@ -360,25 +360,33 @@ slsload_file(
 }
 
 int
-slsload_filedesc(struct slsfiledesc *filedesc, char **bufp, size_t *bufsizep,
-    struct slskv_table **fdtable)
+slsload_filedesc(struct slsfiledesc **filedescp, char **bufp, size_t *bufsizep)
 {
+	struct slsfiledesc *filedesc;
+	uint64_t fd_size;
 	int error;
 
-	/* General file descriptor */
-	error = sls_info(filedesc, sizeof(*filedesc), bufp, bufsizep);
+	error = sls_info(&fd_size, sizeof(fd_size), bufp, bufsizep);
 	if (error != 0)
 		return (0);
+
+	filedesc = malloc(fd_size, M_SLSMM, M_WAITOK);
+
+	/* General file descriptor */
+	error = sls_info(filedesc, fd_size, bufp, bufsizep);
+	if (error != 0) {
+		free(filedesc, M_SLSMM);
+		return (0);
+	}
 
 	if (filedesc->magic != SLSFILEDESC_ID) {
 		SLS_DBG("magic mismatch, %lx vs %x\n", filedesc->magic,
 		    SLSFILEDESC_ID);
+		free(filedesc, M_SLSMM);
 		return (EINVAL);
 	}
 
-	error = slskv_deserial(*bufp, *bufsizep, fdtable);
-	if (error != 0)
-		return (error);
+	*filedescp = filedesc;
 
 	return (0);
 }

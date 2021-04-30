@@ -20,8 +20,8 @@ int slsload_sysvshm(struct slssysvshm *shm, char **bufp, size_t *bufsizep);
 
 int slsload_file(
     struct slsfile *file, void **data, char **bufp, size_t *bufsizep);
-int slsload_filedesc(struct slsfiledesc *filedesc, char **bufp,
-    size_t *bufsizep, struct slskv_table **fdtable);
+int slsload_filedesc(
+    struct slsfiledesc **filedescp, char **bufp, size_t *bufsizep);
 int slsload_vmspace(struct slsvmspace *vm, struct shmmap_state **shmstate,
     char **bufp, size_t *bufsizep);
 int slsload_sockbuf(
