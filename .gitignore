@@ -102,3 +102,4 @@ criu-results/
 *.gz
 stats.*
 dtraceoutput
+__pycache__
