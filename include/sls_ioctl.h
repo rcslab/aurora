@@ -4,6 +4,10 @@
 #include <sys/ioccom.h>
 #include <sys/sbuf.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* The attributes of a process in the SLS. */
 struct sls_attr {
 	int attr_target; /* Backend into which the process is checkpointed */
@@ -114,4 +118,8 @@ struct sls_metropolis_spawn_args {
 #define SLSATTR_ISCACHEREST(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_CACHEREST))
 #define SLSATTR_ISPREFAULT(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_PREFAULT))
 
+#ifdef __cplusplus
+}
 #endif
+
+#endif /* _SLS_IOCTL_H_ */

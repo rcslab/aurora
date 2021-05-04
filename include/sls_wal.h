@@ -1,6 +1,13 @@
+#ifndef _SLS_WAL_H_
+#define _SLS_WAL_H_
+
 #include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* A write-ahead log for SLS memory transactions. */
 struct sls_wal {
@@ -29,3 +36,9 @@ int sls_wal_close(struct sls_wal *wal);
 
 /* Specify a point at which execution will resume after a crash. */
 int sls_wal_savepoint(struct sls_wal *wal);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // _SLS_WAL_H_

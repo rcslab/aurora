@@ -1,5 +1,5 @@
-#ifndef _SLS_H__
-#define _SLS_H__
+#ifndef _SLS_H_
+#define _SLS_H_
 
 #include <sys/param.h>
 #include <sys/mount.h>
@@ -7,6 +7,10 @@
 #include <stdbool.h>
 
 #include "sls_ioctl.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* Low-level APIs */
 int sls_memsnap(uint64_t oid, void *addr);
@@ -48,4 +52,8 @@ int sls_barrier(int streamid);
 
 extern struct slskv_table *megatable;
 
+#ifdef __cplusplus
+}
 #endif
+
+#endif /* _SLS_H_ */

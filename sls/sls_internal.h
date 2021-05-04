@@ -1,5 +1,5 @@
-#ifndef _SLS_H_
-#define _SLS_H_
+#ifndef _SLS_INTERNAL_H_
+#define _SLS_INTERNAL_H_
 
 #include <sys/param.h>
 #include <sys/condvar.h>
@@ -263,4 +263,4 @@ void sls_procremove(struct proc *p);
 MALLOC_DECLARE(M_SLSMM);
 MALLOC_DECLARE(M_SLSREC);
 
-#endif /* _SLS_H_ */
+#endif /* _SLS_INTERNAL_H_ */
