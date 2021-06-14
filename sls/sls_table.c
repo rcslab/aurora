@@ -60,14 +60,6 @@ uint64_t sls_pages_grabbed = 0;
 uint64_t sls_io_initiated = 0;
 unsigned int sls_async_slos = 1;
 
-/*
- * A list of info structs which can hold data,
- * along with the size of their metadata.
- */
-static uint64_t sls_datastructs[] = {
-	SLOSREC_VMOBJ,
-};
-
 static int
 sls_doio(struct vnode *vp, struct uio *auio)
 {
@@ -139,15 +131,7 @@ sls_record_destroy(struct sls_record *rec)
 static int
 sls_isdata(uint64_t type)
 {
-	int i;
-
-	for (i = 0; i < sizeof(sls_datastructs) / sizeof(*sls_datastructs);
-	     i++) {
-		if (sls_datastructs[i] == type)
-			return (1);
-	}
-
-	return (0);
+	return (type == SLOSREC_VMOBJ);
 }
 
 /*

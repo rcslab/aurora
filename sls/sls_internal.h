@@ -65,6 +65,8 @@ struct slsrest_data {
 	    *objtable; /* Holds the new VM Objects, indexed by ID */
 	struct slskv_table
 	    *proctable; /* Holds the process records, indexed by ID */
+	struct slskv_table
+	    *oldvntable;	     /* The old vnode table that is not used */
 	struct slskv_table *fptable; /* Holds the new files, indexed by ID */
 	struct slskv_table
 	    *kevtable; /* Holds the kevents for a kq, indexed by kq */

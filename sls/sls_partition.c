@@ -506,3 +506,12 @@ slsp_getstate(struct slspart *slsp)
 {
 	return (slsp->slsp_status);
 }
+
+bool
+slsp_rest_from_mem(struct slspart *slsp)
+{
+	if (slsp->slsp_sckpt == NULL)
+		return (false);
+
+	return (slsp->slsp_target == SLS_MEM);
+}

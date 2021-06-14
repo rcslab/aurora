@@ -187,8 +187,11 @@ slsrest_vmentry_anon(
 	 * Set the entry as text if it is backed by a vnode or an object
 	 * shadowing a vnode.
 	 */
-	if (entry->eflags & MAP_ENTRY_VN_EXEC)
+	if (entry->eflags & MAP_ENTRY_VN_EXEC) {
+		KASSERT(entry->object.vm_object != NULL,
+		    ("No VM object backing text entry"));
 		vm_map_entry_set_vnode_text(entry, true);
+	}
 
 out:
 	vm_map_unlock(map);

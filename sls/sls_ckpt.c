@@ -543,7 +543,7 @@ slsckpt_dataregion_dump(struct slsckpt_dataregion_dump_args *args)
 	 * We compact before turning the checkpoint available, because we modify
 	 * the partition's current checkpoint data.
 	 */
-	if ((slsp->slsp_target == SLS_MEM) || (slsp->slsp_target == SLS_DELTA))
+	if ((slsp->slsp_target == SLS_MEM) || (slsp->slsp_mode == SLS_DELTA))
 		slsckpt_compact_single(slsp, sckpt_data);
 	else
 		slsckpt_destroy(sckpt_data, NULL);
@@ -594,7 +594,7 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	 * purposes), we have to have checkpointed the whole partition before
 	 * checkpointing individual regions.
 	 */
-	if ((slsp->slsp_target == SLS_MEM) || (slsp->slsp_target == SLS_DELTA))
+	if ((slsp->slsp_target == SLS_MEM) || (slsp->slsp_mode == SLS_DELTA))
 		if (slsp->slsp_sckpt == NULL)
 			return (EINVAL);
 
