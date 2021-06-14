@@ -107,6 +107,33 @@ slsvm_object_shadow(struct slskv_table *objtable, vm_object_t *objp)
 }
 
 /*
+ * The same as vm_object_shadow, with different refcount handling and return
+ * values. We also always create a shadow, regardless of the refcount.
+ */
+void
+slsvm_forceshadow(vm_object_t shadow, vm_object_t source, vm_ooffset_t offset)
+{
+	/*
+	 * Store the offset into the source object, and fix up the offset into
+	 * the new object.
+	 */
+	shadow->backing_object = source;
+	shadow->backing_object_offset = offset;
+
+	VM_OBJECT_WLOCK(source);
+	shadow->domain = source->domain;
+	LIST_INSERT_HEAD(&source->shadow_head, shadow, shadow_list);
+	source->shadow_count++;
+
+#if VM_NRESERVLEVEL > 0
+	shadow->flags |= source->flags & OBJ_COLORED;
+	shadow->pg_color = (source->pg_color + OFF_TO_IDX(offset)) &
+	    ((1 << (VM_NFREEORDER - 1)) - 1);
+#endif
+	VM_OBJECT_WUNLOCK(source);
+}
+
+/*
  * Collapse the new table into the old one.
  */
 void

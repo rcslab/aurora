@@ -398,7 +398,7 @@ static int __attribute__((noinline)) slsckpt_file(struct proc *p,
 			goto error;
 
 		/* Update the object pointer, possibly shadowing the object. */
-		error = slsckpt_vmobject_shm(
+		error = slsvmobj_checkpoint_shm(
 		    &((struct shmfd *)fp->f_data)->shm_object, sckpt_data);
 		if (error != 0)
 			goto error;

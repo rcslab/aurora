@@ -13,7 +13,6 @@
  */
 int slsload_thread(struct slsthread *slsthread, char **bufp, size_t *bufsizep);
 int slsload_proc(struct slsproc *slsproc, char **bufp, size_t *bufsizep);
-int slsload_vmobject(struct slsvmobject *obj, char **bufp, size_t *bufsizep);
 int slsload_vmentry(struct slsvmentry *entry, char **bufp, size_t *bufsizep);
 int slsload_vnode(struct slsvnode *slsvnode, char **bufp, size_t *bufsizep);
 int slsload_sysvshm(struct slssysvshm *shm, char **bufp, size_t *bufsizep);
@@ -26,5 +25,7 @@ int slsload_vmspace(struct slsvmspace *vm, struct shmmap_state **shmstate,
     char **bufp, size_t *bufsizep);
 int slsload_sockbuf(
     struct mbuf **mp, uint64_t *sbid, char **bufp, size_t *bufsizep);
+
+int sls_info(void *info, size_t infosize, char **bufp, size_t *bufsizep);
 
 #endif /* _SLS_LOAD_H_ */

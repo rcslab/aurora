@@ -10,9 +10,9 @@
 #include "sls_load.h"
 #include "sls_table.h"
 
-int slsckpt_vmobject(vm_object_t obj, struct slsckpt_data *sckpt_data);
-int slsckpt_vmobject_shm(vm_object_t *objp, struct slsckpt_data *sckpt_data);
-int slsrest_vmobject(
-    struct slsvmobject *slsvmobject, struct slsrest_data *restdata);
+int slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt_data);
+int slsvmobj_checkpoint_shm(vm_object_t *objp, struct slsckpt_data *sckpt_data);
+int slsvmobj_restore_all(
+    struct slskv_table *rectable, struct slsrest_data *restdata);
 
 #endif /* _SLS_VMOBJECT_H_ */

@@ -52,7 +52,7 @@ slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 			goto error;
 
 		KASSERT(shmsegs[i].object != NULL, ("segment has no object"));
-		error = slsckpt_vmobject_shm(&shmsegs[i].object, sckpt_data);
+		error = slsvmobj_checkpoint_shm(&shmsegs[i].object, sckpt_data);
 		if (error != 0)
 			goto error;
 	}

@@ -44,7 +44,7 @@
  * Read an info struct from the buffer, if there is enough data,
  * and adjust bufp and bufisizep to account for the read data.
  */
-static int
+int
 sls_info(void *info, size_t infosize, char **bufp, size_t *bufsizep)
 {
 	if (*bufsizep < infosize)
@@ -387,24 +387,6 @@ slsload_filedesc(struct slsfiledesc **filedescp, char **bufp, size_t *bufsizep)
 	}
 
 	*filedescp = filedesc;
-
-	return (0);
-}
-
-int
-slsload_vmobject(struct slsvmobject *obj, char **bufp, size_t *bufsizep)
-{
-	int error;
-
-	error = sls_info(obj, sizeof(*obj), bufp, bufsizep);
-	if (error != 0)
-		return (error);
-
-	if (obj->magic != SLSVMOBJECT_ID) {
-		SLS_DBG(
-		    "magic mismatch %lx vs %x\n", obj->magic, SLSVMOBJECT_ID);
-		return (EINVAL);
-	}
 
 	return (0);
 }

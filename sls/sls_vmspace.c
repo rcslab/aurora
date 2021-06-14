@@ -115,7 +115,7 @@ slsckpt_vmspace(
 	     entry = entry->next) {
 		for (obj = entry->object.vm_object; obj != NULL;
 		     obj = obj->backing_object) {
-			error = slsckpt_vmobject(obj, sckpt_data);
+			error = slsvmobj_checkpoint(obj, sckpt_data);
 			if (error != 0)
 				return (error);
 		}

@@ -30,6 +30,8 @@ void slsvm_objtable_collapse(
     struct slskv_table *objtable, struct slskv_table *newtable);
 int slsvm_procset_shadow(
     slsset *procset, struct slskv_table *table, bool is_fullckpt);
+void slsvm_forceshadow(
+    vm_object_t shadow, vm_object_t source, vm_ooffset_t offset);
 
 void slsvm_object_reftransfer(vm_object_t src, vm_object_t dst);
 int slsvm_object_shadow(struct slskv_table *objtable, vm_object_t *objp);

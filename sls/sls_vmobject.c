@@ -36,7 +36,7 @@
 #include "sls_vnode.h"
 
 int
-slsckpt_vmobject(vm_object_t obj, struct slsckpt_data *sckpt_data)
+slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt_data)
 {
 	struct slsvmobject cur_obj;
 	struct sls_record *rec;
@@ -120,7 +120,7 @@ error:
  * Checkpoint and shadow a VM object backing a POSIX or SYSV memory segment.
  */
 int
-slsckpt_vmobject_shm(vm_object_t *objp, struct slsckpt_data *sckpt_data)
+slsvmobj_checkpoint_shm(vm_object_t *objp, struct slsckpt_data *sckpt_data)
 {
 	vm_object_t obj, shadow;
 	int error;
@@ -151,7 +151,7 @@ slsckpt_vmobject_shm(vm_object_t *objp, struct slsckpt_data *sckpt_data)
 		VM_OBJECT_WUNLOCK(shadow);
 	} else {
 		/* Checkpoint the object. */
-		error = slsckpt_vmobject(obj, sckpt_data);
+		error = slsvmobj_checkpoint(obj, sckpt_data);
 		if (error != 0)
 			return (error);
 
@@ -167,8 +167,8 @@ slsckpt_vmobject_shm(vm_object_t *objp, struct slsckpt_data *sckpt_data)
 	return (0);
 }
 
-int
-slsrest_vmobject(struct slsvmobject *info, struct slsrest_data *restdata)
+static int
+slsvmobj_restore(struct slsvmobject *info, struct slsrest_data *restdata)
 {
 	vm_object_t object;
 	struct vnode *vp;
@@ -236,6 +236,101 @@ slsrest_vmobject(struct slsvmobject *info, struct slsrest_data *restdata)
 	error = slskv_add(restdata->objtable, info->slsid, (uintptr_t)object);
 	if (error != 0)
 		return error;
+
+	return (0);
+}
+
+static int
+slsvmobj_deserialize(struct slsvmobject *obj, char **bufp, size_t *bufsizep)
+{
+	int error;
+
+	error = sls_info(obj, sizeof(*obj), bufp, bufsizep);
+	if (error != 0)
+		return (error);
+
+	if (obj->magic != SLSVMOBJECT_ID) {
+		SLS_DBG(
+		    "magic mismatch %lx vs %x\n", obj->magic, SLSVMOBJECT_ID);
+		return (EINVAL);
+	}
+
+	return (0);
+}
+
+int
+slsvmobj_restore_all(
+    struct slskv_table *rectable, struct slsrest_data *restdata)
+{
+	struct slsvmobject slsvmobject, *slsvmobjectp;
+	vm_object_t parent, object;
+	struct slskv_iter iter;
+	struct sls_record *rec;
+	uint64_t slsid;
+	size_t buflen;
+	char *buf;
+	int error;
+
+	/* First pass; create of find all objects to be used. */
+	KV_FOREACH(rectable, iter, slsid, rec)
+	{
+		buf = (char *)sbuf_data(rec->srec_sb);
+		buflen = sbuf_len(rec->srec_sb);
+
+		if (rec->srec_type != SLOSREC_VMOBJ)
+			continue;
+
+		/* Get the data associated with the object in the table. */
+		error = slsvmobj_deserialize(&slsvmobject, &buf, &buflen);
+		if (error != 0) {
+			KV_ABORT(iter);
+			return (error);
+		}
+
+		/* Restore the object. */
+		error = slsvmobj_restore(&slsvmobject, restdata);
+		if (error != 0) {
+			KV_ABORT(iter);
+			return (error);
+		}
+	}
+
+	/* Second pass; link up the objects to their shadows. */
+	KV_FOREACH(rectable, iter, slsid, rec)
+	{
+
+		if (rec->srec_type != SLOSREC_VMOBJ)
+			continue;
+
+		/*
+		 * Get the object restored for the given info struct.
+		 * We take advantage of the fact that the VM object info
+		 * struct is the first thing in the record to typecast
+		 * the latter into the former, skipping the parse function.
+		 */
+		slsvmobjectp = (struct slsvmobject *)sbuf_data(rec->srec_sb);
+		if (slsvmobjectp->backer == 0)
+			continue;
+
+		error = slskv_find(restdata->objtable, slsvmobjectp->slsid,
+		    (uintptr_t *)&object);
+		if (error != 0) {
+			KV_ABORT(iter);
+			return (error);
+		}
+
+		/* Find a parent for the restored object, if it exists. */
+		error = slskv_find(restdata->objtable,
+		    (uint64_t)slsvmobjectp->backer, (uintptr_t *)&parent);
+		if (error != 0) {
+			KV_ABORT(iter);
+			return (error);
+		}
+
+		vm_object_reference(parent);
+		slsvm_forceshadow(object, parent, slsvmobjectp->backer_off);
+	}
+	SLS_DBG("Restoration of VM Objects\n");
 
 	return (0);
 }

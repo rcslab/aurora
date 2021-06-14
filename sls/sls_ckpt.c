@@ -494,7 +494,7 @@ slsckpt_dataregion_fillckpt(struct slspart *slsp, struct proc *p,
 		return (EINVAL);
 
 	/*Get the metadata of the VM object. */
-	error = slsckpt_vmobject(obj, sckpt_data);
+	error = slsvmobj_checkpoint(obj, sckpt_data);
 	if (error != 0)
 		return (error);
 

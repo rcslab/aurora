@@ -924,109 +924,6 @@ slsrest_fork(uint64_t daemon, uint64_t rest_stopped, char *buf, size_t buflen,
 	return (0);
 }
 
-/*
- * The same as vm_object_shadow, with different refcount handling and return
- * values. We also always create a shadow, regardless of the refcount.
- */
-static void
-slsrest_shadow(vm_object_t shadow, vm_object_t source, vm_ooffset_t offset)
-{
-	/*
-	 * Store the offset into the source object, and fix up the offset into
-	 * the new object.
-	 */
-	shadow->backing_object = source;
-	shadow->backing_object_offset = offset;
-
-	VM_OBJECT_WLOCK(source);
-	shadow->domain = source->domain;
-	LIST_INSERT_HEAD(&source->shadow_head, shadow, shadow_list);
-	source->shadow_count++;
-
-#if VM_NRESERVLEVEL > 0
-	shadow->flags |= source->flags & OBJ_COLORED;
-	shadow->pg_color = (source->pg_color + OFF_TO_IDX(offset)) &
-	    ((1 << (VM_NFREEORDER - 1)) - 1);
-#endif
-	VM_OBJECT_WUNLOCK(source);
-}
-
-static int
-slsrest_dovmobjects(struct slskv_table *rectable, struct slsrest_data *restdata)
-{
-	struct slsvmobject slsvmobject, *slsvmobjectp;
-	vm_object_t parent, object;
-	struct slskv_iter iter;
-	struct sls_record *rec;
-	uint64_t slsid;
-	size_t buflen;
-	char *buf;
-	int error;
-
-	/* First pass; create of find all objects to be used. */
-	KV_FOREACH(rectable, iter, slsid, rec)
-	{
-		buf = (char *)sbuf_data(rec->srec_sb);
-		buflen = sbuf_len(rec->srec_sb);
-
-		if (rec->srec_type != SLOSREC_VMOBJ)
-			continue;
-
-		/* Get the data associated with the object in the table. */
-		error = slsload_vmobject(&slsvmobject, &buf, &buflen);
-		if (error != 0) {
-			KV_ABORT(iter);
-			return (error);
-		}
-
-		/* Restore the object. */
-		error = slsrest_vmobject(&slsvmobject, restdata);
-		if (error != 0) {
-			KV_ABORT(iter);
-			return (error);
-		}
-	}
-
-	/* Second pass; link up the objects to their shadows. */
-	KV_FOREACH(rectable, iter, slsid, rec)
-	{
-
-		if (rec->srec_type != SLOSREC_VMOBJ)
-			continue;
-
-		/*
-		 * Get the object restored for the given info struct.
-		 * We take advantage of the fact that the VM object info
-		 * struct is the first thing in the record to typecast
-		 * the latter into the former, skipping the parse function.
-		 */
-		slsvmobjectp = (struct slsvmobject *)sbuf_data(rec->srec_sb);
-		if (slsvmobjectp->backer == 0)
-			continue;
-
-		error = slskv_find(restdata->objtable, slsvmobjectp->slsid,
-		    (uintptr_t *)&object);
-		if (error != 0) {
-			KV_ABORT(iter);
-			return (error);
-		}
-
-		/* Find a parent for the restored object, if it exists. */
-		error = slskv_find(restdata->objtable,
-		    (uint64_t)slsvmobjectp->backer, (uintptr_t *)&parent);
-		if (error != 0) {
-			KV_ABORT(iter);
-			return (error);
-		}
-
-		vm_object_reference(parent);
-		slsrest_shadow(object, parent, slsvmobjectp->backer_off);
-	}
-	SLS_DBG("Restoration of VM Objects\n");
-
-	return (0);
-}
-
 static int
 slsrest_dofiles(struct slskv_table *rectable, struct slsrest_data *restdata)
 {
@@ -1206,8 +1103,8 @@ slsrest_data_slos(struct slspart *slsp, struct slsrest_data *restdata,
 		}
 	}
 
-	/* Create the memory objects. */
-	error = slsrest_dovmobjects(*rectablep, restdata);
+	/* Create all memory objects. */
+	error = slsvmobj_restore_all(*rectablep, restdata);
 	if (error != 0)
 		return (error);
 
