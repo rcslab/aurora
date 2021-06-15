@@ -18,6 +18,7 @@
 
 #include "debug.h"
 #include "sls_kv.h"
+#include "sls_load.h"
 #include "sls_proc.h"
 #include "sls_vnode.h"
 
@@ -26,7 +27,7 @@
  * takes and leaves the process locked.
  */
 static int
-slsckpt_thread(struct thread *td, struct sbuf *sb)
+slsproc_checkpoint_thread(struct thread *td, struct sbuf *sb)
 {
 	int error = 0;
 	struct slsthread slsthread;
@@ -73,7 +74,7 @@ void exec_setregs(struct thread *td, struct image_params *imgp, u_long stack);
  * which thread_rest is an argument.
  */
 static int
-sls_thread_create(struct thread *td, void *thunk)
+slsproc_thread_create(struct thread *td, void *thunk)
 {
 	int error = 0;
 	struct slsthread *slsthread = (struct slsthread *)thunk;
@@ -138,15 +139,33 @@ done:
 	return (error);
 }
 
-int
-slsrest_thread(struct proc *p, struct slsthread *slsthread)
+static int
+slsproc_deserialize_thread(
+    struct slsthread *slsthread, char **bufp, size_t *bufsizep)
+{
+	int error;
+
+	error = sls_info(slsthread, sizeof(*slsthread), bufp, bufsizep);
+	if (error != 0)
+		return (error);
+
+	if (slsthread->magic != SLSTHREAD_ID) {
+		DEBUG("magic mismatch\n");
+		return (EINVAL);
+	}
+
+	return (0);
+}
+
+static int
+slsproc_restore_thread(struct proc *p, struct slsthread *slsthread)
 {
 	int error;
 
 	DEBUG1("Trying to restore thread with tid %lu", slsthread->tid);
 	/* XXX Pass the thread ID we wish the restored thread to have. */
 	error = thread_create(
-	    curthread, NULL, sls_thread_create, (void *)slsthread);
+	    curthread, NULL, slsproc_thread_create, (void *)slsthread);
 
 	return (error);
 }
@@ -156,7 +175,7 @@ slsrest_thread(struct proc *p, struct slsthread *slsthread)
  * like PIDs. This function takes and leaves the process locked.
  */
 int
-slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset,
+slsproc_checkpoint(struct proc *p, struct sbuf *sb, slsset *procset,
     struct slsckpt_data *sckpt_data)
 {
 	struct thread *td;
@@ -252,7 +271,7 @@ slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset,
 
 	/* Checkpoint each thread individually. */
 	FOREACH_THREAD_IN_PROC (p, td) {
-		error = slsckpt_thread(td, sb);
+		error = slsproc_checkpoint_thread(td, sb);
 		if (error != 0)
 			return (error);
 	}
@@ -272,7 +291,7 @@ extern struct sysentvec elf64_freebsd_sysvec;
  * Create a new process group and session, properly locking while doing it.
  */
 static int
-slsrest_enterpgrp(struct proc *p, struct pgrp *pgrp, struct session *sess)
+slsproc_enterpgrp(struct proc *p, struct pgrp *pgrp, struct session *sess)
 {
 	int error;
 
@@ -291,7 +310,7 @@ slsrest_enterpgrp(struct proc *p, struct pgrp *pgrp, struct session *sess)
 }
 
 static int
-slsrest_proc_reparent(
+slsproc_reparent(
     struct slsproc *slsproc, struct slsrest_data *restdata, int daemon)
 {
 	struct proc *p = curproc;
@@ -317,7 +336,7 @@ slsrest_proc_reparent(
 }
 
 static int
-slsrest_proc_signals(struct slsproc *slsproc, struct slsrest_data *restdata)
+slsproc_restore_sig(struct slsproc *slsproc, struct slsrest_data *restdata)
 {
 	struct sigacts *newsigacts, *oldsigacts;
 	struct proc *p = curproc;
@@ -339,7 +358,7 @@ slsrest_proc_signals(struct slsproc *slsproc, struct slsrest_data *restdata)
 }
 
 static int
-slsrest_proc_textvp(struct slsproc *slsproc, struct slsrest_data *restdata)
+slsproc_restore_textvp(struct slsproc *slsproc, struct slsrest_data *restdata)
 {
 	struct proc *p = curproc;
 	struct vnode *textvp;
@@ -362,7 +381,7 @@ slsrest_proc_textvp(struct slsproc *slsproc, struct slsrest_data *restdata)
 }
 
 static int
-slsrest_session(struct slsproc *slsproc, struct slsrest_data *restdata)
+slsproc_restore_sess(struct slsproc *slsproc, struct slsrest_data *restdata)
 {
 	struct proc *p = curproc;
 	struct pgrp *pgrp = NULL;
@@ -382,7 +401,7 @@ slsrest_session(struct slsproc *slsproc, struct slsrest_data *restdata)
 	}
 
 	/* Create the new session. */
-	error = slsrest_enterpgrp(p, pgrp, sess);
+	error = slsproc_enterpgrp(p, pgrp, sess);
 	if (error != 0) {
 		free(pgrp, M_PGRP);
 		free(sess, M_SESSION);
@@ -423,7 +442,8 @@ slsrest_session(struct slsproc *slsproc, struct slsrest_data *restdata)
 }
 
 static int
-slsrest_pgrp(struct slsproc *slsproc, struct slsrest_data *restdata, int daemon)
+slsproc_restore_pgrp(
+    struct slsproc *slsproc, struct slsrest_data *restdata, int daemon)
 {
 	struct proc *p = curproc;
 	struct pgrp *pgrp;
@@ -440,7 +460,7 @@ slsrest_pgrp(struct slsproc *slsproc, struct slsrest_data *restdata, int daemon)
 			return (ENOMEM);
 
 		/* Create just the pgrp. */
-		error = slsrest_enterpgrp(p, pgrp, NULL);
+		error = slsproc_enterpgrp(p, pgrp, NULL);
 		if (error != 0) {
 			free(pgrp, M_PGRP);
 			return (error);
@@ -473,7 +493,7 @@ slsrest_pgrp(struct slsproc *slsproc, struct slsrest_data *restdata, int daemon)
  * Wait until the sessions and groups of the process are created.
  */
 static void
-slsrest_procwait(struct slsproc *slsproc, struct slsrest_data *restdata)
+slsproc_waitfor_rest(struct slsproc *slsproc, struct slsrest_data *restdata)
 {
 	struct sesssion *sess;
 	struct pgrp *pgrp;
@@ -516,7 +536,7 @@ slsrest_procwait(struct slsproc *slsproc, struct slsrest_data *restdata)
  * Attach the process to a newly restored process group.
  */
 static int
-slsrest_attach_pgrp(int pgid, struct slsrest_data *restdata)
+slsproc_attach_pgrp(int pgid, struct slsrest_data *restdata)
 {
 	struct pgrp *pgrp;
 	int error;
@@ -541,7 +561,7 @@ slsrest_attach_pgrp(int pgid, struct slsrest_data *restdata)
  * Attach a group leader to a to a newly restored session.
  */
 static int
-slsrest_attach_sess(int sid, struct slsrest_data *restdata)
+slsproc_attach_sess(int sid, struct slsrest_data *restdata)
 {
 	struct proc *p = curproc;
 	struct pgrp *pgrp = p->p_pgrp;
@@ -583,8 +603,8 @@ slsrest_attach_sess(int sid, struct slsrest_data *restdata)
  * Set the process state, including process tree relations and
  * like PIDs. This function takes and leaves the process locked.
  */
-int
-slsrest_proc(struct proc *p, uint64_t daemon, struct slsproc *slsproc,
+static int
+slsproc_restore_proc(struct proc *p, uint64_t daemon, struct slsproc *slsproc,
     struct slsrest_data *restdata)
 {
 	int error;
@@ -608,11 +628,11 @@ slsrest_proc(struct proc *p, uint64_t daemon, struct slsproc *slsproc,
 	KASSERT(!SESS_LEADER(p), ("process is a session leader"));
 	/* Check if we were the original session leader. */
 	if (slsproc->pid == slsproc->sid) {
-		error = slsrest_session(slsproc, restdata);
+		error = slsproc_restore_sess(slsproc, restdata);
 		if (error != 0)
 			goto out;
 	} else if (slsproc->pid == slsproc->pgid) {
-		error = slsrest_pgrp(slsproc, restdata, daemon);
+		error = slsproc_restore_pgrp(slsproc, restdata, daemon);
 		if (error != 0)
 			goto out;
 	}
@@ -627,19 +647,19 @@ slsrest_proc(struct proc *p, uint64_t daemon, struct slsproc *slsproc,
 	 * so release the process lock.
 	 */
 	PROC_UNLOCK(p);
-	slsrest_procwait(slsproc, restdata);
+	slsproc_waitfor_rest(slsproc, restdata);
 	PROC_LOCK(p);
 
 	/* XXX Leaderless pgroups are not being migrated to a new pgroup. */
 	/* If we need to enter a pgroup, look it up in the tables and do it
 	 * here. */
 	if ((slsproc->pid != slsproc->pgid) && (slsproc->pgrpwait != 0)) {
-		error = slsrest_attach_pgrp(slsproc->pgid, restdata);
+		error = slsproc_attach_pgrp(slsproc->pgid, restdata);
 		if (error != 0)
 			goto out;
 	} else if ((slsproc->pid != slsproc->sid) &&
 	    (slsproc->pid == slsproc->pgid) && (slsproc->sid != 0)) {
-		error = slsrest_attach_sess(slsproc->sid, restdata);
+		error = slsproc_attach_sess(slsproc->sid, restdata);
 		if (error != 0)
 			goto out;
 	}
@@ -648,15 +668,15 @@ slsrest_proc(struct proc *p, uint64_t daemon, struct slsproc *slsproc,
 	 * Reparent the process to the original parent, if it exists.
 	 * Otherwise the parent remains the original sls_restore process.
 	 */
-	error = slsrest_proc_reparent(slsproc, restdata, daemon);
+	error = slsproc_reparent(slsproc, restdata, daemon);
 	if (error != 0)
 		goto out;
 
-	error = slsrest_proc_signals(slsproc, restdata);
+	error = slsproc_restore_sig(slsproc, restdata);
 	if (error != 0)
 		goto out;
 
-	error = slsrest_proc_textvp(slsproc, restdata);
+	error = slsproc_restore_textvp(slsproc, restdata);
 	if (error != 0)
 		goto out;
 
@@ -674,4 +694,70 @@ out:
 	PROC_UNLOCK(p);
 
 	return (error);
+}
+
+/* Functions that load parts of the state. */
+static int
+slsproc_deserialize_proc(struct slsproc *slsproc, char **bufp, size_t *bufsizep)
+{
+	int error;
+
+	error = sls_info(slsproc, sizeof(*slsproc), bufp, bufsizep);
+	if (error != 0)
+		return (error);
+
+	if (slsproc->magic != SLSPROC_ID) {
+		SLS_DBG(
+		    "magic mismatch, %lx vs %x\n", slsproc->magic, SLSPROC_ID);
+		return (EINVAL);
+	}
+
+	return (0);
+}
+
+int
+slsproc_restore(struct proc *p, uint64_t daemon, char **bufp, size_t *buflenp,
+    struct slsrest_data *restdata)
+{
+	struct slsthread slsthread;
+	struct slsproc slsproc;
+	int error, i;
+
+	error = slsproc_deserialize_proc(&slsproc, bufp, buflenp);
+	if (error != 0)
+		return (error);
+
+	/*
+	 * Save the old process - new process pairs.
+	 */
+	DEBUG("Adding id to slskv table");
+	PHOLD(p);
+	error = slskv_add(
+	    restdata->proctable, (uint64_t)slsproc.slsid, (uintptr_t)p);
+	if (error != 0) {
+		PRELE(p);
+		SLS_DBG("Error: Could not add process %p to table\n", p);
+	}
+
+	DEBUG("Attempting restore of proc");
+	error = slsproc_restore_proc(p, daemon, &slsproc, restdata);
+	if (error != 0)
+		return (error);
+
+	for (i = 0; i < slsproc.nthreads; i++) {
+		DEBUG("Attempting restore of thread");
+		error = slsproc_deserialize_thread(&slsthread, bufp, buflenp);
+		if (error != 0) {
+			DEBUG1("Error in slsproc_deserialize_thread %d", error);
+			return (error);
+		}
+
+		error = slsproc_restore_thread(p, &slsthread);
+		if (error != 0) {
+			DEBUG1("Error in slsproc_restore_thread %d", error);
+			return (error);
+		}
+	}
+
+	return (0);
 }

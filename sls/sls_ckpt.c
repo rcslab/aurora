@@ -152,7 +152,7 @@ static int __attribute__((noinline)) slsckpt_metadata(
 
 	SDT_PROBE1(sls, , sls_ckpt, , "Checkpointing vm state");
 
-	error = slsckpt_proc(p, sb, procset, sckpt_data);
+	error = slsproc_checkpoint(p, sb, procset, sckpt_data);
 	if (error != 0) {
 		SLS_DBG(
 		    "Error: slsckpt_proc failed with error code %d\n", error);

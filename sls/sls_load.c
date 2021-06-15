@@ -58,42 +58,6 @@ sls_info(void *info, size_t infosize, char **bufp, size_t *bufsizep)
 	return (0);
 }
 
-int
-slsload_thread(struct slsthread *slsthread, char **bufp, size_t *bufsizep)
-{
-	int error;
-
-	error = sls_info(slsthread, sizeof(*slsthread), bufp, bufsizep);
-	if (error != 0)
-		return (error);
-
-	if (slsthread->magic != SLSTHREAD_ID) {
-		DEBUG("magic mismatch\n");
-		return (EINVAL);
-	}
-
-	return (0);
-}
-
-/* Functions that load parts of the state. */
-int
-slsload_proc(struct slsproc *slsproc, char **bufp, size_t *bufsizep)
-{
-	int error;
-
-	error = sls_info(slsproc, sizeof(*slsproc), bufp, bufsizep);
-	if (error != 0)
-		return (error);
-
-	if (slsproc->magic != SLSPROC_ID) {
-		SLS_DBG(
-		    "magic mismatch, %lx vs %x\n", slsproc->magic, SLSPROC_ID);
-		return (EINVAL);
-	}
-
-	return (0);
-}
-
 static int
 slsload_kqueue(slsset **slsknsp, char **bufp, size_t *bufsizep)
 {

@@ -23,10 +23,9 @@
 #include "sls_internal.h"
 #include "sls_kv.h"
 
-int slsckpt_proc(struct proc *p, struct sbuf *sb, slsset *procset,
+int slsproc_checkpoint(struct proc *p, struct sbuf *sb, slsset *procset,
     struct slsckpt_data *sckpt_data);
-int slsrest_proc(struct proc *p, uint64_t daemon, struct slsproc *slsproc,
-    struct slsrest_data *restdata);
-int slsrest_thread(struct proc *p, struct slsthread *slsthread);
+int slsproc_restore(struct proc *p, uint64_t daemon, char **bufp,
+    size_t *buflenp, struct slsrest_data *restdata);
 
 #endif /* _SLS_PROC_H_ */

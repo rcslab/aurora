@@ -274,65 +274,6 @@ slsrest_zonefini(void)
 }
 
 static int
-slsrest_dothread(struct proc *p, char **bufp, size_t *buflenp)
-{
-	struct slsthread slsthread;
-	int error;
-
-	error = slsload_thread(&slsthread, bufp, buflenp);
-	if (error != 0) {
-		DEBUG1("Error in slsload_thread %d", error);
-		return (error);
-	}
-
-	error = slsrest_thread(p, &slsthread);
-	if (error != 0) {
-		DEBUG1("Error in slsrest_thread %d", error);
-		return (error);
-	}
-
-	return (0);
-}
-
-static int
-slsrest_doproc(struct proc *p, uint64_t daemon, char **bufp, size_t *buflenp,
-    struct slsrest_data *restdata)
-{
-	struct slsproc slsproc;
-	int error, i;
-
-	error = slsload_proc(&slsproc, bufp, buflenp);
-	if (error != 0)
-		return (error);
-
-	/*
-	 * Save the old process - new process pairs.
-	 */
-	DEBUG("Adding id to slskv table");
-	PHOLD(p);
-	error = slskv_add(
-	    restdata->proctable, (uint64_t)slsproc.slsid, (uintptr_t)p);
-	if (error != 0) {
-		PRELE(p);
-		SLS_DBG("Error: Could not add process %p to table\n", p);
-	}
-
-	DEBUG("Attempting restore of proc");
-	error = slsrest_proc(p, daemon, &slsproc, restdata);
-	if (error != 0)
-		return (error);
-
-	for (i = 0; i < slsproc.nthreads; i++) {
-		DEBUG("Attempting restore of thread");
-		error = slsrest_dothread(p, bufp, buflenp);
-		if (error != 0)
-			return (error);
-	}
-
-	return (0);
-}
-
-static int
 slsrest_dovnode(struct slsrest_data *restdata, char **bufp, size_t *buflenp)
 {
 	struct slsvnode slsvnode;
@@ -766,7 +707,7 @@ slsrest_metadata(void *args)
 	 * Restore CPU state, file state, and memory
 	 * state, parsing the buffer at each step.
 	 */
-	error = slsrest_doproc(p, daemon, &buf, &buflen, restdata);
+	error = slsproc_restore(p, daemon, &buf, &buflen, restdata);
 	if (error != 0)
 		goto error;
 
