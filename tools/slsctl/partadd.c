@@ -19,6 +19,7 @@ static struct option partadd_longopts[] = {
 	{ "backend", required_argument, NULL, 'b' },
 	{ "ignore unlinked files", required_argument, NULL, 'i' },
 	{ "lazy restore", required_argument, NULL, 'l' },
+	{ "cached restore", required_argument, NULL, 'c' },
 	{ NULL, no_argument, NULL, 0 },
 };
 
@@ -55,9 +56,14 @@ partadd_main(int argc, char *argv[])
 		.attr_flags = 0,
 	};
 
-	while ((opt = getopt_long(
-		    argc, argv, "b:dilo:p:t:", partadd_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "b:cdilo:p:t:", partadd_longopts,
+		    NULL)) != -1) {
 		switch (opt) {
+		case 'c':
+			/* Prefaults only make sense for lazy restores. */
+			attr.attr_flags |= (SLSATTR_CACHEREST |
+			    SLSATTR_LAZYREST);
+			break;
 		case 'd':
 			attr.attr_mode = SLS_DELTA;
 			break;

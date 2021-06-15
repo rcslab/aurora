@@ -30,6 +30,7 @@ char buf[BUFSIZE];
 
 static struct option pymetro_longopts[] = {
 	{ "accept4", no_argument, NULL, '4' },
+	{ "cached", no_argument, NULL, 'c' },
 	{ NULL, no_argument, NULL, 0 },
 };
 
@@ -213,18 +214,23 @@ main(int argc, char **argv)
 {
 	char *args[] = { "python3", "pymetro/server.py", buf, NULL };
 	struct sls_attr attr;
-	bool isaccept4;
+	bool cached = false;
+	bool isaccept4 = false;
 	uint64_t oid;
 	pid_t pid;
 	int error;
 	long opt;
 	int i;
 
-	while ((opt = getopt_long(argc, argv, "4", pymetro_longopts, NULL)) !=
+	while ((opt = getopt_long(argc, argv, "4c", pymetro_longopts, NULL)) !=
 	    -1) {
 		switch (opt) {
 		case '4':
 			isaccept4 = true;
+			break;
+
+		case 'c':
+			cached = true;
 			break;
 
 		default:
@@ -251,6 +257,9 @@ main(int argc, char **argv)
 				.attr_flags = SLSATTR_IGNUNLINKED |
 				    SLSATTR_LAZYREST,
 			};
+
+			if (cached)
+				attr.attr_flags |= SLSATTR_CACHEREST;
 
 			error = sls_partadd(oid, attr);
 			if (error != 0) {

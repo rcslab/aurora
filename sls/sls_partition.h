@@ -91,7 +91,8 @@ int slsp_getstate(struct slspart *slsp);
 bool slsp_hasproc(struct slspart *slsp, pid_t pid);
 bool slsp_rest_from_mem(struct slspart *slsp);
 
-#define SLSPART_IGNUNLINKED(slsp) (SLSATTR_ISIGNUNLINKED((slsp)->slsp_attr))
-#define SLSPART_LAZYREST(slsp) (SLSATTR_ISLAZYREST((slsp)->slsp_attr))
+#define SLSP_IGNUNLINKED(slsp) (SLSATTR_ISIGNUNLINKED((slsp)->slsp_attr))
+#define SLSP_LAZYREST(slsp) (SLSATTR_ISLAZYREST((slsp)->slsp_attr))
+#define SLSP_CACHEREST(slsp) (SLSATTR_ISCACHEREST((slsp)->slsp_attr))
 
 #endif /* _SLSPART_H_ */

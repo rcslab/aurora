@@ -216,6 +216,10 @@ slsckpt_vnode_serialize(struct slsckpt_data *sckpt_data)
 		}
 	}
 
+	/* If we are caching the result, keep the vnode table. */
+	if (SLSATTR_ISCACHEREST(sckpt_data->sckpt_attr))
+		return (0);
+
 	KVSET_FOREACH_POP(sckpt_data->sckpt_vntable, vp)
 	vrele(vp);
 

@@ -663,7 +663,7 @@ sls_read_slos(struct slspart *slsp, struct slskv_table **rectablep,
 
 	for (i = 0; i < idlen; i++) {
 		error = sls_read_slos_record(
-		    ids[i], rectable, objtable, SLSPART_LAZYREST(slsp));
+		    ids[i], rectable, objtable, SLSP_LAZYREST(slsp));
 		if (error != 0)
 			goto error;
 	}

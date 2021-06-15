@@ -1082,6 +1082,9 @@ slsrest_ckptshadow(
 	return (0);
 }
 
+/*
+ * Create a shadow for each leaf object in the VM object table.
+ */
 static int
 slsrest_shadowtable(
     struct slskv_table *shadowtable, struct slskv_table *objtable)
@@ -1108,6 +1111,48 @@ error:
 	return (error);
 }
 
+/*
+ * Cache the data brought in from the disk so that subsequent checkpoints
+ * are from memory.
+ */
+static int
+slsrest_data_cache(struct slspart *slsp, struct slsrest_data *restdata,
+    struct slskv_table *rectable)
+{
+	struct slsckpt_data *sckpt_data;
+	int error;
+
+	DEBUG1("Caching the checkpoint for partition %d\n", slsp->slsp_oid);
+	error = slsckpt_create(&sckpt_data, &slsp->slsp_attr);
+	if (error != 0)
+		return (error);
+
+	error = slsrest_shadowtable(
+	    sckpt_data->sckpt_objtable, restdata->objtable);
+	if (error != 0)
+		return (error);
+
+	slskv_destroy(sckpt_data->sckpt_rectable);
+	sckpt_data->sckpt_rectable = rectable;
+
+	restdata->oldvntable = sckpt_data->sckpt_vntable;
+	sckpt_data->sckpt_vntable = restdata->vntable;
+
+	slsp->slsp_sckpt = sckpt_data;
+
+	/* Create the private shadows from the shadow table. */
+	error = slsrest_ckptshadow(
+	    restdata->objtable, sckpt_data->sckpt_objtable);
+	if (error != 0)
+		return (error);
+
+	return (0);
+}
+
+/*
+ * Restore data from data currently in memory. The image is retained
+ * after checkpointing and can be reused.
+ */
 static int
 slsrest_data_mem(struct slspart *slsp, struct slsrest_data *restdata)
 {
@@ -1119,6 +1164,10 @@ slsrest_data_mem(struct slspart *slsp, struct slsrest_data *restdata)
 	    restdata->objtable, slsp->slsp_sckpt->sckpt_objtable));
 }
 
+/*
+ * Restore an image after bringing it from the SLOS. The image is used up.
+ * after restoring.
+ */
 static int
 slsrest_data_slos(struct slspart *slsp, struct slsrest_data *restdata,
     struct slskv_table **rectablep)
@@ -1153,7 +1202,7 @@ slsrest_data_slos(struct slspart *slsp, struct slsrest_data *restdata,
 		}
 	}
 
-	/* Create the object */
+	/* Create the memory objects. */
 	error = slsrest_dovmobjects(*rectablep, restdata);
 	if (error != 0)
 		return (error);
@@ -1161,6 +1210,20 @@ slsrest_data_slos(struct slspart *slsp, struct slsrest_data *restdata,
 	return (0);
 }
 
+/*
+ * Create a restore image in memory. Each image is composed of a set of
+ * tables holding the resources for the application. For metadata, each
+ * restore deserializes metadata records found either in memory or on disk.
+ * For data, restores may or may not consume the images they create. Memory
+ * restores do not directly use the checkpoint data, but rather shadow the VM
+ * objects.
+ *
+ * Disk restores may or may not consume the data they bring from disk. This is
+ * a matter of policy, and we do this because it makes benchmarking more
+ * straighforward. If users want to not consume the checkpoint data they bring
+ * from the disk during restores, they can choose to cache the data, in which
+ * case Aurora shadows the data like it does for a memory checkpoint.
+ */
 static int
 slsrest_data(struct slspart *slsp, struct slsrest_data **restdatap,
     struct slskv_table **rectablep)
@@ -1222,6 +1285,7 @@ sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
 	struct slskv_table *rectable;
 	struct sls_record *rec;
 	struct slskv_iter iter;
+	bool cached = false;
 	int stateerr;
 	uint64_t slsid;
 	size_t buflen;
@@ -1242,6 +1306,26 @@ sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
 	error = slsrest_data(slsp, &restdata, &rectable);
 	if (error != 0)
 		goto out;
+
+	/*
+	 * Recreate the VM object tree. When restoring from the SLOS we recreate
+	 * everything, while when restoring from memory all anonymous objects
+	 * are already there.
+	 */
+	if (!slsp_rest_from_mem(slsp)) {
+		DEBUG1("Restoring partition %lx from disk", slsp->slsp_oid);
+		/* Cache the data if we want to. */
+		if ((slsp->slsp_attr.attr_flags & SLSATTR_CACHEREST) != 0) {
+			error = slsrest_data_cache(slsp, restdata, rectable);
+			if (error != 0)
+				goto out;
+
+			cached = true;
+			DEBUG1("Cached partition %lx\n", slsp->slsp_oid);
+		}
+	} else {
+		DEBUG1("Restoring partition %lx from memory", slsp->slsp_oid);
+	}
 
 	taskqueue_drain_all(slos.slos_tq);
 
@@ -1355,7 +1439,7 @@ out:
 	stateerr = slsp_setstate(slsp, SLSP_RESTORING, SLSP_AVAILABLE, false);
 	KASSERT(stateerr == 0, ("invalid state transition"));
 
-	if (!slsp_rest_from_mem(slsp))
+	if (!slsp_rest_from_mem(slsp) && !cached)
 		sls_free_rectable(rectable);
 
 	SDT_PROBE1(sls, , sls_rest, , "Cleanup");

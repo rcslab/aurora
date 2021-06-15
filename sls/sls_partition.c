@@ -507,11 +507,20 @@ slsp_getstate(struct slspart *slsp)
 	return (slsp->slsp_status);
 }
 
+/*
+ * Return whether we should restore from memory or the SLOS.
+ */
 bool
 slsp_rest_from_mem(struct slspart *slsp)
 {
 	if (slsp->slsp_sckpt == NULL)
 		return (false);
 
-	return (slsp->slsp_target == SLS_MEM);
+	if (slsp->slsp_target == SLS_MEM)
+		return (true);
+
+	if (slsp->slsp_target == SLS_OSD)
+		return (SLSP_CACHEREST(slsp));
+
+	return (false);
 }
