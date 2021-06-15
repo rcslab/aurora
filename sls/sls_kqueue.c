@@ -54,7 +54,7 @@
  * Remove the kqueue from its file table and fix the backpointers.
  */
 void
-slsrest_kqdetach(struct kqueue *kq)
+slskq_detach(struct kqueue *kq)
 {
 	struct filedesc *fdp = kq->kq_fdp;
 
@@ -65,7 +65,7 @@ slsrest_kqdetach(struct kqueue *kq)
 }
 
 void
-slsrest_kqattach_locked(struct proc *p, struct kqueue *kq)
+slskq_attach_locked(struct proc *p, struct kqueue *kq)
 {
 	struct filedesc *fdp = p->p_fd;
 
@@ -80,17 +80,17 @@ slsrest_kqattach_locked(struct proc *p, struct kqueue *kq)
  * Fixup the references and backpointers of the process' file table and kqueue.
  */
 void
-slsrest_kqattach(struct proc *p, struct kqueue *kq)
+slskq_attach(struct proc *p, struct kqueue *kq)
 {
 	struct filedesc *fdp = p->p_fd;
 
 	FILEDESC_XLOCK(fdp);
-	slsrest_kqattach_locked(p, kq);
+	slskq_attach_locked(p, kq);
 	FILEDESC_XUNLOCK(fdp);
 }
 
 static int
-slsckpt_knote(struct knote *kn, struct sbuf *sb)
+slskq_checkpoint_knote(struct knote *kn, struct sbuf *sb)
 {
 	struct slsknote slskn;
 	int error;
@@ -136,8 +136,8 @@ slsckpt_knote(struct knote *kn, struct sbuf *sb)
 /*
  * Checkpoint a kqueue and all of its associated knotes.
  */
-int
-slsckpt_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
+static int
+slskq_checkpoint_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
 {
 	struct slskqueue slskq;
 	struct knote *kn;
@@ -167,7 +167,7 @@ slsckpt_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
 	/* Get all knotes in the dynamic array. */
 	for (i = 0; i < kq->kq_knlistsize; i++) {
 		SLIST_FOREACH (kn, &kq->kq_knlist[i], kn_link) {
-			error = slsckpt_knote(kn, sb);
+			error = slskq_checkpoint_knote(kn, sb);
 			if (error != 0)
 				return (error);
 		}
@@ -176,7 +176,7 @@ slsckpt_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
 	/* Do the exact same thing for the hashtable. */
 	for (i = 0; i < kq->kq_knhashmask; i++) {
 		SLIST_FOREACH (kn, &kq->kq_knhash[i], kn_link) {
-			error = slsckpt_knote(kn, sb);
+			error = slskq_checkpoint_knote(kn, sb);
 			if (error != 0)
 				return (error);
 		}
@@ -192,6 +192,38 @@ slsckpt_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
 	return (0);
 }
 
+int
+slskq_checkpoint(
+    struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
+{
+	struct kqueue *kq;
+	int error;
+
+	/* Acquire the kqueue for reading. */
+	error = kqueue_acquire(fp, &kq);
+	if (error != 0)
+		return (error);
+
+	info->backer = (uint64_t)kq;
+
+	/* Write out the struct file. */
+	error = sbuf_bcat(sb, (void *)info, sizeof(*info));
+	if (error != 0)
+		return (error);
+
+	error = slskq_checkpoint_kqueue(p, kq, sb);
+	if (error != 0)
+		goto out;
+
+	kqueue_release(kq, 0);
+
+	return (0);
+
+out:
+	kqueue_release(kq, 0);
+	return (error);
+}
+
 /*
  * Restore a kqueue for a process. Kqueues are an exception among
  * entities using the file abstraction, in that they need the rest
@@ -204,7 +236,7 @@ slsckpt_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
  * we fully populate the kqueues with their data.
  */
 int
-slsrest_kqueue(struct slskqueue *slskq, int *fdp)
+slskq_restore_kqueue(struct slskqueue *slskq, int *fdp)
 {
 	struct proc *p = curproc;
 	struct kqueue *kq;
@@ -224,7 +256,7 @@ slsrest_kqueue(struct slskqueue *slskq, int *fdp)
 	 * it will ultimately end up. We need to remove it from its current one,
 	 * we'll attach it to the currect table when that is created.
 	 */
-	slsrest_kqdetach(kq);
+	slskq_detach(kq);
 
 	/* Grab the open file and pass it to the caller. */
 	*fdp = fd;
@@ -236,7 +268,7 @@ slsrest_kqueue(struct slskqueue *slskq, int *fdp)
  * Find a given knote specified by (kqueue, ident, filter).
  */
 static struct knote *
-slsrest_knfind(struct kqueue *kq, __uintptr_t ident, short filter)
+slskq_knfind(struct kqueue *kq, __uintptr_t ident, short filter)
 {
 	struct klist *list;
 	struct knote *kn;
@@ -265,7 +297,7 @@ slsrest_knfind(struct kqueue *kq, __uintptr_t ident, short filter)
  * Register a list of kevents into the kqueue.
  */
 static int
-slsrest_kqregister(int fd, struct kqueue *kq, slsset *slskns)
+slskq_register(int fd, struct kqueue *kq, slsset *slskns)
 {
 	struct slskv_iter iter;
 	struct slsknote *slskn;
@@ -303,7 +335,7 @@ slsrest_kqregister(int fd, struct kqueue *kq, slsset *slskns)
  * the file descriptor table and set the knotes as EOF.
  */
 static void
-slsrest_kq_sockhack(struct proc *p, struct kqueue *kq)
+slskq_sockhack(struct proc *p, struct kqueue *kq)
 {
 	struct filedesc *fdp = p->p_fd;
 	struct socket *so;
@@ -354,8 +386,8 @@ slsrest_kq_sockhack(struct proc *p, struct kqueue *kq)
  * have been restored, since we need the fds to be backed before
  * we attach the relevant kevent to the kqueue.
  */
-int
-slsrest_knotes(int fd, slsset *slskns)
+static int
+slskq_restore_knotes(int fd, slsset *slskns)
 {
 	struct thread *td = curthread;
 	struct slsknote *slskn;
@@ -378,7 +410,7 @@ slsrest_knotes(int fd, slsset *slskns)
 		goto noacquire;
 
 	/* For each slskq, create a kevent and register it. */
-	error = slsrest_kqregister(fd, kq, slskns);
+	error = slskq_register(fd, kq, slskns);
 	if (error != 0)
 		goto noacquire;
 
@@ -401,7 +433,7 @@ slsrest_knotes(int fd, slsset *slskns)
 		 * sockets and IPv6 sockets of all kinds do not get restored, so
 		 * a knote might be missing.
 		 */
-		kn = slsrest_knfind(kq, kev->ident, kev->filter);
+		kn = slskq_knfind(kq, kev->ident, kev->filter);
 		if (kn == NULL) {
 			SLS_DBG("Missing knote (%lx, %x)\n", kev->ident,
 			    kev->filter);
@@ -440,7 +472,7 @@ slsrest_knotes(int fd, slsset *slskns)
 	}
 
 	/* XXX Temporary hack. Send an EOF event to any non-restored sockets. */
-	slsrest_kq_sockhack(curproc, kq);
+	slskq_sockhack(curproc, kq);
 
 	KQ_UNLOCK(kq);
 
@@ -448,6 +480,38 @@ slsrest_knotes(int fd, slsset *slskns)
 
 noacquire:
 	fdrop(fp, td);
+
+	return (0);
+}
+
+/* Restore the knotes to the already restored kqueues. */
+int
+slskq_restore_knotes_all(struct proc *p, struct slskv_table *kevtable)
+{
+	struct file *fp;
+	slsset *kevset;
+	int error;
+	int fd;
+
+	for (fd = 0; fd <= p->p_fd->fd_lastfile; fd++) {
+		if (!fdisused(p->p_fd, fd))
+			continue;
+
+		/* We only want kqueue-backed open files. */
+		fp = FDTOFP(p, fd);
+		if (fp->f_type != DTYPE_KQUEUE)
+			continue;
+
+		/* If we're a kqueue, we _have_ to have a set, even if empty. */
+		error = slskv_find(
+		    kevtable, (uint64_t)fp->f_data, (uintptr_t *)&kevset);
+		if (error != 0)
+			return (error);
+
+		error = slskq_restore_knotes(fd, kevset);
+		if (error != 0)
+			return (error);
+	}
 
 	return (0);
 }

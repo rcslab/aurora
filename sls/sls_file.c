@@ -62,38 +62,6 @@ SDT_PROBE_DEFINE0(sls, , , fileprobe_start);
 SDT_PROBE_DEFINE1(sls, , , fileprobe_return, "int");
 
 static int
-slsckpt_getkqueue(
-    struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
-{
-	struct kqueue *kq;
-	int error;
-
-	/* Acquire the kqueue for reading. */
-	error = kqueue_acquire(fp, &kq);
-	if (error != 0)
-		return (error);
-
-	info->backer = (uint64_t)kq;
-
-	/* Write out the struct file. */
-	error = sbuf_bcat(sb, (void *)info, sizeof(*info));
-	if (error != 0)
-		return (error);
-
-	error = slsckpt_kqueue(p, kq, sb);
-	if (error != 0)
-		goto out;
-
-	kqueue_release(kq, 0);
-
-	return (0);
-
-out:
-	kqueue_release(kq, 0);
-	return (error);
-}
-
-static int
 slsckpt_getpipe(
     struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
 {
@@ -328,7 +296,7 @@ static int __attribute__((noinline)) slsckpt_file(struct proc *p,
 
 	/* Backed by a kqueue - get all pending knotes. */
 	case DTYPE_KQUEUE:
-		error = slsckpt_getkqueue(p, fp, &info, sb);
+		error = slskq_checkpoint(p, fp, &info, sb);
 		if (error != 0)
 			goto error;
 
@@ -510,7 +478,7 @@ slsrest_file(
 
 	case DTYPE_KQUEUE:
 		kqdata = ((slsset *)slsbacker)->data;
-		error = slsrest_kqueue((struct slskqueue *)kqdata, &fd);
+		error = slskq_restore_kqueue((struct slskqueue *)kqdata, &fd);
 		if (error != 0)
 			return (error);
 
@@ -916,7 +884,7 @@ slsrest_filedesc(
 
 		/* Fix up the kqueue to point to its new fptable. */
 		if (fp->f_type == DTYPE_KQUEUE)
-			slsrest_kqattach_locked(p, (struct kqueue *)fp->f_data);
+			slskq_attach_locked(p, (struct kqueue *)fp->f_data);
 	}
 
 	FILEDESC_XUNLOCK(newfdp);

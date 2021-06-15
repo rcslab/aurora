@@ -113,7 +113,7 @@ slsrest_zone_dtor(void *mem, int size, void *args __unused)
 		if (fp->f_type == DTYPE_KQUEUE) {
 			kq = (struct kqueue *)fp->f_data;
 			if (kq->kq_fdp == NULL)
-				slsrest_kqattach(curproc, kq);
+				slskq_attach(curproc, kq);
 		}
 
 		fdrop(fp, curthread);
@@ -445,38 +445,6 @@ slsrest_dosockbuf(char *buf, size_t bufsize, struct slskv_table *table)
 	return (0);
 }
 
-/* Restore the knotes to the already restored kqueues. */
-static int
-slsrest_doknotes(struct proc *p, struct slskv_table *kevtable)
-{
-	struct file *fp;
-	slsset *kevset;
-	int error;
-	int fd;
-
-	for (fd = 0; fd <= p->p_fd->fd_lastfile; fd++) {
-		if (!fdisused(p->p_fd, fd))
-			continue;
-
-		/* We only want kqueue-backed open files. */
-		fp = FDTOFP(p, fd);
-		if (fp->f_type != DTYPE_KQUEUE)
-			continue;
-
-		/* If we're a kqueue, we _have_ to have a set, even if empty. */
-		error = slskv_find(
-		    kevtable, (uint64_t)fp->f_data, (uintptr_t *)&kevset);
-		if (error != 0)
-			return (error);
-
-		error = slsrest_knotes(fd, kevset);
-		if (error != 0)
-			return (error);
-	}
-
-	return (0);
-}
-
 /*
  * Release all master terminals references from the restoring thread, causing
  * the destruction of any PTSes that are not referenced by restore processes.
@@ -717,7 +685,7 @@ slsrest_metadata(void *args)
 		goto error;
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Restoring file table");
-	error = slsrest_doknotes(p, restdata->kevtable);
+	error = slskq_restore_knotes_all(p, restdata->kevtable);
 	if (error != 0)
 		goto error;
 
