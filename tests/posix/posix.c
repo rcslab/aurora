@@ -17,7 +17,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#define OID (1000)
 #define NUMEVENTS (1024)
 #define SHM_SIZE (4096)
 #define UNADDR ("localsocket")
@@ -32,7 +31,7 @@ int unixfd;
 void
 usage(void)
 {
-	printf("Usage: ./posix <mountpoint>\n");
+	printf("Usage: ./posix <oid> <mountpoint>\n");
 	exit(0);
 }
 
@@ -231,11 +230,18 @@ main(int argc, char *argv[])
 	struct sls_attr attr;
 	char *mountpoint;
 	int error, i;
+	uint64_t oid;
 
-	if (argc != 2)
+	if (argc != 3)
 		usage();
 
-	mountpoint = argv[1];
+	oid = strtol(argv[1], NULL, 10);
+	if (oid == 0) {
+		printf("Invalid oid %s\n", argv[1]);
+		exit(0);
+	}
+
+	mountpoint = argv[2];
 	error = chdir(mountpoint);
 	if (error != 0) {
 		perror("chdir");
@@ -244,11 +250,11 @@ main(int argc, char *argv[])
 
 	setup_vnode();
 	setup_pipe();
-	setup_posixshm();
+	// setup_posixshm();
 	setup_pty();
-	setup_kqueue();
-	setup_unixsocket();
-	setup_socketpair();
+	// setup_kqueue();
+	// setup_unixsocket();
+	// setup_socketpair();
 	setup_sysvshm();
 
 	attr = (struct sls_attr) {
@@ -256,27 +262,21 @@ main(int argc, char *argv[])
 		.attr_mode = SLS_FULL,
 		.attr_period = 0,
 	};
-	error = sls_partadd(OID, attr);
+	error = sls_partadd(oid, attr);
 	if (error != 0) {
 		fprintf(stderr, "sls_partadd returned %d\n", error);
 		teardown_and_exit();
 	}
 
-	error = sls_attach(OID, getpid());
+	error = sls_attach(oid, getpid());
 	if (error != 0) {
 		fprintf(stderr, "sls_attach returned %d\n", error);
 		teardown_and_exit();
 	}
 
-	error = sls_checkpoint(OID, false);
+	error = sls_checkpoint(oid, false);
 	if (error != 0) {
 		fprintf(stderr, "sls_checkpoint returned %d\n", error);
-		teardown_and_exit();
-	}
-
-	error = sls_partdel(OID);
-	if (error != 0) {
-		fprintf(stderr, "sls_partdel returned %d\n", error);
 		teardown_and_exit();
 	}
 

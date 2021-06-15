@@ -60,6 +60,60 @@ uint64_t sls_pages_grabbed = 0;
 uint64_t sls_io_initiated = 0;
 unsigned int sls_async_slos = 1;
 
+static uma_zone_t slstable_task_zone;
+
+struct slstable_taskctx {
+	struct task tk;
+	struct sls_record *rec;
+	struct slskv_table *objtable;
+};
+
+int
+slstable_init(void)
+{
+	int error;
+
+	slsm.slsm_tabletq = taskqueue_create("slswritetq", M_WAITOK,
+	    taskqueue_thread_enqueue, &slsm.slsm_tabletq);
+	if (slsm.slsm_tabletq == NULL)
+		return (ENOMEM);
+
+	error = taskqueue_start_threads(
+	    &slsm.slsm_tabletq, 8, PVM, "SLOS Taskqueue Threads");
+	if (error)
+		return (error);
+
+	slstable_task_zone = uma_zcreate("slstable",
+	    sizeof(struct slstable_taskctx), NULL, NULL, NULL, NULL,
+	    UMA_ALIGNOF(struct slstable_taskctx), 0);
+	if (slstable_task_zone == NULL)
+		return (ENOMEM);
+
+	error = sls_zonewarm(slstable_task_zone);
+	if (error != 0)
+		printf("WARNING: Zone slsrest not warmed up\n");
+
+	return (0);
+}
+
+void
+slstable_fini(void)
+{
+	/* Drain the SLOS taskqueue, which might be doing IOs. */
+	if (slos.slos_tq != NULL)
+		taskqueue_drain_all(slos.slos_tq);
+
+	/* Drain the write task queue just in case. */
+	if (slsm.slsm_tabletq != NULL) {
+		taskqueue_drain_all(slsm.slsm_tabletq);
+		taskqueue_free(slsm.slsm_tabletq);
+		slsm.slsm_tabletq = NULL;
+	}
+
+	if (slstable_task_zone != NULL)
+		uma_zdestroy(slstable_task_zone);
+}
+
 static int
 sls_doio(struct vnode *vp, struct uio *auio)
 {
@@ -952,6 +1006,24 @@ sls_write_slos_dataregion(struct slsckpt_data *sckpt_data)
 	return (0);
 }
 
+static void
+slstable_task(void *ctx, int __unused pending)
+{
+	struct slstable_taskctx *task = (struct slstable_taskctx *)ctx;
+	struct sls_record *rec = task->rec;
+	int error;
+
+	/*
+	 * VM object records are special, since we need to dump
+	 * actual memory along with the metadata.
+	 */
+	error = sls_writemeta_slos(rec, NULL, true);
+	if (error != 0)
+		printf("Writing to the SLOS failed with %d\n", error);
+
+	uma_zfree(slstable_task_zone, task);
+}
+
 /*
  * Dumps a table of records into the SLOS. The records of VM objects
  * are special cases, since they are sparse and hold all pages that
@@ -960,6 +1032,7 @@ sls_write_slos_dataregion(struct slsckpt_data *sckpt_data)
 int
 sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 {
+	struct slstable_taskctx *ctx;
 	struct sbuf *sb_manifest;
 	struct sls_record *rec;
 	struct slskv_iter iter;
@@ -970,19 +1043,19 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 
 	KV_FOREACH(sckpt_data->sckpt_rectable, iter, slsid, rec)
 	{
-		/*
-		 * VM object records are special, since we need to dump
-		 * actual memory along with the metadata.
-		 */
-		if (sls_isdata(rec->srec_type))
+		/* Create each record in parallel. */
+		if (sls_isdata(rec->srec_type)) {
 			error = sls_writedata_slos(
 			    rec, sckpt_data->sckpt_objtable);
-		else
-			error = sls_writemeta_slos(rec, NULL, true);
-		if (error != 0) {
-			KV_ABORT(iter);
-			printf("Writing to the SLOS failed with %d\n", error);
-			goto error;
+			if (error != 0)
+				printf("Writing to the SLOS failed with %d\n",
+				    error);
+		} else {
+			ctx = uma_zalloc(slstable_task_zone, M_WAITOK);
+			TASK_INIT(&ctx->tk, 0, &slstable_task, ctx);
+			ctx->rec = rec;
+			ctx->objtable = sckpt_data->sckpt_objtable;
+			taskqueue_enqueue(slsm.slsm_tabletq, &ctx->tk);
 		}
 
 		/* Attach the new record to the checkpoint manifest. */
@@ -1002,6 +1075,8 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 	}
 
 	sbuf_delete(sb_manifest);
+
+	taskqueue_drain_all(slsm.slsm_tabletq);
 
 	return (0);
 

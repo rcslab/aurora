@@ -86,6 +86,12 @@ def memcached(inifile, extra_options) -> None:
         key, value = pair.split("=")
         options[section][key] = value
 
+    if options["stripe"]["enabled"] == "yes":
+        name = options["stripe"]["name"]
+        size = int(options["stripe"]["size"])
+        disks = options["stripe"]["disks"].split()
+        sls.gstripe(name, size, disks)
+
     memcached = options["memcached"]["binary"]
     dscript = str(Path(options["sls"]["sls_source"], options["sls"]["dtrace"]))
     root = Path(options["sls"]["mount_point"])

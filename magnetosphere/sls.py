@@ -1,7 +1,7 @@
 from configparser import ConfigParser
 from pathlib import Path
 import subprocess as sp
-import typing
+from typing import Dict, List
 
 
 def bashcmd(lst, fail_okay=False, mute=False):
@@ -20,7 +20,7 @@ def bashcmd(lst, fail_okay=False, mute=False):
 # Insert a series of PIDs into a partition and start checkpointing them.
 
 
-def checkpoint(pid: int, options: typing.Dict[str, str]):
+def checkpoint(pid: int, options: Dict[str, str]):
 
     slsctl = str(Path(options["sls_source"], "tools", "slsctl", "slsctl"))
     oid = options["oid"]
@@ -68,3 +68,9 @@ def teardown(root: Path):
     bashcmd(["umount", str(root / "dev")], fail_okay=True)
     bashcmd(["umount", str(root)], fail_okay=True)
     bashcmd(["kldunload", "slos"], fail_okay=True)
+
+
+def gstripe(name: str, stripesize: int, disks: List[int]) -> None:
+    bashcmd(["gstripe", "load"], fail_okay=True)
+    bashcmd(["gstripe", "destroy", name], fail_okay=True)
+    bashcmd(["gstripe", "create", "-s", str(stripesize), name] + disks)

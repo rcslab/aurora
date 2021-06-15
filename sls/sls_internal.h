@@ -134,10 +134,6 @@ int slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 void sls_checkpointd(struct sls_checkpointd_args *args);
 void sls_restored(struct sls_restored_args *args);
 
-int slsckpt_create(struct slsckpt_data **sckpt_datap, struct sls_attr *attr);
-void slsckpt_destroy(
-    struct slsckpt_data *sckpt_data, struct slsckpt_data *sckpt_new);
-
 void slsrest_kqattach_locked(struct proc *p, struct kqueue *kq);
 void slsrest_kqattach(struct proc *p, struct kqueue *kq);
 void slsrest_kqdetach(struct kqueue *kq);
@@ -162,6 +158,7 @@ extern char *sls_basedir;
 
 extern uint64_t sls_ckpt_attempted;
 extern uint64_t sls_ckpt_done;
+extern uint64_t sls_ckpt_duration;
 SDT_PROVIDER_DECLARE(sls);
 
 #define KTR_SLS KTR_SPARE4
@@ -247,6 +244,9 @@ sls_swapderef(void)
 
 #define SLS_ZONEWARM (1024)
 int sls_zonewarm(uma_zone_t zone);
+
+int slsckpt_zoneinit(void);
+void slsckpt_zonefini(void);
 
 int slsrest_zoneinit(void);
 void slsrest_zonefini(void);

@@ -62,13 +62,13 @@
 int sls_vfs_sync = 0;
 uint64_t sls_ckpt_attempted;
 uint64_t sls_ckpt_done;
+uint64_t sls_ckpt_duration;
 
 SDT_PROBE_DEFINE1(sls, , slsckpt_dataregion_dump, , "char *");
 SDT_PROBE_DEFINE1(sls, , slsckpt_dataregion_fillckpt, , "char *");
 SDT_PROBE_DEFINE1(sls, , slsckpt_dataregion, , "char *");
 SDT_PROBE_DEFINE1(sls, , sls_checkpointd, , "char *");
 SDT_PROBE_DEFINE1(sls, , sls_ckpt, , "char *");
-SDT_PROBE_DEFINE1(sls, , slsckpt_metadata, , "char *");
 SDT_PROBE_DEFINE0(sls, , , stopclock_start);
 SDT_PROBE_DEFINE0(sls, , , stopclock_finish);
 
@@ -126,6 +126,7 @@ static int __attribute__((noinline)) slsckpt_metadata(
 	struct sbuf *sb;
 	int error = 0;
 
+	SDT_PROBE1(sls, , sls_ckpt, , "Starting metadata checkpointing");
 	KASSERT(p->p_pid != 0, ("Trying to checkpoint the kernel"));
 
 	/* Dump the process state */
@@ -140,7 +141,7 @@ static int __attribute__((noinline)) slsckpt_metadata(
 
 	sb = sbuf_new_auto();
 
-	SDT_PROBE1(sls, , slsckpt_metadata, , "Setting up metadata");
+	SDT_PROBE1(sls, , sls_ckpt, , "Setting up metadata");
 
 	error = slsckpt_vmspace(p->p_vmspace, sb, sckpt_data);
 	if (error != 0) {
@@ -149,7 +150,7 @@ static int __attribute__((noinline)) slsckpt_metadata(
 		goto out;
 	}
 
-	SDT_PROBE1(sls, , slsckpt_metadata, , "Checkpointing vm state");
+	SDT_PROBE1(sls, , sls_ckpt, , "Checkpointing vm state");
 
 	error = slsckpt_proc(p, sb, procset, sckpt_data);
 	if (error != 0) {
@@ -158,17 +159,18 @@ static int __attribute__((noinline)) slsckpt_metadata(
 		goto out;
 	}
 
-	SDT_PROBE1(sls, , slsckpt_metadata, , "Getting process state");
+	SDT_PROBE1(sls, , sls_ckpt, , "Getting process state");
 	/* XXX This has to be last right now, because the filedesc is not in its
 	 * own record. */
 	error = slsckpt_filedesc(p, sckpt_data, sb);
 	if (error != 0) {
 		SLS_DBG("Error: slsckpt_filedesc failed with error code %d\n",
 		    error);
+		SDT_PROBE1(sls, , sls_ckpt, , "Getting the fdtable");
 		goto out;
 	}
 
-	SDT_PROBE1(sls, , slsckpt_metadata, , "Getting the fdtable");
+	SDT_PROBE1(sls, , sls_ckpt, , "Getting the fdtable");
 
 	error = sbuf_finish(sb);
 	if (error != 0)
@@ -189,6 +191,7 @@ out:
 		sbuf_delete(sb);
 	}
 
+	SDT_PROBE1(sls, , sls_ckpt, , "Metadata done");
 	return error;
 }
 
@@ -226,7 +229,7 @@ slsckpt_compact_single(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 	/* Collapse the new table into the old one. */
 	slsvm_objtable_collapsenew(
 	    slsp->slsp_sckpt->sckpt_objtable, sckpt_data->sckpt_objtable);
-	slsckpt_destroy(sckpt_data, NULL);
+	uma_zfree(slsckpt_zone, sckpt_data);
 }
 
 static void
@@ -234,7 +237,7 @@ slsckpt_compact(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 {
 	if (slsp->slsp_target == SLS_MEM || slsp->slsp_mode == SLS_DELTA) {
 		/* Replace the old checkpoint in the partition. */
-		slsckpt_destroy(slsp->slsp_sckpt, sckpt_data);
+		uma_zfree_arg(slsckpt_zone, slsp->slsp_sckpt, sckpt_data);
 		slsp->slsp_sckpt = sckpt_data;
 		return;
 	}
@@ -245,7 +248,7 @@ slsckpt_compact(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 	/* Destroy the shadows. We don't keep any between iterations. */
 	DEBUG("Compacting full checkpoint");
 	KASSERT(slsp->slsp_sckpt == NULL, ("Full disk checkpoint has data"));
-	slsckpt_destroy(sckpt_data, NULL);
+	uma_zfree(slsckpt_zone, sckpt_data);
 }
 
 static int
@@ -297,9 +300,9 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 #ifdef KTR
 	KVSET_FOREACH(procset, iter, p) { slsvm_print_vmspace(p->p_vmspace); }
 #endif
-	error = slsckpt_create(&sckpt_data, &slsp->slsp_attr);
-	if (error != 0)
-		return (error);
+	sckpt_data = uma_zalloc_arg(slsckpt_zone, &slsp->slsp_attr, M_WAITOK);
+	if (sckpt_data == NULL)
+		return (ENOMEM);
 
 	SDT_PROBE1(sls, , sls_ckpt, , "Creating the checkpoint");
 
@@ -356,8 +359,14 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 
 	SDT_PROBE1(sls, , sls_ckpt, , "Shadowing the objects");
 
-	/* Let the process execute ASAP */
+	/*
+	 * Let the process execute ASAP. For a one-off checkpoint, the process
+	 * is also waiting for the partition to signal the operation is done.
+	 */
 	slsckpt_cont(procset, pcaller);
+
+	if (slsp->slsp_attr.attr_period == 0)
+		slsp_signal(slsp, 0);
 
 	SDT_PROBE1(sls, , sls_ckpt, , "Continuing the process");
 	SDT_PROBE0(sls, , , stopclock_finish);
@@ -407,7 +416,10 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 error:
 	/* Undo existing VM object tree modifications. */
 	if (sckpt_data != NULL)
-		slsckpt_destroy(sckpt_data, NULL);
+		uma_zfree(slsckpt_zone, sckpt_data);
+
+	if (slsp->slsp_attr.attr_period == 0)
+		slsp_signal(slsp, error);
 
 	return (error);
 }
@@ -546,7 +558,7 @@ slsckpt_dataregion_dump(struct slsckpt_dataregion_dump_args *args)
 	if ((slsp->slsp_target == SLS_MEM) || (slsp->slsp_mode == SLS_DELTA))
 		slsckpt_compact_single(slsp, sckpt_data);
 	else
-		slsckpt_destroy(sckpt_data, NULL);
+		uma_zfree(slsckpt_zone, sckpt_data);
 
 	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Compacting the data");
 
@@ -619,13 +631,15 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 		goto error_single;
 	}
 
-	SDT_PROBE1(sls, , slsckpt_dataregion, , "Getting the partition");
-
-	error = slsckpt_create(&sckpt_data, &slsp->slsp_attr);
-	if (error != 0)
+	sckpt_data = uma_zalloc_arg(slsckpt_zone, &slsp->slsp_attr, M_WAITOK);
+	if (sckpt_data == NULL) {
+		error = ENOMEM;
 		goto error_single;
+	}
 
 	SDT_PROBE0(sls, , , stopclock_start);
+
+	SDT_PROBE1(sls, , slsckpt_dataregion, , "Getting the partition");
 
 	/* Single thread to avoid races with other threads. */
 	PROC_LOCK(p);
@@ -687,7 +701,7 @@ error_single:
 	    slsp, SLSP_CHECKPOINTING, SLSP_AVAILABLE, false);
 	KASSERT(stateerr == 0, ("partition not in ckpt state"));
 
-	slsckpt_destroy(sckpt_data, NULL);
+	uma_zfree(slsckpt_zone, sckpt_data);
 
 	/* Remove the reference taken by the initial ioctl call. */
 	slsp_deref(slsp);
@@ -811,10 +825,13 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	struct proc *pcaller = args->pcaller;
 	struct slspart *slsp = args->slsp;
 	struct timespec tstart, tend;
+	struct timespec tin, tout;
 	long msec_elapsed, msec_left;
 	slsset *procset = NULL;
 	struct proc *p;
 	int stateerr, error = 0;
+
+	nanotime(&tin);
 
 	/* The set of processes we are going to checkpoint. */
 	error = slsset_create(&procset);
@@ -851,18 +868,23 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		sls_ckpt_attempted += 1;
 		DEBUG1("Attempting checkpoint %d", sls_ckpt_attempted);
 		/* Check if the partition got detached from the SLS. */
-		if (slsp->slsp_status != SLSP_CHECKPOINTING)
+		if (slsp->slsp_status != SLSP_CHECKPOINTING) {
+			DEBUG("Process not in checkpointing state, exiting");
 			break;
-
-		SDT_PROBE1(sls, , sls_checkpointd, , "Setting up");
+		}
 
 		/* Gather all processes still running. */
 		error = slsckpt_gather_processes(slsp, pcaller, procset);
-		if (error != 0)
+		if (error != 0) {
+			DEBUG1(
+			    "Failed to gather processes with error %d", error);
 			break;
+		}
 
-		if (slsp_isempty(slsp))
+		if (slsp_isempty(slsp)) {
+			DEBUG("No processes left to checkpoint");
 			break;
+		}
 
 		/*
 		 * If we recursively checkpoint, we don't actually enter the
@@ -881,12 +903,11 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 				break;
 		}
 
-		SDT_PROBE1(sls, , sls_checkpointd, , "Gathering processes");
-		SDT_PROBE0(sls, , , stopclock_start);
+		DEBUG("Gathered all processes");
 
 		slsckpt_stop(procset, pcaller);
 
-		SDT_PROBE1(sls, , sls_checkpointd, , "Stopping processes");
+		DEBUG("Stopped all processes");
 
 		/* Preadvance the epoch, the checkpoint will advance it. */
 		*nextepoch = slsp_epoch_preadvance(slsp);
@@ -920,6 +941,11 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 			pause_sbt("slscpt", SBT_1MS * msec_left, 0,
 			    C_HARDCLOCK | C_CATCH);
 
+		nanotime(&tout);
+		sls_ckpt_duration += (TONANO(tout) - TONANO(tin)) /
+		    (1000 * 1000);
+		tin = tout;
+
 		DEBUG("Woke up");
 		/*
 		 * The sls_ckpt() process has marked the partition as
@@ -939,14 +965,6 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	DEBUG("Stopped checkpointing");
 
 out:
-
-	/*
-	 * Either everything went ok, or something went wrong before or during
-	 * checkpointing proper. In any case, propagate the error if the caller
-	 * is waiting for it.
-	 */
-	if (slsp->slsp_attr.attr_period == 0)
-		slsp_signal(slsp, error);
 
 	/* Drop the reference we got for the SLS process. */
 	slsp_deref(slsp);

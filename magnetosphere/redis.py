@@ -90,11 +90,11 @@ def teardown(signum: int, stack) -> None:
         dtrace_process.terminate()
         dtrace_process.join()
 
+    bashcmd(["sysctl", "aurora"])
+
     if redis_process is not None:
         redis_process.kill()
         redis_process.join()
-
-    bashcmd(["sysctl", "aurora"])
 
     if teardown_root:
         sls.teardown(root)
@@ -120,6 +120,12 @@ def redis_server(inifile, extra_options) -> None:
         section, pair = option.split(".")
         key, value = pair.split("=")
         options[section][key] = value
+
+    if options["stripe"]["enabled"] == "yes":
+        name = options["stripe"]["name"]
+        size = int(options["stripe"]["size"])
+        disks = options["stripe"]["disks"].split()
+        sls.gstripe(name, size, disks)
 
     redis = options["redis-server"]["binary"]
     conf = options["redis-server"]["conf"]

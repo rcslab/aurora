@@ -39,6 +39,7 @@ tests/udplisten/udplisten
 tests/unixlisten/unixlisten
 tests/unlink/unlink
 tests/vmobject/vmobject
+tests/vmregion/vmregion
 tests/wal/wal
 
 scripts/config.sh

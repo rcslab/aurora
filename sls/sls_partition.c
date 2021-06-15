@@ -38,14 +38,13 @@
 #include "sls_table.h"
 #include "sls_vm.h"
 
-/* XXX Turn this into a zone, this is gonna be a bottleneck for region ckpts. */
-int
-slsckpt_create(struct slsckpt_data **sckpt_datap, struct sls_attr *attr)
-{
-	struct slsckpt_data *sckpt_data = NULL;
-	int error;
+uma_zone_t slsckpt_zone;
 
-	sckpt_data = malloc(sizeof(*sckpt_data), M_SLSMM, M_WAITOK | M_ZERO);
+static int
+slsckpt_zone_init(void *mem, int size, int flags __unused)
+{
+	struct slsckpt_data *sckpt_data = (struct slsckpt_data *)mem;
+	int error;
 
 	error = slskv_create(&sckpt_data->sckpt_rectable);
 	if (error != 0)
@@ -55,13 +54,9 @@ slsckpt_create(struct slsckpt_data **sckpt_datap, struct sls_attr *attr)
 	if (error != 0)
 		goto error;
 
-	error = slskv_create(&sckpt_data->sckpt_vntable);
+	error = slsset_create(&sckpt_data->sckpt_vntable);
 	if (error != 0)
 		goto error;
-
-	memcpy(&sckpt_data->sckpt_attr, attr, sizeof(sckpt_data->sckpt_attr));
-
-	*sckpt_datap = sckpt_data;
 
 	return (0);
 
@@ -73,21 +68,44 @@ error:
 		slskv_destroy(sckpt_data->sckpt_rectable);
 	}
 
-	free(sckpt_data, M_SLSMM);
-
 	return (error);
 }
 
-void
-slsckpt_destroy(struct slsckpt_data *sckpt_data, struct slsckpt_data *sckpt_new)
+static void
+slsckpt_zone_fini(void *mem, int size)
 {
+	struct slsckpt_data *sckpt_data = (struct slsckpt_data *)mem;
+
+	slsset_destroy(sckpt_data->sckpt_vntable);
+	slskv_destroy(sckpt_data->sckpt_objtable);
+	slskv_destroy(sckpt_data->sckpt_rectable);
+}
+
+static int
+slsckpt_zone_ctor(void *mem, int size, void *arg, int flags __unused)
+{
+	struct slsckpt_data *sckpt_data = (struct slsckpt_data *)mem;
+	struct sls_attr *attr;
+
+	if (arg != NULL) {
+		attr = (struct sls_attr *)arg;
+		memcpy(&sckpt_data->sckpt_attr, attr,
+		    sizeof(sckpt_data->sckpt_attr));
+	}
+
+	return (0);
+}
+
+static void
+slsckpt_zone_dtor(void *mem, int size, void *arg)
+{
+	struct slsckpt_data *sckpt_data = (struct slsckpt_data *)mem;
+	struct slsckpt_data *sckpt_new = (struct slsckpt_data *)arg;
 	struct slskv_table *newtable;
+	struct sls_record *rec;
 	struct vnode *vp;
+	uint64_t slsid;
 
-	if (sckpt_data == NULL)
-		return;
-
-	DEBUG("Destroying stored checkpoint");
 	/*
 	 * Collapse all objects created for the checkpoint. If delta
 	 * checkpointing, update the new table's keys to be the backers of
@@ -95,16 +113,38 @@ slsckpt_destroy(struct slsckpt_data *sckpt_data, struct slsckpt_data *sckpt_new)
 	 */
 	newtable = (sckpt_new != NULL) ? sckpt_new->sckpt_objtable : NULL;
 	slsvm_objtable_collapse(sckpt_data->sckpt_objtable, newtable);
-	slskv_destroy(sckpt_data->sckpt_objtable);
 
 	/* Release all held vnodes. */
 	KVSET_FOREACH_POP(sckpt_data->sckpt_vntable, vp)
 	vrele(vp);
-	slsset_destroy(sckpt_data->sckpt_vntable);
 
-	sls_free_rectable(sckpt_data->sckpt_rectable);
+	KV_FOREACH_POP(sckpt_data->sckpt_rectable, slsid, rec)
+	sls_record_destroy(rec);
+}
 
-	free(sckpt_data, M_SLSMM);
+int
+slsckpt_zoneinit(void)
+{
+	int error;
+
+	slsckpt_zone = uma_zcreate("slsckpt", sizeof(struct slsckpt_data),
+	    slsckpt_zone_ctor, slsckpt_zone_dtor, slsckpt_zone_init,
+	    slsckpt_zone_fini, UMA_ALIGNOF(struct slsckpt_data), 0);
+	if (slsckpt_zone == NULL)
+		return (ENOMEM);
+
+	error = sls_zonewarm(slsckpt_zone);
+	if (error != 0)
+		printf("WARNING: Zone slsckpt not warmed up\n");
+
+	return (0);
+}
+
+void
+slsckpt_zonefini(void)
+{
+	if (slsckpt_zone != NULL)
+		uma_zdestroy(slsckpt_zone);
 }
 
 /* Find a process in the SLS with the given PID. */
@@ -281,7 +321,7 @@ slsp_fini(struct slspart *slsp)
 	}
 
 	if (slsp->slsp_sckpt != NULL)
-		slsckpt_destroy(slsp->slsp_sckpt, NULL);
+		uma_zfree(slsckpt_zone, slsp->slsp_sckpt);
 
 	free(slsp, M_SLSMM);
 }

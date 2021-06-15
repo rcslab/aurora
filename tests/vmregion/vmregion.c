@@ -12,12 +12,12 @@
 void
 usage(void)
 {
-	printf("Usage: ./vmobject <# of objects> <size in bytes>\n");
+	printf("Usage: ./vmregion <size in bytes>\n");
 	exit(0);
 }
 
 void
-checkpoint_round(int round)
+memsnap(void *addr)
 {
 	struct timeval ckpt[2];
 	int error;
@@ -28,9 +28,9 @@ checkpoint_round(int round)
 		exit(0);
 	}
 
-	error = sls_checkpoint(OID, false);
+	error = sls_memsnap(OID, addr);
 	if (error != 0) {
-		fprintf(stderr, "sls_checkpoint returned %d\n", error);
+		fprintf(stderr, "sls_memsnap returned %d\n", error);
 		exit(0);
 	}
 
@@ -40,7 +40,7 @@ checkpoint_round(int round)
 		exit(0);
 	}
 
-	printf("Time elapsed (%d): %ldus\n", round,
+	printf("Time elapsed: %ldus\n",
 	    (1000 * 1000) * (ckpt[1].tv_sec - ckpt[0].tv_sec) +
 		(ckpt[1].tv_usec - ckpt[0].tv_usec));
 
@@ -50,56 +50,39 @@ checkpoint_round(int round)
 int
 main(int argc, char *argv[])
 {
-	size_t objcnt, objsize;
 	struct sls_attr attr;
+	uint64_t nextepoch;
 	size_t us_elapsed;
-	void **mappings;
 	void *startaddr;
+	size_t objsize;
+	void *mapping;
 	int error;
 	int i;
 
-	if (argc != 3)
+	if (argc != 2)
 		usage();
 
-	objcnt = strtol(argv[1], NULL, 10);
-	if (objcnt == 0)
-		usage();
-
-	objsize = strtol(argv[2], NULL, 10);
+	objsize = strtol(argv[1], NULL, 10);
 	if (objsize == 0)
 		usage();
 
-	printf(
-	    "Using %lu objects, %lu bytes (or %lu KB, or %lu MB, or %lu GB) each\n",
-	    objcnt, objsize, objsize / 1024, objsize / (1024 * 1024),
+	printf("Objects has %lu bytes (or %lu KB, or %lu MB, or %lu GB) each\n",
+	    objsize, objsize / 1024, objsize / (1024 * 1024),
 	    objsize / (1024 * 1024 * 1024));
 
-	mappings = malloc(sizeof(*mappings) * objcnt);
-	if (mappings == NULL) {
-		perror("malloc");
+	mapping = mmap(0x100000000, objsize, PROT_READ | PROT_WRITE,
+	    MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0);
+
+	if (mapping == NULL) {
+		perror("mmap");
 		exit(0);
 	}
 
-	for (i = 0; i < objcnt; i++) {
-		mappings[i] = mmap(NULL, objsize, PROT_READ | PROT_WRITE,
-		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-
-		if (mappings[i] == NULL) {
-			perror("mmap");
-			exit(0);
-		}
-
-		memset(mappings[i], random(), objsize);
-		if (mmap(mappings[i] + objsize, 0x1000, PROT_NONE, 0, -1, 0) ==
-		    NULL) {
-			perror("mmap");
-			exit(0);
-		}
-	}
+	memset(mapping, random(), objsize);
 
 	attr = (struct sls_attr) {
 		.attr_target = SLS_OSD,
-		.attr_mode = SLS_FULL,
+		.attr_mode = SLS_DELTA,
 		.attr_period = 0,
 		.attr_flags = SLSATTR_IGNUNLINKED,
 	};
@@ -115,7 +98,21 @@ main(int argc, char *argv[])
 		exit(0);
 	}
 
-	checkpoint_round(i);
+	error = sls_checkpoint_epoch(OID, false, &nextepoch);
+	if (error != 0) {
+		fprintf(stderr, "sls_checkpoint returned %d\n", error);
+		exit(0);
+	}
+
+	error = sls_untilepoch(OID, nextepoch);
+	if (error != 0) {
+		fprintf(stderr, "sls_untilepoch: %s\n", strerror(error));
+		exit(1);
+	}
+
+	memset(mapping, 0x5a, objsize);
+
+	memsnap(mapping);
 
 	return (0);
 }

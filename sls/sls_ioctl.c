@@ -632,6 +632,9 @@ sls_sysctl_init(void)
 	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "ckpt_done", CTLFLAG_RW, &sls_ckpt_done, 0,
 	    "Checkpoints successfully done");
+	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "ckpt_duration", CTLFLAG_RW, &sls_ckpt_duration, 0,
+	    "Total run time of the checkpointer");
 	(void)SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "async_slos", CTLFLAG_RW, &sls_async_slos, 0,
 	    "Asynchronous SLOS writes");
@@ -731,7 +734,15 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		if (error)
 			return (error);
 
-		/* The restore data zone depends on the kv zone. */
+		error = slstable_init();
+		if (error)
+			return (error);
+
+		/* The ckpt and restore zones depend on the kv zone. */
+		error = slsckpt_zoneinit();
+		if (error != 0)
+			return (error);
+
 		error = slsrest_zoneinit();
 		if (error != 0)
 			return (error);
@@ -787,23 +798,32 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 	case MOD_UNLOAD:
 
 		SLS_LOCK();
+		printf("Waiting for all operations in progress...\n");
 		/* Signal that we're exiting and wait for threads to finish. */
 		slsm.slsm_exiting = 1;
 		/* Wait for all operations to end. */
 		while (slsm.slsm_inprog > 0)
 			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
 
+		printf("Killing all processes in Aurora...\n");
 
 		/* Kill all processes in Aurora. This call can sleep. */
 		error = sls_prockillall();
 		if (error != 0)
 			return (EBUSY);
 
+		printf("Waiting for all processes to exit...\n");
+
 		/* Wait for all operations to end. */
 		while (!LIST_EMPTY(&slsm.slsm_plist))
 			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
 		SLS_UNLOCK();
 
+		printf("Cleaning up any pending writes in the taskqueue...\n");
+		/* Clean up any pending write operations. */
+		slstable_fini();
+
+		printf("Destroying all partitions...\n");
 		/* Destroy all partitions. */
 		slsp_delall();
 
@@ -819,8 +839,10 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		 * themselves to the process list.
 		 */
 		SLS_LOCK();
+		printf("Destroying the swapper...\n");
 		sls_pager_swapoff();
 
+		printf("Waiting for all swap objects to die...\n");
 		while (slsm.slsm_swapobjs > 0)
 			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
 
@@ -847,10 +869,12 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 			printf("Failed to destroy sysctl\n");
 
 		slsrest_zonefini();
+		slsckpt_zonefini();
 		slskv_fini();
 
 		cv_destroy(&slsm.slsm_exitcv);
 		mtx_destroy(&slsm.slsm_mtx);
+		printf("Done.\n");
 
 		break;
 	default:

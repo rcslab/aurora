@@ -1,7 +1,9 @@
+#!/usr/sbin/dtrace -s
+
 #pragma D option quiet
 int tstart, nstart;
 
-BEGIN 
+BEGIN
 {
 	ftype[1] = "vnode";
 	ftype[2] = "socket";
@@ -11,59 +13,50 @@ BEGIN
 	ftype[10] = "pts";
 }
 
-sls:sls::fileckptstart
+sls:::fileprobe_start
 {
 	self->tstart = timestamp;
 }
 
-sls:sls::fileckptend
+sls:::fileprobe_return
 {
-	@time[ftype[arg0]] = avg(timestamp - self->tstart);
+	@ckpt[ftype[arg0]] = avg(timestamp - self->tstart);
 }
 
-sls:sls::fileckpterr
-{
-	@time["err"] = avg(timestamp - self->tstart);
-	@errcounts["err"] = count();
-}
-
-sls:sls::sysvstart
+fbt::slsckpt_sysvshm:entry
 {
 	self->tstart = timestamp;
 }
 
-sls:sls::sysvend
+fbt::slsckpt_sysvshm:return
 {
-	@time["sysvshm"] = avg(timestamp - self->tstart);
+	@ckpt["sysvshm"] = avg(timestamp - self->tstart);
 }
 
-
-sls:sls::sysverror
+sls:::filerest_start
 {
-	@time["err"] = avg(timestamp - self->tstart);
-	@errcounts["sysverr"] = count();
+	self->tstart = timestamp;
 }
 
-sls:sls::namestart
+sls:::filerest_return
 {
-	self->nstart = timestamp;
+	@rest[ftype[arg0]] = avg(timestamp - self->tstart);
 }
 
-sls:sls::nameend
+fbt::slsrest_sysvshm:entry
 {
-	@time["name"] = avg(timestamp - self->nstart); 
+	self->tstart = timestamp;
 }
 
-sls:sls::nameerr
+fbt::slsrest_sysvshm:return
 {
-	@time["nameerr"] = avg(timestamp - self->nstart); 
-	@errcounts["nameerr"] = count();
+	@rest["sysvshm"] = avg(timestamp - self->tstart);
 }
 
 END
 {
-	print("Checkpoint times (ns):");
-	printa(@time);
-	print("Error errcounts(ns):");
-	printa(@errcounts);
+	printf("Checkpoint times (ns):");
+	printa(@ckpt);
+	printf("Restore times (ns):");
+	printa(@rest);
 }

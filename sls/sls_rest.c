@@ -67,6 +67,8 @@
 #include "sls_vnode.h"
 #include "sysv_internal.h"
 
+SDT_PROBE_DEFINE0(sls, , , filerest_start);
+SDT_PROBE_DEFINE1(sls, , , filerest_return, "int");
 SDT_PROBE_DEFINE1(sls, , sls_rest, , "char *");
 SDT_PROBE_DEFINE1(sls, , slsrest_metadata, , "char *");
 SDT_PROBE_DEFINE0(sls, , slsrest_start, );
@@ -362,7 +364,9 @@ slsrest_dofile(struct slsrest_data *restdata, char *buf, size_t buflen)
 	if (error != 0)
 		return (error);
 
+	SDT_PROBE0(sls, , , filerest_start);
 	error = slsrest_file(data, &slsfile, restdata);
+	SDT_PROBE1(sls, , , filerest_return, slsfile.type);
 
 	switch (slsfile.type) {
 	case DTYPE_KQUEUE:
@@ -1123,9 +1127,9 @@ slsrest_data_cache(struct slspart *slsp, struct slsrest_data *restdata,
 	int error;
 
 	DEBUG1("Caching the checkpoint for partition %d\n", slsp->slsp_oid);
-	error = slsckpt_create(&sckpt_data, &slsp->slsp_attr);
-	if (error != 0)
-		return (error);
+	sckpt_data = uma_zalloc_arg(slsckpt_zone, &slsp->slsp_attr, M_WAITOK);
+	if (sckpt_data == NULL)
+		return (ENOMEM);
 
 	error = slsrest_shadowtable(
 	    sckpt_data->sckpt_objtable, restdata->objtable);

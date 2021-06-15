@@ -58,6 +58,9 @@
 #include "sls_vmobject.h"
 #include "sls_vnode.h"
 
+SDT_PROBE_DEFINE0(sls, , , fileprobe_start);
+SDT_PROBE_DEFINE1(sls, , , fileprobe_return, "int");
+
 static int
 slsckpt_getkqueue(
     struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
@@ -804,7 +807,9 @@ slsckpt_filedesc(
 		}
 
 		/* Checkpoint the file structure itself. */
+		SDT_PROBE0(sls, , , fileprobe_start);
 		error = slsckpt_file(p, fp, &slsfdp->fd_table[fd], sckpt_data);
+		SDT_PROBE1(sls, , , fileprobe_return, fp->f_type);
 		if (error != 0)
 			goto done;
 	}
