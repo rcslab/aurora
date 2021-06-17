@@ -168,6 +168,10 @@ sls_prockillall(void)
 		 */
 	}
 
+	/* Wait for all the processes to die. */
+	while (!LIST_EMPTY(&slsm.slsm_plist))
+		cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
+
 	return (0);
 }
 
@@ -662,6 +666,13 @@ sls_sysctl_init(void)
 	return (0);
 }
 
+static void
+sls_sysctl_fini(void)
+{
+	if (sysctl_ctx_free(&aurora_ctx))
+		printf("Failed to destroy sysctl\n");
+}
+
 static int
 sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
     struct thread *td)
@@ -734,172 +745,219 @@ static struct cdevsw slsmm_cdevsw = {
 };
 
 static int
+sls_partadd_default_osd(void)
+{
+	struct sls_partadd_args partadd_args;
+
+	partadd_args.oid = SLS_DEFAULT_PARTITION;
+	partadd_args.attr.attr_mode = SLS_DELTA;
+	partadd_args.attr.attr_target = SLS_OSD;
+	partadd_args.attr.attr_period = 0;
+	partadd_args.attr.attr_flags = 0;
+
+	return (sls_partadd(&partadd_args));
+}
+
+static int
+sls_partadd_default_mem(void)
+{
+	struct sls_partadd_args partadd_args;
+
+	partadd_args.oid = SLS_DEFAULT_MPARTITION;
+	partadd_args.attr.attr_mode = SLS_FULL;
+	partadd_args.attr.attr_target = SLS_MEM;
+	partadd_args.attr.attr_period = 0;
+	partadd_args.attr.attr_flags = 0;
+
+	return (sls_partadd(&partadd_args));
+}
+
+static void
+sls_partadd_default(void)
+{
+	int error;
+
+	error = sls_partadd_default_osd();
+	if (error) {
+		printf("Problem creating default on-disk partition\n");
+	}
+
+	error = sls_partadd_default_mem();
+	if (error) {
+		printf("Problem creating default in-memory partition\n");
+	}
+}
+
+static int
+slsm_init(void)
+{
+	int error;
+
+	mtx_init(&slsm.slsm_mtx, "slsm", NULL, MTX_DEF);
+	cv_init(&slsm.slsm_exitcv, "slsm");
+
+	error = slskv_create(&slsm.slsm_procs);
+	if (error != 0)
+		return (error);
+
+	error = slskv_create(&slsm.slsm_parts);
+	if (error != 0)
+		return (error);
+
+	error = slskv_create(&slsm.slsm_prefault);
+	if (error != 0)
+		return (error);
+
+	error = slskv_create(&slsm.slsm_resident);
+	if (error != 0)
+		return (error);
+
+	return (0);
+}
+
+static void
+slsm_fini(void)
+{
+	uint64_t objid;
+	bitstr_t *bitmap;
+
+	/* Destroy the prefault bitmaps. */
+	if (slsm.slsm_prefault != NULL) {
+		KV_FOREACH_POP(slsm.slsm_prefault, objid, bitmap)
+		free(bitmap, M_SLSMM);
+		slskv_destroy(slsm.slsm_prefault);
+	}
+
+	/* Destroy the resident page bitmaps . */
+	if (slsm.slsm_resident != NULL) {
+		KV_FOREACH_POP(slsm.slsm_resident, objid, bitmap)
+		free(bitmap, M_SLSMM);
+		slskv_destroy(slsm.slsm_resident);
+	}
+
+	if (slsm.slsm_parts != NULL) {
+		slskv_destroy(slsm.slsm_parts);
+		slsm.slsm_parts = NULL;
+	}
+
+	/* Remove all processes from the global table.  */
+	if (slsm.slsm_procs != NULL) {
+		slskv_destroy(slsm.slsm_procs);
+		slsm.slsm_procs = NULL;
+	}
+
+	cv_destroy(&slsm.slsm_exitcv);
+	mtx_destroy(&slsm.slsm_mtx);
+}
+
+static void
+sls_hook_attach(void)
+{
+	/* Construct the system call vector. */
+	slssyscall_initsysvec();
+	slsmetropolis_initsysvec();
+	sls_exit_hook = sls_exit_procremove;
+	vm_fault_metropolis_hook = sls_register_fault;
+}
+
+static void
+sls_hook_detach(void)
+{
+	vm_fault_metropolis_hook = NULL;
+	sls_exit_hook = NULL;
+	slsmetropolis_finisysvec();
+	slssyscall_finisysvec();
+}
+
+static void
+sls_flush_operations(void)
+{
+	slsm.slsm_exiting = 1;
+	while (slsm.slsm_inprog > 0)
+		cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
+}
+
+static int
 SLSHandler(struct module *inModule, int inEvent, void *inArg)
 {
 	int error = 0;
 	struct vnode __unused *vp = NULL;
-	struct sls_partadd_args partadd_args;
-	uint64_t objid;
-	bitstr_t *bitmap;
 
 	switch (inEvent) {
 	case MOD_LOAD:
 		bzero(&slsm, sizeof(slsm));
 
-		mtx_init(&slsm.slsm_mtx, "slsm", NULL, MTX_DEF);
-		cv_init(&slsm.slsm_exitcv, "slsm");
-
+		/* Enable the hashtables.*/
 		error = slskv_init();
-		if (error)
+		if (error != 0)
 			return (error);
 
+		/* Initialize global module state. Depends on the KV zone. */
+		error = slsm_init();
+		if (error != 0)
+			return (error);
+
+		/* Initialize the IO system. Depends on global module state. */
 		error = slstable_init();
-		if (error)
+		if (error != 0)
 			return (error);
 
-		/* The ckpt and restore zones depend on the kv zone. */
+		/* Initialize checkpoint state. Depends on the KV zone. */
 		error = slsckpt_zoneinit();
 		if (error != 0)
 			return (error);
 
+		/* Initialize restore state. Depends on the KV zone. */
 		error = slsrest_zoneinit();
-		if (error != 0)
-			return (error);
-
-		error = slskv_create(&slsm.slsm_procs);
-		if (error != 0)
-			return (error);
-
-		error = slskv_create(&slsm.slsm_parts);
-		if (error != 0)
-			return (error);
-
-		error = slskv_create(&slsm.slsm_prefault);
-		if (error != 0)
-			return (error);
-
-		error = slskv_create(&slsm.slsm_resident);
 		if (error != 0)
 			return (error);
 
 		/* Initialize Aurora-related sysctls. */
 		sls_sysctl_init();
 
-		/* Create a default on-disk and in-memory partition */
-		partadd_args.oid = SLS_DEFAULT_PARTITION;
-		partadd_args.attr.attr_mode = SLS_DELTA;
-		partadd_args.attr.attr_target = SLS_OSD;
-		partadd_args.attr.attr_period = 0;
-		partadd_args.attr.attr_flags = 0;
-		error = sls_partadd(&partadd_args);
-		if (error) {
-			printf("Problem creating default on-disk partition\n");
-		}
-
-		partadd_args.oid = SLS_DEFAULT_MPARTITION;
-		partadd_args.attr.attr_mode = SLS_FULL;
-		partadd_args.attr.attr_target = SLS_MEM;
-		partadd_args.attr.attr_period = 0;
-		partadd_args.attr.attr_flags = 0;
-		error = sls_partadd(&partadd_args);
-		if (error) {
-			printf(
-			    "Problem creating default in-memory partition\n");
-		}
+		/* Add the syscall vectors and hooks. */
+		sls_hook_attach();
 
 		/* Commandeer the swap pager. */
 		sls_pager_register();
 
-		/* Construct the system call vector. */
-		slssyscall_initsysvec();
-		slsmetropolis_initsysvec();
-		sls_exit_hook = sls_exit_procremove;
-		vm_fault_metropolis_hook = sls_register_fault;
+		/* Create a default on-disk and in-memory partition. */
+		sls_partadd_default();
 
 		/* Make the SLS available to userspace. */
 		slsm.slsm_cdev = make_dev(
 		    &slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "sls");
 
-		KASSERT(error == 0, ("megatable creation failed"));
 		break;
 
 	case MOD_UNLOAD:
 
 		SLS_LOCK();
-		printf("Waiting for all operations in progress...\n");
-		vm_fault_metropolis_hook = NULL;
+
 		/* Signal that we're exiting and wait for threads to finish. */
-		slsm.slsm_exiting = 1;
-		/* Wait for all operations to end. */
-		while (slsm.slsm_inprog > 0)
-			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
+		sls_flush_operations();
 
 		printf("Killing all processes in Aurora...\n");
-
-		/* Kill all processes in Aurora. This call can sleep. */
+		/* Kill all processes in Aurora, sleep till they exit. */
 		error = sls_prockillall();
 		if (error != 0)
 			return (EBUSY);
 
-		printf("Waiting for all processes to exit...\n");
-
-		/* Wait for all operations to end. */
-		while (!LIST_EMPTY(&slsm.slsm_plist))
-			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
-		SLS_UNLOCK();
-
-		printf("Cleaning up any pending writes in the taskqueue...\n");
-		/* Clean up any pending write operations. */
-		slstable_fini();
-
-		printf("Destroying all partitions...\n");
-		/* Destroy all partitions. */
-		slsp_delall();
-
-		/* Destroy the prefault bitmaps. */
-		if (slsm.slsm_prefault != NULL) {
-			KV_FOREACH_POP(slsm.slsm_prefault, objid, bitmap)
-			free(bitmap, M_SLSMM);
-			slskv_destroy(slsm.slsm_prefault);
-		}
-
-		/* Destroy the resident page bitmaps . */
-		if (slsm.slsm_resident != NULL) {
-			KV_FOREACH_POP(slsm.slsm_resident, objid, bitmap)
-			free(bitmap, M_SLSMM);
-			slskv_destroy(slsm.slsm_resident);
-		}
-
+		printf("Turning off the swapper...\n");
 		/*
-		 * Swap off the Aurora swapper.  XXX Ideally we'd like to kill
-		 * every single process that could conceivably use Aurora swap
-		 * objects; this includes processes created from restored Aurora
-		 * processes using fork(), and processes that have been orphaned
-		 * and given to init(). If runnin a partition in a container, as
-		 * we should, this is easy; we traverse the process tree of the
-		 * container init process. If not, we need to override the
-		 * system call vectors of all processes in Aurora to add
-		 * themselves to the process list.
+		 * Swap off the Aurora swapper. XXX Make sure that all Aurora
+		 * processes are dead.
 		 */
-		SLS_LOCK();
-		printf("Destroying the swapper...\n");
 		sls_pager_swapoff();
-
-		printf("Waiting for all swap objects to die...\n");
-		while (slsm.slsm_swapobjs > 0)
-			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
-
-		SLS_UNLOCK();
-
+		KASSERT(slsm.slsm_swapobjs == 0, ("sls_pager_swapoff failed"));
 		sls_pager_unregister();
 
-		/* We need to have powered Aurora off. */
-		if (slsm.slsm_exiting == 0)
-			return (EINVAL);
+		SLS_UNLOCK();
 
-		sls_exit_hook = NULL;
-		slsmetropolis_finisysvec();
-		slssyscall_finisysvec();
+		/* Destroy all in-memory partition data. */
+		slsp_delall();
+
+		sls_hook_detach();
 
 		/*
 		 * Destroy the device, wait for all ioctls in progress. We do
@@ -908,15 +966,16 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		if (slsm.slsm_cdev != NULL)
 			destroy_dev(slsm.slsm_cdev);
 
-		if (sysctl_ctx_free(&aurora_ctx))
-			printf("Failed to destroy sysctl\n");
+		sls_sysctl_fini();
+
+		printf("Cleaning up image and module state...\n");
 
 		slsrest_zonefini();
 		slsckpt_zonefini();
-		slskv_fini();
 
-		cv_destroy(&slsm.slsm_exitcv);
-		mtx_destroy(&slsm.slsm_mtx);
+		slstable_fini();
+		slsm_fini();
+		slskv_fini();
 		printf("Done.\n");
 
 		break;

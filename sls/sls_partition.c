@@ -401,16 +401,6 @@ slsp_delall(void)
 	while (slskv_pop(slsm.slsm_parts, &oid, (uintptr_t *)&slsp) == 0)
 		slsp_fini(slsp);
 
-	/* Remove all processes from the global table.  */
-	if (slsm.slsm_procs != NULL) {
-		slskv_destroy(slsm.slsm_procs);
-		slsm.slsm_procs = NULL;
-	}
-
-	if (slsm.slsm_parts != NULL) {
-		slskv_destroy(slsm.slsm_parts);
-		slsm.slsm_parts = NULL;
-	}
 }
 
 void
