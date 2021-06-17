@@ -20,6 +20,7 @@ static struct option partadd_longopts[] = {
 	{ "ignore unlinked files", required_argument, NULL, 'i' },
 	{ "lazy restore", required_argument, NULL, 'l' },
 	{ "cached restore", required_argument, NULL, 'c' },
+	{ "prefault", required_argument, NULL, 'p' },
 	{ NULL, no_argument, NULL, 0 },
 };
 
@@ -82,6 +83,10 @@ partadd_main(int argc, char *argv[])
 
 		case 'o':
 			oid = strtol(optarg, NULL, 10);
+			break;
+
+		case 'p':
+			attr.attr_flags |= SLSATTR_PREFAULT;
 			break;
 
 		case 't':

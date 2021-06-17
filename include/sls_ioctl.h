@@ -105,11 +105,13 @@ struct sls_metropolis_spawn_args {
 #define SLSATTR_IGNUNLINKED 0x1 /* Ignore unlinked files */
 #define SLSATTR_LAZYREST 0x2	/* Restore lazily */
 #define SLSATTR_CACHEREST 0x4	/* Cache restore images in memory */
+#define SLSATTR_PREFAULT 0x8	/* Prefault popular pages */
 
 #define SLSATTR_FLAGISSET(attr, flag) (((attr).attr_flags & flag) != 0)
 #define SLSATTR_ISIGNUNLINKED(attr) \
 	(SLSATTR_FLAGISSET((attr), SLSATTR_IGNUNLINKED))
 #define SLSATTR_ISLAZYREST(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_LAZYREST))
 #define SLSATTR_ISCACHEREST(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_CACHEREST))
+#define SLSATTR_ISPREFAULT(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_PREFAULT))
 
 #endif

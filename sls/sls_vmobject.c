@@ -167,6 +167,28 @@ slsvmobj_checkpoint_shm(vm_object_t *objp, struct slsckpt_data *sckpt_data)
 	return (0);
 }
 
+static void
+slsvmobj_prefault(struct slsvmobject *info)
+{
+	size_t bmp_size;
+	char *bitmap;
+	int error;
+
+	error = slskv_find(
+	    slsm.slsm_prefault, info->slsid, (uintptr_t *)&bitmap);
+	if (error == 0)
+		return;
+
+	bmp_size = info->size / 8;
+	if ((info->size % 8) != 0)
+		bmp_size += 1;
+	bitmap = malloc(bmp_size, M_SLSMM, M_WAITOK | M_ZERO);
+
+	error = slskv_add(slsm.slsm_prefault, info->slsid, (uintptr_t)bitmap);
+	if (error != 0)
+		free(bitmap, M_SLSMM);
+}
+
 static int
 slsvmobj_restore(struct slsvmobject *info, struct slsrest_data *restdata)
 {
@@ -183,6 +205,10 @@ slsvmobj_restore(struct slsvmobject *info, struct slsrest_data *restdata)
 		 * OBJT_SWAP is just a default object which has swapped, or is
 		 * SYSV_SHM. It is already restored and set up.
 		 */
+
+		if (SLSP_PREFAULT(restdata->slsp))
+			slsvmobj_prefault(info);
+
 		return (0);
 
 	case OBJT_VNODE:

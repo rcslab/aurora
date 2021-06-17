@@ -1,6 +1,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bio.h>
+#include <sys/bitstring.h>
 #include <sys/buf.h>
 #include <sys/conf.h>
 #include <sys/filio.h>
@@ -532,29 +533,64 @@ error:
 	return (error);
 }
 
+static int
+sls_readdata_prefault(struct vnode *vp, vm_object_t obj, bitstr_t *bitmap)
+{
+	struct slos_extent extent;
+	vm_pindex_t offset;
+	int error;
+
+	DEBUG1("Prefaulting object %lx", obj->objid);
+	offset = 0;
+	for (;;) {
+		/* Go over the blocks we don't need */
+		while (offset < obj->size) {
+			if (bit_test(bitmap, offset) != 0)
+				break;
+			offset += 1;
+		}
+
+		extent.sxt_lblkno = offset + SLOS_OBJOFF;
+		extent.sxt_cnt = 0;
+		while (offset < obj->size) {
+			if (bit_test(bitmap, offset) == 0)
+				break;
+			offset += 1;
+			extent.sxt_cnt += 1;
+
+			if (extent.sxt_cnt == (sls_contig_limit / PAGE_SIZE))
+				break;
+		}
+
+		if (offset == obj->size)
+			break;
+
+		KASSERT(extent.sxt_cnt > 0, ("Empty extent"));
+
+		error = sls_readpages_slos(vp, obj, extent);
+		if (error != 0)
+			return (error);
+	}
+
+	return (0);
+}
+
 /*
  * Reads in a sparse record representing a VM object,
  * and stores it as a linked list of page runs.
  */
 static int
-sls_readdata(struct vnode *vp, uint64_t slsid, uint64_t type,
-    struct slskv_table *rectable, struct slskv_table *objtable, int lazyrest)
+sls_readdata(struct slspart *slsp, struct vnode *vp, uint64_t slsid,
+    uint64_t type, struct slskv_table *rectable, struct slskv_table *objtable)
 {
 	struct sls_record *rec;
 	vm_object_t obj = NULL;
 	struct sbuf *sb;
+	bitstr_t *bitmap;
 	size_t len;
 	int error;
 
-	switch (type) {
-	case SLOSREC_VMOBJ:
-		len = sizeof(struct slsvmobject);
-		break;
-
-	default:
-
-		return (EINVAL);
-	}
+	len = sizeof(struct slsvmobject);
 
 	/*
 	 * Read the object from the SLOS. Seeks for SLOS nodes are block-sized,
@@ -578,15 +614,30 @@ sls_readdata(struct vnode *vp, uint64_t slsid, uint64_t type,
 		return (0);
 
 	/* XXX Add VFS backend handling. */
-	if (lazyrest == 0) {
+	if (SLSP_LAZYREST(slsp) == 0) {
 		VOP_UNLOCK(vp, 0);
 		error = sls_readdata_slos(vp, obj);
 		VOP_LOCK(vp, LK_EXCLUSIVE);
 
 		if (error != 0)
 			goto error;
+	} else if (SLSP_PREFAULT(slsp)) {
+		/*
+		 * Even we have no prefault vector or can't prefault
+		 * pages in, we can keep going since we have created
+		 * the object.
+		 */
+		error = slskv_find(
+		    slsm.slsm_prefault, slsid, (uintptr_t *)&bitmap);
+		if (error != 0)
+			goto out;
+
+		error = sls_readdata_prefault(vp, obj, bitmap);
+		if (error != 0)
+			goto out;
 	}
 
+out:
 	/* Add the object to the table. */
 	error = slskv_add(objtable, slsid, (uintptr_t)obj);
 	if (error != 0)
@@ -666,8 +717,8 @@ sls_read_slos_manifest(uint64_t oid, uint64_t **ids, size_t *idlen)
 }
 
 static int
-sls_read_slos_record(uint64_t oid, struct slskv_table *rectable,
-    struct slskv_table *objtable, int lazyrest)
+sls_read_slos_record(struct slspart *slsp, uint64_t oid,
+    struct slskv_table *rectable, struct slskv_table *objtable)
 {
 	struct thread *td = curthread;
 	int close_error, error, ret;
@@ -703,8 +754,7 @@ sls_read_slos_record(uint64_t oid, struct slskv_table *rectable,
 	 */
 	DEBUG1("Read record of type %d", st.type);
 	if (sls_isdata(st.type)) {
-		ret = sls_readdata(
-		    vp, oid, st.type, rectable, objtable, lazyrest);
+		ret = sls_readdata(slsp, vp, oid, st.type, rectable, objtable);
 		if (ret != 0)
 			goto out;
 	} else {
@@ -744,8 +794,7 @@ sls_read_slos(struct slspart *slsp, struct slskv_table **rectablep,
 		goto error;
 
 	for (i = 0; i < idlen; i++) {
-		error = sls_read_slos_record(
-		    ids[i], rectable, objtable, SLSP_LAZYREST(slsp));
+		error = sls_read_slos_record(slsp, ids[i], rectable, objtable);
 		if (error != 0)
 			goto error;
 	}
@@ -765,6 +814,29 @@ error:
 	return (error);
 }
 
+static void
+sls_writeobj_bitmap(vm_object_t object)
+{
+	bitstr_t *bitmap = NULL;
+	vm_page_t m;
+	int error;
+
+	error = slskv_find(
+	    slsm.slsm_resident, object->objid, (uintptr_t *)&bitmap);
+	if (error != 0) {
+		bitmap = bit_alloc(object->size, M_SLSMM, M_WAITOK);
+		error = slskv_add(
+		    slsm.slsm_resident, object->objid, (uintptr_t)bitmap);
+		if (error != 0) {
+			free(bitmap, M_SLSMM);
+			return;
+		}
+	}
+
+	TAILQ_FOREACH (m, &object->memq, listq)
+		bit_set(bitmap, m->pindex);
+}
+
 /*
  * Get the pages of an object in the form of a
  * linked list of contiguous memory areas.
@@ -777,6 +849,8 @@ sls_writeobj_data(struct vnode *vp, vm_object_t obj)
 	vm_pindex_t pindex;
 	struct buf *bp;
 	int error;
+
+	sls_writeobj_bitmap(obj);
 
 	pindex = 0;
 	for (;;) {

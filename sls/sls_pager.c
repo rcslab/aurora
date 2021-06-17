@@ -1,5 +1,6 @@
 #include <sys/param.h>
 #include <sys/bio.h>
+#include <sys/bitstring.h>
 #include <sys/buf.h>
 #include <sys/lock.h>
 #include <sys/queue.h>
@@ -25,6 +26,19 @@
 /* The initial swap pager operations vector. */
 static struct pagerops swappagerops_old;
 
+static void
+sls_pager_mark_prefault(uint64_t objid, vm_pindex_t start, vm_pindex_t stop)
+{
+	bitstr_t *bitmap;
+	int error;
+
+	error = slskv_find(slsm.slsm_prefault, objid, (uintptr_t *)&bitmap);
+	if (error != 0)
+		return;
+
+	bit_nset(bitmap, start, stop);
+}
+
 /*
  * Mark the buffer as invalid and wake up any waiters on the object.
  */
@@ -32,11 +46,19 @@ static void
 sls_pager_done(struct buf *bp)
 {
 	vm_object_t obj = NULL;
+	vm_pindex_t start, end;
+	uint64_t objid = 0;
+	uint64_t npages;
 	vm_page_t m;
 	int i;
 
+	npages = bp->b_npages;
 	if (bp->b_npages > 0) {
+		start = bp->b_pages[0]->pindex;
+		end = bp->b_pages[bp->b_npages - 1]->pindex;
+
 		obj = bp->b_pages[0]->object;
+		objid = obj->objid;
 		VM_OBJECT_WLOCK(obj);
 		KASSERT(obj->type != OBJT_DEAD, ("object is dead"));
 
@@ -86,6 +108,9 @@ sls_pager_done(struct buf *bp)
 	bp->b_flags |= B_DONE;
 
 	bdone(bp);
+
+	if (objid != 0)
+		sls_pager_mark_prefault(objid, start, end);
 }
 
 /*

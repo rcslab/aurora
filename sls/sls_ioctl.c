@@ -1,5 +1,6 @@
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/bitstring.h>
 #include <sys/conf.h>
 #include <sys/file.h>
 #include <sys/kernel.h>
@@ -41,6 +42,22 @@ extern int sls_objprotect;
 
 struct sls_metadata slsm;
 struct sysctl_ctx_list aurora_ctx;
+
+static void
+sls_register_fault(vm_map_entry_t entry)
+{
+	vm_object_t object;
+
+	object = entry->object.vm_object;
+	if (object == NULL)
+		return;
+
+	if (object->type != OBJT_VNODE)
+		return;
+
+	if (((struct vnode *)object->handle)->v_mount != slos.slsfs_mount)
+		return;
+}
 
 /*
  * XXXHACK: Populate the zones used in the SLS to avoid slab allocations. We
@@ -722,6 +739,8 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 	int error = 0;
 	struct vnode __unused *vp = NULL;
 	struct sls_partadd_args partadd_args;
+	uint64_t objid;
+	bitstr_t *bitmap;
 
 	switch (inEvent) {
 	case MOD_LOAD:
@@ -752,6 +771,14 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 			return (error);
 
 		error = slskv_create(&slsm.slsm_parts);
+		if (error != 0)
+			return (error);
+
+		error = slskv_create(&slsm.slsm_prefault);
+		if (error != 0)
+			return (error);
+
+		error = slskv_create(&slsm.slsm_resident);
 		if (error != 0)
 			return (error);
 
@@ -787,6 +814,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		slssyscall_initsysvec();
 		slsmetropolis_initsysvec();
 		sls_exit_hook = sls_exit_procremove;
+		vm_fault_metropolis_hook = sls_register_fault;
 
 		/* Make the SLS available to userspace. */
 		slsm.slsm_cdev = make_dev(
@@ -799,6 +827,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 
 		SLS_LOCK();
 		printf("Waiting for all operations in progress...\n");
+		vm_fault_metropolis_hook = NULL;
 		/* Signal that we're exiting and wait for threads to finish. */
 		slsm.slsm_exiting = 1;
 		/* Wait for all operations to end. */
@@ -826,6 +855,20 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		printf("Destroying all partitions...\n");
 		/* Destroy all partitions. */
 		slsp_delall();
+
+		/* Destroy the prefault bitmaps. */
+		if (slsm.slsm_prefault != NULL) {
+			KV_FOREACH_POP(slsm.slsm_prefault, objid, bitmap)
+			free(bitmap, M_SLSMM);
+			slskv_destroy(slsm.slsm_prefault);
+		}
+
+		/* Destroy the resident page bitmaps . */
+		if (slsm.slsm_resident != NULL) {
+			KV_FOREACH_POP(slsm.slsm_resident, objid, bitmap)
+			free(bitmap, M_SLSMM);
+			slskv_destroy(slsm.slsm_resident);
+		}
 
 		/*
 		 * Swap off the Aurora swapper.  XXX Ideally we'd like to kill
