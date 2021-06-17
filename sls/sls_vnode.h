@@ -3,9 +3,6 @@
 
 #include "sls_internal.h"
 
-bool slsckpt_vnode_istty(struct vnode *vp);
-bool slsckpt_vnode_ckptbyname(struct vnode *vp);
-
 int slsckpt_vnode_serialize(struct slsckpt_data *sckpt_data);
 int slsckpt_vnode(struct vnode *vp, struct slsckpt_data *sckpt_data);
 int slsrest_vnode(struct slsvnode *info, struct slsrest_data *restdata);

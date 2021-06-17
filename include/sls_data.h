@@ -129,7 +129,7 @@ struct slsfile {
 	u_int flag;
 
 	off_t offset;
-	uint64_t backer;
+	uint64_t vnode;
 	uint64_t ino;
 	/*
 	 * Let's not bother with this flag from the filedescent struct.

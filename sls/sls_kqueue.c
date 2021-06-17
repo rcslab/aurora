@@ -192,38 +192,6 @@ slskq_checkpoint_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
 	return (0);
 }
 
-int
-slskq_checkpoint(
-    struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
-{
-	struct kqueue *kq;
-	int error;
-
-	/* Acquire the kqueue for reading. */
-	error = kqueue_acquire(fp, &kq);
-	if (error != 0)
-		return (error);
-
-	info->backer = (uint64_t)kq;
-
-	/* Write out the struct file. */
-	error = sbuf_bcat(sb, (void *)info, sizeof(*info));
-	if (error != 0)
-		return (error);
-
-	error = slskq_checkpoint_kqueue(p, kq, sb);
-	if (error != 0)
-		goto out;
-
-	kqueue_release(kq, 0);
-
-	return (0);
-
-out:
-	kqueue_release(kq, 0);
-	return (error);
-}
-
 /*
  * Restore a kqueue for a process. Kqueues are an exception among
  * entities using the file abstraction, in that they need the rest
@@ -515,3 +483,41 @@ slskq_restore_knotes_all(struct proc *p, struct slskv_table *kevtable)
 
 	return (0);
 }
+
+static int
+slskq_slsid(struct file *fp, uint64_t *slsidp)
+{
+	return ((uint64_t)fp);
+}
+
+static int
+slskq_checkpoint(struct file *fp, struct sls_record *rec,
+    struct slsckpt_data *sckpt_data __unused)
+{
+	struct proc *p = curproc;
+	struct kqueue *kq;
+	int error;
+
+	/* Acquire the kqueue for reading. */
+	error = kqueue_acquire(fp, &kq);
+	if (error != 0)
+		return (error);
+
+	error = slskq_checkpoint_kqueue(p, kq, rec->srec_sb);
+
+	kqueue_release(kq, 0);
+
+	return (error);
+}
+
+static bool
+slskq_supported(struct file *fp)
+{
+	return (true);
+}
+
+struct slsfile_ops slskq_ops = {
+	.slsfile_supported = slskq_supported,
+	.slsfile_slsid = slskq_slsid,
+	.slsfile_checkpoint = slskq_checkpoint,
+};

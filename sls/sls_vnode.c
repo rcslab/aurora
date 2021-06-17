@@ -63,7 +63,7 @@ slsckpt_vnode_istty(struct vnode *vp)
 /*
  * Check if the vnode can be checkpointed by name.
  */
-bool
+static bool
 slsckpt_vnode_ckptbyname(struct vnode *vp)
 {
 	/* If it's a regular file, we're good. */
@@ -156,7 +156,6 @@ slsckpt_vnode_serialize_single(
 		if (error != 0)
 			goto error;
 
-		DEBUG("Checkpointing vnode by path");
 	} else {
 		slsvnode.magic = SLSVNODE_ID;
 		slsvnode.slsid = (uint64_t)vp;
@@ -296,3 +295,133 @@ slsrest_vnode(struct slsvnode *info, struct slsrest_data *restdata)
 
 	return (0);
 }
+
+static int
+slsvn_slsid(struct file *fp, uint64_t *slsidp)
+{
+	struct vnode *vp = fp->f_vnode;
+
+	/*
+	 * We use the device pointer as our ID for ttys; it's
+	 * accessible by the master side, while the vnode isn't.
+	 *
+	 * More than one file may correspond to a vnode, so in
+	 * case of a regular file we use the file pointer itself.
+	 * The vnode record uses the vnode.
+	 */
+	if (slsckpt_vnode_istty(vp))
+		*slsidp = (uint64_t)fp->f_vnode->v_rdev;
+	else
+		*slsidp = (uint64_t)fp;
+
+	return (0);
+}
+
+static int
+slsvn_checkpoint(
+    struct file *fp, struct sls_record *rec, struct slsckpt_data *sckpt_data)
+{
+	struct vnode *vp = (struct vnode *)fp->f_vnode;
+	int error;
+
+	/*
+	 * In our case, vnodes are either regular, or they are ttys
+	 * (the slave side, the master side is DTYPE_PTS). In the former
+	 * case, we just get the name; in the latter, the name is
+	 * useless, since pts devices are interchangeable, and we
+	 * do not know if the specific number will be available at
+	 * restore time. We therefore use a struct slspts instead
+	 * of a name to represent it.
+	 */
+	if (slsckpt_vnode_ckptbyname(vp)) {
+		/* Get the location of the node in the VFS/SLSFS. */
+		error = slsckpt_vnode(vp, sckpt_data);
+		if (error != 0)
+			return (error);
+
+		return (0);
+	}
+
+	/* If the vnode has no name and isn't a tty we can't checkpoint. */
+	if (!slsckpt_vnode_istty(vp))
+		return (EINVAL);
+
+	/* Otherwise we checkpoint the tty slave. */
+	error = slspts_checkpoint_vnode(vp, rec);
+	if (error != 0)
+		return (error);
+
+	return (0);
+}
+
+/* List of paths for device vnodes that can be included in a checkpoint. */
+char *sls_accepted_devices[] = {
+	"/dev/null",
+	"/dev/zero",
+	"/dev/hpet0",
+	"/dev/random",
+	"/dev/urandom",
+	NULL,
+};
+
+static bool
+slsckpt_is_accepted_device(struct vnode *vp)
+{
+	struct thread *td = curthread;
+	char *freepath = NULL;
+	char *fullpath = "";
+	bool accepted;
+	int error;
+	int i;
+
+	/* Get the path of the vnode. */
+	error = vn_fullpath(td, vp, &fullpath, &freepath);
+	if (error != 0) {
+		DEBUG1("No path for device vnode %p", vp);
+		accepted = false;
+		goto out;
+	}
+
+	for (i = 0; sls_accepted_devices[i] != NULL; i++) {
+		if (strncmp(fullpath, sls_accepted_devices[i], PATH_MAX) != 0) {
+			accepted = true;
+			goto out;
+		}
+	}
+	accepted = false;
+
+out:
+	free(freepath, M_TEMP);
+	return (accepted);
+}
+
+static bool
+slsvn_supported(struct file *fp)
+{
+	/* FIFOs are always fine.*/
+	if (fp->f_type == DTYPE_FIFO)
+		return (true);
+
+	/*
+	 * An exception to the "only handle regular files" rule.
+	 * Used to handle slave PTYs, as mentioned in slsckpt_file().
+	 */
+	if ((fp->f_vnode->v_type == VCHR) &&
+	    ((fp->f_vnode->v_rdev->si_devsw->d_flags & D_TTY) != 0))
+		return (true);
+
+	if (fp->f_vnode->v_type == VCHR)
+		return (slsckpt_is_accepted_device(fp->f_vnode));
+
+	/* Handle only regular vnodes for now. */
+	if (fp->f_vnode->v_type != VREG)
+		return (false);
+
+	return (true);
+}
+
+struct slsfile_ops slsvn_ops = {
+	.slsfile_supported = slsvn_supported,
+	.slsfile_slsid = slsvn_slsid,
+	.slsfile_checkpoint = slsvn_checkpoint,
+};

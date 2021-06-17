@@ -22,8 +22,10 @@ int sls_read_slos(struct slspart *slsp, struct slskv_table **rectable,
 int sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data);
 int sls_write_slos_dataregion(struct slsckpt_data *sckpt_data);
 
+struct sls_record *sls_getrecord_empty(uint64_t slsid, uint64_t type);
 struct sls_record *sls_getrecord(
     struct sbuf *sb, uint64_t slsid, uint64_t type);
+int sls_record_seal(struct sls_record *rec);
 void sls_record_destroy(struct sls_record *rec);
 void sls_free_rectable(struct slskv_table *rectable);
 

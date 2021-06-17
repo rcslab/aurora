@@ -49,8 +49,9 @@
 #include "sls_file.h"
 #include "sls_internal.h"
 
-int
-slsckpt_pipe(struct proc *p, struct file *fp, struct sbuf *sb)
+static int
+slspipe_checkpoint(
+    struct file *fp, struct sls_record *rec, struct slsckpt_data *sckpt_data)
 {
 	struct pipe *pipe, *peer;
 	struct slspipe info;
@@ -76,11 +77,12 @@ slsckpt_pipe(struct proc *p, struct file *fp, struct sbuf *sb)
 	info.peer = (uint64_t)peer;
 
 	/* Write out the data. */
-	error = sbuf_bcat(sb, (void *)&info, sizeof(info));
+	error = sbuf_bcat(rec->srec_sb, (void *)&info, sizeof(info));
 	if (error != 0)
 		return (error);
 
-	error = sbuf_bcat(sb, pipe->pipe_buffer.buffer, pipe->pipe_buffer.cnt);
+	error = sbuf_bcat(
+	    rec->srec_sb, pipe->pipe_buffer.buffer, pipe->pipe_buffer.cnt);
 	if (error != 0)
 		return (error);
 
@@ -162,3 +164,24 @@ slsrest_pipe(
 
 	return (0);
 }
+
+static int
+slspipe_slsid(struct file *fp, uint64_t *slsidp)
+{
+	/* Use the pipe ID because each end has its own record. */
+	*slsidp = (uint64_t)fp->f_data;
+
+	return (0);
+}
+
+static bool
+slspipe_supported(struct file *fp)
+{
+	return (true);
+}
+
+struct slsfile_ops slspipe_ops = {
+	.slsfile_supported = slspipe_supported,
+	.slsfile_slsid = slspipe_slsid,
+	.slsfile_checkpoint = slspipe_checkpoint,
+};

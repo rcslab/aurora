@@ -61,136 +61,101 @@
 SDT_PROBE_DEFINE0(sls, , , fileprobe_start);
 SDT_PROBE_DEFINE1(sls, , , fileprobe_return, "int");
 
+/*
+ * Function vector and related boilerplate for the different file types.
+ */
+
+extern struct slsfile_ops slsvn_ops;
+extern struct slsfile_ops slssock_ops;
+extern struct slsfile_ops slspipe_ops;
+extern struct slsfile_ops slskq_ops;
+extern struct slsfile_ops slsshm_ops;
+extern struct slsfile_ops slspts_ops;
+
 static int
-slsckpt_getpipe(
-    struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
+slsfile_slsid_invalid(struct file *fp, uint64_t *slsidp)
 {
-	int error;
-
-	info->backer = (uint64_t)fp->f_data;
-
-	/* Write out the struct file. */
-	error = sbuf_bcat(sb, (void *)info, sizeof(*info));
-	if (error != 0)
-		return (error);
-
-	error = slsckpt_pipe(p, fp, sb);
-	if (error != 0)
-		return (error);
-
-	return (0);
+	return (EINVAL);
 }
 
 static int
-slsckpt_getsocket(struct proc *p, struct file *fp, struct slsfile *info,
-    struct sbuf *sb, struct slsckpt_data *sckpt_data)
+slsfile_checkpoint_invalid(
+    struct file *fp, struct sls_record *rec, struct slsckpt_data *sckpt_data)
 {
-	int error;
-
-	info->backer = (uint64_t)fp->f_data;
-
-	/* Write out the struct file. */
-	error = sbuf_bcat(sb, (void *)info, sizeof(*info));
-	if (error != 0)
-		return (error);
-
-	error = slsckpt_socket(p, (struct socket *)fp->f_data, sb, sckpt_data);
-	if (error != 0)
-		return (error);
-
-	return (0);
+	return (EINVAL);
 }
 
-static uint64_t
-slsckpt_getsocket_peer(struct socket *so)
+static bool
+slsfile_supported_invalid(struct file *fp)
 {
-	struct socket *sopeer;
-	struct unpcb *unpcb;
-
-	/* Only UNIX sockets can have peers. */
-	if (so->so_type != AF_UNIX)
-		return (0);
-
-	unpcb = sotounpcb(so);
-
-	/* Check if we have peers at all.  */
-	if (unpcb->unp_conn == NULL)
-		return (0);
-
-	/*
-	 * We have a peer if we have a bidirectional connection.
-	 * (Alternatively, it's a one-to-many datagram conn).
-	 */
-	if (unpcb->unp_conn->unp_conn != unpcb)
-		return (0);
-
-	sopeer = unpcb->unp_conn->unp_socket;
-
-	return (uint64_t)sopeer;
+	return (false);
 }
 
-/* Get the master side of the PTS. */
+static struct slsfile_ops slsfile_invalid = {
+	.slsfile_supported = slsfile_supported_invalid,
+	.slsfile_slsid = slsfile_slsid_invalid,
+	.slsfile_checkpoint = slsfile_checkpoint_invalid,
+};
+
+struct slsfile_ops *slsfile_ops[] = {
+	&slsfile_invalid, /* DTYPE_NONE */
+	&slsvn_ops,	  /* DTYPE_VNODE */
+	&slssock_ops,	  /* DTYPE_SOCKET */
+	&slspipe_ops,	  /* DTYPE_PIPE */
+	&slsvn_ops,	  /* DTYPE_FIFO */
+	&slskq_ops,	  /* DTYPE_CRYPTO */
+	&slsfile_invalid, /* DTYPE_CRYPTO */
+	&slsfile_invalid, /* DTYPE_MQUEUE */
+	&slsshm_ops,	  /* DTYPE_SHM */
+	&slsfile_invalid, /* DTYPE_SEM */
+	&slspts_ops,	  /* DTYPE_PTS */
+	&slsfile_invalid, /* DTYPE_DEV */
+	&slsfile_invalid, /* DTYPE_PROCDESC */
+	&slsfile_invalid, /* DTYPE_LINUXEFD */
+	&slsfile_invalid, /* DTYPE_LINUXTFD */
+};
+
 static int
-slsckpt_getpts_mst(struct proc *p, struct file *fp, struct tty *tty,
-    struct slsfile *info, struct sbuf *sb)
+slsfile_slsid(struct file *fp, uint64_t *slsidp)
 {
-	int error;
-
-	info->type = DTYPE_PTS;
-	info->backer = (uint64_t)tty;
-
-	/* Write out the struct file. */
-	error = sbuf_bcat(sb, (void *)info, sizeof(*info));
-	if (error != 0)
-		return (error);
-
-	error = slsckpt_pts_mst(p, tty, sb);
-	if (error != 0)
-		return (error);
-
-	return (0);
-}
-
-/* Get the slave side of the PTS. */
-static int
-slsckpt_getpts_slv(struct proc *p, struct file *fp, struct vnode *vp,
-    struct slsfile *info, struct sbuf *sb)
-{
-	int error;
-
-	info->type = DTYPE_PTS;
-	info->backer = (uint64_t)vp->v_rdev;
-
-	/* Write out the struct file. */
-	error = sbuf_bcat(sb, (void *)info, sizeof(*info));
-	if (error != 0)
-		return (error);
-
-	error = slsckpt_pts_slv(p, vp, sb);
-	if (error != 0)
-		return (error);
-
-	return (0);
+	return ((slsfile_ops[fp->f_type]->slsfile_slsid)(fp, slsidp));
 }
 
 static int
-slsckpt_getposixshm(
-    struct proc *p, struct file *fp, struct slsfile *info, struct sbuf *sb)
+slsfile_checkpoint(
+    struct file *fp, struct sls_record *rec, struct slsckpt_data *sckpt_data)
 {
-	struct shmfd *shmfd;
+	return (
+	    (slsfile_ops[fp->f_type]->slsfile_checkpoint)(fp, rec, sckpt_data));
+}
+
+static bool
+slsfile_supported(struct file *fp)
+{
+	return (slsfile_ops[fp->f_type]->slsfile_supported)(fp);
+}
+
+static int
+slsfile_is_ttyvp(struct file *fp)
+{
+	return (
+	    (fp->f_type == DTYPE_VNODE) && (slsckpt_vnode_istty(fp->f_vnode)));
+}
+
+static int
+slsfile_setinfo(struct file *fp, struct sls_record *rec, int type)
+{
+	struct slsfile info;
 	int error;
 
-	shmfd = (struct shmfd *)fp->f_data;
+	info.magic = SLSFILE_ID;
+	info.slsid = rec->srec_id;
+	info.type = type;
+	info.flag = fp->f_flag;
+	info.offset = fp->f_offset;
+	info.vnode = (uint64_t)fp->f_vnode;
 
-	/* Finalize and write out the struct file. */
-	info->type = DTYPE_SHM;
-	info->backer = (uint64_t)shmfd;
-
-	error = sbuf_bcat(sb, (void *)info, sizeof(*info));
-	if (error != 0)
-		return (error);
-
-	error = slsckpt_posixshm(shmfd, sb);
+	error = sbuf_bcat(rec->srec_sb, (void *)&info, sizeof(info));
 	if (error != 0)
 		return (error);
 
@@ -204,220 +169,61 @@ slsckpt_getposixshm(
  * belong to exactly one open file when anonymous. That means
  * that we can safely store them together.
  */
-static int __attribute__((noinline)) slsckpt_file(struct proc *p,
+static int
+slsckpt_file(
     struct file *fp, uint64_t *fpslsid, struct slsckpt_data *sckpt_data)
 {
-	struct sbuf *sb, *oldsb;
 	struct sls_record *rec;
-	struct slsfile info;
-	uint64_t sockid;
+	uint64_t slsid;
 	int error;
+	int type;
 
-	/* By default the SLS ID of the file is the file pointer. */
-	*fpslsid = (uint64_t)fp;
+	/* Get the unique ID and create an empty record. */
+	error = slsfile_slsid(fp, &slsid);
+	if (error != 0)
+		return (error);
 
-	/*
-	 * If we have already checkpointed this open file, return success.
-	 * The caller will add the SLS ID to its file descriptor table.
-	 */
-	if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t)fp,
-		(uintptr_t *)&sb) == 0)
-		return (0);
-
-	info.type = fp->f_type;
-	info.flag = fp->f_flag;
-	info.offset = fp->f_offset;
+	rec = sls_getrecord_empty(slsid, SLOSREC_FILE);
 
 	/*
-	 * XXX Change SLS ID to the encoding used for the rest of the objects.
+	 * Try to add the record into the table. If it is not inserted,
+	 * it's already there and we're done.
 	 */
-	info.magic = SLSFILE_ID;
-	info.slsid = *fpslsid;
-
-	sb = sbuf_new_auto();
-
-	DEBUG1("Restoring file of type %d", fp->f_type);
-	/* Checkpoint further information depending on the file's type. */
-	switch (fp->f_type) {
-		/* Backed by a vnode - get the name. */
-	case DTYPE_VNODE:
-	case DTYPE_FIFO:
-		DEBUG1("Found vnode %p", fp->f_vnode);
-		/*
-		 * In our case, vnodes are either regular, or they are ttys
-		 * (the slave side, the master side is DTYPE_PTS). In the former
-		 * case, we just get the name; in the latter, the name is
-		 * useless, since pts devices are interchangeable, and we
-		 * do not know if the specific number will be available at
-		 * restore time. We therefore use a struct slspts instead
-		 * of a name to represent it.
-		 */
-		if (slsckpt_vnode_ckptbyname(fp->f_vnode)) {
-
-			/* Get the location of the node in the VFS/SLSFS. */
-			error = slsckpt_vnode(fp->f_vnode, sckpt_data);
-			if (error != 0)
-				goto error;
-
-			info.backer = (uint64_t)fp->f_vnode;
-			error = sbuf_bcat(sb, (void *)&info, sizeof(info));
-			if (error != 0)
-				goto error;
-
-			break;
-		}
-
-		if (!slsckpt_vnode_istty(fp->f_vnode)) {
-			error = EINVAL;
-			goto error;
-		}
-
-		/*
-		 * We use the device pointer as our ID, because it's
-		 * accessible by the master side, while our fp isn't.
-		 */
-		*fpslsid = (uint64_t)fp->f_vnode->v_rdev;
-		info.slsid = *fpslsid;
-
-		/* Check again if we have actually checkpointed this pts before.
-		 */
-		if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t)*fpslsid,
-			(uintptr_t *)&oldsb) == 0) {
-			sbuf_delete(sb);
-			return (0);
-		}
-
-		/* Otherwise we checkpoint the tty slave. */
-		error = slsckpt_getpts_slv(p, fp, fp->f_vnode, &info, sb);
-		if (error != 0)
-			goto error;
-
-		break;
-
-	/* Backed by a kqueue - get all pending knotes. */
-	case DTYPE_KQUEUE:
-		error = slskq_checkpoint(p, fp, &info, sb);
-		if (error != 0)
-			goto error;
-
-		break;
-
-		/* Backed by a pipe - get existing data. */
-	case DTYPE_PIPE:
-
-		/*
-		 * In order to be able to use the open file table
-		 * to find if we need to restore a file's peer, we
-		 * need to make it so that the open file and its
-		 * backing pipe have the same ID. Pass it to the caller.
-		 */
-		*fpslsid = (uint64_t)fp->f_data;
-		info.slsid = *fpslsid;
-
-		/*
-		 * Since we're using the pipe pointer instead of the
-		 * file pointer, recheck whether we have actually already
-		 * checkpointed this pipe - the last test wouldn't have caught
-		 * it. Having two records, one for each end of the pipe, is
-		 * kinda useless right now because we don't configure the peer
-		 * after restoring, but it could be used for fixing up its
-		 * configuration in the future.
-		 */
-		if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t)*fpslsid,
-			(uintptr_t *)&oldsb) == 0) {
-			sbuf_delete(sb);
-			return (0);
-		}
-
-		error = slsckpt_getpipe(p, fp, &info, sb);
-		if (error != 0)
-			goto error;
-
-		break;
-
-	case DTYPE_SOCKET:
-		/* Check out if we have a paired socket. */
-		sockid = slsckpt_getsocket_peer((struct socket *)(fp->f_data));
-		if (sockid != 0) {
-			/* Same problem and methodology as with pipes above. */
-			*fpslsid = (uint64_t)fp->f_data;
-			info.slsid = *fpslsid;
-
-			/* Recheck - again, same as with pipes. */
-			if (slskv_find(sckpt_data->sckpt_rectable,
-				(uint64_t)*fpslsid, (uintptr_t *)&oldsb) == 0) {
-				sbuf_delete(sb);
-				return (0);
-			}
-		}
-
-		/* No peer or peer not checkpointed, go ahead. */
-		error = slsckpt_getsocket(p, fp, &info, sb, sckpt_data);
-		if (error != 0)
-			goto error;
-
-		break;
-
-	case DTYPE_SHM:
-
-		/* Checkpoint the POSIX segment itself. */
-		error = slsckpt_getposixshm(p, fp, &info, sb);
-		if (error != 0)
-			goto error;
-
-		/* Update the object pointer, possibly shadowing the object. */
-		error = slsvmobj_checkpoint_shm(
-		    &((struct shmfd *)fp->f_data)->shm_object, sckpt_data);
-		if (error != 0)
-			goto error;
-
-		break;
-
-	case DTYPE_PTS:
-		/*
-		 * We use the pointer to the tty as our ID, because it's
-		 * accessible by the slave side, while our fp isn't.
-		 */
-		*fpslsid = (uint64_t)fp->f_data;
-		info.slsid = *fpslsid;
-
-		/* Check again if we have actually checkpointed this pts before.
-		 */
-		if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t)*fpslsid,
-			(uintptr_t *)&oldsb) == 0) {
-			sbuf_delete(sb);
-			return (0);
-		}
-
-		error = slsckpt_getpts_mst(
-		    p, fp, (struct tty *)fp->f_data, &info, sb);
-		if (error != 0)
-			goto error;
-
-		break;
-
-	default:
-		panic("invalid file type %d", fp->f_type);
-	}
-
-	sbuf_finish(sb);
-
-	KASSERT(*fpslsid == info.slsid,
-	    ("returning ID different from that of the record"));
-	rec = sls_getrecord(sb, *fpslsid, SLOSREC_FILE);
-	/* Add the backing entities to the global tables. */
-	error = slskv_add(sckpt_data->sckpt_rectable, *fpslsid, (uintptr_t)rec);
+	error = slskv_add(sckpt_data->sckpt_rectable, slsid, (uintptr_t)rec);
 	if (error != 0) {
-		free(rec, M_SLSREC);
-		goto error;
+		sls_record_destroy(rec);
+		*fpslsid = slsid;
+		return (0);
 	}
+
+	/* We treat vnodes backed by TTYs as tty files. */
+	type = (slsfile_is_ttyvp(fp)) ? DTYPE_PTS : fp->f_type;
+
+	/* Set generic file info. */
+	error = slsfile_setinfo(fp, rec, type);
+	if (error != 0)
+		goto error;
+
+	/* Grab file type specific state. */
+	error = slsfile_checkpoint(fp, rec, sckpt_data);
+	if (error != 0)
+		goto error;
+
+	/* Seal the record to prevent further changes. */
+	error = sls_record_seal(rec);
+	if (error != 0)
+		goto error;
+
+	/* Propagage to the caller the ID we found. */
+	*fpslsid = slsid;
 
 	return (0);
 
 error:
-	SLS_DBG("checkpointing file returned error %d", error);
+	/* Destroy the incomplete record. */
+	slskv_del(sckpt_data->sckpt_rectable, slsid);
+	sls_record_destroy(rec);
 
-	sbuf_delete(sb);
 	return (error);
 }
 
@@ -443,7 +249,7 @@ slsrest_file(
 	case DTYPE_FIFO:
 
 		error = slskv_find(
-		    restdata->vntable, info->backer, (uintptr_t *)&vp);
+		    restdata->vntable, info->vnode, (uintptr_t *)&vp);
 		if (error != 0) {
 			/* XXX Ignore the error if ignoring unlinked files. */
 			DEBUG("Probably restoring an unlinked file");
@@ -609,121 +415,6 @@ slsrest_file(
 	return (0);
 }
 
-/* List of paths for device vnodes that can be included in a checkpoint. */
-char *sls_accepted_devices[] = {
-	"/dev/null",
-	"/dev/zero",
-	"/dev/hpet0",
-	"/dev/random",
-	"/dev/urandom",
-	NULL,
-};
-
-static bool
-slsckpt_is_accepted_device(struct vnode *vp)
-{
-	struct thread *td = curthread;
-	char *freepath = NULL;
-	char *fullpath = "";
-	bool accepted;
-	int error;
-	int i;
-
-	/* Get the path of the vnode. */
-	error = vn_fullpath(td, vp, &fullpath, &freepath);
-	if (error != 0) {
-		DEBUG1("No path for device vnode %p", vp);
-		accepted = false;
-		goto out;
-	}
-
-	for (i = 0; sls_accepted_devices[i] != NULL; i++) {
-		if (strncmp(fullpath, sls_accepted_devices[i], PATH_MAX) != 0) {
-			accepted = true;
-			goto out;
-		}
-	}
-	accepted = false;
-
-out:
-	free(freepath, M_TEMP);
-	return (accepted);
-}
-
-static int
-slsckpt_file_supported(struct file *fp)
-{
-	struct socket *so;
-
-	switch (fp->f_type) {
-	case DTYPE_VNODE:
-		/*
-		 * An exception to the "only handle regular files" rule.
-		 * Used to handle slave PTYs, as mentioned in slsckpt_file().
-		 */
-		if ((fp->f_vnode->v_type == VCHR) &&
-		    ((fp->f_vnode->v_rdev->si_devsw->d_flags & D_TTY) != 0))
-			return (1);
-
-		if (fp->f_vnode->v_type == VCHR)
-			return (slsckpt_is_accepted_device(fp->f_vnode));
-
-		/* Handle only regular vnodes for now. */
-		if (fp->f_vnode->v_type != VREG)
-			return (0);
-
-		return (1);
-
-	case DTYPE_SOCKET:
-		so = (struct socket *)fp->f_data;
-
-		/* IPv4 and UNIX sockets are allowed. */
-		if (so->so_proto->pr_domain->dom_family == AF_UNIX)
-			return (1);
-
-		/* XXX Do the fast thing for connected sockets for now. */
-		if (so->so_proto->pr_domain->dom_family == AF_INET) {
-			if (so->so_type == SOCK_STREAM)
-				return (SOLISTENING(so));
-			return (1);
-		}
-
-		/* Anything else isn't. */
-		return (0);
-
-		/*
-		 * XXX Protocols we might need to support in the future:
-		 * AF_INET6, AF_NETGRAPH. If we put networking-focused
-		 * applications in the SLS, also AF_ARP, AF_LINK maybe?
-		 */
-
-	case DTYPE_DEV:
-		/* Devices are accessed as VFS nodes. */
-		return (0);
-
-		/*
-		 * Devices aren't exposed at this level, instead being
-		 * backed by special vnodes in the VFS. That means that
-		 * any open devices like /dev/null and /dev/zero will
-		 * be of DTYPE_VNODE, and will be properly checkpointed/
-		 * restored at that level (assuming they are stateless).
-		 * Looking at the code, it also seems like this device
-		 * type is only used by the Linux compat layer.
-		 */
-
-	case DTYPE_FIFO:
-	case DTYPE_KQUEUE:
-	case DTYPE_PIPE:
-	case DTYPE_SHM:
-	case DTYPE_PTS:
-		/* These types are always ok. */
-		return (1);
-
-	default:
-		/* Otherwise we ignore the file. */
-		return (0);
-	}
-}
 
 int
 slsckpt_filedesc(
@@ -759,8 +450,6 @@ slsckpt_filedesc(
 
 	/* Scan the entries of the table for active file descriptors. */
 	for (fd = 0; fd <= fdp->fd_lastfile; fd++) {
-		if (fd >= 20)
-			break;
 		if (!fdisused(fdp, fd)) {
 			continue;
 		}
@@ -770,16 +459,17 @@ slsckpt_filedesc(
 		fp = FDTOFP(p, fd);
 
 		/* Check if the file is currently supported by SLS. */
-		if (!slsckpt_file_supported(fp)) {
+		if (!slsfile_supported(fp)) {
 			continue;
 		}
 
 		/* Checkpoint the file structure itself. */
 		SDT_PROBE0(sls, , , fileprobe_start);
-		error = slsckpt_file(p, fp, &slsfdp->fd_table[fd], sckpt_data);
+		error = slsckpt_file(fp, &slsfdp->fd_table[fd], sckpt_data);
 		SDT_PROBE1(sls, , , fileprobe_return, fp->f_type);
-		if (error != 0)
+		if (error != 0) {
 			goto done;
+		}
 	}
 
 	/* Add the size of the struct before the struct itself. */

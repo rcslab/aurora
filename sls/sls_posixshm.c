@@ -25,17 +25,6 @@
 #include <sys/unpcb.h>
 #include <sys/vnode.h>
 
-#include <machine/param.h>
-
-/* XXX Pipe has to be after selinfo */
-#include <sys/pipe.h>
-
-/*
- * XXX eventvar should include more headers,
- * it can't be placed alphabetically.
- */
-#include <sys/eventvar.h>
-
 #include <vm/vm.h>
 #include <vm/pmap.h>
 #include <vm/uma.h>
@@ -48,41 +37,12 @@
 #include <netinet/in.h>
 #include <netinet/in_pcb.h>
 
-#include <slos.h>
 #include <sls_data.h>
 
 #include "debug.h"
 #include "sls_file.h"
 #include "sls_internal.h"
-
-int
-slsckpt_posixshm(struct shmfd *shmfd, struct sbuf *sb)
-{
-	struct slsposixshm slsposixshm;
-	int error;
-
-	slsposixshm.slsid = (uint64_t)shmfd;
-	slsposixshm.magic = SLSPOSIXSHM_ID;
-	slsposixshm.mode = shmfd->shm_mode;
-	slsposixshm.object = (uint64_t)shmfd->shm_object->objid;
-	slsposixshm.is_named = (shmfd->shm_path != NULL);
-
-	/* Write down the path, if it exists. */
-	if (shmfd->shm_path != NULL)
-		strlcpy(slsposixshm.path, shmfd->shm_path, PATH_MAX);
-
-	/*
-	 * While the shmfd is unique for the shared memory, and so
-	 * might be pointed to by multiple open files, the size of
-	 * the metadata is small enough that we can checkpoint
-	 * multiple times, and restore only once.
-	 */
-	error = sbuf_bcat(sb, &slsposixshm, sizeof(slsposixshm));
-	if (error != 0)
-		return (error);
-
-	return (0);
-}
+#include "sls_vmobject.h"
 
 int
 slsrest_posixshm(
@@ -143,3 +103,61 @@ slsrest_posixshm(
 
 	return (0);
 }
+
+static int
+slsshm_slsid(struct file *fp, uint64_t *slsidp)
+{
+	*slsidp = (uint64_t)(fp->f_data);
+
+	return (0);
+}
+
+static int
+slsshm_checkpoint(
+    struct file *fp, struct sls_record *rec, struct slsckpt_data *sckpt_data)
+{
+	struct slsposixshm slsposixshm;
+	struct shmfd *shmfd;
+	int error;
+
+	shmfd = (struct shmfd *)fp->f_data;
+
+	slsposixshm.slsid = (uint64_t)shmfd;
+	slsposixshm.magic = SLSPOSIXSHM_ID;
+	slsposixshm.mode = shmfd->shm_mode;
+	slsposixshm.object = (uint64_t)shmfd->shm_object->objid;
+	slsposixshm.is_named = (shmfd->shm_path != NULL);
+
+	/* Write down the path, if it exists. */
+	if (shmfd->shm_path != NULL)
+		strlcpy(slsposixshm.path, shmfd->shm_path, PATH_MAX);
+
+	/*
+	 * While the shmfd is unique for the shared memory, and so
+	 * might be pointed to by multiple open files, the size of
+	 * the metadata is small enough that we can checkpoint
+	 * multiple times, and restore only once.
+	 */
+	error = sbuf_bcat(rec->srec_sb, &slsposixshm, sizeof(slsposixshm));
+	if (error != 0)
+		return (error);
+
+	/* Update the object pointer, possibly shadowing the object. */
+	error = slsvmobj_checkpoint_shm(&shmfd->shm_object, sckpt_data);
+	if (error != 0)
+		return (error);
+
+	return (0);
+}
+
+static bool
+slsshm_supported(struct file *fp)
+{
+	return (true);
+}
+
+struct slsfile_ops slsshm_ops = {
+	.slsfile_supported = slsshm_supported,
+	.slsfile_slsid = slsshm_slsid,
+	.slsfile_checkpoint = slsshm_checkpoint,
+};

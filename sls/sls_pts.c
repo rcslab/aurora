@@ -215,42 +215,44 @@ out:
 	return (error);
 }
 
-int
-slsckpt_pts_mst(struct proc *p, struct tty *pts, struct sbuf *sb)
+static int
+slspts_checkpoint(
+    struct file *fp, struct sls_record *rec, struct slsckpt_data *sckpt_data)
 {
+	struct tty *tty = (struct tty *)fp->f_data;
 	struct slspts slspts;
 	int error;
 
 	/* Get the data from the PTY. */
 	slspts.magic = SLSPTS_ID;
-	slspts.slsid = (uint64_t)pts;
-	/* This is the master side of the pts. */
+	slspts.slsid = (uint64_t)tty;
+	/* This is the master side of the tty. */
 	slspts.ismaster = 1;
 	/* We use the cdev as the peer's ID. */
-	slspts.peerid = (uint64_t)pts->t_dev;
-	slspts.drainwait = pts->t_drainwait;
-	slspts.termios = pts->t_termios;
-	slspts.winsize = pts->t_winsize;
-	slspts.writepos = pts->t_writepos;
-	slspts.termios_init_in = pts->t_termios_init_in;
-	slspts.termios_init_out = pts->t_termios_init_out;
-	slspts.termios_lock_in = pts->t_termios_lock_in;
-	slspts.termios_lock_out = pts->t_termios_lock_out;
-	slspts.flags = pts->t_flags;
+	slspts.peerid = (uint64_t)tty->t_dev;
+	slspts.drainwait = tty->t_drainwait;
+	slspts.termios = tty->t_termios;
+	slspts.winsize = tty->t_winsize;
+	slspts.writepos = tty->t_writepos;
+	slspts.termios_init_in = tty->t_termios_init_in;
+	slspts.termios_init_out = tty->t_termios_init_out;
+	slspts.termios_lock_in = tty->t_termios_lock_in;
+	slspts.termios_lock_out = tty->t_termios_lock_out;
+	slspts.flags = tty->t_flags;
 	KASSERT(
-	    ((pts->t_flags & TF_BUSY) == 0), ("PTS checkpointed while busy"));
+	    ((tty->t_flags & TF_BUSY) == 0), ("PTS checkpointed while busy"));
 
 	/* Add it to the record. */
-	error = sbuf_bcat(sb, (void *)&slspts, sizeof(slspts));
+	error = sbuf_bcat(rec->srec_sb, (void *)&slspts, sizeof(slspts));
 	if (error != 0)
 		return (error);
 
 	/* Get the data. */
-	error = slsckpt_ttyinq_read(&pts->t_inq, sb);
+	error = slsckpt_ttyinq_read(&tty->t_inq, rec->srec_sb);
 	if (error != 0)
 		return (error);
 
-	error = slsckpt_ttyoutq_read(&pts->t_outq, sb);
+	error = slsckpt_ttyoutq_read(&tty->t_outq, rec->srec_sb);
 	if (error != 0)
 		return (error);
 
@@ -258,7 +260,7 @@ slsckpt_pts_mst(struct proc *p, struct tty *pts, struct sbuf *sb)
 }
 
 int
-slsckpt_pts_slv(struct proc *p, struct vnode *vp, struct sbuf *sb)
+slspts_checkpoint_vnode(struct vnode *vp, struct sls_record *rec)
 {
 	struct slspts slspts;
 	int error;
@@ -273,7 +275,7 @@ slsckpt_pts_slv(struct proc *p, struct vnode *vp, struct sbuf *sb)
 	/* We don't need anything else, it's in the master's record. */
 
 	/* Add it to the record. */
-	error = sbuf_bcat(sb, (void *)&slspts, sizeof(slspts));
+	error = sbuf_bcat(rec->srec_sb, (void *)&slspts, sizeof(slspts));
 	if (error != 0)
 		return (error);
 
@@ -313,7 +315,7 @@ slsrest_pts(struct slskv_table *fptable, struct slspts *slspts, int *fdp)
 		goto error;
 
 	tty = masterfp->f_data;
-	/* XXX See if there are flags we can (slspts->flags to t_flags).  */
+	/* XXX See if there are flags we can (slstty->flags to t_flags).  */
 
 	KASSERT(tty->t_dev != NULL, ("device is null"));
 	KASSERT(tty->t_dev->si_devsw != NULL, ("cdevsw is null"));
@@ -411,3 +413,28 @@ error:
 
 	return (error);
 }
+
+static int
+slspts_slsid(struct file *fp, uint64_t *slsidp)
+{
+	/*
+	 * Pseudoterminals come in pairs, but one side is an
+	 * actual pts file, the other is a device vnode.
+	 * We handle the device vnode separately.
+	 */
+	*slsidp = (uint64_t)fp->f_data;
+
+	return (0);
+}
+
+static bool
+slspts_supported(struct file *fp)
+{
+	return (true);
+}
+
+struct slsfile_ops slspts_ops = {
+	.slsfile_supported = slspts_supported,
+	.slsfile_slsid = slspts_slsid,
+	.slsfile_checkpoint = slspts_checkpoint,
+};

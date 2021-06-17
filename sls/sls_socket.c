@@ -239,10 +239,11 @@ slsckpt_sock_in(struct socket *so, struct slssock *info)
 	return (0);
 }
 
-int
-slsckpt_socket(struct proc *p, struct socket *so, struct sbuf *sb,
-    struct slsckpt_data *sckpt_data)
+static int
+slssock_checkpoint(
+    struct file *fp, struct sls_record *rec, struct slsckpt_data *sckpt_data)
 {
+	struct socket *so = (struct socket *)fp->f_data;
 	struct slssock info;
 	int error;
 
@@ -301,7 +302,7 @@ slsckpt_socket(struct proc *p, struct socket *so, struct sbuf *sb,
 		info.family = AF_UNSPEC;
 
 	/* Write it out to the SLS record. */
-	error = sbuf_bcat(sb, (void *)&info, sizeof(info));
+	error = sbuf_bcat(rec->srec_sb, (void *)&info, sizeof(info));
 	if (error != 0)
 		return (error);
 #if 0
@@ -656,3 +657,77 @@ error:
 
 	return (error);
 }
+
+static uint64_t
+slsckpt_getsocket_peer(struct socket *so)
+{
+	struct socket *sopeer;
+	struct unpcb *unpcb;
+
+	/* Only UNIX sockets can have peers. */
+	if (so->so_type != AF_UNIX)
+		return (0);
+
+	unpcb = sotounpcb(so);
+
+	/* Check if we have peers at all.  */
+	if (unpcb->unp_conn == NULL)
+		return (0);
+
+	/*
+	 * We have a peer if we have a bidirectional connection.
+	 * (Alternatively, it's a one-to-many datagram conn).
+	 */
+	if (unpcb->unp_conn->unp_conn != unpcb)
+		return (0);
+
+	sopeer = unpcb->unp_conn->unp_socket;
+
+	return (uint64_t)sopeer;
+}
+
+static int
+slssock_slsid(struct file *fp, uint64_t *slsidp)
+{
+	uint64_t slsid, peerid;
+
+	slsid = (uint64_t)fp->f_data;
+
+	/* Get the ID of the peer socket, or 0 if none. */
+	peerid = slsckpt_getsocket_peer((struct socket *)(fp->f_data));
+	*slsidp = max(slsid, peerid);
+
+	return (0);
+}
+
+static bool
+slssock_supported(struct file *fp)
+{
+	struct socket *so = (struct socket *)fp->f_data;
+
+	/* IPv4 and UNIX sockets are allowed. */
+	if (so->so_proto->pr_domain->dom_family == AF_UNIX)
+		return (true);
+
+	/* XXX Do the fast thing for connected sockets for now. */
+	if (so->so_proto->pr_domain->dom_family == AF_INET) {
+		if (so->so_type == SOCK_STREAM)
+			return (SOLISTENING(so));
+		return (true);
+	}
+
+	/* Anything else isn't. */
+	return (false);
+
+	/*
+	 * XXX Protocols we might need to support in the future:
+	 * AF_INET6, AF_NETGRAPH. If we put networking-focused
+	 * applications in the SLS, also AF_ARP, AF_LINK maybe?
+	 */
+}
+
+struct slsfile_ops slssock_ops = {
+	.slsfile_supported = slssock_supported,
+	.slsfile_slsid = slssock_slsid,
+	.slsfile_checkpoint = slssock_checkpoint,
+};

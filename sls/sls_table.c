@@ -14,6 +14,7 @@
 #include <sys/ptrace.h>
 #include <sys/queue.h>
 #include <sys/rwlock.h>
+#include <sys/sbuf.h>
 #include <sys/shm.h>
 #include <sys/signalvar.h>
 #include <sys/syscallsubr.h>
@@ -173,6 +174,33 @@ sls_getrecord(struct sbuf *sb, uint64_t slsid, uint64_t type)
 	rec->srec_type = type;
 
 	return (rec);
+}
+
+struct sls_record *
+sls_getrecord_empty(uint64_t slsid, uint64_t type)
+{
+	struct sls_record *rec;
+	struct sbuf *sb;
+
+	sb = sbuf_new_auto();
+
+	KASSERT(slsid != 0, ("attempting to get record with SLS ID 0"));
+	KASSERT(type != 0, ("attempting to get record invalid type"));
+	rec = malloc(sizeof(*rec), M_SLSREC, M_WAITOK);
+	rec->srec_id = slsid;
+	rec->srec_sb = sb;
+	rec->srec_type = type;
+
+	return (rec);
+}
+
+/*
+ * Seal the record, preventing any further changes.
+ */
+int
+sls_record_seal(struct sls_record *rec)
+{
+	return (sbuf_finish(rec->srec_sb));
 }
 
 void
