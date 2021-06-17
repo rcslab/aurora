@@ -21,6 +21,7 @@ static struct option partadd_longopts[] = {
 	{ "lazy restore", required_argument, NULL, 'l' },
 	{ "cached restore", required_argument, NULL, 'c' },
 	{ "prefault", required_argument, NULL, 'p' },
+	{ "precopy", required_argument, NULL, 'e' },
 	{ NULL, no_argument, NULL, 0 },
 };
 
@@ -67,6 +68,14 @@ partadd_main(int argc, char *argv[])
 			break;
 		case 'd':
 			attr.attr_mode = SLS_DELTA;
+			break;
+		case 'e':
+			/*
+			 * Due to the way we mark the hot set, we need to
+			 * prefault to be able to precopy.
+			 */
+			attr.attr_flags |= (SLSATTR_LAZYREST |
+			    SLSATTR_PREFAULT | SLSATTR_PRECOPY);
 			break;
 
 		case 'i':

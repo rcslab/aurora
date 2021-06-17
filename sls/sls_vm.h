@@ -37,6 +37,7 @@ void slsvm_object_reftransfer(vm_object_t src, vm_object_t dst);
 int slsvm_object_shadow(struct slskv_table *objtable, vm_object_t *objp);
 void slsvm_object_copy(
     struct proc *p, struct vm_map_entry *entry, vm_object_t obj);
+void slsvm_object_precopy(vm_object_t object, vm_object_t parent);
 
 void slsvm_print_chain(vm_object_t shadow);
 void slsvm_print_crc32_vmspace(struct vmspace *vm);
@@ -49,4 +50,5 @@ void slsvm_object_scan(void);
 
 void slsvm_pages_dump(struct vmspace *vm, struct slskv_table *table);
 void slsvm_pages_check(struct vmspace *vm, struct slskv_table *table);
+
 #endif /* _SLSVM_H_ */

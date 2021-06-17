@@ -136,8 +136,8 @@ slsckpt_vmspace(
  * Great for anonymous pages.
  */
 static int
-slsrest_vmentry_anon(
-    struct vm_map *map, struct slsvmentry *info, struct slskv_table *objtable)
+slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info,
+    struct slskv_table *objtable, bool precopy)
 {
 	vm_map_entry_t entry;
 	vm_object_t object;
@@ -152,6 +152,12 @@ slsrest_vmentry_anon(
 	else
 		vm_object_reference(object);
 
+	/* If precopying, copy all writable pages into the application. */
+	if (precopy && (object != NULL) && (object->backing_object != NULL) &&
+	    ((info->protection & VM_PROT_WRITE) != 0)) {
+		slsvm_object_precopy(object, object->backing_object);
+	}
+
 	/*
 	 * Create a map entry using and manually set the fields we can't set by
 	 * using the proper arguments (mainly flags).
@@ -160,6 +166,8 @@ slsrest_vmentry_anon(
 	guard = MAP_NO_MERGE;
 	if (info->eflags & MAP_ENTRY_GUARD)
 		guard |= MAP_CREATE_GUARD;
+	if (precopy)
+		guard |= MAP_PREFAULT;
 
 	error = vm_map_insert(map, object, info->offset, info->start, info->end,
 	    info->protection, info->max_protection, guard);
@@ -249,6 +257,8 @@ slsrest_vmentry_file(
 		flags |= MAP_NOSYNC;
 	if (entry->eflags & MAP_ENTRY_NOCOREDUMP)
 		flags |= MAP_NOCORE;
+	if (SLSP_PRECOPY(restdata->slsp))
+		flags |= MAP_PREFAULT;
 
 	start = entry->start;
 
@@ -289,16 +299,19 @@ slsrest_vmentry(
 	/* If it's a guard page use the code for anonymous/empty/physical
 	 * entries. */
 	if (entry->obj == 0)
-		return slsrest_vmentry_anon(map, entry, restdata->objtable);
+		return slsrest_vmentry_anon(
+		    map, entry, restdata->objtable, false);
 
 	/* Jump table for restoring the entries. */
 	switch (entry->type) {
 	case OBJT_DEFAULT:
 	case OBJT_SWAP:
-		return slsrest_vmentry_anon(map, entry, restdata->objtable);
+		return slsrest_vmentry_anon(map, entry, restdata->objtable,
+		    SLSP_PRECOPY(restdata->slsp));
 
 	case OBJT_PHYS:
-		return slsrest_vmentry_anon(map, entry, restdata->objtable);
+		return slsrest_vmentry_anon(
+		    map, entry, restdata->objtable, false);
 
 	case OBJT_VNODE:
 		return slsrest_vmentry_file(map, entry, restdata);

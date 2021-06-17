@@ -95,6 +95,7 @@ bool slsp_rest_from_mem(struct slspart *slsp);
 #define SLSP_LAZYREST(slsp) (SLSATTR_ISLAZYREST((slsp)->slsp_attr))
 #define SLSP_CACHEREST(slsp) (SLSATTR_ISCACHEREST((slsp)->slsp_attr))
 #define SLSP_PREFAULT(slsp) (SLSATTR_ISPREFAULT((slsp)->slsp_attr))
+#define SLSP_PRECOPY(slsp) (SLSATTR_ISPRECOPY((slsp->slsp_attr)))
 
 extern uma_zone_t slsckpt_zone;
 

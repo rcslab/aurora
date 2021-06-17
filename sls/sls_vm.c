@@ -1,5 +1,6 @@
 #include <sys/types.h>
 #include <sys/param.h>
+#include <sys/bitstring.h>
 #include <sys/conf.h>
 #include <sys/endian.h>
 #include <sys/lock.h>
@@ -28,6 +29,87 @@
 
 int sls_objprotect = 1;
 SDT_PROBE_DEFINE(sls, , , procset_loop);
+
+#define SLS_PRECOPY_MAX (64)
+
+/*
+ * Preemptively create private copies of writable pages for the
+ * new application. The new pages are inserted in the shadows,
+ * and the page tables of the processes themselves.
+ */
+void
+slsvm_object_precopy(vm_object_t object, vm_object_t parent)
+{
+	vm_page_t ma[SLS_PRECOPY_MAX];
+	vm_page_t mb[SLS_PRECOPY_MAX];
+	vm_pindex_t offset, pstart;
+	int count, npages;
+	bitstr_t *bitmap;
+	vm_page_t m;
+	int error;
+	int i;
+
+	error = slskv_find(
+	    slsm.slsm_prefault, parent->objid, (uintptr_t *)&bitmap);
+	if (error != 0)
+		return;
+
+	KASSERT(
+	    parent == object->backing_object, ("Object has the wrong parent"));
+	KASSERT(object->backing_object_offset == 0,
+	    ("Shadow cannot be an Aurora shadow"));
+
+	DEBUG1("Precopy triggered for object %lx\n", parent->objid);
+	offset = 0;
+	VM_OBJECT_WLOCK(object);
+	VM_OBJECT_RLOCK(parent);
+	while (offset < object->size) {
+		/* Go over the blocks we don't need */
+		while (offset < object->size) {
+			if (bit_test(bitmap, offset) != 0)
+				break;
+			offset += 1;
+		}
+
+		pstart = offset;
+		count = 0;
+		while (offset < object->size) {
+			if (bit_test(bitmap, offset) == 0)
+				break;
+
+			m = vm_page_lookup(parent, offset);
+			if (m == NULL)
+				continue;
+
+			ma[count] = m;
+			offset += 1;
+			count += 1;
+
+			if (count == SLS_PRECOPY_MAX)
+				break;
+		}
+
+		if (count == 0)
+			continue;
+
+		KASSERT(count > 0, ("No pages to copy"));
+
+		/*
+		 * Create the pages in the new object. We might precopy less
+		 * than we expected.
+		 */
+		npages = vm_page_grab_pages(
+		    object, pstart, VM_ALLOC_NORMAL, mb, count);
+		KASSERT(npages == count, ("got less pages than expected"));
+
+		for (i = 0; i < count; i++) {
+			pmap_copy_page(ma[i], mb[i]);
+			vm_page_xunbusy(mb[i]);
+		}
+	}
+	VM_OBJECT_RUNLOCK(parent);
+	VM_OBJECT_WUNLOCK(object);
+}
 
 /*
  * Create a shadow of the same size as the object, perfectly aligned.
