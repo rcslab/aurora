@@ -356,58 +356,6 @@ slsload_filedesc(struct slsfiledesc **filedescp, char **bufp, size_t *bufsizep)
 }
 
 int
-slsload_vmentry(struct slsvmentry *entry, char **bufp, size_t *bufsizep)
-{
-	int error;
-
-	error = sls_info(entry, sizeof(*entry), bufp, bufsizep);
-	if (error != 0)
-		return (error);
-
-	if (entry->magic != SLSVMENTRY_ID) {
-		SLS_DBG("magic mismatch");
-		return (EINVAL);
-	}
-
-	return (0);
-}
-
-int
-slsload_vmspace(struct slsvmspace *vm, struct shmmap_state **shmstatep,
-    char **bufp, size_t *bufsizep)
-{
-	struct shmmap_state *shmstate = NULL;
-	size_t shmsize;
-	int error;
-
-	*shmstatep = NULL;
-
-	error = sls_info(vm, sizeof(*vm), bufp, bufsizep);
-	if (error != 0)
-		return (error);
-
-	if (vm->magic != SLSVMSPACE_ID) {
-		SLS_DBG("magic mismatch\n");
-		return (EINVAL);
-	}
-
-	if (vm->has_shm != 0) {
-		shmsize = sizeof(*shmstate) * shminfo.shmseg;
-		shmstate = malloc(shmsize, M_SHM, M_WAITOK);
-
-		error = sls_info(shmstate, shmsize, bufp, bufsizep);
-		if (error != 0) {
-			free(shmstate, M_SHM);
-			return (error);
-		}
-	}
-
-	*shmstatep = shmstate;
-
-	return (0);
-}
-
-int
 slsload_sysvshm(struct slssysvshm *shm, char **bufp, size_t *bufsizep)
 {
 	int error;

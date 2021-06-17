@@ -143,7 +143,7 @@ static int __attribute__((noinline)) slsckpt_metadata(
 
 	SDT_PROBE1(sls, , sls_ckpt, , "Setting up metadata");
 
-	error = slsckpt_vmspace(p->p_vmspace, sb, sckpt_data);
+	error = slsvmspace_checkpoint(p->p_vmspace, sb, sckpt_data);
 	if (error != 0) {
 		SLS_DBG("Error: slsckpt_vmspace failed with error code %d\n",
 		    error);

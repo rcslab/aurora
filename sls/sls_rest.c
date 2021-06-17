@@ -349,46 +349,6 @@ slsrest_dofiledesc(
 }
 
 static int
-slsrest_dovmspace(
-    struct proc *p, char **bufp, size_t *buflenp, struct slsrest_data *restdata)
-{
-	struct slsvmentry slsvmentry;
-	struct slsvmspace slsvmspace;
-	struct shmmap_state *shmstate = NULL;
-	vm_map_t map;
-	int error, i;
-
-	/*
-	 * Restore the VM space and its map. We need to read the state even if
-	 * we are restoring from a cached vmspace.
-	 */
-	error = slsload_vmspace(&slsvmspace, &shmstate, bufp, buflenp);
-	if (error != 0)
-		return (error);
-
-	error = slsrest_vmspace(p, &slsvmspace, shmstate);
-	if (error != 0) {
-		free(shmstate, M_SHM);
-		return (error);
-	}
-
-	map = &p->p_vmspace->vm_map;
-
-	/* Create the individual VM entries. */
-	for (i = 0; i < slsvmspace.nentries; i++) {
-		error = slsload_vmentry(&slsvmentry, bufp, buflenp);
-		if (error != 0)
-			return (error);
-
-		error = slsrest_vmentry(map, &slsvmentry, restdata);
-		if (error != 0)
-			return (error);
-	}
-
-	return (0);
-}
-
-static int
 slsrest_dosysvshm(char *buf, size_t bufsize, struct slskv_table *objtable)
 {
 	struct slssysvshm slssysvshm;
@@ -666,7 +626,7 @@ slsrest_metadata(void *args)
 	PROC_UNLOCK(p);
 	SLS_UNLOCK();
 
-	error = slsrest_dovmspace(p, &buf, &buflen, restdata);
+	error = slsvmspace_restore(p, &buf, &buflen, restdata);
 	if (error != 0)
 		goto error;
 

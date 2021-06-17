@@ -39,7 +39,7 @@
 fo_mmap_t vn_mmap;
 
 static int
-slsckpt_vmentry(struct vm_map_entry *entry, struct sbuf *sb)
+slsvmspace_checkpoint_entry(struct vm_map_entry *entry, struct sbuf *sb)
 {
 	struct slsvmentry cur_entry;
 	int error;
@@ -74,7 +74,7 @@ slsckpt_vmentry(struct vm_map_entry *entry, struct sbuf *sb)
 }
 
 int
-slsckpt_vmspace(
+slsvmspace_checkpoint(
     struct vmspace *vm, struct sbuf *sb, struct slsckpt_data *sckpt_data)
 {
 	vm_map_t vm_map = &vm->vm_map;
@@ -123,7 +123,7 @@ slsckpt_vmspace(
 
 	for (entry = vm_map->header.next; entry != &vm_map->header;
 	     entry = entry->next) {
-		error = slsckpt_vmentry(entry, sb);
+		error = slsvmspace_checkpoint_entry(entry, sb);
 		if (error != 0)
 			return (error);
 	}
@@ -136,7 +136,7 @@ slsckpt_vmspace(
  * Great for anonymous pages.
  */
 static int
-slsrest_vmentry_anon(struct vm_map *map, struct slsvmentry *info,
+slsvmspace_restore_entry_anon(struct vm_map *map, struct slsvmentry *info,
     struct slskv_table *objtable, bool precopy)
 {
 	vm_map_entry_t entry;
@@ -210,7 +210,7 @@ out:
 }
 
 static int
-slsrest_vmentry_file(
+slsvmspace_restore_entry_file(
     struct vm_map *map, struct slsvmentry *entry, struct slsrest_data *restdata)
 {
 	struct thread *td = curthread;
@@ -287,8 +287,8 @@ slsrest_vmentry_file(
 	return (error);
 }
 
-int
-slsrest_vmentry(
+static int
+slsvmspace_restore_entry(
     struct vm_map *map, struct slsvmentry *entry, struct slsrest_data *restdata)
 {
 	int error;
@@ -299,22 +299,22 @@ slsrest_vmentry(
 	/* If it's a guard page use the code for anonymous/empty/physical
 	 * entries. */
 	if (entry->obj == 0)
-		return slsrest_vmentry_anon(
+		return slsvmspace_restore_entry_anon(
 		    map, entry, restdata->objtable, false);
 
 	/* Jump table for restoring the entries. */
 	switch (entry->type) {
 	case OBJT_DEFAULT:
 	case OBJT_SWAP:
-		return slsrest_vmentry_anon(map, entry, restdata->objtable,
-		    SLSP_PRECOPY(restdata->slsp));
+		return (slsvmspace_restore_entry_anon(map, entry,
+		    restdata->objtable, SLSP_PRECOPY(restdata->slsp)));
 
 	case OBJT_PHYS:
-		return slsrest_vmentry_anon(
-		    map, entry, restdata->objtable, false);
+		return (slsvmspace_restore_entry_anon(
+		    map, entry, restdata->objtable, false));
 
 	case OBJT_VNODE:
-		return slsrest_vmentry_file(map, entry, restdata);
+		return (slsvmspace_restore_entry_file(map, entry, restdata));
 
 		/*
 		 * Right now we only support the HPET counter. If we
@@ -342,8 +342,8 @@ slsrest_vmentry(
 	}
 }
 
-int
-slsrest_vmspace(
+static int
+slsvmspace_restore_vmspace(
     struct proc *p, struct slsvmspace *info, struct shmmap_state *shmstate)
 {
 	struct vmspace *vm;
@@ -365,6 +365,105 @@ slsrest_vmspace(
 
 	if (shmstate != NULL)
 		vm->vm_shm = shmstate;
+
+	return (0);
+}
+
+static int
+slsvmspace_deserialize(struct slsvmspace *vm, struct shmmap_state **shmstatep,
+    char **bufp, size_t *bufsizep)
+{
+	struct shmmap_state *shmstate = NULL;
+	size_t shmsize;
+	int error;
+
+	*shmstatep = NULL;
+
+	error = sls_info(vm, sizeof(*vm), bufp, bufsizep);
+	if (error != 0)
+		return (error);
+
+	if (vm->magic != SLSVMSPACE_ID) {
+		SLS_DBG("magic mismatch\n");
+		return (EINVAL);
+	}
+
+	if (vm->has_shm != 0) {
+		shmsize = sizeof(*shmstate) * shminfo.shmseg;
+		shmstate = malloc(shmsize, M_SHM, M_WAITOK);
+
+		error = sls_info(shmstate, shmsize, bufp, bufsizep);
+		if (error != 0) {
+			free(shmstate, M_SHM);
+			return (error);
+		}
+	}
+
+	*shmstatep = shmstate;
+
+	return (0);
+}
+
+static int
+slsvmspace_deserialize_entry(
+    struct slsvmentry *entry, char **bufp, size_t *bufsizep)
+{
+	int error;
+
+	error = sls_info(entry, sizeof(*entry), bufp, bufsizep);
+	if (error != 0)
+		return (error);
+
+	if (entry->magic != SLSVMENTRY_ID) {
+		SLS_DBG("magic mismatch");
+		return (EINVAL);
+	}
+
+	return (0);
+}
+
+int
+slsvmspace_restore(
+    struct proc *p, char **bufp, size_t *buflenp, struct slsrest_data *restdata)
+{
+	struct slsvmentry slsvmentry;
+	struct slsvmspace slsvmspace;
+	struct shmmap_state *shmstate = NULL;
+	vm_map_t map;
+	int error, i;
+
+	/*
+	 * Restore the VM space and its map. We need to read the state even if
+	 * we are restoring from a cached vmspace.
+	 */
+	error = slsvmspace_deserialize(&slsvmspace, &shmstate, bufp, buflenp);
+	if (error != 0)
+		return (error);
+
+	/*
+	 * Create the new vmspace. Also attach the restore shared memory state,
+	 * so if anything goes wrong it gets deallocated along with the vmspace
+	 * itself.
+	 */
+	error = slsvmspace_restore_vmspace(p, &slsvmspace, shmstate);
+	if (error != 0) {
+		free(shmstate, M_SHM);
+		return (error);
+	}
+
+	map = &p->p_vmspace->vm_map;
+
+	/* Create the individual VM entries. */
+	for (i = 0; i < slsvmspace.nentries; i++) {
+		error = slsvmspace_deserialize_entry(
+		    &slsvmentry, bufp, buflenp);
+		if (error != 0)
+			return (error);
+
+		error = slsvmspace_restore_entry(map, &slsvmentry, restdata);
+		if (error != 0)
+			return (error);
+	}
 
 	return (0);
 }
