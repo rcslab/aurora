@@ -119,7 +119,8 @@ slsckpt_cont(slsset *procset, struct proc *pcaller)
 /*
  * Get all the metadata of a process.
  */
-static int __attribute__((noinline)) slsckpt_metadata(
+static int
+slsckpt_metadata(
     struct proc *p, slsset *procset, struct slsckpt_data *sckpt_data)
 {
 	struct sls_record *rec;
@@ -284,8 +285,9 @@ slsckpt_initio(struct slspart *slsp, struct slsckpt_data *sckpt_data)
  * it properly, as well as shadowing any VM objects directly accessible
  * by the partition's processes.
  */
-static int __attribute__((noinline)) sls_ckpt(slsset *procset,
-    struct proc *pcaller, struct slspart *slsp, uint64_t nextepoch)
+static int
+sls_ckpt(slsset *procset, struct proc *pcaller, struct slspart *slsp,
+    uint64_t nextepoch)
 {
 	struct slsckpt_data *sckpt_data;
 	struct slskv_iter iter;
@@ -818,7 +820,7 @@ slsckpt_gather_children(slsset *procset, struct proc *pcaller)
 /*
  * System process that continuously checkpoints a partition.
  */
-void __attribute__((noinline))
+void
 sls_checkpointd(struct sls_checkpointd_args *args)
 {
 	uint64_t *nextepoch = args->nextepoch;
@@ -876,6 +878,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		/* Gather all processes still running. */
 		error = slsckpt_gather_processes(slsp, pcaller, procset);
 		if (error != 0) {
+			slsp_signal(slsp, error);
 			DEBUG1(
 			    "Failed to gather processes with error %d", error);
 			break;
@@ -883,6 +886,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 
 		if (slsp_isempty(slsp)) {
 			DEBUG("No processes left to checkpoint");
+			slsp_signal(slsp, 0);
 			break;
 		}
 
@@ -899,8 +903,10 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		/* If we're not recursively checkpointing, abort the search. */
 		if (args->recurse != 0) {
 			error = slsckpt_gather_children(procset, pcaller);
-			if (error != 0)
+			if (error != 0) {
+				slsp_signal(slsp, error);
 				break;
+			}
 		}
 
 		DEBUG("Gathered all processes");
@@ -916,6 +922,7 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		error = sls_ckpt(procset, pcaller, slsp, *nextepoch);
 		if (error != 0) {
 			slsp_epoch_advance(slsp, *nextepoch);
+			slsp_signal(slsp, error);
 			DEBUG1("Checkpoint failed with %d\n", error);
 			break;
 		}
