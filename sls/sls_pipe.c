@@ -46,6 +46,7 @@
 #include <slos.h>
 #include <sls_data.h>
 
+#include "debug.h"
 #include "sls_file.h"
 #include "sls_internal.h"
 
@@ -91,23 +92,62 @@ slspipe_checkpoint(
 	return (0);
 }
 
-int
-slsrest_pipe(
-    struct slskv_table *fptable, int flags, struct slspipe *ppinfo, int *fdp)
+/*
+ * Restore an end of the pipe pair.
+ */
+static int
+slspipe_restore_pipeend(struct pipe *pp, struct slspipe *slspipe)
 {
-	struct file *fp, *peerfp;
+
+	/* Restore the buffer's state. */
+	pp->pipe_buffer.cnt = slspipe->pipebuf.cnt;
+	pp->pipe_buffer.in = slspipe->pipebuf.in;
+	pp->pipe_buffer.out = slspipe->pipebuf.out;
+	/* Check if the data fits in the newly created pipe. */
+	if (pp->pipe_buffer.size < slspipe->pipebuf.cnt)
+		return (EINVAL);
+
+	memcpy(pp->pipe_buffer.buffer, slspipe->data, slspipe->pipebuf.cnt);
+
+	return (0);
+}
+
+static int
+slspipe_restore(void *slsbacker, struct slsfile *info,
+    struct slsrest_data *restdata, struct file **fpp)
+{
+	struct slspipe *slspipe = (struct slspipe *)slsbacker;
+	struct file *localfp = NULL, *peerfp = NULL;
+	uint64_t slsid = slspipe->slsid;
+	struct thread *td = curthread;
 	int localfd, peerfd;
-	struct pipe *pipe;
+	int close_error;
+	struct pipe *pp;
 	int filedes[2];
 	int error;
 
+	/* The pipe has been created, it just needs to be initialized. */
+	if (slskv_find(restdata->fptable, slsid, (uintptr_t *)&peerfp) == 0) {
+		pp = (struct pipe *)peerfp->f_data;
+
+		error = slspipe_restore_pipeend(pp, slspipe);
+		if (error != 0)
+			return (error);
+
+		/* The pipe end is already in the table. */
+		*fpp = NULL;
+
+		return (0);
+	}
+
 	/* Create both ends of the pipe. */
-	error = kern_pipe(curthread, filedes, flags, NULL, NULL);
+	error = kern_pipe(curthread, filedes,
+	    info->flag & (O_NONBLOCK | O_CLOEXEC), NULL, NULL);
 	if (error != 0)
 		return error;
 
 	/* Check whether we are the read or the write end. */
-	if (ppinfo->iswriteend) {
+	if (slspipe->iswriteend) {
 		localfd = filedes[1];
 		peerfd = filedes[0];
 	} else {
@@ -115,26 +155,28 @@ slsrest_pipe(
 		peerfd = filedes[1];
 	}
 
-	fp = FDTOFP(curthread->td_proc, localfd);
-	pipe = (struct pipe *)fp->f_data;
+	/* Extract the local and remote file descriptors from the table. */
+	error = slsfile_extractfp(localfd, &localfp);
+	if (error != 0)
+		goto error;
 
-	/* Restore the buffer's state. */
-	pipe->pipe_buffer.cnt = ppinfo->pipebuf.cnt;
-	pipe->pipe_buffer.in = ppinfo->pipebuf.in;
-	pipe->pipe_buffer.out = ppinfo->pipebuf.out;
-	/* Check if the data fits in the newly created pipe. */
-	if (pipe->pipe_buffer.size < ppinfo->pipebuf.cnt)
-		return (EINVAL);
+	/* We have consumed the fd, ignore during cleanup. */
+	localfd = -1;
 
-	memcpy(pipe->pipe_buffer.buffer, ppinfo->data, ppinfo->pipebuf.cnt);
+	error = slsfile_extractfp(peerfd, &peerfp);
+	if (error != 0)
+		goto error;
+
+	/* Same as with localfd.*/
+	peerfd = -1;
 
 	/*
-	 * Grab the peer's file pointer, save it to the table.
-	 * When we come across the peer's record later, we'll have
-	 * already restored it, and so we will just ignore it. We
-	 * thus avoid restoring the same pipe twice.
+	 * Restore the local pipe state.
 	 */
-	peerfp = FDTOFP(curthread->td_proc, peerfd);
+	pp = (struct pipe *)localfp->f_data;
+	error = slspipe_restore_pipeend(pp, slspipe);
+	if (error != 0)
+		goto error;
 
 	/*
 	 * We take the liberty here of using the pipe's SLS ID instead
@@ -142,27 +184,35 @@ slsrest_pipe(
 	 * time that pipes and their corresponding open files have the
 	 * same ID, this is not a problem.
 	 */
-	error = slskv_add(fptable, ppinfo->peer, (uintptr_t)peerfp);
-	if (error != 0) {
-		kern_close(curthread, localfd);
-		kern_close(curthread, peerfd);
-		return (error);
-	}
+	error = slskv_add(restdata->fptable, slspipe->peer, (uintptr_t)peerfp);
+	if (error != 0)
+		goto error;
 
-	/* Get a reference on behalf of the hashtable. */
-	if (!fhold(peerfp)) {
-		kern_close(curthread, peerfd);
-		return (EBADF);
-	}
-
-	/* Remove it from this process and this fd. */
-	kern_close(curthread, peerfd);
-
-	/* The caller will take care of the local file descriptor the same way.
-	 */
-	*fdp = localfd;
+	/* The caller adds the local descriptor to the table. */
+	*fpp = localfp;
 
 	return (0);
+
+error:
+	if (localfd >= 0) {
+		close_error = kern_close(td, localfd);
+		if (close_error != 0)
+			DEBUG1("kern_close failed with %d", error);
+	}
+
+	if (peerfd >= 0) {
+		close_error = kern_close(td, peerfd);
+		if (close_error != 0)
+			DEBUG1("kern_close failed with %d", error);
+	}
+
+	if (localfp != NULL)
+		fdrop(localfp, td);
+
+	if (peerfp != NULL)
+		fdrop(peerfp, td);
+
+	return (error);
 }
 
 static int
@@ -184,4 +234,5 @@ struct slsfile_ops slspipe_ops = {
 	.slsfile_supported = slspipe_supported,
 	.slsfile_slsid = slspipe_slsid,
 	.slsfile_checkpoint = slspipe_checkpoint,
+	.slsfile_restore = slspipe_restore,
 };

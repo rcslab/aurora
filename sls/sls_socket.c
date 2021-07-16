@@ -78,114 +78,6 @@
 	    SO_OOBINLINE | SO_TIMESTAMP | SO_BINTIME | SO_NOSIGPIPE |      \
 	    SO_NO_DDP | SO_NO_OFFLOAD)
 
-#if 0
-static int
-slsckpt_sockbuf(struct sockbuf *sockbuf, struct slsckpt_data *sckpt_data)
-{
-	struct filedescent **fdescent;
-	struct mbuf *packetm, *m;
-	struct slsmbuf slsmbuf;
-	struct sls_record *rec;
-	size_t datalen, clen;
-	struct cmsghdr *cm;
-	struct sbuf *sb;
-	int error, i;
-	int numfds;
-
-	sb = sbuf_new_auto();
-
-	SOCKBUF_LOCK(sockbuf);
-	/* 
-	 * Iterate through all packets. We don't worry about
-	 * denoting where each record ends, we can find out
-	 * by reading the mbuf flags and checking for M_EOR.
-	 */
-	for (packetm = sockbuf->sb_mb; packetm != NULL; 
-	    packetm = packetm->m_nextpkt) {
-
-		for (m = packetm; m != NULL; m = m->m_next) {
-			slsmbuf.magic = SLSMBUF_ID;
-			slsmbuf.slsid = (uint64_t) sockbuf;
-			/* We associate the mbufs with the socket buffer. */
-			slsmbuf.type = packetm->m_type;
-			slsmbuf.flags = packetm->m_flags;
-			slsmbuf.len = packetm->m_len;
-
-			/* Dump the metadata of the mbuf. */
-			sbuf_bcat(sb, &slsmbuf, sizeof(slsmbuf));
-
-			/* Get the data itself. */
-			sbuf_bcat(sb, mtod(m, caddr_t), slsmbuf.len);
-
-			/* 
-			 * If we just dumped a UNIX SCM_RIGHTS message, also dump the
-			 * filedescent it's pointing to, which holds pointers to the
-			 * file descriptors and their capabilities.
-			 */
-			if (m->m_type == MT_CONTROL) {
-				/* Seems like there can be multiple messages in a control packet. */
-				cm = mtod(m, struct cmsghdr *);
-				clen = cm->cmsg_len;
-
-				while (cm != NULL) {
-					/* We only care about passing file descriptors. */
-					if ((cm->cmsg_level == SOL_SOCKET) &&
-					    (cm->cmsg_type != SCM_RIGHTS)) {
-
-						/* The data is a pointer to a bunch of filedescents. */
-						fdescent = (struct filedescent **) CMSG_DATA(cm);
-						datalen = (caddr_t) cm + cm->cmsg_len - (caddr_t) fdescent;
-						numfds = datalen / sizeof(*fdescent);
-
-						/* 
-						 * Dump the array of filedescents into the record. 
-						 * XXX This code makes the assumption that the file that
-						 * is being transferred is still open in some table.
-						 * This is not necessarily true, since the sender may
-						 * close the fd after sending it and before the receiver
-						 * gets the control message. We need to check the file table
-						 * if the file has been checkpointed, and if not, to 
-						 * checkpoint it ourselves.
-						 */
-						sbuf_bcat(sb, &numfds, sizeof(numfds));
-						for (i = 0; i < numfds; i++)
-							sbuf_bcat(sb, fdescent[i], sizeof(*fdescent[i]));
-					}
-
-					/* Check if there are any more messages in the mbuf. */
-					if (CMSG_SPACE(datalen) < clen) {
-						/* If so, go further into the array. */
-						clen -= CMSG_SPACE(datalen);
-						cm = (struct cmsghdr *) ((caddr_t) cm + CMSG_SPACE(datalen));
-					} else {
-						/* Otherwise we're done. */
-						clen = 0;
-						cm = NULL;
-					}
-				}
-			}
-		}
-	}
-
-	SOCKBUF_UNLOCK(sockbuf);
-	error = sbuf_finish(sb);
-	if (error != 0) {
-		sbuf_delete(sb);
-		return (error);
-	}
-
-	rec = sls_getrecord(sb, (uint64_t) slsmbuf.slsid, SLOSREC_SOCKBUF);
-	/* Add the new buffer to the tables. */
-	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t) sockbuf, (uintptr_t) rec);
-	if (error != 0) {
-		free(rec, M_SLSREC);
-		sbuf_delete(sb);
-		return (error);
-	}
-
-	return (0);
-}
-#endif
 
 /* Get the address of a unix socket. */
 static int
@@ -305,28 +197,6 @@ slssock_checkpoint(
 	error = sbuf_bcat(rec->srec_sb, (void *)&info, sizeof(info));
 	if (error != 0)
 		return (error);
-#if 0
-
-	/* Get the rcv and snd buffers if not empty,  add their IDs to the socket. */
-
-	if (so->so_rcv.sb_mbcnt != 0) {
-		info.rcvid = (uint64_t) &so->so_rcv;
-		error = slsckpt_sockbuf(&so->so_rcv, sckpt_data);
-		if (error != 0)
-			return (error);
-	} else {
-		info.rcvid = 0;
-	}
-
-	if (so->so_snd.sb_mbcnt != 0) {
-		info.sndid = (uint64_t) &so->so_snd;
-		error = slsckpt_sockbuf(&so->so_snd, sckpt_data);
-		if (error != 0)
-			return (error);
-	} else {
-		info.sndid = 0;
-	}
-#endif
 
 	return (0);
 }
@@ -432,228 +302,301 @@ slsrest_uipc_bindat(struct socket *so, struct sockaddr *name)
 	return (0);
 }
 
-int
-slsrest_socket(struct slsrest_data *restdata, struct slssock *info,
-    struct slsfile *finfo, int *fdp)
+/*
+ * Restore any state set by fcntl.
+ */
+static int
+slssock_fcntl(int fd, struct socket *so, struct slssock *slssock)
 {
-	struct slskv_table *table = restdata->fptable;
 	struct thread *td = curthread;
-	struct sockaddr_un *unaddr;
-	struct sockaddr_in *inaddr;
-	struct socket *so, *sopeer;
-	struct file *fp, *peerfp;
-	struct unpcb *unpcb, *unpeerpcb;
-	int fd, peerfd = -1;
-	int option = 1;
-	int family;
-	int error;
+
+	if (slssock->family != AF_UNSPEC) {
+		if ((slssock->state & SS_ASYNC) != 0)
+			kern_fcntl_freebsd(td, fd, F_SETFL, O_ASYNC);
+		if ((slssock->state & SS_NBIO) != 0)
+			kern_fcntl_freebsd(td, fd, F_SETFL, O_NONBLOCK);
+		so->so_options = slssock->options & (~SO_ACCEPTCONN);
+	}
+
+	return (0);
+}
+
+/*
+ * Set all restorable options.
+ */
+static int
+slssock_setopt(int fd, struct slssock *slssock)
+{
 	int mask;
+	const int intbits = sizeof(mask) * 8;
+	struct thread *td = curthread;
+	int option = 1;
+	int error;
 	int i;
 
-	/* We create an inet dummy sockets if we can't properly restore. */
-	family = (info->family == AF_UNSPEC) ? AF_INET : info->family;
+	/* Set any options we can. */
+	if ((slssock->options & SLS_SO_RESTORABLE) == 0)
+		return (0);
 
-	/* Create the new socket. */
-	error = kern_socket(td, family, info->type, info->proto);
+	for (i = 0; i < intbits; i++) {
+		mask = 1 << i;
+		if ((mask & SLS_SO_RESTORABLE) == 0)
+			continue;
+
+		error = kern_setsockopt(td, fd, SOL_SOCKET, mask, &option,
+		    UIO_SYSSPACE, sizeof(option));
+		if (error != 0)
+			return (error);
+	}
+
+	return (0);
+}
+
+static int
+slssock_restore_afinet(struct slssock *slssock, int fd, int slsmetr_sockid)
+{
+	struct sockaddr_in *inaddr = (struct sockaddr_in *)&slssock->in;
+	struct thread *td = curthread;
+	int error, i;
+
+	/* Check if the socket is bound. */
+	if (slssock->bound == 0)
+		return (0);
+
+	/*
+	 * XXXHACK If this is a listening socket for a Metropolis function,
+	 * assign it a random port, much like accept() does.
+	 *  Try randomly picking a number from 1024 to 65535
+	 */
+	if (slsmetr_sockid == slssock->slsid) {
+
+		for (i = 0; i < METROPOLIS_RETRIES; i++) {
+			inaddr->sin_port = 1024 + (random() % (65545 - 1024));
+			error = kern_bindat(
+			    td, AT_FDCWD, fd, (struct sockaddr *)inaddr);
+			if (error == 0)
+				return (error);
+		}
+
+		if (error != 0)
+			return (error);
+
+	} else {
+		/*
+		 * We use bind() instead of setting the address directly
+		 * because we need to let the kernel know we are
+		 * reserving the address.
+		 */
+		error = kern_bindat(
+		    td, AT_FDCWD, fd, (struct sockaddr *)inaddr);
+		if (error != 0)
+			return (error);
+	}
+
+	return (0);
+}
+
+static int
+slssock_restore_pair(
+    struct slsrest_data *restdata, struct socket *so, struct slssock *slssock)
+{
+	struct unpcb *unpcb, *unpeerpcb;
+	struct thread *td = curthread;
+	struct socket *sopeer;
+	struct file *peerfp;
+	int peerfd;
+	int error;
+
+	/* Create the socket peer. */
+	error = kern_socket(td, slssock->family, slssock->type, slssock->proto);
 	if (error != 0)
 		return (error);
 
-	fd = td->td_retval[0];
-
-	/* Reach into the file descriptor and get the socket. */
-	fp = FDTOFP(td->td_proc, fd);
-	so = (struct socket *)fp->f_data;
-
-	/* Restore the socket's nonblocking/async state. */
-	if (info->family != AF_UNSPEC) {
-		if ((info->state & SS_ASYNC) != 0)
-			kern_fcntl_freebsd(td, fd, F_SETFL, O_ASYNC);
-		if ((info->state & SS_NBIO) != 0)
-			kern_fcntl_freebsd(td, fd, F_SETFL, O_NONBLOCK);
-		so->so_options = info->options & (~SO_ACCEPTCONN);
+	peerfd = td->td_retval[0];
+	error = slsfile_extractfp(peerfd, &peerfp);
+	if (error != 0) {
+		slsfile_attemptclose(peerfd);
+		return (error);
 	}
 
-	/* Set any options we can. */
-	if (info->options & SLS_SO_RESTORABLE) {
-		for (i = 0; i < sizeof(int) * 8; i++) {
-			mask = 1 << i;
-			if ((mask & SLS_SO_RESTORABLE) == 0)
-				continue;
+	sopeer = (struct socket *)peerfp->f_data;
 
-			error = kern_setsockopt(td, fd, SOL_SOCKET, mask,
-			    &option, UIO_SYSSPACE, sizeof(option));
-			if (error != 0)
-				goto error;
+	error = slskv_add(
+	    restdata->fptable, slssock->unpeer, (uintptr_t)peerfp);
+	if (error != 0) {
+		fdrop(peerfp, td);
+		return error;
+	}
+
+	/* Connect the two sockets. See kern_socketpair(). */
+	error = soconnect2(so, sopeer);
+	if (error != 0)
+		return (error);
+
+	if (slssock->type == SOCK_DGRAM) {
+		/*
+		 * Datagram connections are asymetric, so
+		 * repeat the process to the other direction.
+		 */
+		error = soconnect2(sopeer, so);
+		if (error != 0)
+			return (error);
+	} else if (so->so_proto->pr_flags & PR_CONNREQUIRED) {
+		/* Use credentials to make the stream socket
+		 * exclusive to the peer. */
+		unpcb = sotounpcb(so);
+		unpeerpcb = sotounpcb(sopeer);
+		unp_copy_peercred(td, unpcb, unpeerpcb, unpcb);
+	}
+
+	if (peerfd >= 0) {
+		error = slsfile_extractfp(peerfd, &peerfp);
+		if (error != 0)
+			return (error);
+		peerfd = -1;
+
+		error = slskv_add(
+		    restdata->fptable, slssock->unpeer, (uintptr_t)peerfp);
+		if (error != 0) {
+			fdrop(peerfp, td);
+			return (error);
 		}
 	}
 
-	DEBUG1("Restoring socket of family %d", info->family);
-	switch (info->family) {
+	return (0);
+}
+
+static int
+slssock_restore_aflocal(
+    struct slsrest_data *restdata, struct socket *so, struct slssock *slssock)
+{
+	struct sockaddr_un *unaddr = (struct sockaddr_un *)&slssock->un;
+	int error;
+
+	/*
+	 * Check if the socket has a peer. If it does, then it is
+	 * either a UNIX stream data socket, or it is a socket
+	 * created using socketpair(); in both cases, it has a peer,
+	 * so we create it alongside it.
+	 */
+	if (slssock->unpeer != 0)
+		return (slssock_restore_pair(restdata, so, slssock));
+
+	/*
+	 * We assume it is either a listening socket, or a
+	 * datagram socket. The only case where we don't bind
+	 * is if it is a datagram client socket, in which case
+	 * we just leave it be.
+	 */
+	if (slssock->bound == 0)
+		goto out;
+
+	/*
+	 * The bind() function for UNIX sockets makes assumptions
+	 * that do not hold here, so we use our own custom version.
+	 */
+	error = slsrest_uipc_bindat(so, (struct sockaddr *)unaddr);
+	if (error != 0)
+		return (error);
+out:
+
+	return (0);
+}
+
+static int
+slssock_restore(void *slsbacker, struct slsfile *finfo,
+    struct slsrest_data *restdata, struct file **fpp)
+{
+	struct slssock *slssock = (struct slssock *)slsbacker;
+	struct thread *td = curthread;
+	int close_error, error;
+	int fd, peerfd = -1;
+	struct socket *so;
+	struct file *fp;
+	uintptr_t peer;
+	int family;
+
+	/* Same as with pipes, check if we have already restored it. */
+	if (slskv_find(restdata->fptable, finfo->slsid, &peer) == 0) {
+		*fpp = NULL;
+		return (0);
+	}
+
+	/* We create an inet dummy sockets if we can't properly restore. */
+	family = (slssock->family == AF_UNSPEC) ? AF_INET : slssock->family;
+
+	/* Create the new socket. */
+	error = kern_socket(td, family, slssock->type, slssock->proto);
+	if (error != 0)
+		return (error);
+	fd = td->td_retval[0];
+	so = (struct socket *)FDTOFP(td->td_proc, fd)->f_data;
+
+	/* Use setsockopt() to restore any state */
+	error = slssock_setopt(fd, slssock);
+	if (error != 0)
+		goto error;
+
+	/* Use fcntl to set up async/nonblocking state. */
+	error = slssock_fcntl(fd, so, slssock);
+	if (error != 0)
+		goto error;
+
+	DEBUG1("Restoring socket of family %d", slssock->family);
+	switch (slssock->family) {
 	/* A socket we can't restore. Mark it as closed. */
 	case AF_UNSPEC:
 		break;
 
 	case AF_INET:
-		inaddr = (struct sockaddr_in *)&info->in;
-
-		/* Check if the socket is bound. */
-		if (info->bound == 0)
-			break;
-
-		/*
-		 * If this is a listening socket for a Metropolis function,
-		 * assign it a random port, much like accept() does.
-		 *  Try randomly picking a number from 1024 to 65535
-		 */
-		if (restdata->slsmetr.slsmetr_sockid == info->slsid) {
-
-			for (i = 0; i < METROPOLIS_RETRIES; i++) {
-				inaddr->sin_port = 1024 +
-				    (random() % (65545 - 1024));
-				error = kern_bindat(td, AT_FDCWD, fd,
-				    (struct sockaddr *)inaddr);
-				if (error == 0)
-					break;
-			}
-
-			if (error != 0)
-				goto error;
-
-		} else {
-			/*
-			 * We use bind() instead of setting the address directly
-			 * because we need to let the kernel know we are
-			 * reserving the address.
-			 */
-			error = kern_bindat(
-			    td, AT_FDCWD, fd, (struct sockaddr *)inaddr);
-			if (error != 0)
-				goto error;
-		}
-
+		error = slssock_restore_afinet(
+		    slssock, fd, restdata->slsmetr.slsmetr_sockid);
 		break;
 
 	case AF_LOCAL:
-		unaddr = (struct sockaddr_un *)&info->un;
-		/*
-		 * Check if the socket has a peer. If it does, then it is
-		 * either a UNIX stream data socket, or it is a socket
-		 * created using socketpair(); in both cases, it has a peer,
-		 * so we create it alongside it.
-		 */
-		if (info->unpeer != 0) {
-			/* Create the socket peer. */
-			error = kern_socket(
-			    td, info->family, info->type, info->proto);
-			if (error != 0)
-				goto error;
-
-			peerfd = td->td_retval[0];
-			peerfp = FDTOFP(td->td_proc, peerfd);
-			sopeer = (struct socket *)peerfp->f_data;
-
-			/* Connect the two sockets. See kern_socketpair(). */
-			error = soconnect2(so, sopeer);
-			if (error != 0)
-				goto error;
-
-			if (info->type == SOCK_DGRAM) {
-				/*
-				 * Datagram connections are asymetric, so
-				 * repeat the process to the other direction.
-				 */
-				error = soconnect2(sopeer, so);
-				if (error != 0)
-					goto error;
-			} else if (so->so_proto->pr_flags & PR_CONNREQUIRED) {
-				/* Use credentials to make the stream socket
-				 * exclusive to the peer. */
-				unpcb = sotounpcb(so);
-				unpeerpcb = sotounpcb(sopeer);
-				unp_copy_peercred(td, unpcb, unpeerpcb, unpcb);
-			}
-
-			break;
-		}
-
-		/*
-		 * We assume it is either a listening socket, or a
-		 * datagram socket. The only case where we don't bind
-		 * is if it is a datagram client socket, in which case
-		 * we just leave it be.
-		 */
-		if (info->bound == 0)
-			break;
-
-		/*
-		 * The bind() function for UNIX sockets makes assumptions
-		 * that do not hold here, so we use our own custom version.
-		 */
-		error = slsrest_uipc_bindat(so, (struct sockaddr *)unaddr);
-		if (error != 0) {
-			kern_close(td, fd);
-			return (error);
-		}
-
+		error = slssock_restore_aflocal(restdata, so, slssock);
 		break;
 
 	default:
-		panic(
-		    "%s: Unknown protocol family %d\n", __func__, info->family);
+		slsfile_attemptclose(fd);
+		DEBUG2("%s: Unknown protocol %d\n", __func__, slssock->family);
+		return (EINVAL);
 	}
 
 	/* Check if we need to listen for incoming connections. */
-	if ((info->options & SO_ACCEPTCONN) != 0) {
+	if ((slssock->options & SO_ACCEPTCONN) != 0) {
 		DEBUG("Setting the socket to listen");
-		error = kern_listen(td, fd, info->backlog);
+		error = kern_listen(td, fd, slssock->backlog);
 		if (error != 0)
 			goto error;
 	}
 
-	if (peerfd >= 0) {
-		error = slskv_add(table, info->unpeer, (uintptr_t)peerfp);
-		if (error != 0)
-			goto error;
-
-		/* Get a hold for the table, before closing the fd. */
-		if (!fhold(peerfp)) {
-			error = EBADF;
-			goto error;
-		}
-
-		kern_close(td, peerfd);
-	}
-
-	*fdp = fd;
-
-#if 0
-	/* Restore the data into the socket buffers. */
-	error = slsrest_sockbuf(sockbuftable, info->rcvid, &so->so_rcv);
+	/* The rest of the operations are done directly on the descriptor. */
+	error = slsfile_extractfp(fd, &fp);
 	if (error != 0)
 		goto error;
+	fd = -1;
 
-	error = slsrest_sockbuf(sockbuftable, info->sndid, &so->so_snd);
-	if (error != 0)
-		goto error;
+	*fpp = fp;
 
-	/* If we also created our peer, restore its buffers, too. */
-	if (sopeer != NULL) {
-		error = slsrest_sockbuf(sockbuftable, info->peer_rcvid, &sopeer->so_rcv);
-		if (error != 0)
-			goto error;
-
-		error = slsrest_sockbuf(sockbuftable, info->peer_sndid, &sopeer->so_snd);
-		if (error != 0)
-			goto error;
-	}
-#endif
+	/* XXX Restore the send/receive socket buffers. */
 
 	return (0);
 
 error:
-	if (peerfd >= 0)
-		kern_close(td, peerfd);
-	kern_close(td, fd);
+	if (fd >= 0) {
+		close_error = kern_close(td, fd);
+		if (close_error != 0)
+			DEBUG1("Error %d when closing file", close_error);
+
+		return (error);
+	}
+
+	if (peerfd >= 0) {
+		close_error = kern_close(td, peerfd);
+		if (close_error != 0)
+			DEBUG1("Error %d when closing file", close_error);
+	}
 
 	return (error);
 }
@@ -730,4 +673,5 @@ struct slsfile_ops slssock_ops = {
 	.slsfile_supported = slssock_supported,
 	.slsfile_slsid = slssock_slsid,
 	.slsfile_checkpoint = slssock_checkpoint,
+	.slsfile_restore = slssock_restore,
 };

@@ -5,6 +5,6 @@
 
 int slsckpt_vnode_serialize(struct slsckpt_data *sckpt_data);
 int slsckpt_vnode(struct vnode *vp, struct slsckpt_data *sckpt_data);
-int slsrest_vnode(struct slsvnode *info, struct slsrest_data *restdata);
+int slsvn_restore_vnode(struct slsvnode *info, struct slsrest_data *restdata);
 
 #endif /* _SLS_VNODE_H_ */

@@ -44,19 +44,34 @@
 #include "sls_internal.h"
 #include "sls_vmobject.h"
 
-int
-slsrest_posixshm(
-    struct slsposixshm *info, struct slskv_table *objtable, int *fdp)
+static void
+slsshm_restore_swapobj(struct file *fp, vm_object_t obj)
 {
-	vm_object_t oldobj, obj;
-	struct shmfd *shmfd;
+	struct shmfd *shmfd = (struct shmfd *)fp->f_data;
+	vm_object_t oldobj;
+
+	DEBUG1("Swapped object %p into shared memory segment", obj);
+	vm_object_reference(obj);
+
+	oldobj = shmfd->shm_object;
+	shmfd->shm_object = obj;
+
+	vm_object_deallocate(oldobj);
+}
+
+static int
+slsshm_restore(void *slsbacker, struct slsfile *finfo,
+    struct slsrest_data *restdata, struct file **fpp)
+{
+	struct slsposixshm *info = (struct slsposixshm *)slsbacker;
+	vm_object_t obj;
 	struct file *fp;
 	char *path;
 	int error;
 	int fd;
 
 	/* First and foremost, go fetch the object backing the shared memory. */
-	error = slskv_find(objtable, info->object, (uintptr_t *)&obj);
+	error = slskv_find(restdata->objtable, info->object, (uintptr_t *)&obj);
 	if (error != 0)
 		return (error);
 
@@ -78,28 +93,31 @@ slsrest_posixshm(
 
 		DEBUG("Shared memory segment already created");
 
-		/* It was - return the fd and let the main code take care of the
-		 * rest. */
-		*fdp = curthread->td_retval[0];
+		fd = curthread->td_retval[0];
+
+		/* Yes, return the fd let the caller take care of the rest. */
+		error = slsfile_extractfp(fd, &fp);
+		if (error != 0) {
+			slsfile_attemptclose(fd);
+			return (error);
+		}
+
+		*fpp = fp;
+
 		return (0);
 	}
 
 	/* Otherwise we just created it. */
 	fd = curthread->td_retval[0];
+	error = slsfile_extractfp(fd, &fp);
+	if (error != 0) {
+		slsfile_attemptclose(fd);
+		return (error);
+	}
 
-	/* Change the shared memory segment to point to the restored data. */
-	fp = FDTOFP(curproc, fd);
-	shmfd = (struct shmfd *)fp->f_data;
+	slsshm_restore_swapobj(fp, obj);
 
-	DEBUG1("Swapped object %p into shared memory segment", obj);
-	vm_object_reference(obj);
-
-	oldobj = shmfd->shm_object;
-	shmfd->shm_object = obj;
-
-	vm_object_deallocate(oldobj);
-
-	*fdp = fd;
+	*fpp = fp;
 
 	return (0);
 }
@@ -160,4 +178,5 @@ struct slsfile_ops slsshm_ops = {
 	.slsfile_supported = slsshm_supported,
 	.slsfile_slsid = slsshm_slsid,
 	.slsfile_checkpoint = slsshm_checkpoint,
+	.slsfile_restore = slsshm_restore,
 };

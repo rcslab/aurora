@@ -91,10 +91,18 @@ slsfile_supported_invalid(struct file *fp)
 	return (false);
 }
 
+static int
+slsfile_restore_invalid(void *slsbacker, struct slsfile *info,
+    struct slsrest_data *restdata, struct file **fpp)
+{
+	return (EINVAL);
+}
+
 static struct slsfile_ops slsfile_invalid = {
 	.slsfile_supported = slsfile_supported_invalid,
 	.slsfile_slsid = slsfile_slsid_invalid,
 	.slsfile_checkpoint = slsfile_checkpoint_invalid,
+	.slsfile_restore = slsfile_restore_invalid,
 };
 
 struct slsfile_ops *slsfile_ops[] = {
@@ -129,6 +137,14 @@ slsfile_checkpoint(
 	    (slsfile_ops[fp->f_type]->slsfile_checkpoint)(fp, rec, sckpt_data));
 }
 
+static int
+slsfile_restore(void *slsbacker, struct slsfile *finfo,
+    struct slsrest_data *restdata, struct file **fpp)
+{
+	return ((slsfile_ops[finfo->type]->slsfile_restore)(
+	    slsbacker, finfo, restdata, fpp));
+}
+
 static bool
 slsfile_supported(struct file *fp)
 {
@@ -140,6 +156,38 @@ slsfile_is_ttyvp(struct file *fp)
 {
 	return (
 	    (fp->f_type == DTYPE_VNODE) && (slsckpt_vnode_istty(fp->f_vnode)));
+}
+
+void
+slsfile_attemptclose(int fd)
+{
+	struct thread *td = curthread;
+	int error;
+
+	/* Can't do much if we fail to close the file. */
+	error = kern_close(td, fd);
+	if (error != 0)
+		DEBUG1("Error %d when closing file", error);
+}
+
+int
+slsfile_extractfp(int fd, struct file **fpp)
+{
+	struct thread *td = curthread;
+	struct file *fp = FDTOFP(td->td_proc, fd);
+
+	/* Get a reference on behalf of the hashtable. */
+	if (!fhold(fp))
+		return (EBADF);
+
+	/*
+	 * Remove it from this process and this fd. If closing the fd fails
+	 * we keep going, since we cannot handle the error meaningfully.
+	 */
+	slsfile_attemptclose(fd);
+	*fpp = fp;
+
+	return (0);
 }
 
 static int
@@ -232,177 +280,22 @@ slsrest_file(
     void *slsbacker, struct slsfile *info, struct slsrest_data *restdata)
 {
 	struct thread *td = curthread;
-	struct slspipe *slspipe;
-	struct pipe *pipepeer;
-	struct kqueue *kq;
-	struct vnode *vp;
-	struct file *fp, *fppeer;
-	uintptr_t peer;
-	uint64_t slsid;
-	void *kqdata;
-	int fd;
+	struct file *fp;
 	int error;
 
 	DEBUG1("Restoring file of type %d", info->type);
-	switch (info->type) {
-	case DTYPE_VNODE:
-	case DTYPE_FIFO:
-
-		error = slskv_find(
-		    restdata->vntable, info->vnode, (uintptr_t *)&vp);
-		if (error != 0) {
-			/* XXX Ignore the error if ignoring unlinked files. */
-			DEBUG("Probably restoring an unlinked file");
-			return (error);
-		}
-
-		/* Create the file handle, open the vnode associate the two. */
-		error = falloc_noinstall(td, &fp);
-		if (error != 0)
-			return (error);
-
-		VOP_LOCK(vp, LK_EXCLUSIVE);
-		error = vn_open_vnode(vp, info->flag, td->td_ucred, td, fp);
-		if (error != 0) {
-			VOP_UNLOCK(vp, 0);
-			fdrop(fp, td);
-			return (error);
-		}
-
-		vref(vp);
-		fp->f_vnode = vp;
-
-		/* Manually attach the vnode method vector. */
-		if (fp->f_ops == &badfileops) {
-			fp->f_seqcount = 1;
-			finit(fp, info->flag, DTYPE_VNODE, vp, &vnops);
-		}
-		VOP_UNLOCK(vp, 0);
-		fd = -1;
-
-		break;
-
-	case DTYPE_KQUEUE:
-		kqdata = ((slsset *)slsbacker)->data;
-		error = slskq_restore_kqueue((struct slskqueue *)kqdata, &fd);
-		if (error != 0)
-			return (error);
-
-		/*
-		 * Associate the restored kqueue with its record. We can't
-		 * restore the kevents properly because we need to have a
-		 * fully restored file descriptor table. We therefore keep
-		 * the set of kevents for the kqueue in a table until we need
-		 * it.
-		 */
-		fp = FDTOFP(curproc, fd);
-		kq = fp->f_data;
-		error = slskv_add(
-		    restdata->kevtable, (uint64_t)kq, (uintptr_t)slsbacker);
-		if (error != 0)
-			return (error);
-
-		break;
-
-	case DTYPE_PIPE:
-		/*
-		 * Pipes are a special case, because restoring one end
-		 * also brings back the other. For this reason, we look
-		 * for the pipe's SLS ID instead of the open file's.
-		 *
-		 * Because the rest of the fptable's data is indexed
-		 * by the ID held in the slsfile structure, we do an
-		 * extra check using the ID of slspipe. If we find it,
-		 * we have already restored the peer, and so we only need
-		 * to restore the data for the backer.
-		 */
-		slspipe = (struct slspipe *)slsbacker;
-		slsid = slspipe->slsid;
-		if (slskv_find(
-			restdata->fptable, slsid, (uintptr_t *)&fppeer) == 0) {
-			pipepeer = (struct pipe *)fppeer->f_data;
-
-			/* Restore the buffer's state. */
-			pipepeer->pipe_buffer.cnt = slspipe->pipebuf.cnt;
-			pipepeer->pipe_buffer.in = slspipe->pipebuf.in;
-			pipepeer->pipe_buffer.out = slspipe->pipebuf.out;
-			/* Check if the data fits in the newly created pipe. */
-			if (pipepeer->pipe_buffer.size < slspipe->pipebuf.cnt)
-				return (EINVAL);
-
-			memcpy(pipepeer->pipe_buffer.buffer, slspipe->data,
-			    slspipe->pipebuf.cnt);
-
-			return (0);
-		}
-
-		error = slsrest_pipe(restdata->fptable,
-		    info->flag & (O_NONBLOCK | O_CLOEXEC),
-		    (struct slspipe *)slsbacker, &fd);
-		if (error != 0)
-			return (error);
-
-		break;
-
-	case DTYPE_SOCKET:
-		/* Same as with pipes, check if we have already restored it. */
-		slsid = ((struct slssock *)slsbacker)->slsid;
-		if (slskv_find(restdata->fptable, slsid, &peer) == 0)
-			return (0);
-
-		error = slsrest_socket(restdata, slsbacker, info, &fd);
-		if (error != 0)
-			return (error);
-
-		break;
-
-	case DTYPE_PTS:
-		/*
-		 * As with pipes, restoring one side restores the other.
-		 * Therefore, check whether we need to proceed.
-		 */
-		slsid = ((struct slspts *)slsbacker)->slsid;
-		if (slskv_find(restdata->fptable, slsid, &peer) == 0)
-			return (0);
-
-		error = slsrest_pts(
-		    restdata->fptable, (struct slspts *)slsbacker, &fd);
-		if (error != 0)
-			return (error);
-		break;
-
-	case DTYPE_SHM:
-		error = slsrest_posixshm(
-		    (struct slsposixshm *)slsbacker, restdata->objtable, &fd);
-		if (error != 0)
-			return (error);
-
-		break;
-
-	default:
-		panic("invalid file type");
-	}
+	error = slsfile_restore(slsbacker, info, restdata, &fp);
+	if (error != 0)
+		return (error);
 
 	/*
-	 * Get the open file from the table and add it to the hashtable. We
-	 * don't need to lseek the file to the right position, manually setting
-	 * the offset works.
+	 * Sometimes we get no file pointer back. For example, we might support
+	 * ignoring missing files, or when restoring an already created pipe
+	 * end.
 	 */
-	if (fd >= 0) {
-		fp = FDTOFP(curproc, fd);
-		/* We keep the open file in the fptable. */
-		if (!fhold(fp)) {
-			kern_close(td, fd);
-			return (EBADF);
-		}
+	if (fp == NULL)
+		return (0);
 
-		/*
-		 * Remove the open from this process' table.
-		 * When we find out we need it, we'll put
-		 * it into the table of the appropriate process.
-		 */
-		kern_close(td, fd);
-	}
 	fp->f_flag = info->flag;
 	fp->f_offset = info->offset;
 

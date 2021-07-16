@@ -229,7 +229,7 @@ slsckpt_vnode_serialize(struct slsckpt_data *sckpt_data)
  * Get the vnode corresponding to a VFS path.
  */
 static int
-slsrest_vnode_path(struct slsvnode *info, struct vnode **vpp)
+slsvn_restore_path(struct slsvnode *info, struct vnode **vpp)
 {
 	struct thread *td = curthread;
 	struct nameidata nd;
@@ -249,7 +249,7 @@ slsrest_vnode_path(struct slsvnode *info, struct vnode **vpp)
  * Restore a vnode from a SLOS inode. This is mostly code from kern_openat()
  */
 static int
-slsrest_vnode_ino(struct slsvnode *info, struct vnode **vpp)
+slsvn_restore_ino(struct slsvnode *info, struct vnode **vpp)
 {
 	struct vnode *vp;
 	int error;
@@ -270,7 +270,7 @@ slsrest_vnode_ino(struct slsvnode *info, struct vnode **vpp)
 }
 
 int
-slsrest_vnode(struct slsvnode *info, struct slsrest_data *restdata)
+slsvn_restore_vnode(struct slsvnode *info, struct slsrest_data *restdata)
 {
 	struct vnode *vp;
 	int error;
@@ -278,10 +278,10 @@ slsrest_vnode(struct slsvnode *info, struct slsrest_data *restdata)
 	/* Get the vnode either from the inode or the path. */
 	if (info->has_path == 1) {
 		DEBUG("Restoring named vnode");
-		error = slsrest_vnode_path(info, &vp);
+		error = slsvn_restore_path(info, &vp);
 	} else {
 		DEBUG1("Restoring vnode with inode number 0x%lx", info->ino);
-		error = slsrest_vnode_ino(info, &vp);
+		error = slsvn_restore_ino(info, &vp);
 	}
 	if (error != 0)
 		return (error);
@@ -350,6 +350,50 @@ slsvn_checkpoint(
 	error = slspts_checkpoint_vnode(vp, rec);
 	if (error != 0)
 		return (error);
+
+	return (0);
+}
+
+static int
+slsvn_restore(void *slsbacker, struct slsfile *finfo,
+    struct slsrest_data *restdata, struct file **fpp)
+{
+	struct thread *td = curthread;
+	struct vnode *vp;
+	struct file *fp;
+	int error;
+
+	error = slskv_find(restdata->vntable, finfo->vnode, (uintptr_t *)&vp);
+	if (error != 0) {
+		/* XXX Ignore the error if ignoring unlinked files. */
+		DEBUG("Probably restoring an unlinked file");
+		return (error);
+	}
+
+	/* Create the file handle, open the vnode associate the two. */
+	error = falloc_noinstall(td, &fp);
+	if (error != 0)
+		return (error);
+
+	VOP_LOCK(vp, LK_EXCLUSIVE);
+	error = vn_open_vnode(vp, finfo->flag, td->td_ucred, td, fp);
+	if (error != 0) {
+		VOP_UNLOCK(vp, 0);
+		fdrop(fp, td);
+		return (error);
+	}
+
+	vref(vp);
+	fp->f_vnode = vp;
+
+	/* Manually attach the vnode method vector. */
+	if (fp->f_ops == &badfileops) {
+		fp->f_seqcount = 1;
+		finit(fp, finfo->flag, DTYPE_VNODE, vp, &vnops);
+	}
+	VOP_UNLOCK(vp, 0);
+
+	*fpp = fp;
 
 	return (0);
 }
@@ -424,4 +468,5 @@ struct slsfile_ops slsvn_ops = {
 	.slsfile_supported = slsvn_supported,
 	.slsfile_slsid = slsvn_slsid,
 	.slsfile_checkpoint = slsvn_checkpoint,
+	.slsfile_restore = slsvn_restore,
 };

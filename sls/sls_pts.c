@@ -282,20 +282,77 @@ slspts_checkpoint_vnode(struct vnode *vp, struct sls_record *rec)
 	return (0);
 }
 
+static int
+slspts_restore_slv(struct tty *tty, int *fdp)
+{
+	struct thread *td = curthread;
+	char *path;
+	int error;
+
+	/* Get the name of the slave side. */
+	path = malloc(PATH_MAX, M_SLSMM, M_WAITOK);
+	strlcpy(path, DEVFS_ROOT, sizeof(DEVFS_ROOT));
+	strlcat(path, devtoname(tty->t_dev), PATH_MAX);
+
+	error = kern_openat(td, AT_FDCWD, path, UIO_SYSSPACE, O_RDWR, S_IRWXU);
+	free(path, M_SLSMM);
+	if (error != 0)
+		return (error);
+
+	*fdp = td->td_retval[0];
+
+	return (0);
+}
+
+static int
+slspts_restore_ttyq(struct slspts *slspts, struct tty *tty)
+{
+	size_t written;
+
+	/* Fill back in the tty input and output queues. */
+	if (slspts->inq != NULL) {
+		written = ttyinq_write(
+		    &tty->t_inq, slspts->inq, slspts->inqlen, 0);
+		if (written != slspts->inqlen)
+			return (EINVAL);
+	}
+
+	if (slspts->outq != NULL) {
+		written = ttyoutq_write(
+		    &tty->t_outq, slspts->outq, slspts->outqlen);
+		if (written != slspts->outqlen)
+			return (EINVAL);
+	}
+
+	return (0);
+}
+
 /*
  * Modified version of sys_posix_openpt(). Restores
  * both the master and the slave side of the pts.
  */
-int
-slsrest_pts(struct slskv_table *fptable, struct slspts *slspts, int *fdp)
+static int
+slspts_restore(void *slsbacker, struct slsfile *finfo,
+    struct slsrest_data *restdata, struct file **fpp)
 {
+	struct slspts *slspts = (struct slspts *)slsbacker;
 	struct file *masterfp, *slavefp;
+	struct file *localfp, *peerfp;
 	int masterfd, slavefd;
+	int localfd, peerfd;
 	struct vnode *vp;
 	struct tty *tty;
-	size_t written;
-	char *path;
+	uintptr_t peer;
+	uint64_t slsid;
 	int error;
+
+	/* If the peer has been already restored we don't need to do anything.
+	 */
+	slsid = slspts->slsid;
+	if (slskv_find(restdata->fptable, slsid, &peer) == 0) {
+		*fpp = NULL;
+		return (0);
+	}
 
 	/*
 	 * We don't really want the fd, but all the other file
@@ -311,8 +368,10 @@ slsrest_pts(struct slskv_table *fptable, struct slspts *slspts, int *fdp)
 	 * manually set the controlling terminal of a process elsewhere.
 	 */
 	error = pts_alloc(FREAD | FWRITE | O_NOCTTY, curthread, masterfp);
-	if (error != 0)
-		goto error;
+	if (error != 0) {
+		fdclose(curthread, masterfp, masterfd);
+		return (error);
+	}
 
 	tty = masterfp->f_data;
 	/* XXX See if there are flags we can (slstty->flags to t_flags).  */
@@ -325,21 +384,9 @@ slsrest_pts(struct slskv_table *fptable, struct slspts *slspts, int *fdp)
 	 * case, and how to properly restore them if we do.
 	 */
 
-	/* Get the name of the slave side. */
-	path = malloc(PATH_MAX, M_SLSMM, M_WAITOK);
-	strlcpy(path, DEVFS_ROOT, sizeof(DEVFS_ROOT));
-	strlcat(path, devtoname(tty->t_dev), PATH_MAX);
-
-	error = kern_openat(
-	    curthread, AT_FDCWD, path, UIO_SYSSPACE, O_RDWR, S_IRWXU);
-	free(path, M_SLSMM);
-	if (error != 0)
-		goto error;
-
 	/* As in the case of pipes, we add the peer to the table ourselves. */
-	slavefd = curthread->td_retval[0];
+	error = slspts_restore_slv(tty, &slavefd);
 	slavefp = FDTOFP(curproc, slavefd);
-
 	vp = slavefp->f_vnode;
 	vref(vp);
 
@@ -349,67 +396,41 @@ slsrest_pts(struct slskv_table *fptable, struct slspts *slspts, int *fdp)
 	 * and combines it with the fd that we return to it.
 	 */
 	if (slspts->ismaster != 0) {
-		error = slskv_add(fptable, slspts->peerid, (uintptr_t)slavefp);
-		if (error != 0) {
-			kern_close(curthread, slavefd);
-			goto error;
-		}
-
-		*fdp = masterfd;
-		/* Get a reference on behalf of the hashtable. */
-		if (!fhold(slavefp)) {
-			error = EBADF;
-			goto error;
-		}
-
-		/* Remove it from this process and this fd. */
-		kern_close(curthread, slavefd);
-
+		localfd = masterfd;
+		peerfd = slavefd;
 	} else {
-		error = slskv_add(fptable, slspts->peerid, (uintptr_t)masterfp);
-		if (error != 0) {
-			kern_close(curthread, masterfd);
-			return (error);
-		}
-
-		*fdp = slavefd;
-		/* Get a reference on behalf of the hashtable. */
-		if (!fhold(masterfp)) {
-			error = EBADF;
-			goto error;
-		}
-		/* Remove it from this process and this fd. */
-		kern_close(curthread, masterfd);
+		localfd = slavefd;
+		peerfd = masterfd;
 	}
 
-	/* Fill back in the tty input and output queues. */
-	if (slspts->inq != NULL) {
-		written = ttyinq_write(
-		    &tty->t_inq, slspts->inq, slspts->inqlen, 0);
-		if (written != slspts->inqlen) {
-			error = EINVAL;
-			goto error;
-		}
+	localfp = FDTOFP(curproc, localfd);
+	peerfp = FDTOFP(curproc, peerfd);
+	error = slskv_add(restdata->fptable, slspts->peerid, (uintptr_t)peerfp);
+	if (error != 0) {
+		slsfile_attemptclose(peerfd);
+		goto error;
 	}
 
-	if (slspts->outq != NULL) {
-		written = ttyoutq_write(
-		    &tty->t_outq, slspts->outq, slspts->outqlen);
-		if (written != slspts->outqlen) {
-			error = EINVAL;
-			goto error;
-		}
-	}
+	error = slsfile_extractfp(peerfd, &peerfp);
+	if (error != 0)
+		goto error;
+
+	error = slspts_restore_ttyq(slspts, tty);
+	if (error != 0)
+		return (error);
 
 	/* We got an extra reference, release it as in posix_openpt(). */
 	fdrop(masterfp, curthread);
 
+	if (!fhold(slavefp))
+		return (EBADF);
+
+	*fpp = FDTOFP(curproc, localfd);
+
 	return (0);
 
 error:
-	free(slspts->inq, M_SLSMM);
-	free(slspts->outq, M_SLSMM);
-	fdclose(curthread, masterfp, masterfd);
+	fdclose(curthread, localfp, localfd);
 
 	return (error);
 }
@@ -437,4 +458,5 @@ struct slsfile_ops slspts_ops = {
 	.slsfile_supported = slspts_supported,
 	.slsfile_slsid = slspts_slsid,
 	.slsfile_checkpoint = slspts_checkpoint,
+	.slsfile_restore = slspts_restore,
 };

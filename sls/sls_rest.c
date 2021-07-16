@@ -285,7 +285,7 @@ slsrest_dovnode(struct slsrest_data *restdata, char **bufp, size_t *buflenp)
 		return (error);
 	}
 
-	error = slsrest_vnode(&slsvnode, restdata);
+	error = slsvn_restore_vnode(&slsvnode, restdata);
 	if (error != 0) {
 		DEBUG1("Error in slsrest_vnode %d", error);
 		return (error);

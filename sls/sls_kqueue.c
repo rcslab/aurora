@@ -203,11 +203,13 @@ slskq_checkpoint_kqueue(struct proc *p, struct kqueue *kq, struct sbuf *sb)
  * files are being restored. We wait until that step is done before
  * we fully populate the kqueues with their data.
  */
-int
-slskq_restore_kqueue(struct slskqueue *slskq, int *fdp)
+static int
+slskq_restore(void *slsbacker, struct slsfile *info,
+    struct slsrest_data *restdata, struct file **fpp)
 {
 	struct proc *p = curproc;
 	struct kqueue *kq;
+	struct file *fp;
 	int error;
 	int fd;
 
@@ -226,8 +228,15 @@ slskq_restore_kqueue(struct slskqueue *slskq, int *fdp)
 	 */
 	slskq_detach(kq);
 
+	fp = FDTOFP(curproc, fd);
+	kq = fp->f_data;
+	error = slskv_add(
+	    restdata->kevtable, (uint64_t)kq, (uintptr_t)slsbacker);
+	if (error != 0)
+		return (error);
+
 	/* Grab the open file and pass it to the caller. */
-	*fdp = fd;
+	*fpp = fp;
 
 	return (0);
 }
@@ -520,4 +529,5 @@ struct slsfile_ops slskq_ops = {
 	.slsfile_supported = slskq_supported,
 	.slsfile_slsid = slskq_slsid,
 	.slsfile_checkpoint = slskq_checkpoint,
+	.slsfile_restore = slskq_restore,
 };
