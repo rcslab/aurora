@@ -360,9 +360,8 @@ slsckpt_filedesc(
 		SDT_PROBE0(sls, , , fileprobe_start);
 		error = slsckpt_file(fp, &slsfdp->fd_table[fd], sckpt_data);
 		SDT_PROBE1(sls, , , fileprobe_return, fp->f_type);
-		if (error != 0) {
+		if (error != 0)
 			goto done;
-		}
 	}
 
 	/* Add the size of the struct before the struct itself. */

@@ -207,33 +207,37 @@ static int
 slskq_restore(void *slsbacker, struct slsfile *info,
     struct slsrest_data *restdata, struct file **fpp)
 {
-	struct proc *p = curproc;
+	struct thread *td = curthread;
 	struct kqueue *kq;
 	struct file *fp;
 	int error;
 	int fd;
 
 	/* Create a kqueue for the process. */
-	error = kern_kqueue(curthread, 0, NULL);
+	error = kern_kqueue(td, 0, NULL);
 	if (error != 0)
 		return (error);
 
-	fd = curthread->td_retval[0];
-	kq = FDTOFP(p, fd)->f_data;
+	fd = td->td_retval[0];
+
+	error = slsfile_extractfp(fd, &fp);
+	if (error != 0)
+		return (error);
 
 	/*
 	 * Right now we are creating the kqueue outside the file table in which
 	 * it will ultimately end up. We need to remove it from its current one,
 	 * we'll attach it to the currect table when that is created.
 	 */
+	kq = fp->f_data;
 	slskq_detach(kq);
 
-	fp = FDTOFP(curproc, fd);
-	kq = fp->f_data;
 	error = slskv_add(
 	    restdata->kevtable, (uint64_t)kq, (uintptr_t)slsbacker);
-	if (error != 0)
+	if (error != 0) {
+		fdrop(fp, td);
 		return (error);
+	}
 
 	/* Grab the open file and pass it to the caller. */
 	*fpp = fp;
@@ -389,7 +393,7 @@ slskq_restore_knotes(int fd, slsset *slskns)
 	/* For each slskq, create a kevent and register it. */
 	error = slskq_register(fd, kq, slskns);
 	if (error != 0)
-		goto noacquire;
+		goto done;
 
 	/*
 	 * We assume that knotes won't be messed with by external entities until
@@ -453,6 +457,7 @@ slskq_restore_knotes(int fd, slsset *slskns)
 
 	KQ_UNLOCK(kq);
 
+done:
 	kqueue_release(kq, 0);
 
 noacquire:
@@ -496,7 +501,9 @@ slskq_restore_knotes_all(struct proc *p, struct slskv_table *kevtable)
 static int
 slskq_slsid(struct file *fp, uint64_t *slsidp)
 {
-	return ((uint64_t)fp);
+	*slsidp = (uint64_t)fp;
+
+	return (0);
 }
 
 static int
