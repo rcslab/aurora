@@ -209,6 +209,29 @@ out:
 	return (error);
 }
 
+/*
+ * Marks the vnode as in use as a shared library.
+ */
+static int
+slsvmspace_set_text(vm_map_entry_t map, vm_offset_t start)
+{
+	vm_map_entry_t vmentry;
+	boolean_t wired;
+	vm_pindex_t pindex;
+	vm_prot_t prot;
+	vm_object_t object;
+
+	error = vm_map_lookup(&map, start, VM_PROT_FAULT_LOOKUP, &vmentry,
+	    &object, &pindex, &prot, &wired);
+	if (error != 0)
+		return (error);
+
+	vm_map_unlock_read(map);
+	vm_map_entry_set_vnode_text(vmentry, true);
+
+	return (0);
+}
+
 static int
 slsvmspace_restore_entry_file(
     struct vm_map *map, struct slsvmentry *entry, struct slsrest_data *restdata)
@@ -282,9 +305,9 @@ slsvmspace_restore_entry_file(
 		return (error);
 
 	if (entry->eflags & MAP_ENTRY_VN_EXEC)
-		VOP_SET_TEXT(vp);
+		error = slsvmspace_set_text(map, start);
 
-	return (error);
+	return (0);
 }
 
 static int
