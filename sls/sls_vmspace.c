@@ -213,13 +213,14 @@ out:
  * Marks the vnode as in use as a shared library.
  */
 static int
-slsvmspace_set_text(vm_map_entry_t map, vm_offset_t start)
+slsvmspace_set_text(vm_map_t map, vm_offset_t start)
 {
 	vm_map_entry_t vmentry;
 	boolean_t wired;
 	vm_pindex_t pindex;
 	vm_prot_t prot;
 	vm_object_t object;
+	int error;
 
 	error = vm_map_lookup(&map, start, VM_PROT_FAULT_LOOKUP, &vmentry,
 	    &object, &pindex, &prot, &wired);
