@@ -249,7 +249,6 @@ sls_metropolis_spawn(struct sls_metropolis_spawn_args *args)
 
 	rest_args = (struct sls_restore_args) {
 		.oid = args->oid,
-		.daemon = 0,
 		.rest_stopped = 0,
 	};
 
@@ -375,7 +374,6 @@ sls_restore(struct sls_restore_args *args)
 	/* Set up the arguments. */
 	restd_args = malloc(sizeof(*restd_args), M_SLSMM, M_WAITOK);
 	restd_args->slsp = slsp;
-	restd_args->daemon = args->daemon;
 	restd_args->rest_stopped = args->rest_stopped;
 
 

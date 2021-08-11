@@ -25,7 +25,6 @@
 
 int slsproc_checkpoint(struct proc *p, struct sbuf *sb, slsset *procset,
     struct slsckpt_data *sckpt_data);
-int slsproc_restore(struct proc *p, uint64_t daemon, char **bufp,
-    size_t *buflenp, struct slsrest_data *restdata);
+int slsproc_restore(struct proc *p, char **bufp, size_t *buflenp, struct slsrest_data *restdata);
 
 #endif /* _SLS_PROC_H_ */

@@ -14,7 +14,6 @@
 #include <unistd.h>
 
 static struct option restore_longopts[] = {
-	{ "daemon", no_argument, NULL, 'd' },
 	{ "memory", no_argument, NULL, 'm' },
 	{ "rest_stopped", no_argument, NULL, 's' },
 	{ NULL, no_argument, NULL, 0 },
@@ -33,20 +32,12 @@ restore_main(int argc, char *argv[])
 	int status;
 	uint64_t oid = SLS_DEFAULT_PARTITION;
 	pid_t childpid;
-	bool daemon = false;
 	bool rest_stopped = false;
 	int opt;
 
 	while ((opt = getopt_long(
 		    argc, argv, "dmo:s", restore_longopts, NULL)) != -1) {
 		switch (opt) {
-		case 'd':
-			/*
-			 * The proceses are restored as a daemon, detached from
-			 * the restore process' terminal.
-			 */
-			daemon = true;
-			break;
 		case 'm':
 			if (oid == SLS_DEFAULT_PARTITION)
 				oid = SLS_DEFAULT_MPARTITION;
@@ -58,10 +49,7 @@ restore_main(int argc, char *argv[])
 			break;
 
 		case 's':
-			/*
-			 * The proceses are restored as a daemon, detached from
-			 * the restore process' terminal.
-			 */
+			/* Restore in a stopped state. */
 			rest_stopped = true;
 			break;
 
@@ -76,7 +64,7 @@ restore_main(int argc, char *argv[])
 		return (0);
 	}
 
-	if ((error = sls_restore(oid, daemon, rest_stopped)) < 0)
+	if ((error = sls_restore(oid, rest_stopped)) < 0)
 		return (1);
 
 	/*

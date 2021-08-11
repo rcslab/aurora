@@ -580,7 +580,6 @@ slsrest_metrfixup(struct proc *p, struct slsrest_data *restdata)
 struct slsrest_metadata_args {
 	char *buf;
 	size_t buflen;
-	uint64_t daemon;
 	uint64_t rest_stopped;
 	struct slsrest_data *restdata;
 };
@@ -594,7 +593,6 @@ slsrest_metadata(void *args)
 	struct slsrest_data *restdata;
 	struct proc *p = curproc;
 	uint64_t rest_stopped;
-	uint64_t daemon;
 	size_t buflen;
 	int error;
 	char *buf;
@@ -606,7 +604,6 @@ slsrest_metadata(void *args)
 
 	buf = ((struct slsrest_metadata_args *)args)->buf;
 	buflen = ((struct slsrest_metadata_args *)args)->buflen;
-	daemon = ((struct slsrest_metadata_args *)args)->daemon;
 	rest_stopped = ((struct slsrest_metadata_args *)args)->rest_stopped;
 	restdata = ((struct slsrest_metadata_args *)args)->restdata;
 
@@ -627,27 +624,35 @@ slsrest_metadata(void *args)
 	SLS_UNLOCK();
 
 	error = slsvmspace_restore(p, &buf, &buflen, restdata);
-	if (error != 0)
+	if (error != 0) {
+		DEBUG1("slsvmspace_restore failed with %", error);
 		goto error;
+	}
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Restoring vm state");
 	/*
 	 * Restore CPU state, file state, and memory
 	 * state, parsing the buffer at each step.
 	 */
-	error = slsproc_restore(p, daemon, &buf, &buflen, restdata);
-	if (error != 0)
+	error = slsproc_restore(p, &buf, &buflen, restdata);
+	if (error != 0) {
+		DEBUG1("slsproc_restore failed with %", error);
 		goto error;
+	}
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Restoring process state");
 	error = slsrest_dofiledesc(p, &buf, &buflen, restdata);
-	if (error != 0)
+	if (error != 0) {
+		DEBUG1("slsrest_dofiledesc failed with %", error);
 		goto error;
+	}
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Restoring file table");
 	error = slskq_restore_knotes_all(p, restdata->kevtable);
-	if (error != 0)
+	if (error != 0) {
+		DEBUG1("slskq_restore_knotes_all failed with %", error);
 		goto error;
+	}
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Restoring kqueues");
 
@@ -739,7 +744,7 @@ error:
 }
 
 static int
-slsrest_fork(uint64_t daemon, uint64_t rest_stopped, char *buf, size_t buflen,
+slsrest_fork(uint64_t rest_stopped, char *buf, size_t buflen,
     struct slsrest_data *restdata)
 {
 	struct fork_req fr;
@@ -764,7 +769,6 @@ slsrest_fork(uint64_t daemon, uint64_t rest_stopped, char *buf, size_t buflen,
 	/* The code below is executed only by the original thread. */
 	args = malloc(sizeof(*args), M_SLSMM, M_WAITOK);
 	args->buf = buf;
-	args->daemon = daemon;
 	args->rest_stopped = rest_stopped;
 	args->buflen = buflen;
 	args->restdata = restdata;
@@ -1049,7 +1053,7 @@ error:
 }
 
 static int
-sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
+sls_rest(struct slspart *slsp, uint64_t rest_stopped)
 {
 	struct slsrest_data *restdata;
 	struct slskv_table *rectable;
@@ -1166,8 +1170,7 @@ sls_rest(struct slspart *slsp, uint64_t daemon, uint64_t rest_stopped)
 		buf = sbuf_data(rec->srec_sb);
 		buflen = sbuf_len(rec->srec_sb);
 
-		error = slsrest_fork(
-		    daemon, rest_stopped, buf, buflen, restdata);
+		error = slsrest_fork(rest_stopped, buf, buflen, restdata);
 		if (error != 0) {
 			KV_ABORT(iter);
 			goto out;
@@ -1225,7 +1228,7 @@ sls_restored(struct sls_restored_args *args)
 	int error;
 
 	/* Restore the old process. */
-	error = sls_rest(args->slsp, args->daemon, args->rest_stopped);
+	error = sls_rest(args->slsp, args->rest_stopped);
 	if (error != 0)
 		DEBUG1("Error: sls_rest failed with %d", error);
 

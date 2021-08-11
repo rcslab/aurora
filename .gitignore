@@ -20,6 +20,7 @@ tests/memsnap/memsnap
 tests/metropolis/metropolis
 tests/mmap/mmap
 tests/multithread/multithread
+tests/pgroup/pgroup
 tests/pipe/pipe
 tests/posixshm/posixshm
 tests/posix/posix

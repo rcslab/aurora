@@ -3,9 +3,10 @@
 . aurora
 aursetup
 
-"./forkwait/forkwait" > /dev/null 2> /dev/null &
+./pgroup/pgroup & # > /dev/null 2> /dev/null &
 PID=$!
-sleep 1
+echo $PID
+sleep 5
 
 slscheckpoint $PID
 if [ $? -ne 0 ];
@@ -14,9 +15,10 @@ then
     exit 1
 fi
 
-sleep 1
-pkill forkwait
+sleep 2
+pkill `pidof pgroup`
 wait $PID
+sleep 2
 
 slsrestore
 if [ $? -ne 0 ];

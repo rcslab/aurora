@@ -150,7 +150,7 @@ slstest(char *path, int period, int argc, char *argv[])
 	printf("Restoring...\n");
 
 	/* Do not detach the children, we need to wait for them. */
-	error = sls_restore(oid, false, false);
+	error = sls_restore(oid, false);
 	sls_partdel(oid);
 	if (error != 0) {
 		fprintf(stderr, "ERROR: sls_restore() exited with %d\n", error);

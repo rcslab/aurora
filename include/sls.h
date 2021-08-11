@@ -17,7 +17,7 @@ int sls_memsnap(uint64_t oid, void *addr);
 int sls_memsnap_epoch(uint64_t oid, void *addr, uint64_t *epoch);
 int sls_checkpoint(uint64_t oid, bool recurse);
 int sls_checkpoint_epoch(uint64_t oid, bool recurse, uint64_t *epoch);
-int sls_restore(uint64_t oid, bool daemon, bool rest_stopped);
+int sls_restore(uint64_t oid, bool rest_stopped);
 
 int sls_attach(uint64_t oid, uint64_t pid);
 int sls_partadd(uint64_t oid, const struct sls_attr attr);
