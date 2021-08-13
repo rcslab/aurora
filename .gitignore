@@ -12,6 +12,7 @@ tests/fd/fd
 tests/fifo/fifo
 tests/fork/fork
 tests/forkwait/forkwait
+tests/journal/journal
 tests/kqueue/kqueue
 tests/llist/llist
 tests/main/main

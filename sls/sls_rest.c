@@ -1078,8 +1078,12 @@ sls_rest(struct slspart *slsp, uint64_t rest_stopped)
 
 	/* Get the record table from the appropriate backend. */
 	error = slsrest_data(slsp, &restdata, &rectable);
-	if (error != 0)
-		goto out;
+	if (error != 0) {
+		stateerr = slsp_setstate(
+		    slsp, SLSP_RESTORING, SLSP_AVAILABLE, true);
+		KASSERT(stateerr == 0, ("state error %d", stateerr));
+		return (error);
+	}
 
 	/*
 	 * Recreate the VM object tree. When restoring from the SLOS we recreate

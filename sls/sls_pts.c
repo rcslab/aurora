@@ -419,9 +419,6 @@ slspts_restore(void *slsbacker, struct slsfile *finfo,
 	if (error != 0)
 		return (error);
 
-	/* We got an extra reference, release it as in posix_openpt(). */
-	fdrop(masterfp, curthread);
-
 	if (!fhold(slavefp))
 		return (EBADF);
 

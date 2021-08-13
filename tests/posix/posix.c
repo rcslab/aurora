@@ -53,7 +53,10 @@ void
 teardown_unixsocket(void)
 {
 	close(unixfd);
-	remove(UNADDR);
+	/*
+	 * We do not remove the socket, because right now we need
+	 * to be able to find the vnode at restore time.
+	 */
 }
 
 void
@@ -250,16 +253,16 @@ main(int argc, char *argv[])
 
 	setup_vnode();
 	setup_pipe();
-	// setup_posixshm();
+	setup_posixshm();
 	setup_pty();
-	// setup_kqueue();
-	// setup_unixsocket();
-	// setup_socketpair();
+	setup_kqueue();
+	setup_unixsocket();
+	setup_socketpair();
 	setup_sysvshm();
 
 	attr = (struct sls_attr) {
 		.attr_target = SLS_OSD,
-		.attr_mode = SLS_FULL,
+		.attr_mode = SLS_DELTA,
 		.attr_period = 0,
 	};
 	error = sls_partadd(oid, attr);

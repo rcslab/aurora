@@ -15,7 +15,6 @@
 /* Found by inspecting struct sockaddr_un. */
 #define UNADDR_MAX (108)
 #define BUFSIZE (1024)
-#define PORT (6668)
 
 char buf[BUFSIZE];
 

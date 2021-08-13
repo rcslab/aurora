@@ -66,10 +66,6 @@ main(int argc, char *argv[])
 	if (objsize == 0)
 		usage();
 
-	printf("Objects has %lu bytes (or %lu KB, or %lu MB, or %lu GB) each\n",
-	    objsize, objsize / 1024, objsize / (1024 * 1024),
-	    objsize / (1024 * 1024 * 1024));
-
 	mapping = mmap(0x100000000, objsize, PROT_READ | PROT_WRITE,
 	    MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0);
 

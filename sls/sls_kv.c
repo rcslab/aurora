@@ -153,9 +153,10 @@ slskv_destroy(struct slskv_table *table)
 {
 	uint64_t key;
 	uintptr_t value;
-	/* Pop all elements from the table */
 
+	/* Pop all elements from the table */
 	KV_FOREACH_POP(table, key, value);
+
 	uma_zfree(slskv_zone, table);
 }
 
@@ -373,7 +374,7 @@ slskv_iterstart(struct slskv_table *table)
 	sx_xlock(&iter.table->sx);
 	slskv_iternextbucket(&iter);
 
-	return iter;
+	return (iter);
 }
 
 /*
@@ -392,7 +393,7 @@ slskv_itercont(struct slskv_iter *iter, uint64_t *key, uintptr_t *value)
 		/* If we have no more buckets to look at, iteration is done. */
 		if (iter->bucket > iter->table->mask) {
 			sx_xunlock(&iter->table->sx);
-			return SLSKV_ITERDONE;
+			return (SLSKV_ITERDONE);
 		}
 	}
 
@@ -425,16 +426,12 @@ slskv_serial_unlocked(struct slskv_table *table, struct sbuf *sb)
 	KV_FOREACH_POP_UNLOCKED(table, key, value)
 	{
 		error = sbuf_bcat(sb, (void *)&key, sizeof(key));
-		if (error != 0) {
-			sx_xunlock(&table->sx);
+		if (error != 0)
 			return (error);
-		}
 
 		sbuf_bcat(sb, (void *)&value, sizeof(value));
-		if (error != 0) {
-			sx_xunlock(&table->sx);
+		if (error != 0)
 			return (error);
-		}
 	}
 
 	return (0);

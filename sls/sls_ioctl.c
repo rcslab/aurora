@@ -748,7 +748,7 @@ sls_partadd_default_osd(void)
 	struct sls_partadd_args partadd_args;
 
 	partadd_args.oid = SLS_DEFAULT_PARTITION;
-	partadd_args.attr.attr_mode = SLS_DELTA;
+	partadd_args.attr.attr_mode = SLS_FULL;
 	partadd_args.attr.attr_target = SLS_OSD;
 	partadd_args.attr.attr_period = 0;
 	partadd_args.attr.attr_flags = 0;

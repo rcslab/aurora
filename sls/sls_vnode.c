@@ -78,6 +78,10 @@ slsckpt_vnode_ckptbyname(struct vnode *vp)
 	if (vp->v_type == VDIR)
 		return (true);
 
+	/* Named UNIX sockets are also allowed. */
+	if (vp->v_type == VSOCK)
+		return (true);
+
 	/*
 	 * If it's a character device, make sure it's not a TTY; TTYs are a
 	 * special case handled in an other path.
@@ -196,19 +200,24 @@ slsckpt_vnode_serialize(struct slsckpt_data *sckpt_data)
 	{
 		/* Check if we have already serialized this vnode. */
 		if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t)vp,
-			(uintptr_t *)&rec) == 0)
+			(uintptr_t *)&rec) == 0) {
+			KV_ABORT(iter);
 			return (0);
+		}
 
 		error = slsckpt_vnode_serialize_single(
 		    vp, SLSATTR_ISIGNUNLINKED(sckpt_data->sckpt_attr), &sb);
-		if (error != 0)
+		if (error != 0) {
+			KV_ABORT(iter);
 			return (error);
+		}
 
 		/* Whether we have a path or not, create the new record. */
 		rec = sls_getrecord(sb, (uint64_t)vp, SLOSREC_VNODE);
 		error = slskv_add(
 		    sckpt_data->sckpt_rectable, (uint64_t)vp, (uintptr_t)rec);
 		if (error != 0) {
+			KV_ABORT(iter);
 			free(rec, M_SLSREC);
 			sbuf_delete(sb);
 			return (error);

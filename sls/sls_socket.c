@@ -53,6 +53,7 @@
 #include "debug.h"
 #include "sls_file.h"
 #include "sls_internal.h"
+#include "sls_vnode.h"
 
 #define METROPOLIS_RETRIES (1000)
 
@@ -81,10 +82,12 @@
 
 /* Get the address of a unix socket. */
 static int
-slsckpt_sock_un(struct socket *so, struct slssock *info)
+slsckpt_sock_un(
+    struct socket *so, struct slssock *info, struct slsckpt_data *sckpt_data)
 {
 	struct unpcb *unpcb;
 	struct socket *sopeer;
+	int error;
 
 	unpcb = sotounpcb(so);
 	if (unpcb->unp_addr != NULL)
@@ -104,6 +107,14 @@ slsckpt_sock_un(struct socket *so, struct slssock *info)
 		info->peer_sndid = (uint64_t)&sopeer->so_snd;
 	}
 	info->bound = (unpcb->unp_vnode != NULL) ? 1 : 0;
+
+	/* Checkpoint the vnode. */
+	if (info->bound) {
+		error = slsckpt_vnode(unpcb->unp_vnode, sckpt_data);
+		if (error != 0)
+			return (error);
+		info->vnode = (uint64_t)unpcb->unp_vnode;
+	}
 
 	return (0);
 }
@@ -159,7 +170,7 @@ slssock_checkpoint(
 		break;
 
 	case AF_LOCAL:
-		error = slsckpt_sock_un(so, &info);
+		error = slsckpt_sock_un(so, &info, sckpt_data);
 		break;
 
 	default:
@@ -250,15 +261,13 @@ slsrest_sockbuf(
  * that there is no interference from outside the SLS for now while restoring).
  */
 static int
-slsrest_uipc_bindat(struct socket *so, struct sockaddr *name)
+slsrest_uipc_bindat(struct socket *so, struct sockaddr *name, struct vnode *vp)
 {
 	struct thread *td = curthread;
 	struct sockaddr_un *soun;
 	struct nameidata nd;
 	cap_rights_t rights;
 	struct unpcb *unp;
-	struct vnode *vp;
-	int error;
 
 	/*
 	 * Checks in the original function are turned into KASSERTs, because
@@ -283,14 +292,19 @@ slsrest_uipc_bindat(struct socket *so, struct sockaddr *name)
 
 	NDINIT_ATRIGHTS(&nd, LOOKUP, FOLLOW | AUDITVNODE1, UIO_SYSSPACE,
 	    soun->sun_path, AT_FDCWD, &rights, td);
-	error = namei(&nd);
-	vp = nd.ni_vp;
-	NDFREE(&nd, NDF_ONLY_PNBUF);
-	if (error != 0)
-		return (error);
+
+	/*
+	 * The path in the socket address is relative to the current
+	 * working directory of the process that opened it before checkpointing.
+	 * (As a note, this scheme seems problematic since the open socket
+	 * file can be used by two processes, each with a different working
+	 * directory). For this reason we don't use the filepath in the socket,
+	 * but directly restore the underlying vnode using Aurora.
+	 */
+
 	/* XXX Make sure the refcounting is correct. */
-	vref(vp);
 	VOP_LOCK(vp, LK_EXCLUSIVE);
+	vref(vp);
 	/* Set up the internal vp state (used when calling connect()). */
 	VOP_UNP_BIND(vp, unp);
 
@@ -353,7 +367,7 @@ slssock_setopt(int fd, struct slssock *slssock)
 }
 
 static int
-slssock_restore_afinet(struct slssock *slssock, int fd, int slsmetr_sockid)
+slssock_restore_afinet(struct slssock *slssock, int fd, uint64_t slsmetr_sockid)
 {
 	struct sockaddr_in *inaddr = (struct sockaddr_in *)&slssock->in;
 	struct thread *td = curthread;
@@ -449,20 +463,6 @@ slssock_restore_pair(
 		unp_copy_peercred(td, unpcb, unpeerpcb, unpcb);
 	}
 
-	if (peerfd >= 0) {
-		error = slsfile_extractfp(peerfd, &peerfp);
-		if (error != 0)
-			return (error);
-		peerfd = -1;
-
-		error = slskv_add(
-		    restdata->fptable, slssock->unpeer, (uintptr_t)peerfp);
-		if (error != 0) {
-			fdrop(peerfp, td);
-			return (error);
-		}
-	}
-
 	return (0);
 }
 
@@ -471,16 +471,8 @@ slssock_restore_aflocal(
     struct slsrest_data *restdata, struct socket *so, struct slssock *slssock)
 {
 	struct sockaddr_un *unaddr = (struct sockaddr_un *)&slssock->un;
+	struct vnode *vp;
 	int error;
-
-	/*
-	 * Check if the socket has a peer. If it does, then it is
-	 * either a UNIX stream data socket, or it is a socket
-	 * created using socketpair(); in both cases, it has a peer,
-	 * so we create it alongside it.
-	 */
-	if (slssock->unpeer != 0)
-		return (slssock_restore_pair(restdata, so, slssock));
 
 	/*
 	 * We assume it is either a listening socket, or a
@@ -492,12 +484,30 @@ slssock_restore_aflocal(
 		goto out;
 
 	/*
+	 * Find the checkpoint time working directory to properly resolve
+	 * UNIX socket names.
+	 */
+	error = slskv_find(restdata->vntable, slssock->vnode, (uintptr_t *)&vp);
+	if (error != 0)
+		return (error);
+
+	/*
 	 * The bind() function for UNIX sockets makes assumptions
 	 * that do not hold here, so we use our own custom version.
 	 */
-	error = slsrest_uipc_bindat(so, (struct sockaddr *)unaddr);
+	error = slsrest_uipc_bindat(so, (struct sockaddr *)unaddr, vp);
 	if (error != 0)
 		return (error);
+
+	/*
+	 * Check if the socket has a peer. If it does, then it is
+	 * either a UNIX stream data socket, or it is a socket
+	 * created using socketpair(); in both cases, it has a peer,
+	 * so we create it alongside it.
+	 */
+	if (slssock->unpeer != 0)
+		return (slssock_restore_pair(restdata, so, slssock));
+
 out:
 
 	return (0);
@@ -551,10 +561,14 @@ slssock_restore(void *slsbacker, struct slsfile *finfo,
 	case AF_INET:
 		error = slssock_restore_afinet(
 		    slssock, fd, restdata->slsmetr.slsmetr_sockid);
+		if (error != 0)
+			goto error;
 		break;
 
 	case AF_LOCAL:
 		error = slssock_restore_aflocal(restdata, so, slssock);
+		if (error != 0)
+			goto error;
 		break;
 
 	default:

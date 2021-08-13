@@ -212,6 +212,8 @@ struct slssock {
 
 	uint64_t peer_rcvid; /* SLS ID for peer's receive buffer */
 	uint64_t peer_sndid; /* SLS ID for peer's send buffer */
+
+	uint64_t vnode; /* Underlying UNIX socket vnode */
 };
 
 #define SLSPTS_ID 0x736c7269
@@ -252,6 +254,7 @@ struct slssysvshm {
 	mode_t mode;
 	key_t key;
 	int segnum;
+	int seq;
 };
 
 #define SLSPOSIXSHM_ID 0x736c7230

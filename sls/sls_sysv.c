@@ -45,6 +45,7 @@ slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 		slssysvshm.key = shmsegs[i].u.shm_perm.key;
 		slssysvshm.shm_segsz = shmsegs[i].u.shm_segsz;
 		slssysvshm.mode = shmsegs[i].u.shm_perm.mode;
+		slssysvshm.seq = shmsegs[i].u.shm_perm.seq;
 		slssysvshm.segnum = i;
 
 		error = sbuf_bcat(sb, (void *)&slssysvshm, sizeof(slssysvshm));
@@ -119,7 +120,7 @@ slsrest_sysvshm(struct slssysvshm *slssysvshm, struct slskv_table *objtable)
 	shmseg->u.shm_perm.mode = (slssysvshm->mode & ACCESSPERMS) |
 	    SHMSEG_ALLOCATED;
 	shmseg->u.shm_perm.key = slssysvshm->key;
-	shmseg->u.shm_perm.seq = (shmseg->u.shm_perm.seq + 1) & 0x7fff;
+	shmseg->u.shm_perm.seq = slssysvshm->seq;
 	shmseg->cred = crhold(cred);
 	shmseg->u.shm_segsz = slssysvshm->shm_segsz;
 	shmseg->u.shm_cpid = curthread->td_proc->p_pid;

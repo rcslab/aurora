@@ -69,11 +69,6 @@ main(int argc, char *argv[])
 	if (objsize == 0)
 		usage();
 
-	printf(
-	    "Using %lu objects, %lu bytes (or %lu KB, or %lu MB, or %lu GB) each\n",
-	    objcnt, objsize, objsize / 1024, objsize / (1024 * 1024),
-	    objsize / (1024 * 1024 * 1024));
-
 	mappings = malloc(sizeof(*mappings) * objcnt);
 	if (mappings == NULL) {
 		perror("malloc");
