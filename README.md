@@ -1,15 +1,19 @@
-OVERVIEW
-========
+Aurora Single Level Store
+=========================
 
-This is the repository for the Aurora Single Level Store. The Single Level 
-Store transparently provides persistence to applications at a millisecond 
-granularity. Apps can call into Aurora to directly control the checkpointing 
-process.
+The Aurora Single Level Store provides transparent persistence for applications 
+based on lightning fast incremental checkpoints.  Aurora checkpoints are either 
+stored on-disk in a custom object store or in memory for debugging 
+applications.  Unlike older single level stores Aurora provides a file system 
+namespace into the store to enable backwards compatibility.
+
+Applications can use the single level store API provided libsls to achieve 
+higher performance and control Aurora's behavior. 
 
 The file tree is the following:
 
 | Directories	| Contents						    |
-| :-----------: | :-------------------------------------------------------: |
+|---------------|-----------------------------------------------------------|
 | benchmarks/	| Performance benchmarks				    |
 | dtrace/	| DTrace scripts for debugging and performance measurements |
 | include/	| Headers for userspace and the kernel			    |
@@ -21,46 +25,93 @@ The file tree is the following:
 | tests/	| Correctness tests for Aurora				    |
 | tools/	| Userspace tools					    |
 
-USAGE
-=====
+Installation
+------------
 
-The checkpoint restore cycle needs 4 commands, all from the slsctl utility:
+Dependencies:
+ - FreeBSD 12.1 with Aurora patches
+ - pidof (testbench)
+ - python3 (testbench)
 
-slsctl partadd: Create an empty partition. Partitions are groups into which we enter processes,
-and allow us to checkpoint groups of processes all at once. Each partition has a unique object ID
-(oid), which can take any value as long as it's unique.
+Before you begin you must install and configure FreeBSD 12.1 with the Aurora 
+enabling patches that can be done from our tree or a provided iso image.  The 
+build depends on header changes to FreeBSD and one of four provided kernel 
+configuration files: GENERIC, PERF, FASTDBG, SLOWDBG.
 
-Options:
+```
+# make
+```
 
--o: Assign a unique OID to the partition
--d: Use if using delta instead of full checkpointing
--t: Checkpointing period. Checkpointing doesn't start immediately, but when it does, it will be
-	continuous if this flag is set. Otherwise it is going to be a one-off checkpoint.
--b: Set backend. Valid values are slos for the SLOS and memory for in-memory checkpoints.
+Once complete you may install Aurora using the following commands.  Remember 
+that the newly installed commands `newfs_sls` and `slsctl` will not be in your 
+path until you type `rehash`.
 
-slsctl partadd -o <oid>  [-d] [-t <interval>] -b <backend>
+```
+# mkdir -p /usr/lib/debug/boot/modules
+# mkdir -p /usr/lib/debug/sbin
+# mkdir -p /usr/aurora/tests
+# make install
+```
 
+The basic test suite can be run to verify things are working:
 
-slsctl attach: Add a process to the partition. We only need the PID of the process and the OID of the partition.
-slsctl attach -o <oid> -p <pid>
+```
+# cd tests
+# ./testbench
+```
 
+Getting Started
+---------------
 
-slsctl checkpoint: Take a checkpoint of the partition. If the -r option is specified, even children of processes
-in the partition that have not been explicitly entered into it will be checkpointed. This is useful for processes
-that often spawn a lot of transient children.
+First you will want to load the kernel modules `sls.ko` and `slos.ko` that 
+provide the single level store and object store/file system functionality.  
+This will recursively load all dependent kernel modules.
 
-slsctl checkpoint -o <oid> [-r]
+```
+# kldload sls
+```
 
-slsctl restore: Restore a partition with the specified OID. The -d option spawns the partition as a daemon,
-detached from all terminals.
+Next you will want to create a SLS object store on a flash storage device, we 
+use `/dev/nvd0` the first NVMe disk as an example.  You may specify any disk or 
+partition available to you.
 
-slsctl restore -o <oid> [-d]
+WARNING: This will destroy all data on the device /dev/nvd0.
 
-An example: Suppose we have a process with PID 123 that we want to checkpoint to disk only once, then restore.
-We would have to run the following (example OID is 3):
+```
+# newfs_sls /dev/nvd0
+```
 
-partadd -o 3 -b slos
-attach -o 3 -p 123
-checkpoint -o 3
-restore -o 3
+Finally we can mount the file system in a directory `/aurora` for our example.  
+This is an important step as this both mounts the file system and opens the 
+object store for use by the single level store.  At the moment you may only 
+have a single aurora file system attached.
+
+```
+# mkdir /aurora
+# mount -t slfs /dev/nvd0 /aurora
+```
+
+To manage the single level store you can use the `slsctl` command to attach 
+processes and create manual checkpoints.  The system actually lets you create 
+partitions that are a logical grouping of persistent processes that can be 
+either memory backed or storage backed see the `-m` flag and `-o` flag.  We 
+will only cover the most basic usage here.
+
+To make an existing process persistent you use the `attach` command.
+```
+# slsctl attach -p <Process PID>
+```
+
+You can manually checkpoint the application using `checkpoint`.  The `-r` flag 
+will recursively checkpoint all children of the parent process.
+
+```
+slsctl checkpoint [-r]
+```
+
+You can restore a process after a system crash using the `restore` command.
+
+```
+slsctl restore
+```
 

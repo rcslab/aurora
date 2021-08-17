@@ -4,6 +4,7 @@ SUBDIR = array compute fd fifo fork forkwait journal kqueue llist main memsnap \
 	 slsfs socketpair sysvshm tcplisten udplisten unixlisten vmobject \
  	 vmregion unlink wal
 
-.include <bsd.subdir.mk>
+BINDIR=/sbin
+.MAKE.EXPORTED=BINDIR
 
-.include <bsd.prog.mk>
+.include <bsd.subdir.mk>
