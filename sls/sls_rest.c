@@ -442,6 +442,9 @@ slsrest_ttyfixup(struct proc *p)
 
 	PROC_LOCK_ASSERT(p, MA_NOTOWNED);
 
+	if (p->p_session == NULL || p->p_session->s_ttyp == NULL)
+		return (0);
+
 	/* Construct the controlling terminal's name. */
 	ttyname = __DECONST(char *, tty_devname(p->p_session->s_ttyp));
 	path = malloc(2 * PATH_MAX, M_SLSMM, M_WAITOK);
