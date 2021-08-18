@@ -717,8 +717,11 @@ slsfs_syncer(struct slos *slos)
 
 		/* Wait until it's time to flush again. */
 		mtx_lock(&slos->slsfs_sync_lk);
-		msleep_sbt(&slos->slsfs_syncing, &slos->slsfs_sync_lk, PRIBIO,
-		    "Sync-wait", SBT_1NS * te.tv_nsec, 0, C_HARDCLOCK);
+		if (te.tv_nsec > 0) {
+			msleep_sbt(&slos->slsfs_syncing, &slos->slsfs_sync_lk,
+			    PRIBIO, "Sync-wait", SBT_1NS * te.tv_nsec, 0,
+			    C_HARDCLOCK);
+		}
 	}
 
 	DEBUG("Syncer exiting");
@@ -1201,13 +1204,9 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	return (0);
 }
 
-/*
- * Wakeup the syncer for a regular sync.
- */
 static int
 slsfs_sync(struct mount *mp, int waitfor)
 {
-	slsfs_wakeup_syncer(0);
 	return (0);
 }
 

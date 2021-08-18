@@ -48,7 +48,7 @@ unloadmod()
 # Create and destroy memory device
 createmd()
 {
-    MDDISK=`mdconfig -a -t malloc -s 5g`
+    MDDISK=`mdconfig -a -t malloc -s 50g`
     DISK="$MDDISK"
     DISKPATH="/dev/$MDDISK"
 }
