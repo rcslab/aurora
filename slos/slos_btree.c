@@ -36,9 +36,6 @@
 #define BP_UNCOWED(bp) (((bp)->b_fsprivate3) = 0)
 #define BP_SETCOWED(bp) (((bp)->b_fsprivate3) = (void *)1)
 
-#define INDEX_INVAL (-1)
-#define NODE_ISROOT(node) ((node)->fn_location == (node)->fn_tree->bt_root)
-
 struct extent {
 	uint64_t start;
 	uint64_t end;
@@ -868,11 +865,11 @@ fbtree_keymin_iter(struct fbtree *tree, void *key, struct fnode_iter *iter)
 static void
 fnode_iter_skip(struct fnode_iter *it)
 {
+	struct fnode *right;
 	// KASSERT(it->it_index <= NODE_SIZE(it->it_node), ("Iterator was out of
 	// bounds"));
 
 	/* If we've exhausted the current node, skip. */
-	struct fnode *right;
 	if (it->it_index >= NODE_SIZE(it->it_node)) {
 		fnode_right(it->it_node, &right);
 		if (right == NULL) {

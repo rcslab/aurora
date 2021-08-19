@@ -39,8 +39,11 @@ extern uma_zone_t fnodes_zone;
 #define NODE_SIZE(node) ((node)->fn_dnode->dn_numkeys)
 #define NODE_RELEASE(node) (brelse((node)->fn_buf))
 #define NODE_ISBUCKETAT(node, index) ((node)->fn_types[(index)])
+#define NODE_ISROOT(node) ((node)->fn_location == (node)->fn_tree->bt_root)
 
 #define NODE_COMPARE(node, key1, key2) ((node)->fn_tree->comp(key1, key2))
+
+#define INDEX_INVAL (-1)
 
 #define ITER_VAL(iter) (fnode_getval((iter).it_node, (iter).it_index))
 #define ITER_KEY(iter) (fnode_getkey((iter).it_node, (iter).it_index))
@@ -51,7 +54,7 @@ extern uma_zone_t fnodes_zone;
 
 #define ITER_RELEASE(iter) (BTREE_UNLOCK((iter).it_node->fn_tree, 0));
 #define ITER_NEXT(iter) (fnode_iter_next(&(iter), 1))
-#define ITER_ISNULL(iter) ((iter).it_index == -1)
+#define ITER_ISNULL(iter) ((iter).it_index == INDEX_INVAL)
 
 #define BTREE_LOCK(tree, flags) (lockmgr(&(tree)->bt_lock, flags, 0))
 #define BTREE_UNLOCK(tree, flags) \
