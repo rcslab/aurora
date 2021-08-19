@@ -2170,8 +2170,11 @@ fnode_init(struct fbtree *tree, bnode_ptr ptr, struct fnode **fn)
 	}
 	rw_runlock(&tree->bt_trie_lock);
 
-	if (node == NULL)
+	if (node == NULL) {
+		printf(
+		    "BUG: Low memory condition fnode_init failed with ENOMEM!\n");
 		return (ENOMEM);
+	}
 
 	/* Read the data from the disk into the buffer cache. */
 	error = fnode_getbufptr(tree, ptr, &node->fn_buf);

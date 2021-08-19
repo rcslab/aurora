@@ -16,7 +16,7 @@
 #include "slsfs_buf.h"
 
 #define NEWOSDSIZE (30)
-#define AMORTIZED_CHUNK (10000)
+#define AMORTIZED_CHUNK (1024)
 
 /*
  * Generic uint64_t comparison function.
@@ -65,8 +65,12 @@ allocate_chunk(struct slos *slos, diskptr_t *ptr)
 	int error;
 
 	error = fbtree_keymax_iter(STREE(slos), &asked, &iter);
-	if (error || ITER_ISNULL(iter)) {
+	if (error != 0) {
 		panic("Problem with keymax %d\n", error);
+	}
+	if (ITER_ISNULL(iter)) {
+		printf("SLOS is full!\n");
+		return (ENOSPC);
 	}
 	fullsize = ITER_KEY_T(iter, uint64_t);
 	off = ITER_VAL_T(iter, uint64_t);

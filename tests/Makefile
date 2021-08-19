@@ -4,7 +4,7 @@ SUBDIR = array compute fd fifo fork forkwait journal kqueue llist main memsnap \
 	 slsfs socketpair sysvshm tcplisten udplisten unixlisten vmobject \
  	 vmregion unlink wal
 
-BINDIR=/sbin
+BINDIR=/usr/aurora/tests
 .MAKE.EXPORTED=BINDIR
 
 .include <bsd.subdir.mk>
