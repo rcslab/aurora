@@ -388,8 +388,11 @@ sls_ckpt(slsset *procset, struct proc *pcaller, struct slspart *slsp,
 	if (slsp->slsp_target == SLS_OSD) {
 		taskqueue_drain_all(slos.slos_tq);
 		/* XXX Using MNT_WAIT is causing a deadlock right now. */
-		VFS_SYNC(slos.slsfs_mount,
-		    (sls_vfs_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
+		error = slsfs_wakeup_syncer(0);
+		if (error != 0)
+			printf(
+			    "Error %d when calling slsfs_wakeup_syncer from the SLS\n",
+			    error);
 	}
 
 	SDT_PROBE1(sls, , sls_ckpt, , "Draining taskqueue");

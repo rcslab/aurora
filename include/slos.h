@@ -159,6 +159,7 @@ extern struct slos slos;
 extern uint64_t checkpoints;
 extern uint64_t checkpointtime;
 
+int slsfs_wakeup_syncer(int is_exiting);
 #endif
 
 #endif /* _SLOS_H_ */

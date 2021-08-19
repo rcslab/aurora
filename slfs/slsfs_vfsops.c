@@ -779,7 +779,7 @@ slsfs_init_fs(struct mount *mp)
 /*
  * Wake up the SLOS syncer.
  */
-static int
+int
 slsfs_wakeup_syncer(int is_exiting)
 {
 	/* Don't sync again if already in progress. */
