@@ -112,14 +112,14 @@ slos_sbat(struct slos *slos, int index, struct slos_sb *sb)
 {
 	struct buf *bp;
 	int error;
+
 	error = bread(slos->slos_vp, index, slos->slos_sb->sb_bsize,
 	    curthread->td_proc->p_ucred, &bp);
 	if (error != 0) {
-		free(sb, M_SLOS_SB);
 		printf("bread failed with %d", error);
-
 		return error;
 	}
+
 	memcpy(sb, bp->b_data, sizeof(struct slos_sb));
 	brelse(bp);
 
@@ -186,6 +186,7 @@ slos_sbread(struct slos *slos)
 			free(sb, M_SLOS_SB);
 			return (error);
 		}
+
 		if (sb->sb_epoch == EPOCH_INVAL && i != 0) {
 			break;
 		}
@@ -307,11 +308,11 @@ error:
 static int
 slos_io_getdaddr(struct slos_node *svp, struct buf *bp)
 {
+	int error;
 	struct slos_diskptr ptr;
 	struct fnode_iter iter;
 	struct fbtree *tree = &svp->sn_tree;
-	daddr_t lblkno = bp->b_lblkno;
-	int error;
+	daddr_t lblkno;
 
 	VOP_LOCK(tree->bt_backend, LK_EXCLUSIVE);
 	BTREE_LOCK(&svp->sn_tree, LK_SHARED);

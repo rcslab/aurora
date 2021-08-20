@@ -139,8 +139,8 @@ slos_blkalloc(struct slos *slos, size_t bytes, diskptr_t *ptr)
 			continue;
 		}
 		error = allocate_chunk(slos, &slos->slos_alloc.chunk);
-		if (error) {
-			panic("Problem allocating\n");
+		if (error != 0) {
+			panic("Problem allocating %d\n", error);
 		}
 
 		BTREE_UNLOCK(OTREE(slos), 0);
@@ -308,7 +308,10 @@ slos_allocator_sync(struct slos *slos, struct slos_sb *newsb)
 	DEBUG("Syncing Allocator");
 	// Allocate and sync the btree's
 	error = slos_blkalloc(slos, total_allocations * BLKSIZE(slos), &ptr);
-	MPASS(error == 0);
+	if (error != 0) {
+		printf("Unexpected slos_blkalloc failed %d!\n", error);
+		return (error);
+	}
 	error = fbtree_sync_withalloc(OTREE(slos), &ptr);
 	MPASS(error == 0);
 	error = fbtree_sync_withalloc(STREE(slos), &ptr);

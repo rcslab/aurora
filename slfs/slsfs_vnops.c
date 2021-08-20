@@ -1721,6 +1721,7 @@ slsfs_ioctl(struct vop_ioctl_args *ap)
 		DEBUG("Remounting on snap");
 		info = (struct slsfs_getsnapinfo *)ap->a_data;
 		return (slsfs_mountsnapshot(info->index));
+
 	case SLSFS_COUNT_CHECKPOINTS:
 		checks = (uint64_t *)ap->a_data;
 		*checks = checkpoints;

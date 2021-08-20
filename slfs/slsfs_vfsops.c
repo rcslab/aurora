@@ -214,13 +214,17 @@ slsfs_startupfs(struct mount *mp)
 				dev_ref(slos.slos_vp->v_rdev);
 				g_topology_unlock();
 			}
-			return (-1);
+			return (error);
 		}
 	} else {
 		if (slos.slos_sb == NULL)
 			slos.slos_sb = malloc(
 			    sizeof(struct slos_sb), M_SLOS_SB, M_WAITOK);
-		slos_sbat(&slos, smp->sp_index, slos.slos_sb);
+		error = slos_sbat(&slos, smp->sp_index, slos.slos_sb);
+		if (error != 0) {
+			free(slos.slos_sb, M_SLOS_SB);
+			return (error);
+		}
 	}
 
 	if (slos.slos_tq == NULL) {
@@ -251,7 +255,7 @@ slsfs_startupfs(struct mount *mp)
 	}
 	DEBUG("SLOS Loaded.");
 
-	return error;
+	return (error);
 }
 
 /*

@@ -179,8 +179,12 @@ createroot()
 {
     if [ ! -f "$SLSROOT" ]; then
 	$SRCROOT/scripts/image.sh
-	$SRCROOT/scripts/rootmin.sh
     fi
+    if [ ! -f "$SLSROOT" ]; then
+	echo "Failed to create root image for testing!"
+	exit 1
+    fi
+    $SRCROOT/scripts/rootmin.sh
 }
 
 installroot()
