@@ -1055,7 +1055,7 @@ error:
 	return (error);
 }
 
-static int
+static int __attribute__((noinline))
 sls_rest(struct slspart *slsp, uint64_t rest_stopped)
 {
 	struct slsrest_data *restdata;

@@ -70,7 +70,9 @@ SDT_PROBE_DEFINE1(sls, , slsckpt_dataregion, , "char *");
 SDT_PROBE_DEFINE1(sls, , sls_checkpointd, , "char *");
 SDT_PROBE_DEFINE1(sls, , sls_ckpt, , "char *");
 SDT_PROBE_DEFINE0(sls, , , stopclock_start);
+SDT_PROBE_DEFINE0(sls, , , meta_start);
 SDT_PROBE_DEFINE0(sls, , , stopclock_finish);
+SDT_PROBE_DEFINE0(sls, , , meta_finish);
 
 /*
  * Stop the processes, and wait until they are truly not running.
@@ -285,9 +287,8 @@ slsckpt_initio(struct slspart *slsp, struct slsckpt_data *sckpt_data)
  * it properly, as well as shadowing any VM objects directly accessible
  * by the partition's processes.
  */
-static int
-sls_ckpt(slsset *procset, struct proc *pcaller, struct slspart *slsp,
-    uint64_t nextepoch)
+static int __attribute__((noinline)) sls_ckpt(slsset *procset,
+    struct proc *pcaller, struct slspart *slsp, uint64_t nextepoch)
 {
 	struct slsckpt_data *sckpt_data;
 	struct slskv_iter iter;
@@ -350,6 +351,7 @@ sls_ckpt(slsset *procset, struct proc *pcaller, struct slspart *slsp,
 			    TD_IS_INHIBITED(td), ("thread is not inhibited"));
 	}
 
+	SDT_PROBE0(sls, , , meta_finish);
 	/* Shadow the objects to be dumped. */
 	error = slsvm_procset_shadow(
 	    procset, sckpt_data->sckpt_objtable, slsckpt_isfullckpt(slsp));
@@ -643,6 +645,7 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	}
 
 	SDT_PROBE0(sls, , , stopclock_start);
+	SDT_PROBE0(sls, , , meta_start);
 
 	SDT_PROBE1(sls, , slsckpt_dataregion, , "Getting the partition");
 

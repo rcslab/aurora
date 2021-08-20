@@ -217,8 +217,7 @@ slsfile_setinfo(struct file *fp, struct sls_record *rec, int type)
  * belong to exactly one open file when anonymous. That means
  * that we can safely store them together.
  */
-static int
-slsckpt_file(
+static int __attribute__((noinline)) slsckpt_file(
     struct file *fp, uint64_t *fpslsid, struct slsckpt_data *sckpt_data)
 {
 	struct sls_record *rec;
