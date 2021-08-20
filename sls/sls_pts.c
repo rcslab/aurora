@@ -387,7 +387,7 @@ slspts_restore(void *slsbacker, struct slsfile *finfo,
 	/* As in the case of pipes, we add the peer to the table ourselves. */
 	error = slspts_restore_slv(tty, &slavefd);
 	if (error != 0) {
-		goto error;
+		return (error);
 	}
 	slavefp = FDTOFP(curproc, slavefd);
 	vp = slavefp->f_vnode;
