@@ -64,9 +64,11 @@ run_test()
     fi
 
     tstart=`date +%s`
+    echo "---------- Starting $NAME at $tstart ----------" >> $TESTLOG
     $1 >> $TESTLOG
     RETVAL=$?
     tstop=`date +%s`
+    echo "---------- Finished $NAME with $RETVAL at $tstop ----------" >> $TESTLOG
     if [ $RETVAL -eq 0 ]; then
 	print_success $NAME `expr $tstop - $tstart`
     else

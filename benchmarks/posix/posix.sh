@@ -1,4 +1,4 @@
-#!/usr/local/bin/bash
+#!/bin/sh
 
 SLSDIR="/root/sls"
 BIN="/$SLSDIR/tests/posix/posix"

@@ -62,7 +62,7 @@ slsnewfs()
 {
     # Pipe to /dev/null if there is no log
     TESTLOG=${TESTLOG:-"/dev/null"}
-    $NEWFS $DISKPATH > $TESTLOG 2> $TESTLOG
+    $NEWFS $DISKPATH >> $TESTLOG 2>> $TESTLOG
 }
 
 slsmount()
