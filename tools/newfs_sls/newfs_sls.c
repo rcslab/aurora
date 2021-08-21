@@ -77,10 +77,12 @@ main(int argc, const char *argv[])
 		if (!size || size < st.st_size) {
 			size = st.st_size;
 		}
+
 		/*
-		 * Have the block size be equal to the standard
-		 * system maximum block size.
+		 * Set the sector size to 4 KiB and block size to the maximum
+		 * block size.
 		 */
+		ssize = 4 * 1024;
 		bsize = 64 * 1024;
 	} else {
 		fprintf(
@@ -95,25 +97,29 @@ main(int argc, const char *argv[])
 
 	// We have to allocate the appropriate super blocks
 
-	printf("creating super blocks\n");
-	struct slos_sb *sb = (struct slos_sb *)malloc(ssize);
 	static_assert(sizeof(struct slos_sb) <= 512,
 	    "superblock larger than sector size");
+
+	printf("creating super blocks\n");
+	struct slos_sb *sb = (struct slos_sb *)malloc(ssize);
 	sb->sb_magic = SLOS_MAGIC;
 	sb->sb_epoch = EPOCH_INVAL;
 	sb->sb_ssize = ssize;
 	sb->sb_bsize = bsize;
 	sb->sb_size = size;
 	sb->sb_asize = bsize;
+
 	for (int i = 0; i < NUMSBS; i++) {
 		sb->sb_index = i;
 		ssize_t written = write(fd, sb, ssize);
 		if (written == (-1)) {
 			perror("writing superblock failed");
+			free(sb);
 			return (1);
 		}
 	}
 	printf("complete\n");
+	free(sb);
 
 	return (0);
 }

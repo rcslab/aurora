@@ -307,9 +307,7 @@ fnode_getbufptr(struct fbtree *tree, bnode_ptr ptr, struct buf **bp)
 int
 fnode_fetch(struct fnode *node, int index, struct fnode **next)
 {
-	int error;
 	bnode_ptr ptr;
-	struct fnode *tmpnode;
 
 	MPASS(NODE_TYPE(node) == BT_INTERNAL);
 	ptr = *(bnode_ptr *)fnode_getval(node, index);
@@ -318,13 +316,7 @@ fnode_fetch(struct fnode *node, int index, struct fnode **next)
 		panic("Should not be zero %d", index);
 	}
 
-	error = fnode_init(node->fn_tree, ptr, &tmpnode);
-
-	// We have to do this cause the buffer may have been freed from under
-	// us so we init to check initilize in case this has occured
-	*next = tmpnode;
-
-	return (error);
+	return fnode_init(node->fn_tree, ptr, next);
 }
 
 /*
@@ -2036,20 +2028,17 @@ fiter_remove(struct fnode_iter *it)
 			break;
 		}
 
-		for (i = 0; i <= NODE_SIZE(parent) + 1; ++i) {
-			if (fnode->fn_location ==
-			    *(bnode_ptr *)fnode_getval(parent, i)) {
+		for (i = 0; i <= NODE_SIZE(parent); ++i) {
+			ptr = fnode_getval(parent, i);
+			if (fnode->fn_location == *ptr) {
+				fnode_remove_at(parent, NULL, i);
+				NODE_FREE(fnode);
+				fnode = parent;
 				break;
 			}
 		}
-		MPASS(i <= NODE_SIZE(parent));
 
-		ptr = fnode_getval(parent, i);
-		MPASS(fnode->fn_location == *ptr);
-
-		fnode_remove_at(parent, NULL, i);
-		NODE_FREE(fnode);
-		fnode = parent;
+		panic("Inconsistent fnode encountered");
 	}
 
 	fnode_write(fnode);

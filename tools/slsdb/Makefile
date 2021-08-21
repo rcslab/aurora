@@ -3,7 +3,7 @@ SRCS= slsdb.cc file.cc directory.cc btree.cc snapshot.cc util.cc
 MAN=
 
 
-LDADD= -lsls -ledit
+LDADD= -ledit
 LDFLAGS= -L../../libsls -lc++
 CFLAGS= -I../../include
 
