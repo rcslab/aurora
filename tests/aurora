@@ -97,14 +97,19 @@ aursetup()
     slsnewfs
     slsmount
     mkdir -p $MNT/dev
+    mkdir -p $MNT/proc
+    mount -t procfs proc $MNT/proc
     mount -t devfs devfs $MNT/dev
+    mount -t fdescfs fdesc $MNT/dev/fd
     loadsls
 }
 
 aurteardown()
 {
     unloadsls
-    umount $MNT/dev
+    umount fdesc $MNT/dev/fd >/dev/null 2>/dev/null
+    umount $MNT/dev >/dev/null 2>/dev/null
+    umount proc $MNT/proc >/dev/null 2>/dev/null
     slsunmount
     unloadslos
 }

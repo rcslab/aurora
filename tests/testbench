@@ -13,8 +13,9 @@ CR=`printf "\015"`
 CLEAR="$CR$ESC[K"
 RED=$ESC"[0;31m"
 GREEN=$ESC"[0;32m"
-#YELLOW= $ESC"[0;33m"
+YELLOW=$ESC"[0;33m"
 NORMAL=$ESC"[0;39m"
+BLACKLIST="testbench.blacklist"
 
 FORMAT="%-40s [ %s%-7s"$NORMAL" ]"
 TFORMAT="%-40s [ %s%-7s"$NORMAL" ] %6s"
@@ -30,6 +31,13 @@ print_success()
     echo -n $CLEAR
     printf "$TFORMAT\n" $1 $GREEN "success" $2
 }
+
+print_disabled()
+{
+    echo -n $CLEAR
+    printf "$TFORMAT\n" $1 $YELLOW "disabled" $2
+}
+
 
 print_running()
 {
@@ -48,6 +56,13 @@ run_test()
 {
     NAME=`basename $1`
     print_running $NAME
+
+    BLACKLISTED=`cat $BLACKLIST | grep "$NAME"`
+    if [ -n "$BLACKLISTED" ]; then
+	print_disabled "$NAME" "N/A"
+	return 0
+    fi
+
     tstart=`date +%s`
     $1 >> $TESTLOG
     RETVAL=$?

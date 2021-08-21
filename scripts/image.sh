@@ -100,5 +100,6 @@ pkg install -y bash;
 pkg install -y python;
 pkg install -y redis;
 pkg install -y memcached;
+pkg install -y tomcat9;
 
 exit;
