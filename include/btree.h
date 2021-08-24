@@ -12,28 +12,27 @@ typedef uint32_t fb_valsize;
 extern uma_zone_t fnodes_zone;
 
 #define NODE_TYPE(node) ((node)->fn_dnode->dn_flags)
-#define NODE_DATA_SIZE(vp) ((4096) - sizeof(struct dnode))
+#define NODE_DATA_SIZE(node) ((node)->fn_bsize - sizeof(struct dnode))
 #define NODE_KS(node) ((node)->fn_tree->bt_keysize)
 #define NODE_VS(node)                                             \
 	((NODE_TYPE((node)) == BT_INTERNAL) ? sizeof(bnode_ptr) : \
 					      ((node)->fn_tree->bt_valsize))
 
 // Total data size minus offset of vales - offset of keys (size of key space);
-#define NODE_VAL_SIZE(node)                            \
-	(NODE_DATA_SIZE((node)->fn_tree->fn_backend) - \
-	    ((node)->fn_values - (node)->fn_keys))
+#define NODE_VAL_SIZE(node) \
+	(NODE_DATA_SIZE(node) - ((node)->fn_values - (node)->fn_keys))
 
-#define MAX_NUM_INTERNAL(node)                                               \
-	((NODE_DATA_SIZE((node)->fn_tree->bt_backend) - sizeof(bnode_ptr)) / \
+#define MAX_NUM_INTERNAL(node)                        \
+	((NODE_DATA_SIZE(node) - sizeof(bnode_ptr)) / \
 	    ((node)->fn_tree->bt_keysize + sizeof(bnode_ptr)))
 
-#define MAX_NUM_EXTERNAL(node)                           \
-	((NODE_DATA_SIZE((node)->fn_tree->bt_backend)) / \
+// N*(Singleton/Bucket Boolean Flag (1) + Key + Value)
+#define MAX_NUM_EXTERNAL(node)    \
+	((NODE_DATA_SIZE(node)) / \
 	    ((node)->fn_tree->bt_keysize + (node)->fn_tree->bt_valsize + 1))
 
-#define MAX_NUM_BUCKET(node)                                             \
-	((NODE_DATA_SIZE((node)->fn_tree->bt_backend) - NODE_KS(node)) / \
-	    ((node)->fn_tree->bt_valsize))
+#define MAX_NUM_BUCKET(node) \
+	((NODE_DATA_SIZE(node) - NODE_KS(node)) / ((node)->fn_tree->bt_valsize))
 
 #define NODE_OFFSET(node) (MAX_NUM_INTERNAL(node) * (node)->fn_tree->bt_keysize)
 #define NODE_SIZE(node) ((node)->fn_dnode->dn_numkeys)
@@ -139,6 +138,7 @@ struct fnode {
 	struct dnode *fn_dnode; /* On disk data */
 	struct buf *fn_buf;	/* Data buffer itself for btree data */
 	bnode_ptr fn_location;	/* Disk block to fnode */
+	uint64_t fn_bsize;	/* Block size */
 	int8_t fn_status;	/* Status flags (see flags above)*/
 	uint8_t *fn_types;
 	void *fn_values; /* Pointer to values list */

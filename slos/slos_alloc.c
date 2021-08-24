@@ -40,6 +40,7 @@ fast_path(struct slos *slos, uint64_t blocks, diskptr_t *ptr)
 {
 	uint64_t blksize = BLKSIZE(slos);
 	diskptr_t *chunk = &slos->slos_alloc.chunk;
+
 	if (chunk->size >= blocks * blksize) {
 		ptr->offset = chunk->offset;
 		ptr->size = blocks * blksize;
@@ -48,6 +49,7 @@ fast_path(struct slos *slos, uint64_t blocks, diskptr_t *ptr)
 		chunk->size -= blocks * blksize;
 		return (0);
 	}
+
 	return (-1);
 }
 
@@ -93,23 +95,26 @@ allocate_chunk(struct slos *slos, diskptr_t *ptr)
 	 * Carve off as much as we need, and put the rest back in.
 	 * XXX Implement buckets.
 	 */
-	KASSERT(temp == fullsize, ("Should be reverse mappings"));
-	fullsize -= asked;
-	off += asked;
+	if (fullsize > asked) {
+		KASSERT(temp == fullsize, ("Should be reverse mappings"));
+		fullsize -= asked;
+		off += asked;
 
-	error = fbtree_insert(STREE(slos), &fullsize, &off);
-	if (error) {
-		panic("Problem removing element in allocation");
-	}
+		error = fbtree_insert(STREE(slos), &fullsize, &off);
+		if (error) {
+			panic("Problem removing element in allocation");
+		}
 
-	error = fbtree_insert(OTREE(slos), &off, &fullsize);
-	if (error) {
-		panic("Problem removing element in allocation");
+		error = fbtree_insert(OTREE(slos), &off, &fullsize);
+		if (error) {
+			panic("Problem removing element in allocation");
+		}
 	}
 
 	ptr->offset = location;
 	ptr->size = asked * blksize;
 	ptr->epoch = slos->slos_sb->sb_epoch;
+
 	return (0);
 }
 
@@ -138,6 +143,7 @@ slos_blkalloc(struct slos *slos, size_t bytes, diskptr_t *ptr)
 			BTREE_UNLOCK(OTREE(slos), 0);
 			continue;
 		}
+
 		error = allocate_chunk(slos, &slos->slos_alloc.chunk);
 		if (error != 0) {
 			panic("Problem allocating %d\n", error);

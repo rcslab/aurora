@@ -466,7 +466,10 @@ fnode_cow(struct fbtree *tree, struct buf *bp)
 	BP_SETCOWED(cur->fn_buf);
 
 	// Get the parent
-	fnode_parent(cur, &parent);
+	error = fnode_parent(cur, &parent);
+	if (error != 0) {
+		panic("fnode_cow: fnode_parent failed %d\n", error);
+	}
 
 	FNODE_PCTRIE_REMOVE(&tree->bt_trie, bp->b_lblkno);
 
@@ -1249,27 +1252,29 @@ fbtree_get(struct fbtree *tree, const void *key, void *value)
 void
 fnode_setup(struct fnode *node, struct fbtree *tree, bnode_ptr ptr)
 {
+	struct slos *slos =
+	    ((struct slos_node *)tree->bt_backend->v_data)->sn_slos;
+
 	node->fn_dnode = (struct dnode *)node->fn_buf->b_data;
 	node->fn_location = ptr;
 	node->fn_tree = tree;
+	node->fn_bsize = slos->slos_sb->sb_bsize;
+
 	if (NODE_TYPE(node) == BT_INTERNAL) {
 		node->fn_types = NULL;
 		node->fn_keys = (char *)node->fn_dnode->dn_data;
 		node->fn_values = (char *)node->fn_keys +
 		    (NODE_MAX(node) * NODE_KS(node));
-		fnode_getval(node, NODE_MAX(node) - 1);
 	} else if (NODE_TYPE(node) == BT_BUCKET) {
 		node->fn_types = NULL;
 		node->fn_keys = (char *)node->fn_dnode->dn_data;
 		node->fn_values = (char *)node->fn_keys + (NODE_KS(node));
-		fnode_getval(node, NODE_MAX(node) - 1);
 	} else {
 		node->fn_types = (uint8_t *)node->fn_dnode->dn_data;
 		node->fn_keys = (char *)node->fn_types +
 		    (sizeof(uint8_t) * NODE_MAX(node));
 		node->fn_values = (char *)node->fn_keys +
 		    (NODE_MAX(node) * NODE_KS(node));
-		fnode_getval(node, NODE_MAX(node) - 1);
 	}
 
 	node->fn_status = 0;
@@ -1284,6 +1289,7 @@ fnode_create(
 {
 	struct slos *slos =
 	    ((struct slos_node *)tree->bt_backend->v_data)->sn_slos;
+
 	KASSERT(ptr != 0, ("Why are you making a blk on the allocator block"));
 
 	/* Get the new bnode's block into the cache. */
