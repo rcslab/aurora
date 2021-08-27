@@ -519,7 +519,8 @@ static int
 slsfs_write(struct vop_write_args *args)
 {
 	struct buf *bp;
-	size_t xfersize, filesize;
+	int xfersize;
+	size_t filesize;
 	uint64_t off;
 	int error = 0;
 	int gbflag = 0;
@@ -599,6 +600,8 @@ slsfs_write(struct vop_write_args *args)
 			error = vn_io_fault_pgmove(
 			    bp->b_pages, off, xfersize, uio);
 		}
+
+		vfs_bio_set_flags(bp, ioflag);
 		/* One thing thats weird right now is our inodes and meta data
 		 * is currently not
 		 * in the buf cache, so we don't really have to worry about
@@ -607,6 +610,8 @@ slsfs_write(struct vop_write_args *args)
 		 */
 		slsfs_bdirty(bp);
 		modified++;
+		if (error || xfersize == 0)
+			break;
 	}
 
 	if (modified) {
@@ -683,6 +688,8 @@ slsfs_read(struct vop_read_args *args)
 		}
 		brelse(bp);
 		resid -= toread;
+		if (error || toread == 0)
+			break;
 	}
 
 	return (error);
