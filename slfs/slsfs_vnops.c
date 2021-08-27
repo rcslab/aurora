@@ -699,37 +699,82 @@ static int
 slsfs_bmap(struct vop_bmap_args *args)
 {
 	struct vnode *vp = args->a_vp;
+	daddr_t lbn = args->a_bn;
+	daddr_t *bnp = args->a_bnp;
+
 	struct slsfsmount *smp = TOSMP(vp->v_mount);
+	struct slos_node *svp = SLSVP(vp);
+	size_t fsbsize, devbsize;
+	size_t scaling;
+
+	struct fnode_iter biter;
+	uint64_t extsize;
+	daddr_t extlbn;
+	daddr_t extbn;
+	diskptr_t ptr;
+
+	int error;
+
+	/* Constants so that we scale by the FS to device block size ratio. */
+	fsbsize = vp->v_bufobj.bo_bsize;
+	devbsize = slos.slos_vp->v_bufobj.bo_bsize;
+
+	KASSERT(fsbsize >= devbsize, ("Sector size larger than block size"));
+
+	/* Scaling factor of sectors per FS block. */
+	scaling = fsbsize / devbsize;
 
 	if (args->a_bop != NULL)
 		*args->a_bop = &smp->sp_slos->slos_vp->v_bufobj;
-	if (args->a_bnp != NULL)
-		*args->a_bnp = args->a_bn;
+
+	/* No readbehind/readahead for now. */
 	if (args->a_runp != NULL)
 		*args->a_runp = 0;
 	if (args->a_runb != NULL)
 		*args->a_runb = 0;
 
-	/*
-	 * We just want to allocate for now, since allocations are persistent
-	 * and get written to disk
-	 * (this is obviously very slow), if we want to make this transactional
-	 * we will need to to probably do the ZFS strategy of just having this
-	 * sent the physical block to the logical one
-	 * and over write the buf_ops so that allocation occurs on the flush or
-	 * the sync?  How would this interact with checkpointing.  I'm thinking
-	 * we will probably have all the flushes occur
-	 * on a checkpoint, or before.
-	 *
-	 * After discussion, we believe that optimistically flushing would be a
-	 * good idea, as it would reduce the dump time for the checkpoint thus
-	 * reducing latency on packets being help up waiting for the data to be
-	 * dumped to disk. Another issue we face here is that if we allocate on
-	 * each block we turn our extents and larger writes into blocks.  So I
-	 * believe the best thing
-	 * to do is do allocation on flush. So we will make our bmap return the
-	 * logical block
-	 */
+	if ((vp->v_type == VCHR) || (vp->v_type == VNON) ||
+	    (vp->v_vflag & VV_SYSTEM))
+		return (EOPNOTSUPP);
+
+	/* If no resolution is necessary we're done. */
+	if (bnp == NULL)
+		return (0);
+
+	/* Look up the physical block number. */
+	error = slsfs_lookupbln(svp, lbn, &biter);
+	if (error != 0)
+		return (error);
+
+	if (ITER_ISNULL(biter)) {
+		ITER_RELEASE(biter);
+		*bnp = -1;
+		return (0);
+	}
+
+	/* Extract the extent's dimensions. */
+	ptr = ITER_VAL_T(biter, diskptr_t);
+
+	/* Turn everything into sector size blocks.*/
+	extlbn = ITER_KEY_T(biter, uint64_t) * scaling;
+	extbn = ptr.offset * scaling;
+	extsize = ptr.size / devbsize;
+	ITER_RELEASE(biter);
+
+	/* Check if we're in a hole. */
+	if (extlbn + extsize <= lbn) {
+		*bnp = -1;
+		return (0);
+	}
+
+	*bnp = extbn + (lbn - extlbn);
+
+	/* Update the readahead. */
+	if (args->a_runb != NULL)
+		*args->a_runb = (lbn - extlbn) / scaling;
+	if (args->a_runp != NULL)
+		*args->a_runp = (extlbn + extsize - lbn - 1) / scaling;
+
 	return (0);
 }
 

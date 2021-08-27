@@ -4,6 +4,10 @@ x86
 */offset.inc
 */vnode_if*.h
 
+benchmarks/posix/posix
+benchmarks/vmobject/vmobject
+benchmarks/vmregion/vmregion
+
 tests/testbench.log
 tests/ktrdump.log
 tests/array/array
@@ -24,7 +28,6 @@ tests/multithread/multithread
 tests/pgroup/pgroup
 tests/pipe/pipe
 tests/posixshm/posixshm
-tests/posix/posix
 tests/print/print
 tests/pymetro/pymetro
 tests/pymetro-partition/pymetro-partition
@@ -41,8 +44,6 @@ tests/tcplisten/tcplisten
 tests/udplisten/udplisten
 tests/unixlisten/unixlisten
 tests/unlink/unlink
-tests/vmobject/vmobject
-tests/vmregion/vmregion
 tests/wal/wal
 
 scripts/config.sh
