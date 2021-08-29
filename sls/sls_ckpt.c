@@ -307,6 +307,7 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 	if (sckpt_data == NULL)
 		return (ENOMEM);
 
+	SDT_PROBE0(sls, , , meta_start);
 	SDT_PROBE1(sls, , sls_ckpt, , "Creating the checkpoint");
 
 	/* Shadow SYSV shared memory. */

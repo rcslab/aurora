@@ -27,7 +27,7 @@
 #include "sls_pager.h"
 #include "sls_vm.h"
 
-int sls_objprotect = 1;
+int sls_objprotect = 0;
 SDT_PROBE_DEFINE(sls, , , procset_loop);
 
 #define SLS_PRECOPY_MAX (64)
