@@ -322,11 +322,11 @@ slsckpt_filedesc(
 
 	error = slsckpt_vnode(fdp->fd_cdir, sckpt_data);
 	if (error != 0)
-		goto done;
+		return (error);
 
 	error = slsckpt_vnode(fdp->fd_rdir, sckpt_data);
 	if (error != 0)
-		goto done;
+		return (error);
 
 	/* The end of the struct is a variable length array. */
 	fd_size = sizeof(*slsfdp) * sizeof(uint64_t) * (fdp->fd_lastfile - 1);
@@ -374,6 +374,8 @@ slsckpt_filedesc(
 
 done:
 	FILEDESC_XUNLOCK(fdp);
+
+	free(slsfdp, M_SLSMM);
 
 	return (error);
 }

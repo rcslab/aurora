@@ -1083,10 +1083,9 @@ fbtree_destroy(struct fbtree *tree)
 	KASSERT(pctrie_is_empty(&tree->bt_trie), ("Trie should be empty"));
 	rw_wunlock(&tree->bt_trie_lock);
 	BTREE_UNLOCK(tree, 0);
-	vput(tree->bt_backend);
-
 	vinvalbuf(tree->bt_backend, 0, 0, 0);
 	vnode_destroy_vobject(tree->bt_backend);
+	vput(tree->bt_backend);
 }
 
 /*

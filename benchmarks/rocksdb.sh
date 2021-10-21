@@ -1,80 +1,79 @@
-#!/usr/local/bin/bash
+#!/bin/sh
+. ../tests/aurora
 
-set -e
+AURORACTL=$SRCROOT/tools/slsctl/slsctl
+BACKEND="slos"
+PERIOD="10"
+OID="1000"
 
-SELF="${BASH_SOURCE[0]}"
-SLSDIR="$(realpath "$(dirname "$SELF")/..")"
-ROCKSDB="$SLSDIR/../rocksdb"
-YCSB="$SLSDIR/../YCSB"
 
-WORKDIR="$1/tmp"
-mkdir -p "$WORKDIR"
-
-SPAWN="$SLSDIR/tools/slsctl/slsctl spawn -o 1000 --"
-
-build_rocksdb() {
-    JAVA_HOME=/usr/local/openjdk8 cmake .. \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DFAIL_ON_WARNINGS=OFF \
-        -DWITH_SNAPPY=ON \
-        -DWITH_JNI=ON \
-        -DCUSTOM_REPO_URL="https://repo1.maven.org/maven2" \
-        -DSLS_PATH="$SLSDIR"
-    make -j$(gnproc) rocksdbjni-shared
-    ln -s librocksdbjni-shared.so java/librocksdbjni.so
+db_bench() {
+    db_bench \
+	--benchmarks=fillbatch,mixgraph \
+	--use_direct_io_for_flush_and_compaction=true \
+	--use_direct_reads=true \
+	--cache_size=$((256 << 20)) \
+	--key_dist_a=0.002312 \
+	--key_dist_b=0.3467 \
+	--keyrange_dist_a=14.18 \
+	--keyrange_dist_b=0.3467 \
+	--keyrange_dist_c=0.0164 \
+	--keyrange_dist_d=-0.08082 \
+	--keyrange_num=30 \
+	--value_k=0.2615 \
+	--value_sigma=25.45 \
+	--iter_k=2.517 \
+	--iter_sigma=14.236 \
+	--mix_get_ratio=0.83 \
+	--mix_put_ratio=0.14 \
+	--mix_seek_ratio=0.03 \
+	--sine_mix_rate_interval_milliseconds=5000 \
+	--sine_a=1000 \
+	--sine_b=0.000073 \
+	--sine_d=4500 \
+	--perf_level=2 \
+	--num=$ROCKSDB_NUM \
+	--key_size=48 \
+	--db=/testmnt/tmp-db \
+	--wal_dir=/testmnt/wal \
+	--duration=$ROCKSDB_DUR \
+	--histogram=1 \
+	--write_buffer_size=$((16 << 30)) \
+	--disable_auto_compactions \
+	--threads=24 \
+	"${@:2}"
+    cd -
+    return $?
 }
 
-if [ ! -e "$ROCKSDB/build-baseline/java/librocksdbjni.so" ]; then
-    (
-        cd "$ROCKSDB"
-        git checkout sls-baseline
-        rm -rf build-baseline
-        mkdir build-baseline
-        cd build-baseline
-        build_rocksdb
-    )
-fi
+stress_aurora()
+{
 
-if [ ! -e "$ROCKSDB/build-sls/java/librocksdbjni.so" ]; then
-    (
-        cd "$ROCKSDB"
-        git checkout sls
-        rm -rf build-sls
-        mkdir build-sls
-        cd build-sls
-        build_rocksdb
-    )
-fi
+	aursetup
+	$AURORACTL partadd -o $OID -d -t $PERIOD -b $BACKEND 
 
-bench_rocksdb() {
-    (
-        # https://github.com/brianfrankcooper/YCSB/wiki/Core-Workloads
+	db_bench baseline --sync=false --disable_wal=true &
+	FUNC_PID="$!"
+	sleep 1
 
-        cd "$YCSB"
-        rm -rf "$WORKDIR/ycsb-rocksdb-data"
+	pid=`pidof db_bench`
+	$AURORACTL attach -o $OID -p $pid 2>> $LOG >> $LOG
+	$AURORACTL checkpoint -o $OID -r >> $LOG 2>> $LOG
 
-        echo "======== Load workload A ========" >../rocksdb-ycsb-$1.log
-        $2 python2 ./bin/ycsb load rocksdb -s -P workloads/workloada -p rocksdb.dir="$WORKDIR/ycsb-rocksdb-data" -jvm-args "-Djava.library.path=$ROCKSDB/build-$1/java " >>../rocksdb-ycsb-$1.log || true
+	wait $FUNC_PID
+	if [ $? -eq 124 ];then
+		echo "[Aurora] Issue with db_bench, restart required"
+		exit 1
+	fi
+	sleep 2
 
-        echo "======== Run workload A ========" >>../rocksdb-ycsb-$1.log
-        $2 python2 ./bin/ycsb run rocksdb -s -P workloads/workloada -p rocksdb.dir="$WORKDIR/ycsb-rocksdb-data" -jvm-args "-Djava.library.path=$ROCKSDB/build-$1/java " >>../rocksdb-ycsb-$1.log || true
-        echo "======== Run workload B ========" >>../rocksdb-ycsb-$1.log
-        $2 python2 ./bin/ycsb run rocksdb -s -P workloads/workloadb -p rocksdb.dir="$WORKDIR/ycsb-rocksdb-data" -jvm-args "-Djava.library.path=$ROCKSDB/build-$1/java " >>../rocksdb-ycsb-$1.log || true
-        echo "======== Run workload C ========" >>../rocksdb-ycsb-$1.log
-        $2 python2 ./bin/ycsb run rocksdb -s -P workloads/workloadc -p rocksdb.dir="$WORKDIR/ycsb-rocksdb-data" -jvm-args "-Djava.library.path=$ROCKSDB/build-$1/java " >>../rocksdb-ycsb-$1.log || true
-        echo "======== Run workload F ========" >>../rocksdb-ycsb-$1.log
-        $2 python2 ./bin/ycsb run rocksdb -s -P workloads/workloadf -p rocksdb.dir="$WORKDIR/ycsb-rocksdb-data" -jvm-args "-Djava.library.path=$ROCKSDB/build-$1/java " >>../rocksdb-ycsb-$1.log || true
-        echo "======== Run workload D ========" >>../rocksdb-ycsb-$1.log
-        $2 python2 ./bin/ycsb run rocksdb -s -P workloads/workloadd -p rocksdb.dir="$WORKDIR/ycsb-rocksdb-data" -jvm-args "-Djava.library.path=$ROCKSDB/build-$1/java " >>../rocksdb-ycsb-$1.log || true
-
-        rm -rf "$WORKDIR/ycsb-rocksdb-data"
-
-        echo "======== Load workload E ========" >>../rocksdb-ycsb-$1.log
-        $2 python2 ./bin/ycsb load rocksdb -s -P workloads/workloade -p rocksdb.dir="$WORKDIR/ycsb-rocksdb-data" -jvm-args "-Djava.library.path=$ROCKSDB/build-$1/java " >>../rocksdb-ycsb-$1.log || true
-        echo "======== Run workload E ========" >>../rocksdb-ycsb-$1.log
-        $2 python2 ./bin/ycsb run rocksdb -s -P workloads/workloade -p rocksdb.dir="$WORKDIR/ycsb-rocksdb-data" -jvm-args "-Djava.library.path=$ROCKSDB/build-$1/java " >>../rocksdb-ycsb-$1.log || true
-    )
+	aurteardown
 }
 
-bench_rocksdb baseline ""
-bench_rocksdb sls "$SPAWN"
+for i in `seq 1 5` ; do 
+	stress_aurora
+done
+
+
+echo "[DONE] Done...\n"
+

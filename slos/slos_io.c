@@ -425,6 +425,7 @@ slos_io(void *ctx, int __unused pending)
 	 * hit the disk.
 	 */
 	bwait(bp, PRIBIO, "slsrw");
+	vrele(vp);
 out:
 	BUF_ASSERT_LOCKED(bp);
 	relpbuf(bp, &slos_pbufcnt);
@@ -455,6 +456,9 @@ slos_iotask_create(struct vnode *vp, struct buf *bp, bool async)
 	ctx = slos_iotask_init(vp, bp);
 
 	BUF_ASSERT_LOCKED(bp);
+
+	/* The corresponding vrele() is in the task. */
+	vref(vp);
 
 	if (async) {
 		TASK_INIT(&ctx->tk, 0, &slos_io, ctx);

@@ -885,6 +885,9 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 	case MOD_LOAD:
 		bzero(&slsm, sizeof(slsm));
 
+		/* Initialize Aurora-related sysctls. */
+		sls_sysctl_init();
+
 		/* Enable the hashtables.*/
 		error = slskv_init();
 		if (error != 0)
@@ -909,9 +912,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		error = slsrest_zoneinit();
 		if (error != 0)
 			return (error);
-
-		/* Initialize Aurora-related sysctls. */
-		sls_sysctl_init();
 
 		/* Add the syscall vectors and hooks. */
 		sls_hook_attach();
@@ -964,8 +964,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		if (slsm.slsm_cdev != NULL)
 			destroy_dev(slsm.slsm_cdev);
 
-		sls_sysctl_fini();
-
 		printf("Cleaning up image and module state...\n");
 
 		slsrest_zonefini();
@@ -974,6 +972,9 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		slstable_fini();
 		slsm_fini();
 		slskv_fini();
+
+		sls_sysctl_fini();
+
 		printf("Done.\n");
 
 		break;

@@ -63,10 +63,8 @@ slskv_zone_init(void *mem, int size, int flags __unused)
 
 	/* Create the buckets using the existing kernel functions. */
 	table->buckets = hashinit(SLSKV_BUCKETS, M_SLSMM, &table->mask);
-	if (table->buckets == NULL) {
-		free(table, M_SLSMM);
+	if (table->buckets == NULL)
 		return (ENOMEM);
-	}
 
 	/* Initialize the mutexes. */
 	for (i = 0; i < SLSKV_BUCKETS; i++)

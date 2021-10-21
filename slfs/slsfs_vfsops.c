@@ -1056,8 +1056,11 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	slsfs_wakeup_syncer(1);
 
 	error = vflush(mp, 0, flags, curthread);
-	if (error)
+	if (error) {
+		printf(
+		    "WARNING: SLOS failed unmount (flush error %d)\n", error);
 		return (error);
+	}
 
 	/*
 	 * Seems like we don't call reclaim on a reference count drop so I

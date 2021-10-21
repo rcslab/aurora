@@ -874,7 +874,6 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		if (slsm.slsm_exiting != 0)
 			break;
 
-		sls_ckpt_attempted += 1;
 		DEBUG1("Attempting checkpoint %d", sls_ckpt_attempted);
 		/* Check if the partition got detached from the SLS. */
 		if (slsp->slsp_status != SLSP_CHECKPOINTING) {
