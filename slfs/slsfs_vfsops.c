@@ -96,16 +96,12 @@ slsfs_init(struct vfsconf *vfsp)
 static int
 slsfs_uninit(struct vfsconf *vfsp)
 {
-	int usecnt;
-
 	/* Wait for anyone who still has the lock. */
 	SLOS_LOCK(&slos);
-	usecnt = slos.slos_usecnt;
-	SLOS_UNLOCK(&slos);
+	KASSERT(slos_getstate(&slos) == SLOS_UNMOUNTED,
+	    ("destroying SLOS with state %d", slos_getstate(&slos)));
 
-	KASSERT(usecnt > 0, ("invalid slos_usecnt %d", usecnt));
-	if (usecnt > 1)
-		return (EBUSY);
+	SLOS_UNLOCK(&slos);
 
 	uma_zdestroy(fnode_zone);
 	uma_zdestroy(fnode_trie_zone);
@@ -439,17 +435,6 @@ slsfs_mountfs(struct vnode *devvp, struct mount *mp)
 	mp->mnt_flag |= MNT_LOCAL;
 	mp->mnt_kern_flag |= MNTK_USES_BCACHE;
 	MNT_IUNLOCK(mp);
-
-#ifdef SLOS_TEST
-
-	printf("Testing fbtreecomponent...");
-	error = slsfs_fbtree_test();
-	if (error != 0)
-		printf("ERROR: Test failed with %d", error);
-
-		/* XXX Returning an error locks up the mounting process. */
-
-#endif /* SLOS_TEST */
 
 	VOP_UNLOCK(slos.slos_vp, 0);
 
@@ -834,25 +819,24 @@ slsfs_mount(struct mount *mp)
 	struct nameidata nd;
 	struct vfsoptlist *opts;
 	int error = 0;
+	enum slos_state oldstate;
 	char *from;
 
 	DEBUG("Mounting drive");
 
-	SLOS_LOCK(&slos);
+	/* We do nothing on updates. */
+	if (mp->mnt_flag & MNT_UPDATE)
+		return (0);
 
+	SLOS_LOCK(&slos);
 	/* Cannot mount twice. */
-	if ((slos.slsfs_mount != NULL) && ((mp->mnt_flag & MNT_UPDATE) == 0)) {
+	if (slos_getstate(&slos) != SLOS_UNMOUNTED) {
 		SLOS_UNLOCK(&slos);
 		return (EBUSY);
 	}
 
-	/* We do nothing on updates. */
-	if (mp->mnt_flag & MNT_UPDATE) {
-		SLOS_UNLOCK(&slos);
-		return (0);
-	}
-
-	slos.slos_usecnt += 1;
+	oldstate = slos_getstate(&slos);
+	slos_setstate(&slos, SLOS_INFLUX);
 	SLOS_UNLOCK(&slos);
 
 	if (mp->mnt_data != NULL) {
@@ -861,12 +845,21 @@ slsfs_mount(struct mount *mp)
 		VOP_LOCK(slos.slsfs_inodes, LK_EXCLUSIVE);
 		VOP_RECLAIM(slos.slsfs_inodes, curthread);
 		VOP_UNLOCK(slos.slsfs_inodes, 0);
+
 		VOP_LOCK(slos.slos_vp, LK_EXCLUSIVE);
+
 		error = slsfs_mountfs(slos.slos_vp, mp);
-		MPASS(error == 0);
+		if (error != 0) {
+			VOP_UNLOCK(slos.slos_vp, LK_EXCLUSIVE);
+			return (error);
+		}
 
 		error = slsfs_init_fs(mp);
-		MPASS(error == 0);
+		if (error != 0) {
+			VOP_UNLOCK(slos.slos_vp, LK_EXCLUSIVE);
+			return (error);
+		}
+
 	} else {
 		opts = mp->mnt_optnew;
 		vfs_filteropt(opts, slsfs_opts);
@@ -892,6 +885,7 @@ slsfs_mount(struct mount *mp)
 
 		/* Get an ID for the new filesystem. */
 		vfs_getnewfsid(mp);
+
 		/* Actually mount the vnode as a filesyste and initialize its
 		 * state. */
 		error = slsfs_mountfs(devvp, mp);
@@ -908,12 +902,18 @@ slsfs_mount(struct mount *mp)
 		vfs_mountedfrom(mp, from);
 	}
 
+	/* Remove the SLOS from the flux state. */
+	SLOS_LOCK(&slos);
+	slos_setstate(&slos, SLOS_MOUNTED);
+	SLOS_UNLOCK(&slos);
+
 	return (0);
 
 error:
-	/* Remove the reference taken above. */
+
+	/* Remove the SLOS from the flux state. */
 	SLOS_LOCK(&slos);
-	slos.slos_usecnt -= 1;
+	slos_setstate(&slos, oldstate);
 	SLOS_UNLOCK(&slos);
 
 	return (error);
@@ -984,8 +984,6 @@ slsfs_unmount_device(struct slsfs_device *sdev)
 		g_topology_unlock();
 	}
 
-	slos.slos_usecnt -= 1;
-
 	SLOS_UNLOCK(&slos);
 
 	slos_allocator_uninit(&slos);
@@ -1038,13 +1036,31 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	sdev = smp->sp_sdev;
 	slos = smp->sp_slos;
 
+	KASSERT(slos->slsfs_mount != NULL, ("no mount"));
+
+	SLOS_LOCK(slos);
+	if (slos_getstate(slos) != SLOS_MOUNTED) {
+		KASSERT(slos_getstate(slos) != SLOS_UNMOUNTED,
+		    ("unmounting nonexistent slsfs"));
+		printf("State %d\n", slos_getstate(slos));
+		SLOS_UNLOCK(slos);
+		return (EBUSY);
+	}
+
+	slos_setstate(slos, SLOS_INFLUX);
+	SLOS_UNLOCK(slos);
+
 	if (mntflags & MNT_FORCE) {
 		flags |= FORCECLOSE;
 	}
 
-	DEBUG("UNMOUNTING");
-
 	/* Free the slos taskqueue, if we have not already done so. */
+	/*
+	 * XXX Can we move this to after we ensure this function succeeds?
+	 * If we fail to flush we are stuck with a file system with a
+	 * nonexistent taskqueue. If the SLS reattaches and tries to reuse it we
+	 * will crash.
+	 */
 	if (slos->slos_tq != NULL)
 		taskqueue_free(slos->slos_tq);
 	slos->slos_tq = NULL;
@@ -1057,9 +1073,8 @@ slsfs_unmount(struct mount *mp, int mntflags)
 
 	error = vflush(mp, 0, flags, curthread);
 	if (error) {
-		printf(
-		    "WARNING: SLOS failed unmount (flush error %d)\n", error);
-		return (error);
+		printf("vflush failed with %d\n", error);
+		goto error;
 	}
 
 	/*
@@ -1075,9 +1090,8 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	DEBUG("Flushed all active vnodes");
 	/* Remove the mounted device. */
 	error = slsfs_unmount_device(sdev);
-	if (error) {
-		return (error);
-	}
+	if (error)
+		goto error;
 
 	cv_destroy(&slos->slsfs_sync_cv);
 	mtx_destroy(&slos->slsfs_sync_lk);
@@ -1093,7 +1107,21 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	mp->mnt_flag &= ~MNT_LOCAL;
 	MNT_IUNLOCK(mp);
 
+	/* Couldn't unmount after all. */
+	SLOS_LOCK(slos);
+	slos_setstate(slos, SLOS_UNMOUNTED);
+	SLOS_UNLOCK(slos);
+
 	return (0);
+
+error:
+	/* Couldn't unmount after all. */
+	SLOS_LOCK(slos);
+	slos_setstate(slos, SLOS_MOUNTED);
+	SLOS_UNLOCK(slos);
+
+	printf("WARNING: SLOS failed unmount (error %d)\n", error);
+	return (error);
 }
 
 static void

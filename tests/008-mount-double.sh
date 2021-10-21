@@ -4,9 +4,15 @@
 
 . aurora
 
-loadmod
+loadslos
 if [ $? -ne 0 ]; then
     echo "Failed to load the modules"
+    exit 1
+fi
+
+slsnewfs 2> /dev/null
+if [ $? -ne 0 ]; then
+    echo "Failed to create the SLSFS"
     exit 1
 fi
 
@@ -25,12 +31,6 @@ fi
 slsunmount
 if [ $? -ne 0 ]; then
     echo "Failed to unmount the SLSFS"
-    exit 1
-fi
-
-unloadsls
-if [ $? -ne 0 ]; then
-    echo "Failed to unload the SLS"
     exit 1
 fi
 

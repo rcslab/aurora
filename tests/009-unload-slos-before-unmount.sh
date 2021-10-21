@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Attempt to unload the sls twice. Should fail.
+# Attempt to unload the slos while the FS is still active. Should fail.
 
 . aurora
 
@@ -12,25 +12,26 @@ fi
 
 unloadsls
 if [ $? -ne 0 ]; then
-    echo "Failed to unload the SLS"
+    echo "Failed to unload SLS"
     exit 1
 fi
 
-unloadsls 2> /dev/null
+
+unloadslos 2>&1
 if [ $? -eq 0 ]; then
-    echo "Unloaded the SLS twice"
+    echo "Unloaded the SLOS with an FS mounted"
     exit 1
 fi
 
 slsunmount
 if [ $? -ne 0 ]; then
-    echo "Failed to unmount the SLSFS"
+    echo "Failed to unmount FS"
     exit 1
 fi
 
 unloadslos
 if [ $? -ne 0 ]; then
-    echo "Failed to unload the SLOS"
+    echo "Failed to remove the SLOS"
     exit 1
 fi
 

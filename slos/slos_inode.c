@@ -87,7 +87,6 @@ slos_init(void)
 
 	bzero(&slos, sizeof(struct slos));
 	lockinit(&slos.slos_lock, PVFS, "sloslock", VLKTIMEOUT, LK_NOSHARE);
-	slos.slos_usecnt = 1;
 
 	sysctl_ctx_init(&slos_ctx);
 	root = SYSCTL_ADD_ROOT_NODE(&slos_ctx, OID_AUTO, "aurora_slos",

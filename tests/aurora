@@ -9,7 +9,7 @@ SLSMINROOT="$SRCROOT/minroot.tar.gz"
 
 STRIPESIZE="$(( 64 * 1024 ))"
 STRIPENAME="st0"
-STRIPEDISKS="nvd0 nvd1 nvd2 nvd3"
+STRIPEDISKS="vtbd1 vtbd2 vtbd3 vtbd4"
 
 # Load and unload kernel modules
 loadsls()
@@ -68,10 +68,23 @@ slsnewfs()
 slsmount()
 {
     mount -t slsfs $DISKPATH $MNT
+    ret=$?
+    if [ $ret  -ne 0 ]; then
+	    return $ret
+    fi
+
+    mkdir -p $MNT/dev
+    mkdir -p $MNT/proc
+    mount -t procfs proc $MNT/proc
+    mount -t devfs devfs $MNT/dev
+    mount -t fdescfs fdesc $MNT/dev/fd
 }
 
 slsunmount()
 {
+    umount fdesc $MNT/dev/fd >/dev/null 2>/dev/null
+    umount $MNT/dev >/dev/null 2>/dev/null
+    umount proc $MNT/proc >/dev/null 2>/dev/null
     umount $MNT
 }
 
@@ -96,20 +109,12 @@ aursetup()
     #finddisk
     slsnewfs
     slsmount
-    mkdir -p $MNT/dev
-    mkdir -p $MNT/proc
-    mount -t procfs proc $MNT/proc
-    mount -t devfs devfs $MNT/dev
-    mount -t fdescfs fdesc $MNT/dev/fd
     loadsls
 }
 
 aurteardown()
 {
     unloadsls
-    umount fdesc $MNT/dev/fd >/dev/null 2>/dev/null
-    umount $MNT/dev >/dev/null 2>/dev/null
-    umount proc $MNT/proc >/dev/null 2>/dev/null
     slsunmount
     unloadslos
 }

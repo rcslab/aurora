@@ -4,9 +4,9 @@
 
 . aurora
 
-loadmod
+aursetup
 if [ $? -ne 0 ]; then
-    echo "Failed to load the modules"
+    echo "Failed to set up Aurora"
     exit 1
 fi
 
@@ -16,9 +16,9 @@ if [ $? -eq 0 ]; then
     exit 1
 fi
 
-unloadmod
+aurteardown
 if [ $? -ne 0 ]; then
-    echo "Failed to unload the modules"
+    echo "Failed to tear down Aurora"
     exit 1
 fi
 

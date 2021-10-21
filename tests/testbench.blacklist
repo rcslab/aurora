@@ -1,6 +1,2 @@
 229-chroot.sh
 230-chroot-devfs.sh
-238-metropolis-pymetro.sh*
-239-metropolis-pymetro-multiple.sh*
-240-metropolis-pymetro-partitions.sh*
-241-metropolis-pymetro-cachedparts.sh*

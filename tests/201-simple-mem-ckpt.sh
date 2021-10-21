@@ -8,6 +8,8 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+slsunmount 2>&1
+
 dd if=/dev/zero of=/dev/null bs=1m 1>&2 &
 
 slscheckpoint `jobid %1`

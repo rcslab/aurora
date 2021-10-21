@@ -1,34 +1,22 @@
 #!/bin/sh
 
-# Attempt to unload the slos before the sls. Should fail.
+# Attempt to unmount with a running SLS. Should fail.
 
 . aurora
 
-loadslos
+aursetup
 if [ $? -ne 0 ]; then
     echo "Failed to load the SLOS"
     exit 1
 fi
 
-slsmount
-if [ $? -ne 0 ]; then
-    echo "Failed to mount the SLSFS"
+slsunmount 2>&1
+if [ $? -eq  0 ]; then
+    echo "Unmounted with the SLS running"
     exit 1
 fi
 
-unloadslos 2> /dev/null
-if [ $? -eq 0 ]; then
-    echo "Unloaded the SLOS while the SLSFS is mounted"
-    exit 1
-fi
-
-slsunmount
-if [ $? -ne 0 ]; then
-    echo "Failed to unmount the SLSFS"
-    exit 1
-fi
-
-unloadslos
+aurteardown
 if [ $? -ne 0 ]; then
     echo "Failed to unload the SLOS"
     exit 1

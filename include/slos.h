@@ -43,7 +43,7 @@ typedef struct slos_diskptr diskptr_t;
 #define DISKPTR_BLOCK(blkno) DISKPTR(blkno, 1)
 #define DISKPTR_NULL DISKPTR(0, 0)
 
-#define SLOS_MAGIC 0x19AA8455115505AAULL
+#define SLOS_MAGIC ((uint64_t)0x19AA8455115505AAULL)
 
 #define SLOS_MAXVOLLEN 32
 
@@ -108,6 +108,19 @@ _Static_assert(sizeof(struct slos_sb) < DEV_BSIZE, "Block size wrong");
 SDT_PROVIDER_DECLARE(slos);
 
 #define SLOS_LOCK(slos) (lockmgr(&((slos)->slos_lock), LK_EXCLUSIVE, NULL))
+#ifdef INVARIANTS
+#define SLOS_ASSERT_LOCKED(slos) \
+	(lockmgr(&((slos)->slos_lock), KA_XLOCKED, NULL))
+#define SLOS_ASSERT_UNLOCKED(slos) \
+	(lockmgr(&((slos)->slos_lock), KA_UNLOCKED, NULL))
+#else
+#define SLOS_ASSERT_LOCKED(slos) \
+	do {                     \
+	} while (false)
+#define SLOS_ASSERT_UNLOCKED(slos) \
+	do {                       \
+	} while (false)
+#endif /* INVARIANTS */
 #define SLOS_UNLOCK(slos) (lockmgr(&((slos)->slos_lock), LK_RELEASE, NULL))
 
 MALLOC_DECLARE(M_SLOS_SB);
@@ -125,6 +138,17 @@ struct slos_blkalloc {
 	struct slos_node *a_offset;
 	struct slos_node *a_size;
 	struct slos_diskptr chunk;
+};
+
+/*
+ * State machine for the SLOS, used to prevent removing state
+ * from underneath the SLS.
+ */
+enum slos_state {
+	SLOS_UNMOUNTED = 0,
+	SLOS_INFLUX,
+	SLOS_MOUNTED,
+	SLOS_WITHSLS,
 };
 
 struct slos {
@@ -152,8 +176,23 @@ struct slos {
 
 	struct lock slos_lock;	   /* Sleepable lock */
 	struct taskqueue *slos_tq; /* Slos taskqueue */
-	int slos_usecnt;	   /* Number of SLS users of the SLOS */
+	enum slos_state slos_state; /* State of the SLS */
 };
+
+static inline enum slos_state
+slos_getstate(struct slos *slos)
+{
+	SLOS_ASSERT_LOCKED(slos);
+	return (slos->slos_state);
+}
+
+static inline void
+slos_setstate(struct slos *slos, enum slos_state state)
+{
+	SLOS_ASSERT_LOCKED(slos);
+	slos->slos_state = state;
+}
+
 extern struct slos slos;
 
 extern uint64_t checkpoints;

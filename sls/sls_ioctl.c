@@ -888,6 +888,16 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		/* Initialize Aurora-related sysctls. */
 		sls_sysctl_init();
 
+		SLOS_LOCK(&slos);
+		if (slos_getstate(&slos) != SLOS_MOUNTED) {
+			SLOS_UNLOCK(&slos);
+			printf("No SLOS mount found. Aborting SLS insert.\n");
+			return (EINVAL);
+		}
+
+		slos_setstate(&slos, SLOS_WITHSLS);
+		SLOS_UNLOCK(&slos);
+
 		/* Enable the hashtables.*/
 		error = slskv_init();
 		if (error != 0)
@@ -972,6 +982,17 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		slstable_fini();
 		slsm_fini();
 		slskv_fini();
+
+		SLOS_LOCK(&slos);
+		/*
+		 * The state might be not be SLOS_WITHSLS if we failed to
+		 * load and are running this as cleanup.
+		 */
+		if (slos_getstate(&slos) == SLOS_WITHSLS) {
+			slos_setstate(&slos, SLOS_MOUNTED);
+			printf("Fixing the state back up\n");
+		}
+		SLOS_UNLOCK(&slos);
 
 		sls_sysctl_fini();
 

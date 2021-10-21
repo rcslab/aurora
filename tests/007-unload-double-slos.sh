@@ -4,15 +4,9 @@
 
 . aurora
 
-loadmod
+loadslos
 if [ $? -ne 0 ]; then
-    echo "Failed to load the modules"
-    exit 1
-fi
-
-unloadsls
-if [ $? -ne 0 ]; then
-    echo "Failed to unload the SLS"
+    echo "Failed to load the SLOS"
     exit 1
 fi
 
