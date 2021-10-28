@@ -153,15 +153,21 @@ slsp_find(uint64_t oid)
 {
 	struct slspart *slsp;
 
-	/* XXX LOCKING - See slsp_deref */
+	/* Use the SLS module lock to serialize accesses to the partition table.
+	 */
+	SLS_LOCK();
+
 	/* Get the partition if it exists. */
-	if (slskv_find(slsm.slsm_parts, oid, (uintptr_t *)&slsp) != 0)
+	if (slskv_find(slsm.slsm_parts, oid, (uintptr_t *)&slsp) != 0) {
+		SLS_UNLOCK();
 		return (NULL);
+	}
 
 	/* We found the process, take a reference to it. */
 	slsp_ref(slsp);
+	SLS_UNLOCK();
 
-	return slsp;
+	return (slsp);
 }
 
 bool
@@ -313,13 +319,6 @@ slsp_fini(struct slspart *slsp)
 	/* Destroy the proc bookkeeping structure. */
 	slsset_destroy(slsp->slsp_procs);
 
-	/* Remove any references to VM objects we may have. */
-	if (slsp->slsp_objects != NULL) {
-		printf("Collapsing the table\n");
-		slsvm_objtable_collapse(slsp->slsp_objects, NULL);
-		slskv_destroy(slsp->slsp_objects);
-	}
-
 	if (slsp->slsp_sckpt != NULL)
 		uma_zfree(slsckpt_zone, slsp->slsp_sckpt);
 
@@ -339,8 +338,7 @@ slsp_add(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
 	 */
 	slsp = slsp_find(oid);
 	if (slsp != NULL) {
-		/* We got a reference to the process with slsp_find, release it.
-		 */
+		/* We got a ref to the process with slsp_find, release it. */
 
 		slsp_deref(slsp);
 		return (EINVAL);
@@ -410,18 +408,26 @@ slsp_ref(struct slspart *slsp)
 }
 
 void
-slsp_deref(struct slspart *slsp)
+slsp_deref_locked(struct slspart *slsp)
 {
-	/*
-	 * XXX LOCKING - There currently is a race condition,
-	 * because we an slsp with refcount 0 is still accessible
-	 * via the hashtable. We need a lock to mediate between
-	 * slsp_deref() and slsp_find().
-	 */
+	SLS_ASSERT_LOCKED();
 	atomic_add_int(&slsp->slsp_refcount, -1);
 
 	if (slsp->slsp_refcount == 0)
 		slsp_del(slsp->slsp_oid);
+}
+
+void
+slsp_deref(struct slspart *slsp)
+{
+	/*
+	 * Lock the module, because dropping the refcount to 0 and
+	 * removing the partition from the table should be done
+	 * atomically.
+	 */
+	SLS_LOCK();
+	slsp_deref_locked(slsp);
+	SLS_UNLOCK();
 }
 
 int

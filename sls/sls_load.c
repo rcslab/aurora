@@ -143,7 +143,7 @@ slsload_pipe(struct slspipe *slspipe, char **bufp, size_t *bufsizep)
 	error = sls_info(slspipe->data, slspipe->pipebuf.cnt, bufp, bufsizep);
 	if (error != 0) {
 		free(slspipe->data, M_SLSMM);
-		return error;
+		return (error);
 	}
 
 	return (0);

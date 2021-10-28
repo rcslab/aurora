@@ -371,6 +371,7 @@ static int
 slskq_restore_knotes(int fd, slsset *slskns)
 {
 	struct thread *td = curthread;
+	struct slskv_iter iter;
 	struct slsknote *slskn;
 	struct kevent *kev;
 	struct kqueue *kq;
@@ -404,7 +405,7 @@ slskq_restore_knotes(int fd, slsset *slskns)
 
 	KQ_LOCK(kq);
 	/* Traverse the kqueue, fixing up each knote as we go. */
-	KVSET_FOREACH_POP(slskns, slskn)
+	KVSET_FOREACH(slskns, iter, slskn)
 	{
 		/* First try to find the knote in the fd-related array. */
 		kev = &slskn->kn_kevent;

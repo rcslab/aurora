@@ -142,6 +142,18 @@ compare_vnode_t(const void *k1, const void *k2)
 	return (0);
 }
 
+/*
+ * Have the in-memory root inode point to its new position in the btree.
+ * This callback does not update the on-disk metadata for the root inode
+ * to avoid recursion. Doing so would prevent us from marking the whole
+ * FS as clean, e.g., during unmount.
+ *
+ * The problem: We call this function when we create a COW snapshot, which
+ * is our only way to actually flush data. The whole file system, _including_
+ * the root inode, must be clean after COW . If we call slos_update here like
+ * for regular inodes, we are dirtying the root inode immediately after marking
+ * it as COW.
+ */
 void
 slsfs_root_rc(void *ctx, bnode_ptr p)
 {

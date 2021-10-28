@@ -152,25 +152,23 @@ sls_prockillall(void)
 {
 	struct proc *p, *tmp;
 
-	/* Wait for all the children to be done. */
+	/*
+	 * The children take the SLS lock on exit while holding the process
+	 * lock. This means that we cannot hold the SLS lock when we get the
+	 * process lock, otherwise we can cause a deadlock. We are traversing
+	 * the list using a safe macro, so we are allowed to drop the lock.
+	 */
 	LIST_FOREACH_SAFE (p, &slsm.slsm_plist, p_aurlist, tmp) {
-		/* Kill the process and wait for it. */
 		PROC_LOCK(p);
 		kern_psignal(p, SIGKILL);
 		PROC_UNLOCK(p);
 
 		while (sls_proc_insls(p))
 			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
-
-		/*
-		 * There is no need to remove the processes from the list, they
-		 * remove themselves when exiting.
-		 */
 	}
 
-	/* Wait for all the processes to die. */
-	while (!LIST_EMPTY(&slsm.slsm_plist))
-		cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
+	/* Ensure all processes are dead. */
+	KASSERT(LIST_EMPTY(&slsm.slsm_plist), ("processes still in Aurora"));
 
 	return (0);
 }
@@ -193,12 +191,6 @@ sls_metropolis(struct sls_metropolis_args *args)
 	struct proc *p = curthread->td_proc;
 	struct slspart *slsp;
 
-	SLS_LOCK();
-	if (SLS_EXITING()) {
-		SLS_UNLOCK();
-		return (ENODEV);
-	}
-
 	/* Check if the partition actually exists. */
 	slsp = slsp_find(args->oid);
 	if (slsp == NULL) {
@@ -206,7 +198,8 @@ sls_metropolis(struct sls_metropolis_args *args)
 		return (EINVAL);
 	}
 
-	slsp_deref(slsp);
+	SLS_LOCK();
+	slsp_deref_locked(slsp);
 
 	/* Add the process in Aurora. */
 	PROC_LOCK(p);
@@ -360,13 +353,6 @@ sls_restore(struct sls_restore_args *args)
 	/* Get the partition to be checkpointed. */
 	slsp = slsp_find(args->oid);
 	if (slsp == NULL) {
-		error = EINVAL;
-		goto error;
-	}
-
-	/* Make sure an in-memory checkpoint already has data. */
-	if ((slsp->slsp_attr.attr_target == SLS_MEM) &&
-	    (slsp->slsp_sckpt == NULL)) {
 		error = EINVAL;
 		goto error;
 	}
@@ -786,13 +772,24 @@ sls_partadd_default(void)
 	}
 }
 
-static int
-slsm_init(void)
+static void
+slsm_init_locking(void)
 {
-	int error;
-
 	mtx_init(&slsm.slsm_mtx, "slsm", NULL, MTX_DEF);
 	cv_init(&slsm.slsm_exitcv, "slsm");
+}
+
+static void
+slsm_fini_locking(void)
+{
+	cv_destroy(&slsm.slsm_exitcv);
+	mtx_destroy(&slsm.slsm_mtx);
+}
+
+static int
+slsm_init_contents(void)
+{
+	int error;
 
 	error = slskv_create(&slsm.slsm_procs);
 	if (error != 0)
@@ -814,7 +811,7 @@ slsm_init(void)
 }
 
 static void
-slsm_fini(void)
+slsm_fini_contents(void)
 {
 	uint64_t objid;
 	bitstr_t *bitmap;
@@ -843,9 +840,6 @@ slsm_fini(void)
 		slskv_destroy(slsm.slsm_procs);
 		slsm.slsm_procs = NULL;
 	}
-
-	cv_destroy(&slsm.slsm_exitcv);
-	mtx_destroy(&slsm.slsm_mtx);
 }
 
 static void
@@ -884,6 +878,9 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 	switch (inEvent) {
 	case MOD_LOAD:
 		bzero(&slsm, sizeof(slsm));
+		/* We need the locks if we error out before we initialize the
+		 * slsm. */
+		slsm_init_locking();
 
 		/* Initialize Aurora-related sysctls. */
 		sls_sysctl_init();
@@ -904,7 +901,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 			return (error);
 
 		/* Initialize global module state. Depends on the KV zone. */
-		error = slsm_init();
+		error = slsm_init_contents();
 		if (error != 0)
 			return (error);
 
@@ -945,21 +942,19 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		/* Signal that we're exiting and wait for threads to finish. */
 		sls_flush_operations();
 
-		printf("Killing all processes in Aurora...\n");
+		DEBUG("Killing all processes in Aurora...");
 		/* Kill all processes in Aurora, sleep till they exit. */
+
 		error = sls_prockillall();
 		if (error != 0)
 			return (EBUSY);
 
-		printf("Turning off the swapper...\n");
-		/*
-		 * Swap off the Aurora swapper. XXX Make sure that all Aurora
-		 * processes are dead.
-		 */
+		DEBUG("Turning off the swapper...");
+
+		/* Swap off the Aurora swapper. */
 		sls_pager_swapoff();
 		KASSERT(slsm.slsm_swapobjs == 0, ("sls_pager_swapoff failed"));
 		sls_pager_unregister();
-
 		SLS_UNLOCK();
 
 		/* Destroy all in-memory partition data. */
@@ -974,13 +969,13 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		if (slsm.slsm_cdev != NULL)
 			destroy_dev(slsm.slsm_cdev);
 
-		printf("Cleaning up image and module state...\n");
+		DEBUG("Cleaning up image and module state...");
 
 		slsrest_zonefini();
 		slsckpt_zonefini();
 
 		slstable_fini();
-		slsm_fini();
+		slsm_fini_contents();
 		slskv_fini();
 
 		SLOS_LOCK(&slos);
@@ -988,15 +983,14 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		 * The state might be not be SLOS_WITHSLS if we failed to
 		 * load and are running this as cleanup.
 		 */
-		if (slos_getstate(&slos) == SLOS_WITHSLS) {
+		if (slos_getstate(&slos) == SLOS_WITHSLS)
 			slos_setstate(&slos, SLOS_MOUNTED);
-			printf("Fixing the state back up\n");
-		}
 		SLOS_UNLOCK(&slos);
 
 		sls_sysctl_fini();
+		slsm_fini_locking();
 
-		printf("Done.\n");
+		DEBUG("Done.");
 
 		break;
 	default:

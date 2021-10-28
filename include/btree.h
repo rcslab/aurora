@@ -225,4 +225,6 @@ int slsfs_fbtree_test(void);
 /* Internal system btree initialization */
 int fbtree_sysinit(struct slos *slos, size_t offset, diskptr_t *ptr);
 
+#define BTREE_MAX_COW_ATTEMPTS (100)
+
 #endif /* _BTREE_H_ */

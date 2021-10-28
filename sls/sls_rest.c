@@ -130,6 +130,7 @@ slsrest_zone_dtor(void *mem, int size, void *args __unused)
 		KVSET_FOREACH_POP(kevset, slskev)
 		free(slskev, M_SLSMM);
 
+		free(kevset->data, M_SLSMM);
 		slsset_destroy(kevset);
 	}
 	KV_FOREACH_POP(restdata->mbuftable, slsid, headm)
@@ -310,14 +311,25 @@ slsrest_dofile(struct slsrest_data *restdata, char *buf, size_t buflen)
 	SDT_PROBE1(sls, , , filerest_return, slsfile.type);
 
 	switch (slsfile.type) {
-	case DTYPE_KQUEUE:
 	case DTYPE_VNODE:
 	case DTYPE_FIFO:
 		/* Nothing to clean up. */
 		break;
 
-	case DTYPE_SHM:
+	case DTYPE_KQUEUE:
+		/*
+		 * The kqueue code creates the knote table, which is used
+		 * while restoring the processes themselves and isn't cleaned
+		 * here.
+		 */
+		break;
+
 	case DTYPE_PIPE:
+		free(((struct slspipe *)data)->data, M_SLSMM);
+		free(data, M_SLSMM);
+		break;
+
+	case DTYPE_SHM:
 	case DTYPE_SOCKET:
 	case DTYPE_PTS:
 		free(data, M_SLSMM);
@@ -1076,6 +1088,15 @@ sls_rest(struct slspart *slsp, uint64_t rest_stopped)
 		KASSERT(slsp->slsp_status == SLSP_DETACHED,
 		    ("Blocking slsp_setstate() on live partition failed"));
 
+		return (error);
+	}
+
+	/* Make sure an in-memory checkpoint already has data. */
+	if ((slsp->slsp_attr.attr_target == SLS_MEM) &&
+	    (slsp->slsp_sckpt == NULL)) {
+		stateerr = slsp_setstate(
+		    slsp, SLSP_RESTORING, SLSP_AVAILABLE, true);
+		KASSERT(stateerr == 0, ("state error %d", stateerr));
 		return (error);
 	}
 

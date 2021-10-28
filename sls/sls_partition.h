@@ -39,7 +39,6 @@ struct slspart {
 	struct sls_attr slsp_attr; /* Checkpointing paramaters */
 	int slsp_refcount; /* Reference count for the partition. */
 
-	struct slskv_table *slsp_objects; /* VM Objects created for the SLS */
 	struct slsckpt_data *slsp_sckpt;  /* In-memory checkpoint */
 	uint64_t slsp_procnum; /* Number of processes in the partition */
 
@@ -76,6 +75,7 @@ void slsp_delall(void);
 
 void slsp_ref(struct slspart *slsp);
 void slsp_deref(struct slspart *slsp);
+void slsp_deref_locked(struct slspart *slsp);
 
 int slsp_isempty(struct slspart *slsp);
 uint64_t slsp_epoch_preadvance(struct slspart *slsp);

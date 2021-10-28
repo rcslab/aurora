@@ -46,6 +46,11 @@ struct buf_ops bufops_slsfs = {
 };
 
 void
+
+/*
+ * Have the in memory inode update its offset in the inode btree. This
+ * operation also brings the on-disk metadata into memorya and updates it.
+ */
 slos_generic_rc(void *ctx, bnode_ptr p)
 {
 	struct slos_node *svp = (struct slos_node *)ctx;

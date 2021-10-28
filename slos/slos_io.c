@@ -113,15 +113,26 @@ slos_sbat(struct slos *slos, int index, struct slos_sb *sb)
 	struct buf *bp;
 	int error;
 
-	error = bread(slos->slos_vp, index, slos->slos_sb->sb_bsize,
+	error = bread(slos->slos_vp, index, slos->slos_bsize,
 	    curthread->td_proc->p_ucred, &bp);
 	if (error != 0) {
 		printf("bread failed with %d", error);
-		return error;
+		return (error);
 	}
 
 	memcpy(sb, bp->b_data, sizeof(struct slos_sb));
 	brelse(bp);
+
+	/* Check whether the read superblock has sane values. */
+
+	/* Check each superblock whether it is valid. */
+	if (sb->sb_magic != SLOS_MAGIC) {
+		return (EINVAL);
+	}
+
+	/* Sanity check the block size. */
+	if (sb->sb_bsize != slos->slos_bsize)
+		return (EINVAL);
 
 	return (0);
 }
@@ -160,31 +171,23 @@ slos_sbread(struct slos *slos)
 
 	sb = malloc(st.st_blksize, M_SLOS_SB, M_WAITOK | M_ZERO);
 	slos->slos_sb = sb;
-	sb->sb_bsize = st.st_blksize;
+	/* We assume that all superblocks have the same block size. */
+	slos->slos_bsize = st.st_blksize;
 
 	/* Find the largest epoch superblock in the NUMSBS array.
 	 * This is starts at 0  offset of every device
 	 */
 	for (int i = 0; i < NUMSBS; i++) {
+		/* If we didn't find any, go check the next one. */
 		error = slos_sbat(slos, i, sb);
 		if (error != 0) {
-			free(sb, M_SLOS_SB);
-			return (error);
-		}
-
-		/* Check each superblock whether  it is valid. */
-		if (sb->sb_magic != SLOS_MAGIC) {
-			printf("ERROR: Superblock %d is corrupted\n", i);
-			printf("ERROR: Magic %lx, should be %lx", sb->sb_magic,
-			    SLOS_MAGIC);
-			/* Just skip this superblock, look for the next valid
-			 * one. */
+			DEBUG1("ERROR: Superblock %d missing or corrupted", i);
 			continue;
 		}
 
-		if (sb->sb_epoch == EPOCH_INVAL && i != 0) {
+		/* We found the last superblock. */
+		if (sb->sb_epoch == EPOCH_INVAL && i != 0)
 			break;
-		}
 
 		DEBUG2("Superblock at %lu is epoch %d", i, sb->sb_epoch);
 		if (sb->sb_epoch > largestepoch) {
@@ -202,7 +205,7 @@ slos_sbread(struct slos *slos)
 
 	/* If we hit this case we didn't find a single valid block. */
 	if (sb->sb_magic != SLOS_MAGIC) {
-		printf("ERROR: Magic for SLOS is %lx, should be %lx",
+		printf("ERROR: Magic for SLOS is %lx, should be %lx\n",
 		    sb->sb_magic, SLOS_MAGIC);
 		free(sb, M_SLOS_SB);
 		return (EINVAL);

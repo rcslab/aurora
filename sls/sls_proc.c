@@ -551,9 +551,11 @@ slsproc_restore_pid(
 {
 	struct session *sess = NULL;
 	struct pgrp *pgrp = NULL;
-	struct proc *piter;
+	struct proc *piter, *ptmp;
 	bool inuse;
 	int error;
+
+	KASSERT(p != NULL, ("no process provided"));
 
 	/* Fixing up PIDs gets in the way of Metropolis mode's autoscaling. */
 	if (restdata->slsmetr.slsmetr_proc != 0)
@@ -562,11 +564,8 @@ slsproc_restore_pid(
 	sx_xlock(&allproc_lock);
 	sx_xlock(&proctree_lock);
 
-	piter = LIST_FIRST(&allproc);
-
-	/* Traverse the whole process list, ensure the PID is not present in the
-	 * system. */
-	for (; piter != NULL; piter = LIST_NEXT(piter, p_list)) {
+	/* Ensure the PID is not present in the system. */
+	LIST_FOREACH_SAFE (piter, &allproc, p_list, ptmp) {
 		if (piter == p)
 			continue;
 

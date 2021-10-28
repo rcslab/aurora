@@ -108,11 +108,13 @@ _Static_assert(sizeof(struct slos_sb) < DEV_BSIZE, "Block size wrong");
 SDT_PROVIDER_DECLARE(slos);
 
 #define SLOS_LOCK(slos) (lockmgr(&((slos)->slos_lock), LK_EXCLUSIVE, NULL))
-#ifdef INVARIANTS
+#define SLOS_UNLOCK(slos) (lockmgr(&((slos)->slos_lock), LK_RELEASE, NULL))
+
+#if (defined(INVARIANTS) && defined(INVARIANT_SUPPORT))
 #define SLOS_ASSERT_LOCKED(slos) \
-	(lockmgr(&((slos)->slos_lock), KA_XLOCKED, NULL))
+	(lockmgr_assert(&((slos)->slos_lock), KA_XLOCKED))
 #define SLOS_ASSERT_UNLOCKED(slos) \
-	(lockmgr(&((slos)->slos_lock), KA_UNLOCKED, NULL))
+	(lockmgr_assert(&((slos)->slos_lock), KA_UNLOCKED))
 #else
 #define SLOS_ASSERT_LOCKED(slos) \
 	do {                     \
@@ -120,8 +122,7 @@ SDT_PROVIDER_DECLARE(slos);
 #define SLOS_ASSERT_UNLOCKED(slos) \
 	do {                       \
 	} while (false)
-#endif /* INVARIANTS */
-#define SLOS_UNLOCK(slos) (lockmgr(&((slos)->slos_lock), LK_RELEASE, NULL))
+#endif
 
 MALLOC_DECLARE(M_SLOS_SB);
 
@@ -177,6 +178,7 @@ struct slos {
 	struct lock slos_lock;	   /* Sleepable lock */
 	struct taskqueue *slos_tq; /* Slos taskqueue */
 	enum slos_state slos_state; /* State of the SLS */
+	uint64_t slos_bsize;	    /* Block size */
 };
 
 static inline enum slos_state

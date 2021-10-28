@@ -192,7 +192,15 @@ testaccept_parent(void)
 
 		/* Create as many forks as we need. */
 		for (j = 0; j < SCALING; j++) {
+		retry:
 			error = sls_metropolis_spawn(OID + i, listsock);
+			if (error == EAGAIN) {
+				printf(
+				    "PID of function already in use, retrying...\n");
+				sleep(1);
+				goto retry;
+			}
+
 			if (error != 0) {
 				perror("sls_metropolis_spawn");
 				exit(EX_OSERR);

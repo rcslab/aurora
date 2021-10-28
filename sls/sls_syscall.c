@@ -35,7 +35,12 @@ sls_exit_procremove(struct proc *p)
 
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 
+	/* Temporarily drop the process lock and get it back to prevent
+	 * deadlocks. */
+	PROC_UNLOCK(p);
 	SLS_LOCK();
+	PROC_LOCK(p);
+
 	sls_procremove(p);
 	cv_signal(&slsm.slsm_exitcv);
 	SLS_UNLOCK();
@@ -69,24 +74,24 @@ slssyscall_fork(struct thread *td, void *data)
 	pid_t pid;
 
 	/* Don't race with an exiting module when adding the child to Aurora. */
-	SLS_LOCK();
-	if (SLS_EXITING()) {
-		SLS_UNLOCK();
-		return (EAGAIN);
-	}
+	error = sls_startop(true);
+	if (error != 0)
+		return (error);
 
 	error = sys_fork(td, uap);
 	if (error != 0) {
-		SLS_UNLOCK();
+		sls_finishop();
 		return (error);
 	}
 
 	pid = td->td_retval[0];
 
+	SLS_LOCK();
 	/* Try to find the new process and lock (it might have died already). */
 	p = pfind(pid);
 	if (p == NULL) {
 		SLS_UNLOCK();
+		sls_finishop();
 		return (0);
 	}
 
@@ -94,9 +99,11 @@ slssyscall_fork(struct thread *td, void *data)
 	 * Metropolis one. */
 	sls_procadd(
 	    curproc->p_auroid, p, (curproc->p_sysent != &slssyscall_sysvec));
-	PROC_UNLOCK(p);
 
+	PROC_UNLOCK(p);
 	SLS_UNLOCK();
+
+	sls_finishop();
 
 	return (0);
 }

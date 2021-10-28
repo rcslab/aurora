@@ -141,7 +141,7 @@ slsfs_inodes_init(struct mount *mp, struct slos *slos)
 
 	/* Create the filesystem root. */
 	error = slos_icreate(slos, SLOS_ROOT_INODE, MAKEIMODE(VDIR, S_IRWXU));
-	if (error == EINVAL) {
+	if (error == EEXIST) {
 		DEBUG("Already exists");
 	} else if (error) {
 		return (error);
@@ -204,12 +204,6 @@ slsfs_startupfs(struct mount *mp)
 		error = slos_sbread(&slos);
 		if (error != 0) {
 			DEBUG1("ERROR: slos_sbread failed with %d", error);
-			if (slos.slos_cp != NULL) {
-				g_topology_lock();
-				g_vfs_close(slos.slos_cp);
-				dev_ref(slos.slos_vp->v_rdev);
-				g_topology_unlock();
-			}
 			return (error);
 		}
 	} else {
@@ -276,14 +270,24 @@ slsfs_create_slos(struct mount *mp, struct vnode *devvp)
 	if (error) {
 		printf("Error in opening GEOM vfs");
 		g_topology_unlock();
-		return error;
+		goto error;
 	}
 	slos.slos_pp = g_dev_getprovider(devvp->v_rdev);
 	g_topology_unlock();
 
 	error = slsfs_startupfs(mp);
-	MPASS(error == 0);
+	if (error) {
+		g_topology_lock();
+		g_vfs_close(slos.slos_cp);
+		g_topology_unlock();
+		goto error;
+	}
 
+	return (0);
+
+error:
+	cv_destroy(&slos.slsfs_sync_cv);
+	mtx_destroy(&slos.slsfs_sync_lk);
 	return (error);
 }
 
@@ -308,7 +312,7 @@ slsfs_mount_device(
 	/* Create the in-memory SLOS. */
 	error = slsfs_create_slos(mp, devvp);
 	if (error != 0) {
-		printf("Error creating SLOS - %d", error);
+		DEBUG1("slsfs_create_slos: error %d", error);
 		return (error);
 	}
 
@@ -416,6 +420,7 @@ slsfs_mountfs(struct vnode *devvp, struct mount *mp)
 		DEBUG("Not a snap remount - mount device");
 		error = slsfs_mount_device(devvp, mp, &slsfsdev);
 		if (error) {
+			free(smp, M_SLSFS);
 			return error;
 		}
 
@@ -423,11 +428,11 @@ slsfs_mountfs(struct vnode *devvp, struct mount *mp)
 	} else {
 		smp = (struct slsfsmount *)mp->mnt_data;
 		error = slsfs_startupfs(mp);
+		if (error)
+			return (error);
 	}
 
 	KASSERT(smp->sp_slos != NULL, ("Null slos"));
-	if (error)
-		return error;
 
 	mp->mnt_data = smp;
 
@@ -849,16 +854,12 @@ slsfs_mount(struct mount *mp)
 		VOP_LOCK(slos.slos_vp, LK_EXCLUSIVE);
 
 		error = slsfs_mountfs(slos.slos_vp, mp);
-		if (error != 0) {
-			VOP_UNLOCK(slos.slos_vp, LK_EXCLUSIVE);
-			return (error);
-		}
+		if (error != 0)
+			goto error;
 
 		error = slsfs_init_fs(mp);
-		if (error != 0) {
-			VOP_UNLOCK(slos.slos_vp, LK_EXCLUSIVE);
-			return (error);
-		}
+		if (error != 0)
+			goto error;
 
 	} else {
 		opts = mp->mnt_optnew;
@@ -886,15 +887,17 @@ slsfs_mount(struct mount *mp)
 		/* Get an ID for the new filesystem. */
 		vfs_getnewfsid(mp);
 
-		/* Actually mount the vnode as a filesyste and initialize its
-		 * state. */
+		/* Mount the filesystem and initialize its state. */
 		error = slsfs_mountfs(devvp, mp);
-		if (error)
+		if (error) {
+			vput(devvp);
 			goto error;
+		}
 
 		error = slsfs_init_fs(mp);
 		if (error) {
 			/* XXX: This seems like a broken error path */
+			vput(devvp);
 			goto error;
 		}
 
@@ -1042,7 +1045,6 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	if (slos_getstate(slos) != SLOS_MOUNTED) {
 		KASSERT(slos_getstate(slos) != SLOS_UNMOUNTED,
 		    ("unmounting nonexistent slsfs"));
-		printf("State %d\n", slos_getstate(slos));
 		SLOS_UNLOCK(slos);
 		return (EBUSY);
 	}
@@ -1078,10 +1080,13 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	}
 
 	/*
-	 * Seems like we don't call reclaim on a reference count drop so I
-	 * manually call slos_vpfree to release the memory.
+	 * Manually destroy the root inode. This works as long as everything
+	 * has been flushed above.
 	 */
+	svp = SLSVP(slos->slsfs_inodes);
 	slos->slsfs_inodes = NULL;
+	slos_vpfree(slos, svp);
+
 	// Free the checksum tree
 	svp = slos->slos_cktree;
 	slos->slos_cktree = NULL;
