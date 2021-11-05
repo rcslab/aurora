@@ -864,9 +864,12 @@ sls_hook_detach(void)
 static void
 sls_flush_operations(void)
 {
-	slsm.slsm_exiting = 1;
+	SLS_ASSERT_LOCKED();
+
+	/* Wait for all operations to be done. */
 	while (slsm.slsm_inprog > 0)
 		cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
+	slsm.slsm_exiting = 1;
 }
 
 static int
@@ -942,9 +945,8 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		/* Signal that we're exiting and wait for threads to finish. */
 		sls_flush_operations();
 
-		DEBUG("Killing all processes in Aurora...");
 		/* Kill all processes in Aurora, sleep till they exit. */
-
+		DEBUG("Killing all processes in Aurora...");
 		error = sls_prockillall();
 		if (error != 0)
 			return (EBUSY);

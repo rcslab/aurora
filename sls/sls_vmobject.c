@@ -201,6 +201,13 @@ slsvmobj_restore(struct slsvmobject *info, struct slsrest_data *restdata)
 	case OBJT_DEFAULT:
 		/* FALLTHROUGH */
 	case OBJT_SWAP:
+
+#ifdef INVARIANTS
+		error = slskv_find(
+		    restdata->objtable, info->slsid, (uintptr_t *)&object);
+		KASSERT(error == 0, ("object %lx not found", info->slsid));
+#endif /* INVARIANTS */
+
 		/*
 		 * OBJT_SWAP is just a default object which has swapped, or is
 		 * SYSV_SHM. It is already restored and set up.

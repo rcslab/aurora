@@ -321,7 +321,7 @@ sls_pager_putpages(
 	int error, i;
 	bool sync;
 
-	if (sls_pager_obj_init(obj)) {
+	if (sls_pager_obj_init(obj) != 0) {
 		for (i = 0; i < count; i++)
 			rtvals[i] = VM_PAGER_FAIL;
 		return;
@@ -530,7 +530,7 @@ sls_pager_alloc(void *handle, vm_offset_t size, vm_prot_t prot,
 	obj->objid = (uint64_t)handle;
 
 	VM_OBJECT_WLOCK(obj);
-	if (sls_pager_obj_init(obj))
+	if (sls_pager_obj_init(obj) != 0)
 		goto error;
 	VM_OBJECT_WUNLOCK(obj);
 
@@ -542,6 +542,13 @@ sls_pager_alloc(void *handle, vm_offset_t size, vm_prot_t prot,
 	return (obj);
 
 error:
+	/*
+	 * This error path is triggered when the SLS starts exiting. However,
+	 * the error handling throughout the kernel assumes that the failure is
+	 * due to running out of memory. This shouldn't matter too much since if
+	 * a process is using the SLS pager is in Aurora, so it's dying real
+	 * soon.
+	 */
 	obj->objid = oldid;
 	VM_OBJECT_WUNLOCK(obj);
 	if (cred != NULL) {

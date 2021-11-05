@@ -188,10 +188,6 @@ sls_startop(bool allow_concurrent)
 		return (EBUSY);
 	}
 
-	/* Check if we're exiting. */
-	if (slsm.slsm_exiting)
-		return (EBUSY);
-
 	slsm.slsm_inprog += 1;
 	SLS_UNLOCK();
 	return (0);

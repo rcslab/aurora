@@ -395,6 +395,7 @@ sls_readdata_slos_vmobj(struct slskv_table *table, uint64_t slsid,
     struct sls_record *rec, vm_object_t *objp)
 {
 	struct slsvmobject *info;
+	vm_object_t obj;
 	uint64_t type;
 	size_t size;
 	int error;
@@ -420,8 +421,16 @@ sls_readdata_slos_vmobj(struct slskv_table *table, uint64_t slsid,
 	}
 
 	/* Allocate a new object. */
-	*objp = vm_pager_allocate(OBJT_SWAP, (void *)slsid, IDX_TO_OFF(size),
+	obj = vm_pager_allocate(OBJT_SWAP, (void *)slsid, IDX_TO_OFF(size),
 	    VM_PROT_DEFAULT, 0, NULL);
+
+	/* If we don't get an object we are unloading the SLS. */
+	if (obj == NULL) {
+		slskv_del(table, slsid);
+		return (EBUSY);
+	}
+
+	*objp = obj;
 
 	return (0);
 }
@@ -587,29 +596,29 @@ sls_readdata(struct slspart *slsp, struct vnode *vp, uint64_t slsid,
 	vm_object_t obj = NULL;
 	struct sbuf *sb;
 	bitstr_t *bitmap;
-	size_t len;
 	int error;
-
-	len = sizeof(struct slsvmobject);
 
 	/*
 	 * Read the object from the SLOS. Seeks for SLOS nodes are block-sized,
 	 * so just read the whole first block of the node.
 	 */
-	error = sls_readrec_buf(vp, len, &sb);
+	error = sls_readrec_buf(vp, sizeof(struct slsvmobject), &sb);
 	if (error != 0)
 		return (error);
 
 	rec = sls_getrecord(sb, slsid, type);
+	KASSERT(rec != NULL, ("No record allocated"));
 
 	/* Store the record for later and possibly make a new object.  */
 	VOP_UNLOCK(vp, 0);
 	error = sls_readdata_slos_vmobj(rectable, slsid, rec, &obj);
 	VOP_LOCK(vp, LK_EXCLUSIVE);
-	if (error != 0)
+	if (error != 0) {
+		free(rec, M_SLSREC);
 		return (error);
+	}
 
-	/* If there is no object to restore right now, we're done. */
+	/* The object is NULL for non-anonymous objects. */
 	if (obj == NULL)
 		return (0);
 
@@ -648,6 +657,9 @@ out:
 error:
 	VM_OBJECT_WUNLOCK(obj);
 	vm_object_deallocate(obj);
+
+	free(rec, M_SLSREC);
+
 	return (error);
 }
 
