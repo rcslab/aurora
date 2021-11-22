@@ -2,7 +2,7 @@
 
 . aurora
 aursetup
-installminroot
+installroot
 
 # Like test 206 (file), but using the SLOS as a root filesystem.
 cp "./mmap/mmap" "$MNT/mmap"

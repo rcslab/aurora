@@ -4,8 +4,7 @@ NEWFS=$SRCROOT/tools/newfs_sls/newfs_sls
 MNT="/testmnt"
 
 SLSCTL=$SRCROOT/tools/slsctl/slsctl
-SLSROOT="$SRCROOT/root.tar.gz"
-SLSMINROOT="$SRCROOT/minroot.tar.gz"
+SLSROOT="$SRCROOT/root.tar"
 
 STRIPESIZE="$(( 64 * 1024 ))"
 STRIPENAME="st0"
@@ -67,6 +66,7 @@ slsnewfs()
 
 slsmount()
 {
+    mkdir -p $MNT
     mount -t slsfs $DISKPATH $MNT
     ret=$?
     if [ $ret  -ne 0 ]; then
@@ -189,18 +189,10 @@ createroot()
 	echo "Failed to create root image for testing!"
 	exit 1
     fi
-    $SRCROOT/scripts/rootmin.sh
 }
 
 installroot()
 {
     # Unpack the root into the mount if it exists
     tar -C "$MNT" -xf "$SLSROOT"
-}
-
-
-installminroot()
-{
-    # Unpack the root into the mount if it exists
-    tar -C "$MNT" -xf "$SLSMINROOT"
 }

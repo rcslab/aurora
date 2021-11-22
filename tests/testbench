@@ -156,7 +156,10 @@ export DISK
 export DISKPATH
 
 # Create a directory tree for the root if needed
-createroot
+if [ ! -f "$SLSROOT" ]; then
+    echo "SLSFS tarred root not found, please run image.sh"
+    exit 0
+fi
 
 if [ $# -ge 1 ]; then
     INPUTS=""

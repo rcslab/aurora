@@ -13,8 +13,8 @@ slsmount
 mkdir -p $MNT/dev
 mount -t devfs devfs $MNT/dev
 
-# Create the minroot
-installminroot
+# Create the root
+installroot
 
 # Copy over the workload and run it
 cp $SRCROOT/tests/fd/fd "/$MNT/fd"
