@@ -116,12 +116,16 @@ struct fbtree {
 #define BT_INTERNAL ((uint8_t)1)
 #define BT_BUCKET ((uint8_t)2)
 
+/* AURODNOD ASCII to hex */
+#define DN_MAGIC ((uint64_t)0x4155524F444E4F44)
+
 /*
  * On Disk Btree Node
  */
 struct dnode {
 	uint32_t dn_numkeys; /* Number of keys */
 	uint8_t dn_flags;    /* External/Internal/Bucket*/
+	uint64_t dn_magic;   /* Magic value for on disk btree nodes */
 	char dn_data[];	     /* Data which will hold the keys and children */
 };
 

@@ -14,8 +14,8 @@ template <typename K, typename V> class BtreeIter {
 	    , at(n->at) {};
 	BtreeIter<K, V>()
 	    : at(-1)
-	    , node(nullptr) {};
-	BtreeIter<K, V>(std::shared_ptr<BtreeNode<K, V>> node, int at)
+	    , node() {};
+	BtreeIter<K, V>(BtreeNode<K, V> &node, int at)
 	    : node(node)
 	    , at(at) {};
 
@@ -24,7 +24,7 @@ template <typename K, typename V> class BtreeIter {
 
 	BtreeIter<K, V> next();
 	int valid();
-	std::shared_ptr<BtreeNode<K, V>> node;
+	BtreeNode<K, V> node;
 	int at;
 };
 
@@ -35,6 +35,9 @@ template <typename K, typename V> class BtreeNode {
 	    , snap(sb)
 	    , blknum(blknum) {};
 	BtreeNode<K, V>(BtreeNode<K, V> *node);
+	BtreeNode<K, V>(BtreeNode<K, V> &node);
+	BtreeNode<K, V>(BtreeNode<K, V> const &node);
+	BtreeNode<K, V>() = default;
 	~BtreeNode<K, V>();
 
 	int init();
@@ -51,8 +54,7 @@ template <typename K, typename V> class BtreeNode {
 	struct fbtree tree;
 	struct fnode node;
 	int error = 0;
-	char *data = nullptr;
-	K parentkey = -1;
+	char data[4096];
 	Snapshot *snap;
 	long blknum;
 };

@@ -150,6 +150,7 @@ enum slos_state {
 	SLOS_INFLUX,
 	SLOS_MOUNTED,
 	SLOS_WITHSLS,
+	SLOS_SNAPCHANGE,
 };
 
 struct slos {

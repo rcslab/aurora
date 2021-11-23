@@ -40,7 +40,6 @@ std::vector<std::pair<uint64_t, diskptr_t>>
 InodeFile::availableInodes()
 {
 	std::vector<std::pair<uint64_t, diskptr_t>> arr;
-	auto root = tree.getRoot();
 	auto iter = tree.keymax(0);
 	while (iter.valid()) {
 		arr.push_back(std::make_pair(iter.key(), iter.val()));
@@ -100,6 +99,7 @@ std::string
 SFile::toString()
 {
 	std::stringstream ss;
+	ss << std::setbase(16);
 	ss << "Inode " << ino.ino_pid << std::endl;
 	ss << snap->toString();
 	if (S_ISDIR(ino.ino_mode)) {
@@ -127,9 +127,6 @@ SFile::toString()
 	ss << "Birthday Time: "
 	   << time_to_string(ino.ino_birthtime, ino.ino_birthtime_nsec)
 	   << std::endl;
-	ss << "Record Type: " << rec_to_string(ino.ino_rstat.type) << std::endl;
-	ss << "Record Length: " << ino.ino_rstat.len << std::endl;
-
 	return ss.str();
 }
 

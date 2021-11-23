@@ -83,13 +83,15 @@ static int
 slscommand(int argc, char *argv[])
 {
 	int i;
+	int error;
 
 	assert(argc > 0);
 
 	/* Search for the command. */
 	for (int i = 0; commandtable[i].name != NULL; i++) {
-		if (slsmatch(argv[0], &commandtable[i]))
+		if (slsmatch(argv[0], &commandtable[i])) {
 			return commandtable[i].cmd(argc, (char **)argv);
+		}
 	}
 
 	/* No matches. */

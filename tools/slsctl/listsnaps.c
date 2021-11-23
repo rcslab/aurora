@@ -17,13 +17,14 @@
 void
 listsnaps_usage(void)
 {
-	printf("Usage: slsctl listsnaps -m <mount_dir>");
+	printf("Usage: slsctl listsnaps -m <mount_dir> [-l]");
 }
 
 void
 mountsnap_usage(void)
 {
-	printf("Usage: slsctl mountsnap -m <mount_dir> -i <int>");
+	printf(
+	    "Usage: slsctl mountsnap -m <mount_dir> -i <int>\nIndex of -1 mounts latest, all other snapshots are mounted read-only");
 }
 
 static void
@@ -75,17 +76,27 @@ mountsnap_main(int argc, char *argv[])
 }
 
 int
+modulo(int x, int N)
+{
+	return (x % N + N) % N;
+}
+
+int
 listsnaps_main(int argc, char *argv[])
 {
 	int opt;
 	char mountdir[255];
 	int mountgiven = 0;
+	int show_last_only = false;
 	struct slsfs_getsnapinfo info;
-	while ((opt = getopt(argc, argv, "m:")) != -1) {
+	while ((opt = getopt(argc, argv, "m:l")) != -1) {
 		switch (opt) {
 		case 'm':
 			mountgiven = 1;
 			strcpy(mountdir, optarg);
+			break;
+		case 'l':
+			show_last_only = true;
 			break;
 		default:
 			listsnaps_usage();
@@ -99,13 +110,24 @@ listsnaps_main(int argc, char *argv[])
 	}
 
 	int fd = open(mountdir, O_RDONLY);
-	for (int i = 0; (i < NUMSBS) && (info.snap_sb.sb_epoch != EPOCH_INVAL);
-	     i++) {
+	int i = 0;
+	for (; (i < NUMSBS) && (info.snap_sb.sb_epoch != EPOCH_INVAL); i++) {
 		info.index = i;
 		info.snap_sb.sb_epoch = EPOCH_INVAL;
 		ioctl(fd, SLSFS_GET_SNAP, &info);
-		print_snap(&info);
+		if (!show_last_only)
+			print_snap(&info);
 	}
 
+	if (show_last_only) {
+		/*
+		 * We must use true modulo here in case we decrement to a
+		 * negative number
+		 */
+		info.index = modulo(i - 1, NUMSBS);
+		ioctl(fd, SLSFS_GET_SNAP, &info);
+		print_snap(&info);
+		return info.index;
+	}
 	return (0);
 }

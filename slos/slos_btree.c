@@ -435,23 +435,24 @@ fnode_cow(struct fbtree *tree, struct buf *bp)
 	    ((struct slos_node *)tree->bt_backend->v_data)->sn_slos;
 	struct bufobj *bo = &tree->bt_backend->v_bufobj;
 
-	// Already cowed, we can stop
+	/* Already cowed, we can stop */
 	if (BP_ISCOWED(bp)) {
 		return (0);
 	}
 
-	// Dont need mutex locks as we should be holding the VP lock and tree
-	// lock exclusively
+	/* Dont need mutex locks as we should be holding the VP lock and tree
+	 * lock exclusively
+	 */
 	struct fnode *cur = FNODE_PCTRIE_LOOKUP(&tree->bt_trie, bp->b_lblkno);
 	if (cur == NULL) {
 		panic("Attempting COW on nonexistent btree node");
 	}
 
 	MPASS(cur->fn_buf == bp);
-	// Alocate a new block the btree node
+	/* Alocate a new block the btree node */
 	error = slos_blkalloc(slos, BLKSIZE(slos), &ptr);
 #ifdef SHOWCOW
-	DEBUG3("fnode_cow(%p) %lu->%lu", bp, bp->b_lblkno, ptr.offset);
+	DEBUG3("fnode_cow(%p) %lu->%lu\n", bp, bp->b_lblkno, ptr.offset);
 #endif
 	if (error != 0) {
 		panic("slos_blkalloc failed %d\n", error);
@@ -463,9 +464,10 @@ fnode_cow(struct fbtree *tree, struct buf *bp)
 	if (error != 0) {
 		panic("Unhandled BUF_LOCK failure %d\n", error);
 	}
+
 	BP_SETCOWED(cur->fn_buf);
 
-	// Get the parent
+	/* Get the parent */
 	error = fnode_parent(cur, &parent);
 	if (error != 0) {
 		panic("fnode_cow: fnode_parent failed %d\n", error);
@@ -473,15 +475,16 @@ fnode_cow(struct fbtree *tree, struct buf *bp)
 
 	FNODE_PCTRIE_REMOVE(&tree->bt_trie, bp->b_lblkno);
 
-	// Release the buf from the current vnode, this allows us to remove the
-	// logical mapping in the bufobject
+	/* Release the buf from the current vnode, this allows us to remove the
+	 * logical mapping in the bufobject
+	 */
 	brelvp(cur->fn_buf);
 
 	BO_LOCK(bo);
 
 	/* Change the location of the block and place the buffer back on the
-	 *vnode backend. This allows us to essentially copy on write without
-	 *actually doing any copying.
+	 * vnode backend. This allows us to essentially copy on write without
+	 * actually doing any copying.
 	 */
 	old = cur->fn_location;
 	cur->fn_buf->b_lblkno = ptr.offset;
@@ -494,12 +497,13 @@ fnode_cow(struct fbtree *tree, struct buf *bp)
 	}
 
 	BO_UNLOCK(bo);
-	// Final reassignment of buffer to proper blkno
+	/* Final reassignment of buffer to proper blkno */
 	reassignbuf(cur->fn_buf);
 
 	if (parent) {
 		int i;
-		// Find exactly where you exist in your parents children values
+		/* Find exactly where you exist in your parents children values
+		 * */
 		for (i = 0; i < NODE_SIZE(parent) + 1; i++) {
 			bnode_ptr p = *(bnode_ptr *)fnode_getval(parent, i);
 			if (old == p) {
@@ -512,16 +516,18 @@ fnode_cow(struct fbtree *tree, struct buf *bp)
 			fnode_print(cur);
 			panic("Problem with children in cow %lu %d", old, i);
 		}
-		// Replace the on disk ptr version of the current node
+		/* Replace the on disk ptr version of the current node */
 		fnode_setval(parent, i, &cur->fn_location);
-		// Now do the same for the parent
+		/* Now do the same for the parent */
 		fnode_cow(tree, parent->fn_buf);
 	} else {
 		tree->bt_root = cur->fn_location;
 	}
 
 	cur->fn_buf->b_flags |= B_MANAGED;
-	bdwrite(cur->fn_buf);
+	/*  Before we flush we should set magic value */
+	cur->fn_dnode->dn_magic = DN_MAGIC;
+	bwrite(cur->fn_buf);
 
 	return 0;
 }
@@ -2110,8 +2116,10 @@ fbtree_insert(struct fbtree *tree, void *key, void *value)
 
 #ifdef INVARIANTS
 	struct fnode_iter iter, next;
+	char buf[tree->bt_valsize];
 	int k = 0;
 	int compare;
+
 	fbtree_keymin_iter(tree, &k, &iter);
 	next = iter;
 	ITER_NEXT(next);
@@ -2128,6 +2136,9 @@ fbtree_insert(struct fbtree *tree, void *key, void *value)
 		iter = next;
 		ITER_NEXT(next);
 	}
+
+	error = fbtree_get(tree, key, buf);
+	KASSERT(error == 0, ("Could not retrieve back the key"));
 #endif
 
 	return (error);

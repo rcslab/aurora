@@ -41,20 +41,7 @@ SDT_PROBE_DEFINE3(slos, , , slsfs_vnodeblk, "uint64_t", "uint64_t", "int");
 static int
 slsfs_inactive(struct vop_inactive_args *args)
 {
-	int error = 0;
-	struct vnode *vp = args->a_vp;
-	struct slos_node *svp = SLSVP(vp);
-
-	if (svp->sn_status == IN_DEAD) {
-		/* XXX Do not destroy the file,  we need it for the SLS. */
-		/*
-		error = slos_truncate(vp, 0);
-		slsfs_destroy_node(svp);
-		*/
-		vrecycle(vp);
-	}
-
-	return (error);
+	return (0);
 }
 
 static int
@@ -127,7 +114,8 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 	vnode_destroy_vobject(vp);
 	if (vp->v_type != VCHR) {
 		cache_purge(vp);
-		vfs_hash_remove(vp);
+		if (vp != slos.slsfs_inodes)
+			vfs_hash_remove(vp);
 		slos_vpfree(svp->sn_slos, svp);
 	}
 
@@ -1737,7 +1725,11 @@ slsfs_mountsnapshot(int index)
 	struct mount *mp = slos.slsfs_mount;
 	struct slsfsmount *smp = mp->mnt_data;
 
+	SLOS_LOCK(&slos);
+	slos_setstate(&slos, SLOS_SNAPCHANGE);
 	smp->sp_index = index;
+	SLOS_UNLOCK(&slos);
+
 	return VFS_MOUNT(mp);
 }
 

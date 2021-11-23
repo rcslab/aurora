@@ -813,6 +813,20 @@ slsfs_wakeup_syncer(int is_exiting)
 	return (0);
 }
 
+static int
+slsfs_free_system_vnode(struct vnode *vp)
+{
+	struct slos_node *svp;
+	svp = SLSVP(vp);
+	vrele(vp);
+
+	VOP_LOCK(vp, LK_EXCLUSIVE);
+	VOP_RECLAIM(vp, curthread);
+	VOP_UNLOCK(vp, 0);
+
+	return 0;
+}
+
 /*
  * Mount the filesystem.
  */
@@ -835,21 +849,35 @@ slsfs_mount(struct mount *mp)
 
 	SLOS_LOCK(&slos);
 	/* Cannot mount twice. */
-	if (slos_getstate(&slos) != SLOS_UNMOUNTED) {
+	if ((slos_getstate(&slos) != SLOS_UNMOUNTED) &&
+	    (slos_getstate(&slos) != SLOS_SNAPCHANGE)) {
 		SLOS_UNLOCK(&slos);
 		return (EBUSY);
 	}
 
 	oldstate = slos_getstate(&slos);
+	if (oldstate == SLOS_SNAPCHANGE) {
+		KASSERT(mp->mnt_data != NULL,
+		    ("Requires mount data for snapshot remount"));
+		struct slsfsmount *smp = mp->mnt_data;
+		// Argument of index -1 means we want the latest snapshot and
+		// we can write at that point
+		if (smp->sp_index != -1) {
+			mp->mnt_flag |= MNT_RDONLY;
+		} else {
+			mp->mnt_flag &= ~(MNT_RDONLY);
+		}
+	}
+
 	slos_setstate(&slos, SLOS_INFLUX);
 	SLOS_UNLOCK(&slos);
 
 	if (mp->mnt_data != NULL) {
 		slsfs_wakeup_syncer(1);
 		vflush(mp, 0, FORCECLOSE, curthread);
-		VOP_LOCK(slos.slsfs_inodes, LK_EXCLUSIVE);
-		VOP_RECLAIM(slos.slsfs_inodes, curthread);
-		VOP_UNLOCK(slos.slsfs_inodes, 0);
+
+		slsfs_free_system_vnode(slos.slsfs_inodes);
+		slos.slsfs_inodes = NULL;
 
 		VOP_LOCK(slos.slos_vp, LK_EXCLUSIVE);
 
@@ -1031,7 +1059,6 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	struct slsfs_device *sdev;
 	struct slsfsmount *smp;
 	struct slos *slos;
-	struct slos_node *svp;
 	int error;
 	int flags = 0;
 
@@ -1042,7 +1069,8 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	KASSERT(slos->slsfs_mount != NULL, ("no mount"));
 
 	SLOS_LOCK(slos);
-	if (slos_getstate(slos) != SLOS_MOUNTED) {
+	if (slos_getstate(slos) != SLOS_MOUNTED &&
+	    ((mntflags & MNT_FORCE) == 0)) {
 		KASSERT(slos_getstate(slos) != SLOS_UNMOUNTED,
 		    ("unmounting nonexistent slsfs"));
 		SLOS_UNLOCK(slos);
@@ -1083,14 +1111,12 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	 * Manually destroy the root inode. This works as long as everything
 	 * has been flushed above.
 	 */
-	svp = SLSVP(slos->slsfs_inodes);
+	slsfs_free_system_vnode(slos->slsfs_inodes);
 	slos->slsfs_inodes = NULL;
-	slos_vpfree(slos, svp);
 
 	// Free the checksum tree
-	svp = slos->slos_cktree;
+	slos_vpfree(slos, slos->slos_cktree);
 	slos->slos_cktree = NULL;
-	slos_vpfree(slos, svp);
 
 	DEBUG("Flushed all active vnodes");
 	/* Remove the mounted device. */

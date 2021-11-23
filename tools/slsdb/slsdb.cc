@@ -153,25 +153,32 @@ cmd_inode(Snapshot *sb, vector<string> &args)
 		return (-1);
 	}
 
-	if (args.size() != 2) {
+	if (args.size() != 3) {
 		cout << "Bad arguments" << endl;
 		return (-1);
 	}
 
-	ino = strtol(args[1].c_str(), NULL, 10);
+	auto type = args[1];
+	if (type == "l") {
+		ino = strtol(args[2].c_str(), NULL, 16);
 
-	auto inode = sb->getInodeFile();
-	if (!inode) {
-		return (-1);
+		auto inode = sb->getInodeFile();
+		if (!inode) {
+			return (-1);
+		}
+
+		currinode = inode->getFile(ino);
+		if (currinode == nullptr) {
+			cout << "Problem inode" << endl;
+			return (-1);
+		}
+
+		cout << currinode->toString() << endl;
+	} else if (type == "p") {
+		auto blknum = strtol(args[2].c_str(), NULL, 16);
+		auto f = createFile(sb, blknum);
+		std::cout << f->toString() << std::endl;
 	}
-
-	currinode = inode->getFile(ino);
-	if (currinode == nullptr) {
-		cout << "Problem inode" << endl;
-		return (-1);
-	}
-
-	cout << currinode->toString() << endl;
 	return (0);
 }
 
@@ -184,11 +191,12 @@ cmd_li(Snapshot *sb, vector<string> &args)
 	}
 
 	auto inode = sb->getInodeFile();
-
+	cout << std::setbase(16);
 	for (auto k : inode->availableInodes()) {
 		cout << k.first << " -> (" << k.second.offset;
 		cout << ", " << k.second.epoch << ")" << endl;
 	}
+	cout << std::setbase(10);
 
 	return (0);
 }
@@ -250,11 +258,35 @@ cmd_exit(Snapshot *unused, vector<string> &args)
 	exit(0);
 }
 
+int
+cmd_btree_at(Snapshot *sb, vector<string> &args)
+{
+	if (sb == nullptr) {
+		cout << "Current snapshot not selected" << endl;
+		return (-1);
+	}
+
+	auto blknum = strtol(args[1].c_str(), NULL, 16);
+	auto type = args[2];
+	if (type == "inode") {
+		auto b = Btree<size_t, diskptr_t>(sb, blknum);
+		auto node = b.getRoot();
+		node.print();
+	} else {
+		cout << "Bad or no type selected for btree" << endl;
+	}
+
+	return 0;
+}
+
 std::map<string, std::pair<cmd_t, string>> cmds = {
 	{ "ls", std::make_pair(cmd_ls, "List snapshots") },
 	{ "snap", std::make_pair(cmd_snap, "Select a snapshot") },
 	{ "li", std::make_pair(cmd_li, "List inodes") },
-	{ "inode", std::make_pair(cmd_inode, "Select an inode") },
+	{ "bt", std::make_pair(cmd_btree_at, "Get BtreeNode at blknum") },
+	{ "inode",
+	    std::make_pair(cmd_inode,
+		"Select an inode physical (p) or logical (l) (E.g inode p 1e253") },
 	{ "print", std::make_pair(cmd_print, "Print inode") },
 	{ "dump", std::make_pair(cmd_dump, "Dump inode to file") },
 	{ "hexdump", std::make_pair(cmd_hexdump, "Hexdump inode") },

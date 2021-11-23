@@ -342,7 +342,6 @@ slos_iopen(struct slos *slos, uint64_t oid, struct slos_node **svpp)
 	 * end up having to sleep while
 	 * we wait for the buffer, current fix is to allow sleeping on this lock
 	 */
-
 	if (oid == SLOS_INODES_ROOT) {
 		error = slos_svpimport(
 		    slos, slos->slos_sb->sb_root.offset, true, &svp);
