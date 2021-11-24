@@ -136,6 +136,16 @@ install_packages()
     install_one_package $MNTROOT python
 }
 
+copy_dns_certs()
+{
+	MNTROOT=$1
+	CERTS="/etc/ssl/cert.pem"
+	LOCALCERTS="/usr/local/share/certs"
+
+	cp -r $CERTS "$MNTROOT/$CERTS"
+	cp -r $LOCALCERTS "$MNTROOT/$LOCALCERTS"
+}
+
 create_image()
 {
     BSDINSTALL_DISTSITE=`get_distribution_mirror`
@@ -146,13 +156,12 @@ create_image()
     IP=$1
     REPO=$2
 
-    #cleanup_mountpoint $MNTROOT
-
     unpack_base $MNTROOT $BASE
 
     mount_pseudofs $MNTROOT
 
     configure_dns $MNTROOT $IP
+    copy_dns_certs $MNTROOT 
     configure_pkg $MNTROOT $REPO
     install_packages $MNTROOT
 
@@ -163,17 +172,19 @@ create_image()
     pack_base $MNTROOT $SLSROOT
 }
 
-if [ $# -ne 2 ]; then
-    echo "Usage: ./image.sh <IP> <REPO>"
-    exit 0;
-fi
-
-IP="$1"
-REPO="$2"
-
 if [ ! -z $SLSROOT ]; then
     echo "No root specified"
     exit 0;
+fi
+
+if [ -z $IP ]; then
+	echo "No DNS server specified, using 8.8.8.8"
+	IP="8.8.8.8"
+fi
+
+if [ -z $REPO ]; then
+	echo "No Aurora package repo specified, using RCS"
+	REPO="https://rcs.uwaterloo.ca/~ali/FreeBSD:amd64:12.1/"
 fi
 
 create_image $IP $REPO

@@ -83,8 +83,8 @@ struct slos_sb {
 	uint64_t sb_size;  /* fs size in blocks */
 
 	/* Summary Information */
-	uint64_t sb_numblks; /* number of blocks */
 	uint64_t sb_mtime;   /* last mounted */
+	uint64_t sb_used;  /* blocks used */
 
 	diskptr_t sb_root;	  /* Root inode for all inodes */
 	diskptr_t sb_allocoffset; /* Allocator Offset key tree */

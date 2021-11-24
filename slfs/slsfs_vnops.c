@@ -176,6 +176,10 @@ slsfs_access(struct vop_access_args *args)
 	struct vattr vap;
 	int error;
 
+	/* VCHR vnodes are inaccessible vnodes backing btrees. */
+	if (vp->v_type == VCHR)
+		return (EOPNOTSUPP);
+
 	error = VOP_GETATTR(vp, &vap, cred);
 	if (error) {
 		return (error);
@@ -864,7 +868,7 @@ slsfs_cksum(struct buf *bp)
 
 	if (bp->b_data == unmapped_buf ||
 	    (bp->b_vp == slos.slos_cktree->sn_fdev) ||
-	    slos.slos_sb->sb_epoch == (-1)) {
+	    slos.slos_sb->sb_epoch == EPOCH_INVAL) {
 		return 0;
 	}
 
@@ -1176,47 +1180,34 @@ slsfs_setattr(struct vop_setattr_args *args)
 
 		return (EINVAL);
 	}
+
+	/*
+	 * XXX Flag handling is incomplete (some flags might be ignored),
+	 * but preventing their use blocks us from running specific commands
+	 * on the file system.
+	 */
 	if (vap->va_flags != VNOVAL) {
 
-		/*
-		 * Currently just copying the flags seen from UFS and will
-		 * smudge it in as I go.
-		 */
-		if ((vap->va_flags &
-			~(SF_APPEND | SF_ARCHIVED | SF_IMMUTABLE | SF_NOUNLINK |
-			    SF_SNAPSHOT | UF_APPEND | UF_ARCHIVE | UF_HIDDEN |
-			    UF_IMMUTABLE | UF_NODUMP | UF_NOUNLINK |
-			    UF_OFFLINE | UF_OPAQUE | UF_READONLY | UF_REPARSE |
-			    UF_SPARSE | UF_SYSTEM)) != 0) {
+		/* Support the same flags as ext2. */
+		if (vap->va_flags & ~(SF_APPEND | SF_IMMUTABLE))
 			return (EOPNOTSUPP);
-		}
-		if (vp->v_mount->mnt_flag & MNT_RDONLY) {
-			return (EROFS);
-		}
 
-		if ((error = VOP_ACCESS(vp, VADMIN, cred, td))) {
+		if (vp->v_mount->mnt_flag & MNT_RDONLY)
+			return (EROFS);
+
+		if ((error = VOP_ACCESS(vp, VADMIN, cred, td)))
 			return (error);
-		}
 
 		if (!priv_check_cred(cred, PRIV_VFS_SYSFLAGS, 0)) {
 			if (node->sn_ino.ino_flags &
-			    (SF_NOUNLINK | SF_IMMUTABLE | SF_APPEND)) {
+			    (SF_IMMUTABLE | SF_APPEND)) {
 				error = securelevel_gt(cred, 0);
-				if (error) {
+				if (error)
 					return (error);
-				}
-
-				if ((vap->va_flags ^ node->sn_ino.ino_flags) &
-				    SF_SNAPSHOT)
-					return (EPERM);
 			}
 		} else {
-			if (node->sn_ino.ino_flags &
-				(SF_NOUNLINK | SF_IMMUTABLE | SF_APPEND) ||
-			    ((vap->va_flags ^ node->sn_ino.ino_flags) &
-				SF_SETTABLE)) {
+			if (node->sn_ino.ino_flags & (SF_IMMUTABLE | SF_APPEND))
 				return (EPERM);
-			}
 		}
 
 		node->sn_ino.ino_flags = vap->va_flags | IN_CHANGE;

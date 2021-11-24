@@ -65,6 +65,9 @@ slsfs_add_dirent(
 			DEBUG1("Problem creating buffer at %lu\n", blks);
 			return (error);
 		}
+
+		KASSERT(bp != NULL, ("found sparse directory"));
+
 		blks += 1;
 		SLSINO(svp).ino_blocks = blks;
 		// We are pre adding the dirent we will be adding to this

@@ -639,6 +639,7 @@ again:
 		    slos.slos_sb->sb_epoch, slos.slos_sb->sb_index);
 		SLSVP(slos.slsfs_inodes)->sn_status &= ~(SLOS_DIRTY);
 
+		/* Flush the current superblock itself. */
 		bp = getblk(slos.slos_vp, slos.slos_sb->sb_index,
 		    slos.slos_sb->sb_bsize, 0, 0, 0);
 		MPASS(bp);
@@ -982,16 +983,17 @@ slsfs_statfs(struct mount *mp, struct statfs *sbp)
 {
 	struct slsfs_device *slsdev;
 	struct slsfsmount *smp;
+	struct slos_sb *sb = slos.slos_sb;
 
 	smp = TOSMP(mp);
 	slsdev = smp->sp_sdev;
 	sbp->f_bsize = slsdev->devblocksize;
 	sbp->f_iosize = sbp->f_bsize;
-	sbp->f_blocks = 1000;
-	sbp->f_bfree = 100;
-	sbp->f_bavail = 100;
-	sbp->f_ffree = 0;
-	sbp->f_files = 1000;
+	sbp->f_blocks = sb->sb_size;
+	/* XXX We are not accounting for metadata blocks (e.g. trees). */
+	sbp->f_bfree = sbp->f_bavail = sb->sb_size - sb->sb_used;
+	/* We have no limit on the amount of inodes. */
+	sbp->f_files = sbp->f_ffree = UINT_MAX;
 	sbp->f_namemax = SLSFS_NAME_LEN;
 
 	return (0);

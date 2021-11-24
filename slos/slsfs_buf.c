@@ -53,11 +53,12 @@ slsfs_buf_nocollide(struct vnode *vp, struct fnode_iter *biter, uint64_t bno,
 
 	ptr.offset = 0;
 	ptr.size = size;
-	ptr.epoch = 0;
+	ptr.epoch = EPOCH_INVAL;
 	error = BTREE_LOCK(tree, LK_UPGRADE);
 	if (error) {
 		panic("Could not acquire lock upgrade on Btree %d", error);
 	}
+
 	error = fbtree_insert(tree, &bno, &ptr);
 	if (error) {
 		panic("Problem inserting into tree");
@@ -75,6 +76,12 @@ slsfs_buf_nocollide(struct vnode *vp, struct fnode_iter *biter, uint64_t bno,
 	size = omin(size, MAXBCACHEBUF);
 	MPASS(size <= MAXBCACHEBUF);
 	error = slsfs_balloc(vp, bno, size, gbflag, bp);
+	if (error != 0)
+		panic("Balloc failed\n");
+
+	if (*bp == NULL)
+		panic("slsfs_buf_nocollide failed to allocate\n");
+
 	return (error);
 }
 
@@ -83,14 +90,16 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size,
     enum uio_rw rw, int gbflag, struct buf **bp)
 {
 	struct fnode_iter biter;
+	bool covered, isaligned;
+	size_t extoff;
 	diskptr_t ptr;
 	int error;
-	bool covered;
 
+	uint64_t iter_key;
 	struct slos_node *svp = SLSVP(vp);
-	uint64_t originalsize = size;
+
+	uint64_t original_size = size;
 	size_t blksize = IOSIZE(svp);
-	bool isaligned = (offset % blksize) == 0;
 	uint64_t bno = offset / blksize;
 
 #ifdef VERBOSE
@@ -102,62 +111,52 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size,
 		return (error);
 	}
 	size = roundup(size, IOSIZE(svp));
+
+	/* Past the end of the file, create a new dummy buffer. */
 	if (ITER_ISNULL(biter)) {
-		error = slsfs_buf_nocollide(
-		    vp, &biter, bno, size, rw, gbflag, bp);
-		if (error) {
-			panic("Problem with no collide case");
-		}
+		return (
+		    slsfs_buf_nocollide(vp, &biter, bno, size, rw, gbflag, bp));
+	}
+
+	/* If all the buffer is a hole, return a dummy buffer. */
+	iter_key = ITER_KEY_T(biter, uint64_t);
+	if (!INTERSECT(biter, bno, blksize)) {
+		return (
+		    slsfs_buf_nocollide(vp, &biter, bno, size, rw, gbflag, bp));
+	}
+
+	/*
+	 * Otherwise we overlap with an existing buffer.
+	 */
+
+	ptr = ITER_VAL_T(biter, diskptr_t);
+	ITER_RELEASE(biter);
+
+	/* Truncate the size to be down to the extent.*/
+	/* XXX This manipulation may not work with 4K blocks.  */
+	original_size = size;
+	extoff = bno - iter_key;
+	size = omin(size, ptr.size - (extoff * blksize));
+	size = omin(size, MAXBCACHEBUF);
+
+	isaligned = ((offset % blksize) == 0);
+	covered = (original_size <= size);
+
+	/*
+	 * For aligned, covered writes we just grab random space since
+	 * we overwrite it anyway.
+	 */
+	if (isaligned && covered && (rw == UIO_WRITE)) {
+		*bp = getblk(vp, bno, size, 0, 0, gbflag);
+		if (*bp == NULL)
+			panic("LINE %d: null bp for %lu, %lu", __LINE__, bno,
+			    size);
 	} else {
-		uint64_t iter_key = ITER_KEY_T(biter, uint64_t);
-		// There is a key less then us
-		if (iter_key != bno) {
-			// We intersect so need to read off the block on disk
-			if (INTERSECT(biter, bno, blksize)) {
-				// Since we max allow 64kb blocks from the
-				// buffercache  we dont want to make every
-				// block 64kb so we need to find the smallest
-				// 64kb offset from iter_key.  So we pushed
-				// everything to relative 0 s
-				uint64_t changeoffset = (bno * blksize) -
-				    (iter_key * blksize);
-				// Round down to the nearest MAXCACHEBUF
-				changeoffset = (changeoffset / MAXBCACHEBUF) *
-				    MAXBCACHEBUF;
-				// Add the relative offset to the key back
-				changeoffset += (iter_key * blksize);
-				// Get the block number
-				uint64_t old = bno;
-				bno = changeoffset / blksize;
-				// Update size with shift (could be 0)
-				size += (old - bno) * blksize;
-				size = omin(size, MAXBCACHEBUF);
-				covered = size <= originalsize;
-				ITER_RELEASE(biter);
-				if (isaligned && covered && (rw == UIO_WRITE)) {
-					*bp = getblk(
-					    vp, bno, size, 0, 0, gbflag);
-				} else {
-					error = slsfs_bread(
-					    vp, bno, size, NULL, gbflag, bp);
-				}
-			} else {
-				error = slsfs_buf_nocollide(
-				    vp, &biter, bno, size, rw, gbflag, bp);
-			}
-		} else {
-			ptr = ITER_VAL_T(biter, diskptr_t);
-			size = omin(size, MAXBCACHEBUF);
-			size = omin(size, ptr.size);
-			covered = size <= originalsize;
-			ITER_RELEASE(biter);
-			if (isaligned && covered && (rw == UIO_WRITE)) {
-				*bp = getblk(vp, bno, size, 0, 0, gbflag);
-			} else {
-				error = slsfs_bread(
-				    vp, bno, size, NULL, gbflag, bp);
-			}
-		}
+		/* Otherwise do an actual IO. */
+		error = slsfs_bread(vp, bno, size, NULL, gbflag, bp);
+		if (*bp == NULL)
+			panic("LINE %d: null bp for %lu, %lu", __LINE__, bno,
+			    size);
 	}
 
 	return (error);
@@ -204,21 +203,20 @@ slsfs_balloc(
 	 * our subsequent calls to getblk are 4kb then it will try to truncate
 	 * our pages resulting in the attempted release of unmanaged pages
 	 */
-	if (vp != slos.slsfs_inodes) {
+	if (vp != slos.slsfs_inodes)
 		size = gbflag & GB_UNMAPPED ? MAXBCACHEBUF : size;
-	} else {
-		if (BLKSIZE(&slos) != size) {
-			printf("%lu %lu\n", size, UINT64_MAX);
-			panic("what");
-		}
-	}
+	else
+		KASSERT(
+		    BLKSIZE(&slos) == size, ("invalid size request %lu", size));
+
 	tempbuf = getblk(vp, lbn, size, 0, 0, gbflag);
-	if (tempbuf) {
-		vfs_bio_clrbuf(tempbuf);
-		tempbuf->b_blkno = (daddr_t)(-1);
-	} else {
-		error = EIO;
+	if (tempbuf == NULL) {
+		*bp = NULL;
+		return (EIO);
 	}
+
+	vfs_bio_clrbuf(tempbuf);
+	tempbuf->b_blkno = (daddr_t)(-1);
 
 	*bp = tempbuf;
 
@@ -252,6 +250,7 @@ slsfs_bread(struct vnode *vp, uint64_t lbn, size_t size, struct ucred *cred,
 void
 slsfs_bdirty(struct buf *buf)
 {
+	uint64_t size;
 	// If we are dirtying a buf thats already que'd for a write we should
 	// not signal another bawrite as the system will panic wondering why we
 	if (buf->b_flags & B_DELWRI) {
@@ -259,9 +258,14 @@ slsfs_bdirty(struct buf *buf)
 		return;
 	}
 
+	/* Get the value before we lose ownership of the buffer. */
+	size = buf->b_bufsize;
+
 	/* Be aggressive and start the IO immediately. */
 	buf->b_flags |= B_CLUSTEROK;
 	bawrite(buf);
+
+	atomic_add_64(&slos.slos_sb->sb_used, size / BLKSIZE(&slos));
 
 	return;
 }

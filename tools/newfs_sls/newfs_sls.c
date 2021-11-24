@@ -101,13 +101,14 @@ main(int argc, const char *argv[])
 	    "superblock larger than sector size");
 
 	printf("creating super blocks\n");
-	struct slos_sb *sb = (struct slos_sb *)malloc(ssize);
+	struct slos_sb *sb = (struct slos_sb *)calloc(1, ssize);
 	sb->sb_magic = SLOS_MAGIC;
 	sb->sb_epoch = EPOCH_INVAL;
 	sb->sb_ssize = ssize;
 	sb->sb_bsize = bsize;
 	sb->sb_size = size;
 	sb->sb_asize = bsize;
+	sb->sb_used = 0;
 
 	for (int i = 0; i < NUMSBS; i++) {
 		sb->sb_index = i;

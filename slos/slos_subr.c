@@ -171,20 +171,24 @@ slos_destroy_node(struct slos_node *vp)
 int
 slos_truncate(struct vnode *vp, size_t size)
 {
-	struct bufobj *bo;
 	struct slos_node *svp = SLSVP(vp);
-	size_t filesize = svp->sn_ino.ino_size;
-	bo = &vp->v_bufobj;
-	if (size == 0) {
-		return bufobj_invalbuf(bo, 0, 0, 0);
-	} else if (size > filesize) {
-		svp->sn_ino.ino_size = size;
-		vnode_pager_setsize(vp, svp->sn_ino.ino_size);
-	} else {
-		// Maybe we should jsut set the size anyway for now?
-		// svp->sn_ino.ino_size = size;
-		return ENOSYS;
-	}
+	int error;
+
+	/* Dirty the inode, if anything to update the time accessed. */
+	error = slos_update(svp);
+	if (error != 0)
+		return (error);
+
+	if (size == svp->sn_ino.ino_size)
+		return (0);
+
+	/* Notify the VFS layer of the change. */
+	svp->sn_ino.ino_size = size;
+	vnode_pager_setsize(vp, svp->sn_ino.ino_size);
+
+	/* Nuke the existing data if we are truncating the file to 0. */
+	if (size == 0)
+		return (bufobj_invalbuf(&vp->v_bufobj, 0, 0, 0));
 
 	return (0);
 }
