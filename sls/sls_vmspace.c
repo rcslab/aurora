@@ -378,6 +378,13 @@ slsvmspace_restore_vmspace(
 	atomic_add_int(&p->p_vmspace->vm_refcnt, -1);
 	p->p_vmspace = vm;
 
+	/*
+	 * Load the new pmap into the CPU. Cleanup during exit() in case
+	 * of a restore failure depends on the loaded pmap and the current
+	 * thread's pmap being identical.
+	 */
+	pmap_activate(curthread);
+
 	/* Copy vmspace state to the fresh instance. */
 	vm->vm_swrss = info->vm_swrss;
 	vm->vm_tsize = info->vm_tsize;

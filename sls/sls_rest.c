@@ -26,6 +26,7 @@
 #include <sys/stat.h>
 #include <sys/syscallsubr.h>
 #include <sys/sysent.h>
+#include <sys/sysproto.h>
 #include <sys/taskqueue.h>
 #include <sys/time.h>
 #include <sys/tty.h>
@@ -101,6 +102,7 @@ slsrest_zone_dtor(void *mem, int size, void *args __unused)
 	vm_object_t obj;
 	struct file *fp;
 	struct proc *p;
+	struct pgrp *pgrp;
 
 	KV_FOREACH_POP(restdata->fptable, slsid, fp)
 	{
@@ -148,6 +150,7 @@ slsrest_zone_dtor(void *mem, int size, void *args __unused)
 	KV_FOREACH_POP(restdata->sesstable, slsid, sess)
 	sess_release(sess);
 
+	KV_FOREACH_POP(restdata->pgidtable, slsid, pgrp);
 	/*
 	 * We do not clean up the process groups because each one belongs to at
 	 * least one process (the one that created it), and will be cleaned up

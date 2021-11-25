@@ -462,9 +462,9 @@ slsproc_attach_sess(struct proc *p, int sid, struct slsrest_data *restdata)
 	return (0);
 }
 
-/* Check if the given process is using a target PID in any way. */
+/* Check if the given process is using a target PID as a PID/PGID/SID. */
 static bool
-slsproc_pid_inuse(struct proc *p, pid_t pid)
+slsproc_process_uses_pid(struct proc *p, pid_t pid)
 {
 	/* Did we find the PID in use as a PID? */
 	PROC_LOCK_ASSERT(p, MA_OWNED);
@@ -489,8 +489,8 @@ slsproc_pid_inuse(struct proc *p, pid_t pid)
 static void
 slsproc_changepid(struct proc *p, pid_t pid)
 {
-	sx_assert(&proctree_lock, SX_XLOCKED);
-	sx_assert(&allproc_lock, SX_XLOCKED);
+	sx_assert(&proctree_lock, SA_XLOCKED);
+	sx_assert(&allproc_lock, SA_XLOCKED);
 
 	LIST_REMOVE(p, p_hash);
 	p->p_pid = pid;
@@ -498,8 +498,8 @@ slsproc_changepid(struct proc *p, pid_t pid)
 }
 
 static int
-slsproc_restore_addsess(struct slsproc *slsproc, struct pgrp **pgrp,
-    struct session **sess, struct slsrest_data *restdata)
+slsproc_restore_addsess(struct slsproc *slsproc, struct pgrp *pgrp,
+    struct session *sess, struct slsrest_data *restdata)
 {
 	int error;
 
@@ -508,33 +508,61 @@ slsproc_restore_addsess(struct slsproc *slsproc, struct pgrp **pgrp,
 	 * serialize against non-leaders checking the hashtables.
 	 */
 	mtx_lock(&restdata->procmtx);
-	if (*sess != NULL) {
-		sess_hold(*sess);
+	if (sess != NULL) {
+		sess_hold(sess);
 		error = slskv_add(
-		    restdata->sesstable, slsproc->sid, (uintptr_t)*sess);
+		    restdata->sesstable, slsproc->sid, (uintptr_t)sess);
 		if (error != 0) {
-			sess_release(*sess);
+			sess_release(sess);
 			mtx_unlock(&restdata->procmtx);
 			return (error);
 		}
 	}
 
 	/* "Consume" the session, so it's not freed during error handling. */
-	*sess = NULL;
-
-	if (*pgrp != NULL) {
+	if (pgrp != NULL) {
 		error = slskv_add(
-		    restdata->pgidtable, slsproc->pgid, (uintptr_t)*pgrp);
+		    restdata->pgidtable, slsproc->pgid, (uintptr_t)pgrp);
 		if (error != 0) {
+			slskv_del(restdata->sesstable, slsproc->sid);
+			if (sess != NULL)
+				sess_release(sess);
 			mtx_unlock(&restdata->procmtx);
 			return (error);
 		}
 	}
 
-	*pgrp = NULL;
-
 	/* Wake up any processes waiting to join the pgrp/session. */
 	mtx_unlock(&restdata->procmtx);
+
+	return (0);
+}
+
+/*
+ * Check if a PID is in use throughout the system
+ */
+static int
+slsproc_check_pid_collision(struct proc *p, int pid)
+{
+	struct proc *piter, *ptmp;
+	bool inuse;
+
+	sx_assert(&allproc_lock, SA_XLOCKED);
+	sx_assert(&proctree_lock, SA_XLOCKED);
+
+	/* Ensure the PID is not present in the system. */
+	LIST_FOREACH_SAFE (piter, &allproc, p_list, ptmp) {
+		if (piter == p)
+			continue;
+
+		PROC_LOCK(piter);
+		inuse = slsproc_process_uses_pid(piter, pid);
+		PROC_UNLOCK(piter);
+		if (inuse) {
+			DEBUG1("PID %d is already in use\n", pid);
+			return (EAGAIN);
+		}
+	}
 
 	return (0);
 }
@@ -551,8 +579,6 @@ slsproc_restore_pid(
 {
 	struct session *sess = NULL;
 	struct pgrp *pgrp = NULL;
-	struct proc *piter, *ptmp;
-	bool inuse;
 	int error;
 
 	KASSERT(p != NULL, ("no process provided"));
@@ -564,19 +590,9 @@ slsproc_restore_pid(
 	sx_xlock(&allproc_lock);
 	sx_xlock(&proctree_lock);
 
-	/* Ensure the PID is not present in the system. */
-	LIST_FOREACH_SAFE (piter, &allproc, p_list, ptmp) {
-		if (piter == p)
-			continue;
-
-		PROC_LOCK(piter);
-		inuse = slsproc_pid_inuse(piter, slsproc->pid);
-		PROC_UNLOCK(piter);
-		if (inuse) {
-			DEBUG1("PID %d is already in use\n", slsproc->pid);
-			error = EAGAIN;
-			goto error;
-		}
+	error = slsproc_check_pid_collision(p, slsproc->pid);
+	if (error != 0) {
+		goto out;
 	}
 
 	DEBUG1("Got PID %d back\n", slsproc->pid);
@@ -595,29 +611,25 @@ slsproc_restore_pid(
 	if (pgrp != NULL) {
 		/* We are changing the process tree with this. */
 		error = enterpgrp(p, p->p_pid, pgrp, sess);
-		if (error != 0)
-			goto error;
+		if (error != 0) {
+			free(sess, M_SESSION);
+			free(pgrp, M_PGRP);
+			goto out;
+		}
 	} else {
 		KASSERT(sess == NULL, ("session leader isn't group leader"));
 	}
 
 	/* Add the newly created session/pgrp to the table. */
-	error = slsproc_restore_addsess(slsproc, &pgrp, &sess, restdata);
-	if (error != 0)
-		goto error;
-
-	sx_xunlock(&proctree_lock);
-	sx_xunlock(&allproc_lock);
-
-	return (0);
-
-error:
-
-	if (sess)
-		free(sess, M_SESSION);
-
-	if (pgrp)
-		free(pgrp, M_PGRP);
+	error = slsproc_restore_addsess(slsproc, pgrp, sess, restdata);
+	if (error != 0) {
+		/*
+		 * The session/pgroup are already in use, they will get
+		 * cleaned up when the process exits.
+		 */
+		goto out;
+	}
+out:
 
 	sx_xunlock(&proctree_lock);
 	sx_xunlock(&allproc_lock);
@@ -752,27 +764,33 @@ slsproc_restore(
 	if (error != 0) {
 		PRELE(p);
 		SLS_DBG("Error: Could not add process %p to table\n", p);
+		return (error);
 	}
 
 	DEBUG("Attempting restore of proc");
 	error = slsproc_restore_proc(p, &slsproc, restdata);
 	if (error != 0)
-		return (error);
+		goto error;
 
 	for (i = 0; i < slsproc.nthreads; i++) {
 		DEBUG("Attempting restore of thread");
 		error = slsproc_deserialize_thread(&slsthread, bufp, buflenp);
 		if (error != 0) {
 			DEBUG1("Error in slsproc_deserialize_thread %d", error);
-			return (error);
+			goto error;
 		}
 
 		error = slsproc_restore_thread(p, &slsthread);
 		if (error != 0) {
 			DEBUG1("Error in slsproc_restore_thread %d", error);
-			return (error);
+			goto error;
 		}
 	}
 
 	return (0);
+
+error:
+	slskv_del(restdata->proctable, slsproc.slsid);
+	PRELE(p);
+	return (error);
 }
