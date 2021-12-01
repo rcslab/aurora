@@ -25,6 +25,9 @@ int slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size,
 int slsfs_bread(struct vnode *node, uint64_t lbn, size_t size,
     struct ucred *cred, int flags, struct buf **buf);
 
+int slsfs_devbread(
+    struct slos *slos, uint64_t lbn, size_t size, struct buf **bpp);
+
 void slsfs_bdirty(struct buf *buf);
 int slsfs_bundirty(struct buf *buf);
 

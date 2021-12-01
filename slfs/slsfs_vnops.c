@@ -20,6 +20,8 @@
 #include <vm/vm_extern.h>
 #include <vm/vnode_pager.h>
 
+#include <machine/vmparam.h>
+
 #include <geom/geom_vfs.h>
 #include <slos.h>
 #include <slos_inode.h>
@@ -649,13 +651,13 @@ slsfs_read(struct vop_read_args *args)
 	DEBUG3("Reading filesize %lu - %lu, %lu", SLSVP(vp)->sn_pid, filesize,
 	    uio->uio_offset);
 #endif
-	while (resid) {
+	while (resid > 0) {
 		if (!checksum_enabled) {
 			gbflag |= GB_UNMAPPED;
 		}
 
-		error = slsfs_retrieve_buf(vp, uio->uio_offset, uio->uio_resid,
-		    uio->uio_rw, gbflag, &bp);
+		error = slsfs_retrieve_buf(
+		    vp, uio->uio_offset, resid, uio->uio_rw, gbflag, &bp);
 		if (error) {
 			DEBUG1("Problem getting buffer for write %d", error);
 			return (error);
@@ -725,13 +727,18 @@ slsfs_bmap(struct vop_bmap_args *args)
 	if (args->a_runb != NULL)
 		*args->a_runb = 0;
 
-	if ((vp->v_type == VCHR) || (vp->v_type == VNON) ||
-	    (vp->v_vflag & VV_SYSTEM))
-		return (EOPNOTSUPP);
-
 	/* If no resolution is necessary we're done. */
 	if (bnp == NULL)
 		return (0);
+
+	/*
+	 * We use VCHR to denote vnodes holding btree
+	 * buffers. The mapping for these is simple.
+	 */
+	if (vp->v_type == VCHR) {
+		*bnp = lbn * scaling;
+		return (0);
+	}
 
 	/* Look up the physical block number. */
 	error = slsfs_lookupbln(svp, lbn, &biter);
@@ -748,9 +755,9 @@ slsfs_bmap(struct vop_bmap_args *args)
 	ptr = ITER_VAL_T(biter, diskptr_t);
 
 	/* Turn everything into sector size blocks.*/
-	extlbn = ITER_KEY_T(biter, uint64_t) * scaling;
-	extbn = ptr.offset * scaling;
-	extsize = ptr.size / devbsize;
+	extlbn = ITER_KEY_T(biter, uint64_t);
+	extbn = ptr.offset;
+	extsize = ptr.size / fsbsize;
 	ITER_RELEASE(biter);
 
 	/* Check if we're in a hole. */
@@ -759,13 +766,13 @@ slsfs_bmap(struct vop_bmap_args *args)
 		return (0);
 	}
 
-	*bnp = extbn + (lbn - extlbn);
+	*bnp = (extbn + (lbn - extlbn)) * scaling;
 
 	/* Update the readahead. */
 	if (args->a_runb != NULL)
-		*args->a_runb = (lbn - extlbn) / scaling;
+		*args->a_runb = (lbn - extlbn);
 	if (args->a_runp != NULL)
-		*args->a_runp = (extlbn + extsize - lbn - 1) / scaling;
+		*args->a_runp = (extlbn + extsize - lbn - 1);
 
 	return (0);
 }
@@ -902,7 +909,6 @@ slsfs_strategy(struct vop_strategy_args *args)
 	struct vnode *vp = args->a_vp;
 	struct fnode_iter iter;
 	size_t fsbsize, devbsize;
-	daddr_t old_blkno;
 
 #ifdef VERBOSE
 	DEBUG2("vp=%p blkno=%x", vp, bp->b_lblkno);
@@ -997,9 +1003,9 @@ slsfs_strategy(struct vop_strategy_args *args)
 					goto error;
 			}
 
-			bp->b_blkno = ptr.offset;
 			atomic_add_64(
 			    &slos.slos_sb->sb_data_synced, bp->b_bcount);
+			bp->b_blkno = ptr.offset;
 		} else if (bp->b_iocmd == BIO_READ) {
 			if (ptr.offset != 0) {
 				/* Find where we must start reading from. */
@@ -1019,7 +1025,9 @@ slsfs_strategy(struct vop_strategy_args *args)
 		/* This unlocks the btree. */
 		ITER_RELEASE(iter);
 	} else {
-		/* Writing directly to disk, no logical mappings. */
+		/*
+		 * No other translation, the blocks are right in the disk.
+		 */
 		bp->b_blkno = bp->b_lblkno;
 		SDT_PROBE3(slos, , , slsfs_deviceblk, bp->b_blkno, fsbsize,
 		    fsbsize / devbsize);
@@ -1036,13 +1044,12 @@ slsfs_strategy(struct vop_strategy_args *args)
 	KASSERT(bp->b_blkno != 0,
 	    ("Vnode %p has buffer %p without a disk address", bp, vp));
 
-	/* Scale the block number from the filesystem's to the device's size. */
-	old_blkno = bp->b_blkno;
-	bp->b_blkno *= (fsbsize / devbsize);
 
 	/* The physical disk offset in bytes. */
 	KASSERT(devbsize == dbtob(1),
 	    ("Inconsistent device block size, %lu vs %lu", devbsize, dbtob(1)));
+	/* Scale the block number from the filesystem's to the device's size. */
+	bp->b_blkno *= (fsbsize / devbsize);
 	bp->b_iooffset = dbtob(bp->b_blkno);
 
 #ifdef VERBOSE
@@ -1061,13 +1068,6 @@ slsfs_strategy(struct vop_strategy_args *args)
 			panic("Problem with checksum for buffer %p", bp);
 		}
 	}
-
-	/*
-	 * XXX g_vfs_strategy() isn't synchronous, we can't touch the buffer
-	 * after we send it out. The BIO created in GEOM accesses the bp. Have
-	 * the resetting of the buffer number be a callback.
-	 */
-	bp->b_blkno = old_blkno;
 
 	return (0);
 

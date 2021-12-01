@@ -113,8 +113,14 @@ slos_sbat(struct slos *slos, int index, struct slos_sb *sb)
 	struct buf *bp;
 	int error;
 
-	error = bread(slos->slos_vp, index, slos->slos_bsize,
-	    curthread->td_proc->p_ucred, &bp);
+	/*
+	 * Each superblock is 512 bytes long. Reading
+	 * in using 4K sized blocks just brings in multiple
+	 * blocks at a time. Overlapping reads do not compromise
+	 * correctness.
+	 */
+	error = bread(
+	    slos->slos_vp, index, DEV_BSIZE, curthread->td_proc->p_ucred, &bp);
 	if (error != 0) {
 		printf("bread failed with %d", error);
 		return (error);
@@ -173,9 +179,10 @@ slos_sbread(struct slos *slos)
 	slos->slos_sb = sb;
 	/* We assume that all superblocks have the same block size. */
 	slos->slos_bsize = st.st_blksize;
+	KASSERT(st.st_blksize != DEV_BSIZE, ("SLOS block size is one sector"));
 
 	/* Find the largest epoch superblock in the NUMSBS array.
-	 * This is starts at 0  offset of every device
+	 * This is starts at 0 offset of every device.
 	 */
 	for (int i = 0; i < NUMSBS; i++) {
 		/* If we didn't find any, go check the next one. */

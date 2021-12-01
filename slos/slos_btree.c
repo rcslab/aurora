@@ -2295,16 +2295,13 @@ fbtree_sysinit(struct slos *slos, size_t offset, diskptr_t *ptr)
 	ino.ino_btree.offset = offset + 1;
 	ino.ino_btree.size = BLKSIZE(slos);
 
-	int change = BLKSIZE(slos) / slos->slos_vp->v_bufobj.bo_bsize;
-	bread(slos->slos_vp, offset * change, BLKSIZE(slos),
-	    curthread->td_ucred, &bp);
+	slsfs_devbread(slos, offset, BLKSIZE(slos), &bp);
 	MPASS(bp);
 	bzero(bp->b_data, bp->b_bcount);
 	memcpy(bp->b_data, &ino, sizeof(ino));
 	bwrite(bp);
 
-	bread(slos->slos_vp, (offset + 1) * change, BLKSIZE(slos),
-	    curthread->td_ucred, &bp);
+	slsfs_devbread(slos, offset + 1, BLKSIZE(slos), &bp);
 	MPASS(bp);
 
 	bzero(bp->b_data, bp->b_bcount);

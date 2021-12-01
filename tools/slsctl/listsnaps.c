@@ -3,6 +3,7 @@
 #include <sys/queue.h>
 #include <sys/sbuf.h>
 
+#include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
 #include <slos.h>
@@ -45,22 +46,28 @@ print_snap(struct slsfs_getsnapinfo *inf)
 int
 mountsnap_main(int argc, char *argv[])
 {
-	int opt;
-	char mountdir[255];
+	struct slsfs_getsnapinfo info;
+	char *mountdir;
 	int mountgiven = 0;
 	int index = 0;
-	struct slsfs_getsnapinfo info;
+	int opt;
+	int fd;
+
+	mountdir = malloc(PATH_MAX);
+	if (mountdir == NULL)
+		return (ENOMEM);
+
 	while ((opt = getopt(argc, argv, "m:i:")) != -1) {
 		switch (opt) {
 		case 'm':
 			mountgiven = 1;
-			strcpy(mountdir, optarg);
+			strncpy(mountdir, optarg, PATH_MAX);
 			break;
 		case 'i':
 			index = strtol(optarg, NULL, 10);
 			break;
 		default:
-			listsnaps_usage();
+			mountsnap_usage();
 			return 0;
 		}
 	}
@@ -70,48 +77,73 @@ mountsnap_main(int argc, char *argv[])
 		return (0);
 	}
 
-	int fd = open(mountdir, O_RDONLY);
+	fd = open(mountdir, O_RDONLY);
+	if (fd < 0) {
+		perror("open");
+		free(mountdir);
+		return (0);
+	}
+
 	info.index = index;
-	return ioctl(fd, SLSFS_MOUNT_SNAP, &info);
+	free(mountdir);
+
+	return (ioctl(fd, SLSFS_MOUNT_SNAP, &info));
 }
 
 int
 modulo(int x, int N)
 {
-	return (x % N + N) % N;
+	return ((x % N + N) % N);
 }
 
 int
 listsnaps_main(int argc, char *argv[])
 {
 	int opt;
-	char mountdir[255];
+	char *mountdir;
 	int mountgiven = 0;
 	int show_last_only = false;
 	struct slsfs_getsnapinfo info;
+	int fd;
+	int i;
+
+	mountdir = malloc(PATH_MAX);
+	if (mountdir == NULL)
+		return (ENOMEM);
+
 	while ((opt = getopt(argc, argv, "m:l")) != -1) {
 		switch (opt) {
 		case 'm':
 			mountgiven = 1;
-			strcpy(mountdir, optarg);
+			strncpy(mountdir, optarg, PATH_MAX);
 			break;
 		case 'l':
 			show_last_only = true;
 			break;
 		default:
 			listsnaps_usage();
+			free(mountdir);
 			return 0;
 		}
 	}
 
 	if (!mountgiven) {
 		listsnaps_usage();
+		free(mountdir);
 		return (0);
 	}
 
-	int fd = open(mountdir, O_RDONLY);
-	int i = 0;
-	for (; (i < NUMSBS) && (info.snap_sb.sb_epoch != EPOCH_INVAL); i++) {
+	fd = open(mountdir, O_RDONLY);
+	if (fd < 0) {
+		perror("open");
+		free(mountdir);
+		return (0);
+	}
+
+	free(mountdir);
+
+	for (i = 0; (i < NUMSBS) && (info.snap_sb.sb_epoch != EPOCH_INVAL);
+	     i++) {
 		info.index = i;
 		info.snap_sb.sb_epoch = EPOCH_INVAL;
 		ioctl(fd, SLSFS_GET_SNAP, &info);
@@ -122,7 +154,7 @@ listsnaps_main(int argc, char *argv[])
 	if (show_last_only) {
 		/*
 		 * We must use true modulo here in case we decrement to a
-		 * negative number
+		 * negative number.
 		 */
 		info.index = modulo(i - 1, NUMSBS);
 		ioctl(fd, SLSFS_GET_SNAP, &info);

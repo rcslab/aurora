@@ -441,7 +441,6 @@ slsfs_mountfs(struct vnode *devvp, struct mount *mp)
 	mp->mnt_kern_flag |= MNTK_USES_BCACHE;
 	MNT_IUNLOCK(mp);
 
-	VOP_UNLOCK(slos.slos_vp, 0);
 
 	return (0);
 error:
@@ -455,7 +454,6 @@ error:
 	}
 
 	printf("Error mounting");
-	vput(devvp);
 
 	return (error);
 }
@@ -641,7 +639,7 @@ again:
 
 		/* Flush the current superblock itself. */
 		bp = getblk(slos.slos_vp, slos.slos_sb->sb_index,
-		    slos.slos_sb->sb_bsize, 0, 0, 0);
+		    slos.slos_sb->sb_ssize, 0, 0, 0);
 		MPASS(bp);
 		memcpy(bp->b_data, slos.slos_sb, sizeof(struct slos_sb));
 
@@ -883,13 +881,18 @@ slsfs_mount(struct mount *mp)
 		VOP_LOCK(slos.slos_vp, LK_EXCLUSIVE);
 
 		error = slsfs_mountfs(slos.slos_vp, mp);
-		if (error != 0)
+		if (error != 0) {
+			VOP_UNLOCK(slos.slos_vp, 0);
 			goto error;
+		}
 
 		error = slsfs_init_fs(mp);
-		if (error != 0)
+		if (error != 0) {
+			VOP_UNLOCK(slos.slos_vp, 0);
 			goto error;
+		}
 
+		VOP_UNLOCK(slos.slos_vp, 0);
 	} else {
 		opts = mp->mnt_optnew;
 		vfs_filteropt(opts, slsfs_opts);
@@ -923,10 +926,13 @@ slsfs_mount(struct mount *mp)
 			goto error;
 		}
 
+		VOP_UNLOCK(slos.slos_vp, 0);
+
 		error = slsfs_init_fs(mp);
 		if (error) {
-			/* XXX: This seems like a broken error path */
-			vput(devvp);
+			/* XXX Cleanup init'ed state. */
+			printf("Couldn't init\n");
+			vrele(devvp);
 			goto error;
 		}
 
@@ -987,8 +993,8 @@ slsfs_statfs(struct mount *mp, struct statfs *sbp)
 
 	smp = TOSMP(mp);
 	slsdev = smp->sp_sdev;
-	sbp->f_bsize = slsdev->devblocksize;
-	sbp->f_iosize = sbp->f_bsize;
+	sbp->f_bsize = sb->sb_bsize;
+	sbp->f_iosize = sb->sb_bsize;
 	sbp->f_blocks = sb->sb_size;
 	/* XXX We are not accounting for metadata blocks (e.g. trees). */
 	sbp->f_bfree = sbp->f_bavail = sb->sb_size - sb->sb_used;

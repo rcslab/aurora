@@ -119,7 +119,6 @@ main(int argc, const char *argv[])
 			return (1);
 		}
 	}
-	printf("complete\n");
 	free(sb);
 
 	return (0);

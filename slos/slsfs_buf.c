@@ -105,6 +105,9 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size,
 #ifdef VERBOSE
 	DEBUG1("Attemping to retrieve buffer %lu bno", bno);
 #endif
+	KASSERT(
+	    vp->v_type != VCHR, ("Retrieving buffer for btree backing vnode"));
+
 	error = slsfs_lookupbln(svp, bno, &biter);
 	if (error) {
 		DEBUG1("%d", error);
@@ -244,6 +247,25 @@ slsfs_bread(struct vnode *vp, uint64_t lbn, size_t size, struct ucred *cred,
 	return (0);
 }
 
+int
+slsfs_devbread(struct slos *slos, uint64_t lbn, size_t size, struct buf **bpp)
+{
+	int fsbsize, devbsize;
+	uint64_t bn;
+	int change;
+
+	fsbsize = BLKSIZE(slos);
+	devbsize = slos->slos_vp->v_bufobj.bo_bsize;
+
+	change = fsbsize / devbsize;
+	bn = lbn * change;
+
+	KASSERT(size > 0, ("Device read of size 0"));
+	KASSERT(size % BLKSIZE(slos) == 0, ("Unaligned device read"));
+
+	return (bread(slos->slos_vp, bn, size, curthread->td_ucred, bpp));
+}
+
 /*
  * Mark a buffer as dirty, initializing its flush to disk.
  */
@@ -294,8 +316,13 @@ slsfs_lookupbln(struct slos_node *svp, uint64_t lbn, struct fnode_iter *iter)
 {
 	int error;
 	uint64_t key = lbn;
+
 	BTREE_LOCK(&svp->sn_tree, LK_SHARED);
 	error = fbtree_keymin_iter(&svp->sn_tree, &key, iter);
+	if (error != 0) {
+		BTREE_UNLOCK(&svp->sn_tree, LK_SHARED);
+		return (error);
+	}
 
-	return (error);
+	return (0);
 }

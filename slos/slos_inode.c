@@ -173,7 +173,6 @@ slos_svpimport(
 	struct slos_node *svp = NULL;
 	struct slos_inode *ino;
 	struct buf *bp = NULL;
-	int change;
 
 	/* Read the inode from disk. */
 
@@ -191,9 +190,7 @@ slos_svpimport(
 	 * The rest are retrieved from the inode btree.
 	 */
 	if (system) {
-		change = SLOS_BSIZE(*slos) / SLOS_DEVBSIZE(*slos);
-		error = bread(slos->slos_vp, svpid * change, BLKSIZE(slos),
-		    curthread->td_ucred, &bp);
+		error = slsfs_devbread(slos, svpid, BLKSIZE(slos), &bp);
 		if (error != 0)
 			goto error;
 	} else {
