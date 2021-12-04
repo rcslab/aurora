@@ -6,7 +6,7 @@ NUMFILES=1024
 # Test whether 
 make_file_with_data(){
 	TMPFILE=`mktemp /tmp/slstemp.XXXXX`
-	dd if=/dev/random of=/$TMPFILE bs=$FILESIZE count=1
+	dd if=/dev/random of=/$TMPFILE bs=$FILESIZE count=1 > /dev/null 2> /dev/null
 	echo $TMPFILE
 }
 

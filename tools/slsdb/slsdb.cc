@@ -204,9 +204,20 @@ cmd_li(Snapshot *sb, vector<string> &args)
 int
 cmd_print(Snapshot *sb, vector<string> &args)
 {
-	if (currinode == nullptr) {
-		cout << "No inode selected" << endl;
-		return (-1);
+	auto type = args[1][0];
+	auto blknum = strtol(args[2].c_str(), NULL, 16);
+	switch (type) {
+	case 'i': {
+		auto f = createFile(sb, blknum);
+		std::cout << f->toString() << std::endl;
+		break;
+	}
+	case 'b': {
+		Btree<uint64_t, diskptr_t> tree { sb, blknum };
+		auto s = tree.toString();
+		std::cout << s << std::endl;
+		break;
+	}
 	}
 
 	currinode->print();
@@ -259,6 +270,28 @@ cmd_exit(Snapshot *unused, vector<string> &args)
 }
 
 int
+cmd_verify(Snapshot *unused, vector<string> &args)
+{
+	int error;
+
+	error = retrieveSnaps(snaps);
+	if (error) {
+		return error;
+	}
+
+	for (auto s : snaps) {
+		error = s.verify();
+		if (error) {
+			printf("Snapshot bad\n");
+		} else {
+			printf("Snapshot good\n");
+		}
+	}
+
+	return (0);
+}
+
+int
 cmd_btree_at(Snapshot *sb, vector<string> &args)
 {
 	if (sb == nullptr) {
@@ -283,11 +316,13 @@ std::map<string, std::pair<cmd_t, string>> cmds = {
 	{ "ls", std::make_pair(cmd_ls, "List snapshots") },
 	{ "snap", std::make_pair(cmd_snap, "Select a snapshot") },
 	{ "li", std::make_pair(cmd_li, "List inodes") },
+	{ "verify",
+	    std::make_pair(cmd_verify, "Verify the state of the filesystem") },
 	{ "bt", std::make_pair(cmd_btree_at, "Get BtreeNode at blknum") },
 	{ "inode",
 	    std::make_pair(cmd_inode,
 		"Select an inode physical (p) or logical (l) (E.g inode p 1e253") },
-	{ "print", std::make_pair(cmd_print, "Print inode") },
+	{ "print", std::make_pair(cmd_print, "Print object at block") },
 	{ "dump", std::make_pair(cmd_dump, "Dump inode to file") },
 	{ "hexdump", std::make_pair(cmd_hexdump, "Hexdump inode") },
 	{ "help", std::make_pair(cmd_help, "Show help") },

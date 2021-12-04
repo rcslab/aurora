@@ -194,5 +194,5 @@ createroot()
 installroot()
 {
     # Unpack the root into the mount if it exists
-    tar -C "$MNT" -xf "$SLSROOT"
+    tar -C "$MNT" -xf "$SLSROOT" --exclude "proc/*" --exclude "dev/*"
 }

@@ -1,12 +1,12 @@
-
 #include <assert.h>
 #include <slos.h>
 #include <slos_inode.h>
 #include <unistd.h>
 
-#include <btree.h>
-
+#include <iomanip>
 #include <iostream>
+#include <queue>
+#include <sstream>
 
 #include "btree.h"
 #include "file.h"
@@ -66,12 +66,6 @@ fnodeSetup(Snapshot *snap, struct fnode *node, struct fbtree *tree, char *buf,
     long ptr)
 {
 	node->fn_dnode = (struct dnode *)buf;
-	if (node->fn_dnode->dn_magic != DN_MAGIC) {
-		printf("Corrupted Btree node at 0x%lx\n", ptr);
-		printf("Expected %lu - Got %lu\n", DN_MAGIC,
-		    node->fn_dnode->dn_magic);
-		return;
-	}
 	node->fn_location = ptr;
 	node->fn_bsize = snap->super.sb_bsize;
 	node->fn_tree = tree;
@@ -143,10 +137,8 @@ BtreeNode<K, V>::follow(K key)
 	/* Prepare to traverse the next node. */
 	bnode_ptr ptr = *(bnode_ptr *)fnode_getval(&node, index);
 	auto next = BtreeNode<K, V>(btree, snap, ptr);
-	next.init();
 
 	auto n = next.follow(key);
-	n.init();
 	return n;
 }
 
@@ -168,7 +160,16 @@ template <typename K, typename V>
 int
 BtreeIter<K, V>::valid()
 {
-	return (at != -1);
+	if (node.error) {
+		printf("Corrupt Btree Node found at 0x%lx\n",
+		    node.node.fn_location);
+		return ITER_CORRUPT;
+	}
+	if (at == -1) {
+		return ITER_END;
+	}
+
+	return ITER_GOOD;
 }
 
 template <typename K, typename V>
@@ -222,7 +223,6 @@ BtreeNode<K, V>::follow_to(K key, long blknum)
 	/* Prepare to traverse the next node. */
 	bnode_ptr ptr = *(bnode_ptr *)fnode_getval(&node, index);
 	auto next = BtreeNode<K, V>(btree, snap, ptr);
-	next.init();
 	return next.follow_to(key, blknum);
 }
 
@@ -240,7 +240,7 @@ BtreeIter<K, V>
 BtreeIter<K, V>::next()
 {
 	V val;
-	if (!valid()) {
+	if (valid() != 0) {
 
 		return BtreeIter<K, V> {};
 	}
@@ -253,7 +253,7 @@ BtreeIter<K, V>::next()
 				parentIter = parentIter.next();
 			}
 			parentIter = parentIter.next();
-			if (!parentIter.valid()) {
+			if (parentIter.valid() != 0) {
 				return BtreeIter<K, V> {};
 			}
 
@@ -346,6 +346,12 @@ BtreeNode<K, V>::init()
 	tree.bt_valsize = sizeof(V);
 
 	fnodeSetup(snap, &node, &tree, data, blknum);
+	if (node.fn_dnode->dn_magic != DN_MAGIC) {
+		printf("BTree Corrupt at: 0x%lx\n", node.fn_location);
+		error = 1;
+		return (-1);
+	}
+
 	error = 0;
 	return (0);
 }
@@ -365,10 +371,98 @@ template <typename K, typename V>
 BtreeNode<K, V>
 Btree<K, V>::getRoot()
 {
-	auto root = BtreeNode<K, V>(this, snap, blknum);
-	root.init();
+	return BtreeNode<K, V>(this, snap, blknum);
+}
 
-	return root;
+template <typename K, typename V>
+std::string
+BtreeNode<K, V>::toString()
+{
+	std::stringstream ss;
+	ss << std::setbase(16);
+	bnode_ptr v = *(bnode_ptr *)fnode_getval(&node, 0);
+	ss << "| C 0x" << v << "|";
+	if (type() == BT_INTERNAL) {
+		for (int i = 0; i < NODE_SIZE(&node); i++) {
+			K k = *(K *)fnode_getkey(&node, i);
+			bnode_ptr v = *(bnode_ptr *)fnode_getval(&node, i + 1);
+			ss << "| K 0x" << k << "|| C 0x" << v << "|";
+		}
+	} else {
+		for (int i = 0; i < NODE_SIZE(&node); i++) {
+			K k = *(K *)fnode_getkey(&node, i);
+			ss << "| K 0x" << k << "|";
+		}
+	}
+
+	return ss.str();
+}
+
+template <typename K, typename V>
+std::string
+Btree<K, V>::toString()
+{
+	std::queue<std::pair<BtreeNode<K, V>, int>> bfs;
+	auto root = getRoot();
+	bfs.push(std::make_pair(root, 0));
+	int cur_layer = 0;
+	// Keeping track of the height so we can have empty lines seperating
+	// each layer of the tree
+	std::stringstream ss;
+	ss << std::setbase(16);
+	while (!bfs.empty()) {
+		auto p = bfs.front();
+		auto layer = p.second;
+		auto node = p.first;
+		bfs.pop();
+
+		if (cur_layer < layer) {
+			ss << "EndLayer";
+			cur_layer += 1;
+			ss << std::endl;
+		}
+		if (node.type() == BT_INTERNAL) {
+			for (int i = 0; i < NODE_SIZE(&node.node); i++) {
+				bnode_ptr p = *(bnode_ptr *)fnode_getval(
+				    &node.node, i);
+				auto n = BtreeNode<K, V>(this, snap, p);
+				bfs.push(std::make_pair(n, cur_layer + 1));
+			}
+		}
+
+		ss << node.toString() << ">>>" << std::endl;
+	}
+
+	return ss.str();
+}
+
+template <typename K, typename V>
+int
+BtreeNode<K, V>::verify()
+{
+	if (error) {
+		printf("Corrupt Node: 0x%lx?\n", node.fn_location);
+		return (-1);
+	}
+
+	if (type() == BT_INTERNAL) {
+		for (int i = 0; i < NODE_SIZE(&node); i++) {
+			bnode_ptr p = *(bnode_ptr *)fnode_getval(&node, i);
+			auto n = BtreeNode<K, V>(btree, snap, p);
+			if (n.verify()) {
+				return (-1);
+			}
+		}
+	}
+
+	return (0);
+}
+template <typename K, typename V>
+int
+Btree<K, V>::verify()
+{
+	auto root = getRoot();
+	return root.verify();
 }
 
 template <typename K, typename V>
@@ -376,15 +470,11 @@ BtreeIter<K, V>
 Btree<K, V>::keymax(K key)
 {
 	auto root = getRoot();
-	if (root.failed()) {
-		std::cout << "Failured retrieving root" << std::endl;
-		return BtreeIter<K, V> {};
-	}
-	auto node = root.follow(key);
-	if (node.failed()) {
+	if (root.size() == 0) {
 		return BtreeIter<K, V> {};
 	}
 
+	auto node = root.follow(key);
 	auto iter = node.keymax(key);
 
 	return iter;

@@ -97,8 +97,7 @@ createFile(Snapshot *sb, long blknum)
 		std::cout << "Not implemented" << std::endl;
 		return nullptr;
 	} else if (S_ISLNK(ino.ino_mode)) {
-		std::cout << "Not implemented" << std::endl;
-		return nullptr;
+		return std::make_shared<SReg>(sb, ino);
 	} else if (S_ISSOCK(ino.ino_mode)) {
 		std::cout << "Not implemented" << std::endl;
 		return nullptr;
@@ -107,6 +106,24 @@ createFile(Snapshot *sb, long blknum)
 	}
 
 	return nullptr;
+}
+int
+Snapshot::verify()
+{
+	printf("Verifying snapshot %d-%lu\n", super.sb_index, super.sb_epoch);
+	int error;
+	auto inode_file = getInodeFile();
+	for (auto i : inode_file->availableInodes()) {
+		auto f = createFile(this, i.second.offset);
+		if (f == nullptr)
+			continue;
+		error = f->verify();
+		if (error) {
+			printf("Error in file Inode: 0x%lx\n", i.first);
+			return (error);
+		}
+	}
+	return (0);
 }
 
 std::shared_ptr<InodeFile>

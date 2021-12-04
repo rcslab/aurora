@@ -1,6 +1,10 @@
 #ifndef __SLSBTREE_H__
 #define __SLSBTREE_H__
 
+#define ITER_GOOD (0)
+#define ITER_CORRUPT (1)
+#define ITER_END (2)
+
 class Snapshot;
 
 template <typename K, typename V> class BtreeNode;
@@ -33,7 +37,10 @@ template <typename K, typename V> class BtreeNode {
 	BtreeNode<K, V>(Btree<K, V> *btree, Snapshot *sb, long blknum)
 	    : btree(btree)
 	    , snap(sb)
-	    , blknum(blknum) {};
+	    , blknum(blknum)
+	{
+		init();
+	};
 	BtreeNode<K, V>(BtreeNode<K, V> *node);
 	BtreeNode<K, V>(BtreeNode<K, V> &node);
 	BtreeNode<K, V>(BtreeNode<K, V> const &node);
@@ -42,11 +49,15 @@ template <typename K, typename V> class BtreeNode {
 
 	int init();
 	int failed();
+	int verify();
+	int type() { return NODE_TYPE(&node); }
+	int size() { return node.fn_dnode->dn_numkeys; }
 
 	BtreeIter<K, V> follow_to(K key, long blknum);
 	BtreeNode<K, V> follow(K key);
 	BtreeIter<K, V> parent();
 	void print();
+	std::string toString();
 
 	BtreeIter<K, V> keymax(K key);
 
@@ -68,6 +79,8 @@ template <typename K, typename V> class Btree {
 
 	BtreeIter<K, V> keymax(K key);
 	BtreeNode<K, V> getRoot();
+	int verify();
+	std::string toString();
 
 	Snapshot *snap;
 	struct fbtree tree;

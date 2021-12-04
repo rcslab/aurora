@@ -11,6 +11,7 @@ class Snapshot {
 	    , dev(dev) {};
 	std::string toString(int verbose = 0);
 	std::shared_ptr<InodeFile> getInodeFile();
+	int verify();
 
 	struct slos_sb super;
 	int dev;

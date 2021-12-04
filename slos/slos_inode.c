@@ -3,6 +3,7 @@
 #include <sys/buf.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
+#include <sys/mount.h>
 #include <sys/sbuf.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
@@ -252,6 +253,7 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 	int error;
 	struct fnode_iter iter;
 	struct slos_inode ino;
+	struct buf *bp;
 	diskptr_t ptr;
 	struct uio io;
 	struct iovec iov;
@@ -299,7 +301,15 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 	if (error) {
 		return (error);
 	}
+
+	slsfs_devbread(slos, ptr.offset, BLKSIZE(slos), &bp);
+	MPASS(bp);
+	bzero(bp->b_data, bp->b_bcount);
+	bwrite(bp);
 	ino.ino_btree = ptr;
+
+	VOP_FSYNC(slos->slos_vp, MNT_WAIT, curthread);
+
 	VOP_LOCK(root_vp, LK_EXCLUSIVE);
 	VOP_WRITE(root_vp, &io, 0, NULL);
 	VOP_UNLOCK(root_vp, 0);
@@ -327,6 +337,7 @@ slos_iopen(struct slos *slos, uint64_t oid, struct slos_node **svpp)
 	int error;
 	struct vnode *fdev;
 	struct slos_node *svp = NULL;
+	struct dnode *fn_dnode;
 	struct buf *bp;
 
 	DEBUG1("Opening Inode %lu", oid);
@@ -361,8 +372,12 @@ slos_iopen(struct slos *slos, uint64_t oid, struct slos_node **svpp)
 		if (bp == NULL) {
 			panic("Could not get fake device block");
 		}
+
 		bzero(bp->b_data, bp->b_bcount);
-		bawrite(bp);
+		fn_dnode = (struct dnode *)bp->b_data;
+		fn_dnode->dn_magic = DN_MAGIC;
+		bp->b_fsprivate3 = 0;
+		bwrite(bp);
 		svp->sn_ino.ino_blk = 0;
 	}
 

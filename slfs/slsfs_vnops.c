@@ -97,15 +97,11 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 	struct vnode *vp = args->a_vp;
 	struct slos_node *svp = SLSVP(vp);
 
-	DEBUG2("Reclaiming vnode %p - %lu", vp, svp->sn_pid);
-
 	if (vp == slos.slsfs_inodes) {
 		DEBUG("Special vnode trying to be reclaimed");
 	}
 
-	VI_LOCK(vp);
 	vp->v_data = NULL;
-	VI_UNLOCK(vp);
 
 	vinvalbuf(vp, 0, 0, 0);
 
@@ -558,14 +554,6 @@ slsfs_write(struct vop_write_args *args)
 
 	int modified = 0;
 
-	if (ioflag & IO_DIRECT) {
-		DEBUG("direct");
-	}
-
-	if (ioflag & IO_SYNC) {
-		DEBUG("sync");
-	}
-
 	while (uio->uio_resid) {
 		// Grab the key thats closest to offset, but not over it
 		// Mask out the lower order bits so we just have the block;
@@ -721,7 +709,11 @@ slsfs_bmap(struct vop_bmap_args *args)
 	if (args->a_bop != NULL)
 		*args->a_bop = &smp->sp_slos->slos_vp->v_bufobj;
 
-	/* No readbehind/readahead for now. */
+	/* No readbehind/readahead for now.
+	 * Be careful in the future when setting these values, the pager will
+	 * look at these values and panic if the readahead number is past the
+	 * EOF offset.
+	 */
 	if (args->a_runp != NULL)
 		*args->a_runp = 0;
 	if (args->a_runb != NULL)
@@ -767,12 +759,6 @@ slsfs_bmap(struct vop_bmap_args *args)
 	}
 
 	*bnp = (extbn + (lbn - extlbn)) * scaling;
-
-	/* Update the readahead. */
-	if (args->a_runb != NULL)
-		*args->a_runb = (lbn - extlbn);
-	if (args->a_runp != NULL)
-		*args->a_runp = (extlbn + extsize - lbn - 1);
 
 	return (0);
 }
@@ -1793,12 +1779,17 @@ slsfs_symlink(struct vop_symlink_args *ap)
 		vput(vp);
 		return ENOTDIR;
 	}
+
 	len = strlen(ap->a_target);
-	error = vn_rdwr(UIO_WRITE, vp, ap->a_target, len, 0, UIO_SYSSPACE,
-	    IO_NODELOCKED | IO_NOMACCHECK, cnp->cn_cred, NOCRED, NULL, NULL);
+	SLSVP(vp)->sn_ino.ino_size = len;
+
+	error = vn_rdwr(UIO_WRITE, vp, ap->a_target, len, (off_t)0,
+	    UIO_SYSSPACE, IO_NODELOCKED | IO_NOMACCHECK, cnp->cn_cred, NOCRED,
+	    NULL, NULL);
 	if (error) {
 		vput(vp);
 	}
+	SLSVP(vp)->sn_status |= SLOS_DIRTY;
 	*vpp = vp;
 
 	return (error);

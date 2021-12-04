@@ -58,7 +58,6 @@ slsfs_buf_nocollide(struct vnode *vp, struct fnode_iter *biter, uint64_t bno,
 	if (error) {
 		panic("Could not acquire lock upgrade on Btree %d", error);
 	}
-
 	error = fbtree_insert(tree, &bno, &ptr);
 	if (error) {
 		panic("Problem inserting into tree");
@@ -110,7 +109,6 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size,
 
 	error = slsfs_lookupbln(svp, bno, &biter);
 	if (error) {
-		DEBUG1("%d", error);
 		return (error);
 	}
 	size = roundup(size, IOSIZE(svp));
@@ -285,6 +283,7 @@ slsfs_bdirty(struct buf *buf)
 
 	/* Be aggressive and start the IO immediately. */
 	buf->b_flags |= B_CLUSTEROK;
+	SLSVP(buf->b_vp)->sn_status |= SLOS_DIRTY;
 	bawrite(buf);
 
 	atomic_add_64(&slos.slos_sb->sb_used, size / BLKSIZE(&slos));

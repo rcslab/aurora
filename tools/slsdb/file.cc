@@ -41,7 +41,7 @@ InodeFile::availableInodes()
 {
 	std::vector<std::pair<uint64_t, diskptr_t>> arr;
 	auto iter = tree.keymax(0);
-	while (iter.valid()) {
+	while (iter.valid() == ITER_GOOD) {
 		arr.push_back(std::make_pair(iter.key(), iter.val()));
 		iter = iter.next();
 	}
@@ -93,6 +93,12 @@ rec_to_string(uint64_t type)
 	default:
 		return "Unknown Type";
 	}
+}
+
+int
+SFile::verify()
+{
+	return tree.verify();
 }
 
 std::string

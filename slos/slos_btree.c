@@ -430,7 +430,7 @@ fnode_cow(struct fbtree *tree, struct buf *bp)
 	int error;
 	diskptr_t ptr;
 	bnode_ptr old;
-	struct fnode *parent;
+	struct fnode *parent = NULL;
 	struct slos *slos =
 	    ((struct slos_node *)tree->bt_backend->v_data)->sn_slos;
 	struct bufobj *bo = &tree->bt_backend->v_bufobj;
@@ -449,6 +449,7 @@ fnode_cow(struct fbtree *tree, struct buf *bp)
 	}
 
 	MPASS(cur->fn_buf == bp);
+	MPASS(cur->fn_location == bp->b_lblkno);
 	/* Alocate a new block the btree node */
 	error = slos_blkalloc(slos, BLKSIZE(slos), &ptr);
 #ifdef SHOWCOW
@@ -522,12 +523,13 @@ fnode_cow(struct fbtree *tree, struct buf *bp)
 		fnode_cow(tree, parent->fn_buf);
 	} else {
 		tree->bt_root = cur->fn_location;
+		fbtree_execrc(tree);
 	}
 
 	cur->fn_buf->b_flags |= B_MANAGED;
 	/*  Before we flush we should set magic value */
 	cur->fn_dnode->dn_magic = DN_MAGIC;
-	bwrite(cur->fn_buf);
+	bdwrite(cur->fn_buf);
 
 	return 0;
 }
@@ -628,7 +630,7 @@ fnode_right(struct fnode *node, struct fnode **right)
 int
 fbtree_sync(struct fbtree *tree)
 {
-	int error;
+	int error = 0;
 	struct buf *bp, *tbd;
 	struct fnode *node;
 	struct bufobj *bo = &tree->bt_backend->v_bufobj;
@@ -637,7 +639,9 @@ fbtree_sync(struct fbtree *tree)
 	BTREE_LOCK(tree, LK_EXCLUSIVE);
 	VOP_LOCK(tree->bt_backend, LK_EXCLUSIVE);
 
+	BO_LOCK(bo);
 tryagain:
+	BO_UNLOCK(bo);
 	if (bo->bo_dirty.bv_cnt) {
 		TAILQ_FOREACH_SAFE (bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
 			fnode_cow(tree, bp);
@@ -647,11 +651,6 @@ tryagain:
 
 		/* Apply COW to every tree buffer. */
 		TAILQ_FOREACH_SAFE (bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
-			error = BUF_LOCK(
-			    bp, LK_EXCLUSIVE | LK_INTERLOCK, BO_LOCKPTR(bo));
-			if (error != 0) {
-				panic("Unhandled BUF_LOCK failure %d\n", error);
-			}
 			if (!BP_ISCOWED(bp)) {
 				DEBUG1("Problem with %p", bp);
 				if (attempts > BTREE_MAX_COW_ATTEMPTS) {
@@ -660,11 +659,8 @@ tryagain:
 					    BTREE_MAX_COW_ATTEMPTS);
 				}
 				attempts++;
-				BUF_UNLOCK(bp);
 				goto tryagain;
 			}
-			BUF_UNLOCK(bp);
-			BO_LOCK(bo);
 		}
 
 		/* Now that everything is COWed and immutable, flush it to the
@@ -715,6 +711,8 @@ tryagain:
 		BO_LOCK(bo);
 	}
 
+	error = bufobj_wwait(bo, 0, 0);
+	MPASS(error == 0);
 	BO_UNLOCK(bo);
 
 	VOP_UNLOCK(tree->bt_backend, 0);
@@ -1097,7 +1095,6 @@ fbtree_destroy(struct fbtree *tree)
 	KASSERT(pctrie_is_empty(&tree->bt_trie), ("Trie should be empty"));
 	rw_wunlock(&tree->bt_trie_lock);
 	BTREE_UNLOCK(tree, 0);
-	vinvalbuf(tree->bt_backend, 0, 0, 0);
 	vnode_destroy_vobject(tree->bt_backend);
 	vput(tree->bt_backend);
 }
@@ -1315,11 +1312,14 @@ fnode_create(
 	node->fn_dnode = (struct dnode *)node->fn_buf->b_data;
 	node->fn_dnode->dn_flags = type;
 	node->fn_dnode->dn_numkeys = 0;
+	BP_UNCOWED(node->fn_buf);
 
 	fnode_setup(node, tree, ptr);
 
 	// Node max is dependent on type to calculate correctly
 	bqrelse(node->fn_buf);
+
+	fnode_write(node);
 
 	return (0);
 }
@@ -1706,10 +1706,6 @@ fnode_split(struct fnode *node)
 	fnode_write(right);
 	fnode_parent(node, &parent);
 	fnode_write(node);
-
-	if (newroot) {
-		fbtree_execrc(parent->fn_tree);
-	}
 
 	DEBUG2("split %p, %p", node, right);
 	return (0);
@@ -2196,24 +2192,21 @@ fnode_write(struct fnode *node)
 
 	KASSERT(BTREE_LKSTATUS(node->fn_tree) & (LK_EXCLUSIVE),
 	    ("Should be locked exclusively"));
-	struct fnode *parent;
+
 	if (node->fn_buf->b_xflags & BX_VNDIRTY) {
 		return;
 	}
 
-	while (node) {
-		error = BUF_LOCK(node->fn_buf, LK_EXCLUSIVE, NULL);
-		if (error != 0) {
-			panic("Unhandled BUF_LOCK failure %d\n", error);
-		}
-		if ((node->fn_buf->b_flags & B_MANAGED) == 0) {
-			node->fn_buf->b_flags |= B_CLUSTEROK | B_MANAGED;
-			bremfree(node->fn_buf);
-		}
-		bdwrite(node->fn_buf);
-		fnode_parent(node, &parent);
-		node = parent;
+	error = BUF_LOCK(node->fn_buf, LK_EXCLUSIVE, NULL);
+	if (error != 0) {
+		panic("Unhandled BUF_LOCK failure %d\n", error);
 	}
+	if ((node->fn_buf->b_flags & B_MANAGED) == 0) {
+		node->fn_buf->b_flags |= B_CLUSTEROK | B_MANAGED;
+		bremfree(node->fn_buf);
+	}
+
+	bdwrite(node->fn_buf);
 }
 
 /*

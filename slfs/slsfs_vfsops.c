@@ -535,7 +535,8 @@ again:
 		// Skip over the btrees for now as we will sync them after the
 		// data syncs
 		if ((vp->v_vflag & VV_SYSTEM) ||
-		    ((vp->v_type != VDIR) && (vp->v_type != VREG)) ||
+		    ((vp->v_type != VDIR) && (vp->v_type != VREG) &&
+			(vp->v_type != VLNK)) ||
 		    (vp->v_data == NULL)) {
 			vput(vp);
 			continue;
@@ -558,6 +559,7 @@ again:
 				return;
 			}
 		}
+
 		vput(vp);
 	}
 

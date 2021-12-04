@@ -18,6 +18,7 @@ class SFile {
 	int dumpTo(std::string path);
 	virtual void print();
 	void hexdump();
+	int verify();
 
 	friend std::shared_ptr<SFile> createFile(Snapshot *sb, long blknum);
 
