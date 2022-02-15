@@ -1,4 +1,4 @@
-NAME=pymetro
+NAME=metrosimple
 
 PROG= $(NAME)
 SRC= $(NAME).c

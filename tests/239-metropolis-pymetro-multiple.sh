@@ -5,7 +5,7 @@
 aursetup
 
 echo "$PWD"
-./pymetro/pymetro -s 1>&2 &
+./metrosimple/metrosimple -s 1>&2 &
 PID=$!
 
 wait $PID

@@ -17,28 +17,30 @@
 #include <sysexits.h>
 #include <unistd.h>
 
-#define OID (SLS_DEFAULT_PARTITION)
+#define OID (1000)
 #define LOCALHOST ("127.0.0.1")
-#define ORIGSOCKET (7776)
-#define ORIGSOCKETSTR ("7776")
+#define PARENTSOCK (7776)
+#define PARENTSOCKSTR ("7776")
 #define SOCKET (7777)
-#define SOCKETSTR ("7777")
-#define SOCKSTRSIZE (256)
 #define SCALING (5)
 #define BACKLOG (4)
-#define REPEATS (1)
-#define MSG ("ready")
-char buf[sizeof(MSG)];
+#define REPEATS (4)
+#define BUFSIZE (128)
+
+#define SERVER ("./metroserver/metroserver")
+#define CLIENT ("./metroclient/metroclient")
+
+char buf[BUFSIZE];
 
 static struct option pymetro_longopts[] = {
 	{ "accept4", no_argument, NULL, '4' },
-	{ "scale", no_argument, NULL, 's' },
+	{ "cached", no_argument, NULL, 'c' },
 	{ NULL, no_argument, NULL, 0 },
 };
 
 /* Test whether we're in Metropolis mode. */
 void
-testsls(uint64_t oid, bool expected)
+testsls(bool expected)
 {
 	uint64_t realoid;
 	bool insls;
@@ -57,15 +59,6 @@ testsls(uint64_t oid, bool expected)
 		else
 			fprintf(stderr, "Parent process %d is in the SLS\n",
 			    getpid());
-		exit(EX_OSERR);
-	}
-
-	if (!insls)
-		return;
-
-	if (realoid != OID) {
-		fprintf(
-		    stderr, "Metropolis process is in the wrong partition\n");
 		exit(EX_OSERR);
 	}
 }
@@ -105,7 +98,7 @@ testaccept_sockaddr(struct sockaddr_in *sa)
 	int error;
 
 	sa->sin_family = AF_INET;
-	sa->sin_port = htons(SOCKET);
+	sa->sin_port = htons(PARENTSOCK);
 	error = inet_pton(AF_INET, LOCALHOST, &sa->sin_addr.s_addr);
 	if (error == -1) {
 		perror("inet_pton");
@@ -165,17 +158,17 @@ testaccept_listening(struct sockaddr_in *sa, int *fd)
  * instance.
  */
 void
-testaccept_parent(bool scale)
+testaccept_parent(void)
 {
-	char *args[] = { "python3", "pymetro/client.py", SOCKETSTR, NULL };
+	char *args[] = { CLIENT, "-s", PARENTSOCKSTR, NULL };
 	struct sockaddr_in sa;
 	int listsock, datasock;
 	int error, i, j;
-	int forks;
 	pid_t pid;
 
-	/* Wait for the child to exit due to checkpointing itself. */
-	wait_child();
+	/* Wait for the children to exit due to checkpoint themselves. */
+	for (i = 0; i < SCALING; i++)
+		wait_child();
 
 	/* The child is done, set up the listening socket for ourselves. */
 	testaccept_sockaddr(&sa);
@@ -183,8 +176,8 @@ testaccept_parent(bool scale)
 
 	/* Create a new socket. We will connect to a new instance. */
 	for (i = 0; i < REPEATS; i++) {
-		forks = (scale) ? SCALING : 1;
-		for (j = 0; j < forks; j++) {
+		for (j = 0; j < SCALING; j++) {
+			/* Create the clients. */
 			pid = fork();
 			if (pid < 0) {
 				perror("fork");
@@ -192,8 +185,7 @@ testaccept_parent(bool scale)
 			}
 
 			if (pid == 0) {
-				error = execve(
-				    "/usr/local/bin/python3", args, NULL);
+				error = execve(CLIENT, args, NULL);
 				if (error < 0) {
 					perror("execve");
 					exit(EX_OSERR);
@@ -202,9 +194,9 @@ testaccept_parent(bool scale)
 		}
 
 		/* Create as many forks as we need. */
-		for (j = 0; j < forks; j++) {
+		for (j = 0; j < SCALING; j++) {
 		retry:
-			error = sls_metropolis_spawn(OID, listsock);
+			error = sls_metropolis_spawn(OID + i, listsock);
 			if (error == EAGAIN) {
 				printf(
 				    "PID of function already in use, retrying...\n");
@@ -218,10 +210,11 @@ testaccept_parent(bool scale)
 			}
 		}
 
-		/* Wait for all children. */
-		for (j = 0; j < forks; j++)
+		/* Wait for all children, clients and servers. */
+		for (j = 0; j < SCALING; j++) {
 			wait_child();
-		wait_child();
+			wait_child();
+		}
 	}
 
 	exit(EX_OK);
@@ -230,22 +223,25 @@ testaccept_parent(bool scale)
 int
 main(int argc, char **argv)
 {
-	char *args[] = { "python3", "pymetro/server.py", ORIGSOCKETSTR, NULL };
-	bool scale = false;
-	bool isaccept4;
+	char *args[] = { SERVER, "-s", buf, NULL };
+	struct sls_attr attr;
+	bool cached = false;
+	bool isaccept4 = false;
+	uint64_t oid;
 	pid_t pid;
 	int error;
 	long opt;
+	int i;
 
-	while ((opt = getopt_long(argc, argv, "4s", pymetro_longopts, NULL)) !=
+	while ((opt = getopt_long(argc, argv, "4c", pymetro_longopts, NULL)) !=
 	    -1) {
 		switch (opt) {
 		case '4':
 			isaccept4 = true;
 			break;
 
-		case 's':
-			scale = true;
+		case 'c':
+			cached = true;
 			break;
 
 		default:
@@ -255,33 +251,56 @@ main(int argc, char **argv)
 		}
 	}
 
-	error = sls_metropolis(OID);
-	if (error != 0) {
-		perror("sls_metropolis");
-		exit(EX_OSERR);
-	}
+	/* Create independent server processes. */
+	for (i = 0; i < SCALING; i++) {
+		pid = fork();
+		if (pid < 0) {
+			perror("fork");
+			exit(EX_OSERR);
+		}
 
-	pid = fork();
-	if (pid < 0) {
-		perror("fork");
-		exit(EX_OSERR);
-	}
+		if (pid == 0) {
+			/* Create the private partition for the child. */
+			oid = OID + i;
+			attr = (struct sls_attr) {
+				.attr_target = SLS_OSD,
+				.attr_mode = SLS_DELTA,
+				.attr_flags = SLSATTR_IGNUNLINKED |
+				    SLSATTR_LAZYREST,
+			};
 
-	/*
-	 * We don't get into Metropolis from the child when using fork(), but
-	 * when calling accept().
-	 */
-	testsls(OID, false);
+			if (cached)
+				attr.attr_flags |= SLSATTR_CACHEREST;
 
-	if (pid == 0) {
-		error = execve("/usr/local/bin/python3", args, NULL);
-		if (error != 0) {
-			perror("execve");
+			error = sls_partadd(oid, attr);
+			if (error != 0) {
+				perror("sls_partadd");
+				exit(EX_OSERR);
+			}
+
+			/* Enter Metropolis mode using that partition. */
+			error = sls_metropolis(oid);
+			if (error != 0) {
+				perror("sls_metropolis");
+				exit(EX_OSERR);
+			}
+
+			/* Each child gets their own litening socket port. */
+			snprintf(buf, BUFSIZE, "%d", SOCKET + i);
+
+			/* Call the server. */
+			error = execve(SERVER, args, NULL);
+			if (error != 0)
+				perror("execve");
+
 			exit(EX_OSERR);
 		}
 	}
 
-	testaccept_parent(scale);
+	/* The parent isn't in Metropolis. */
+	testsls(false);
+
+	testaccept_parent();
 
 	return (0);
 }

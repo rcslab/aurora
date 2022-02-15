@@ -8,6 +8,11 @@
 extern "C" {
 #endif
 
+/* The range in which OIDs can fall. */
+#define SLS_OIDRANGE ((1 << 16) - 1)
+#define SLS_OIDMIN (1)
+#define SLS_OIDMAX ((SLS_OIDMIN) + (SLS_OIDRANGE))
+
 /* The attributes of a process in the SLS. */
 struct sls_attr {
 	int attr_target; /* Backend into which the process is checkpointed */

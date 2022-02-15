@@ -1,6 +1,6 @@
 SUBDIR = array compute fd fifo fork forkwait journal kqueue llist main memsnap \
 	 metropolis mmap multithread register pipe pgroup posixshm \
-	 print pymetro pymetro-partition sharemap selfie signal sleep \
+	 print metroclient metroserver metrosimple metroparts sharemap selfie signal sleep \
 	 slsfs socketpair sysvshm tcplisten udplisten unixlisten unlink wal
 
 BINDIR=/usr/aurora/tests

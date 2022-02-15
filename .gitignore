@@ -29,8 +29,10 @@ tests/pgroup/pgroup
 tests/pipe/pipe
 tests/posixshm/posixshm
 tests/print/print
-tests/pymetro/pymetro
-tests/pymetro-partition/pymetro-partition
+tests/metroclient/metroclient
+tests/metroparts/metroparts
+tests/metroserver/metroserver
+tests/metrosimple/metrosimple
 tests/register/register
 tests/selfie/selfie
 tests/sharemap/sharemap

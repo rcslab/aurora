@@ -54,10 +54,10 @@
 /* The maximum size of a single data transfer */
 uint64_t sls_contig_limit = MAXBCACHEBUF;
 int sls_drop_io = 0;
-size_t sls_metadata_sent = 0;
-size_t sls_metadata_received = 0;
-size_t sls_data_sent = 0;
-size_t sls_data_received = 0;
+size_t sls_bytes_written_vfs = 0;
+size_t sls_bytes_read_vfs = 0;
+size_t sls_bytes_written_direct = 0;
+size_t sls_bytes_read_direct = 0;
 uint64_t sls_pages_grabbed = 0;
 uint64_t sls_io_initiated = 0;
 unsigned int sls_async_slos = 1;
@@ -147,9 +147,9 @@ sls_doio(struct vnode *vp, struct uio *auio)
 		MPASS(back != auio->uio_resid);
 	}
 	if (auio->uio_rw == UIO_WRITE)
-		sls_metadata_sent += iosize;
+		sls_bytes_written_vfs += iosize;
 	else
-		sls_metadata_received += iosize;
+		sls_bytes_read_vfs += iosize;
 out:
 
 	sls_io_initiated += 1;
@@ -446,6 +446,7 @@ sls_readpages_slos(struct vnode *vp, vm_object_t obj, struct slos_extent sxt)
 	size_t pgleft;
 	int error, i;
 	int npages;
+	bool retry;
 
 	ma = malloc(sizeof(*ma) * btoc(MAXPHYS), M_SLSMM, M_WAITOK);
 
@@ -469,7 +470,18 @@ sls_readpages_slos(struct vnode *vp, vm_object_t obj, struct slos_extent sxt)
 		}
 		npages = imin(pgleft, npages);
 
-		bp = sls_pager_readbuf(obj, pindex, npages);
+		bp = sls_pager_readbuf(obj, pindex, npages, &retry);
+		while (retry) {
+			/*
+			 * If out of buffers wait until
+			 * more are available.
+			 */
+			VM_OBJECT_WUNLOCK(obj);
+			pause_sbt("wswbuf", SBT_1MS, 0, 0);
+			VM_OBJECT_WLOCK(obj);
+			bp = sls_pager_readbuf(obj, pindex, npages, &retry);
+		}
+
 		/*
 		 * The pages to be paged in are returned busied from the SLOS.
 		 * This is because the task is created from the pager, which
@@ -496,7 +508,7 @@ sls_readpages_slos(struct vnode *vp, vm_object_t obj, struct slos_extent sxt)
 	}
 
 	/* Update the pages read counter. */
-	sls_data_received += bp->b_resid;
+	sls_bytes_read_direct += bp->b_resid;
 	VM_OBJECT_WUNLOCK(obj);
 
 	free(ma, M_SLSMM);
@@ -860,6 +872,7 @@ sls_writeobj_data(struct vnode *vp, vm_object_t obj)
 {
 	vm_pindex_t pindex;
 	struct buf *bp;
+	bool retry;
 	int error;
 
 	sls_writeobj_bitmap(obj);
@@ -871,9 +884,25 @@ sls_writeobj_data(struct vnode *vp, vm_object_t obj)
 		 * Every logically contiguous chunk is physically contiguous in
 		 * backing storage.
 		 */
-		bp = sls_pager_writebuf(obj, pindex, sls_contig_limit);
-		if (bp == NULL)
+		VM_OBJECT_WLOCK(obj);
+		bp = sls_pager_writebuf(obj, pindex, sls_contig_limit, &retry);
+		while (retry) {
+			/*
+			 * XXX hack right now, if we are out of buffers we
+			 * are in deep trouble anyway.
+			 */
+			VM_OBJECT_WUNLOCK(obj);
+			pause_sbt("wswbuf", 10 * SBT_1MS, 0, 0);
+			VM_OBJECT_WLOCK(obj);
+			bp = sls_pager_writebuf(
+			    obj, pindex, sls_contig_limit, &retry);
+		}
+
+		VM_OBJECT_WUNLOCK(obj);
+		if (bp == NULL) {
+			KASSERT(retry == false, ("out of buffers"));
 			break;
+		}
 		/*
 		 * The pindex from which we're going to search for the next run
 		 * of pages.
@@ -881,7 +910,7 @@ sls_writeobj_data(struct vnode *vp, vm_object_t obj)
 		pindex = bp->b_pages[bp->b_npages - 1]->pindex + 1;
 
 		/* Update the counter. */
-		sls_data_sent += bp->b_resid;
+		sls_bytes_written_direct += bp->b_resid;
 
 		BUF_ASSERT_LOCKED(bp);
 		error = slos_iotask_create(vp, bp, sls_async_slos);

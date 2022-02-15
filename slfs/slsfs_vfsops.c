@@ -619,6 +619,7 @@ again:
 		bp = getblk(svp->sn_fdev, ptr.offset, BLKSIZE(&slos), 0, 0, 0);
 		MPASS(bp);
 		memcpy(bp->b_data, ino, sizeof(struct slos_inode));
+		/* Async because we have a barrier below. */
 		bawrite(bp);
 
 		slos.slos_sb->sb_cksumtree = ptr;
@@ -627,7 +628,6 @@ again:
 		DEBUG1("Root Dir at %lu",
 		    SLSVP(slos.slsfs_inodes)->sn_ino.ino_blk);
 		DEBUG1("Inodes File at %lu", slos.slos_sb->sb_root.offset);
-
 		MPASS(ptr.offset != slos.slos_sb->sb_root.offset);
 
 		slos.slos_sb->sb_index = (slos.slos_sb->sb_epoch) % 100;
@@ -808,7 +808,8 @@ slsfs_wakeup_syncer(int is_exiting)
 	}
 
 	/* Wait until the syncer notifies us it's done. */
-	cv_wait(&slos.slsfs_sync_cv, &slos.slsfs_sync_lk);
+	while (slos.slsfs_syncing)
+		cv_wait(&slos.slsfs_sync_cv, &slos.slsfs_sync_lk);
 	mtx_unlock(&slos.slsfs_sync_lk);
 
 	return (0);

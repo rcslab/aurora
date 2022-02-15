@@ -136,7 +136,8 @@ sls_pager_done_setup(struct buf *bp)
 }
 
 struct buf *
-sls_pager_readbuf(vm_object_t obj, vm_pindex_t pindex, size_t npages)
+sls_pager_readbuf(
+    vm_object_t obj, vm_pindex_t pindex, size_t npages, bool *retry)
 {
 	struct buf *bp;
 	int i;
@@ -145,6 +146,10 @@ sls_pager_readbuf(vm_object_t obj, vm_pindex_t pindex, size_t npages)
 	VM_OBJECT_ASSERT_WLOCKED(obj);
 
 	bp = getpbuf(&slos_pbufcnt);
+	if (bp == NULL) {
+		*retry = true;
+		return (NULL);
+	}
 
 	vm_page_grab_pages(obj, pindex, VM_ALLOC_NORMAL, bp->b_pages, npages);
 	for (i = 0; i < npages; i++) {
@@ -160,6 +165,7 @@ sls_pager_readbuf(vm_object_t obj, vm_pindex_t pindex, size_t npages)
 	bp->b_iocmd = BIO_READ;
 
 	sls_pager_done_setup(bp);
+	*retry = false;
 
 	return (bp);
 }
@@ -168,12 +174,16 @@ sls_pager_readbuf(vm_object_t obj, vm_pindex_t pindex, size_t npages)
  * Create a buffer with the pages to be sent out.
  */
 struct buf *
-sls_pager_writebuf(vm_object_t obj, vm_pindex_t pindex, size_t targetsize)
+sls_pager_writebuf(
+    vm_object_t obj, vm_pindex_t pindex, size_t targetsize, bool *retry)
 {
 	size_t npages = 0;
 	vm_pindex_t pindex_init;
 	struct buf *bp;
 	vm_page_t m;
+
+	/* Read the global variable once here to prevent possible races. */
+	VM_OBJECT_ASSERT_WLOCKED(obj);
 
 	KASSERT(targetsize <= sls_contig_limit,
 	    ("page %lx is larger than sls_contig_limit %lx", targetsize,
@@ -184,10 +194,15 @@ sls_pager_writebuf(vm_object_t obj, vm_pindex_t pindex, size_t targetsize)
 	    ("object has %d references and %d shadows", obj->ref_count,
 		obj->shadow_count));
 
-	bp = getpbuf(&slos_pbufcnt);
-	KASSERT(bp != NULL, ("did not get new physical buffer"));
+	bp = trypbuf(&slos_pbufcnt);
+	if (bp == NULL) {
+		*retry = true;
+		return (NULL);
+	}
 
-	VM_OBJECT_WLOCK(obj);
+	KASSERT(bp != NULL, ("did not get new physical buffer"));
+	KASSERT(bp->b_resid == 0, ("Buffer already has resid"));
+
 	for (m = vm_page_find_least(obj, pindex); m != NULL;
 	     m = vm_page_next(m)) {
 		if (npages == 0)
@@ -208,6 +223,8 @@ sls_pager_writebuf(vm_object_t obj, vm_pindex_t pindex, size_t targetsize)
 		m->oflags |= VPO_SWAPINPROG;
 		bp->b_pages[npages++] = m;
 		bp->b_resid += pagesizes[m->psind];
+		KASSERT(pagesizes[m->psind] == PAGE_SIZE,
+		    ("unexpected page size %ld", pagesizes[m->psind]));
 		if (bp->b_resid == targetsize)
 			break;
 	}
@@ -215,7 +232,8 @@ sls_pager_writebuf(vm_object_t obj, vm_pindex_t pindex, size_t targetsize)
 	/* We didn't find any pages. */
 	if (npages == 0) {
 		relpbuf(bp, &slos_pbufcnt);
-		VM_OBJECT_WUNLOCK(obj);
+		*retry = false;
+
 		return (NULL);
 	}
 
@@ -229,9 +247,10 @@ sls_pager_writebuf(vm_object_t obj, vm_pindex_t pindex, size_t targetsize)
 	sls_pages_grabbed += bp->b_npages;
 
 	sls_pager_done_setup(bp);
-	VM_OBJECT_WUNLOCK(obj);
 
 	BUF_ASSERT_LOCKED(bp);
+
+	*retry = false;
 
 	return (bp);
 }
@@ -317,9 +336,13 @@ static void
 sls_pager_putpages(
     vm_object_t obj, vm_page_t *ma, int count, int flags, int *rtvals)
 {
+	size_t target_pagecnt;
 	struct buf *bp;
 	int error, i;
+	bool retry;
 	bool sync;
+
+	VM_OBJECT_ASSERT_WLOCKED(obj);
 
 	if (sls_pager_obj_init(obj) != 0) {
 		for (i = 0; i < count; i++)
@@ -333,14 +356,27 @@ sls_pager_putpages(
 	else
 		sync = (flags & VM_PAGER_PUT_SYNC) != 0;
 
-	bp = sls_pager_writebuf(obj, ma[0]->pindex, count * PAGE_SIZE);
+	/* We can do contiguous IOs up to a certain number of pages. */
+	target_pagecnt = min(count, sls_contig_limit / PAGE_SIZE);
+	bp = sls_pager_writebuf(
+	    obj, ma[0]->pindex, target_pagecnt * PAGE_SIZE, &retry);
+	if (retry) {
+		/* We're out of memory, try again. */
+		for (i = target_pagecnt; i < count; i++)
+			rtvals[i] = VM_PAGER_AGAIN;
 
-	for (i = 0; i < count; i++) {
+		return;
+	}
+
+	for (i = 0; i < target_pagecnt; i++) {
 		KASSERT(ma[i]->dirty == VM_PAGE_BITS_ALL,
 		    ("swapping out clean page"));
 		KASSERT(ma[i] == bp->b_pages[i], ("bp page array is wrong"));
 		rtvals[i] = VM_PAGER_PEND;
 	}
+
+	for (i = target_pagecnt; i < count; i++)
+		rtvals[i] = VM_PAGER_AGAIN;
 
 	/*
 	 * XXX We need to make certain this will succeed; VM_PAGER_PEND actually
@@ -394,6 +430,7 @@ sls_pager_getpages(
 	vm_pindex_t pindex;
 	struct buf *bp;
 	int error, i;
+	bool retry;
 
 	/* Make sure we have all pages, not just the one we looked for. */
 	if (!sls_pager_haspage(obj, ma[0]->pindex, &maxbehind, &maxahead))
@@ -468,7 +505,10 @@ sls_pager_getpages(
 	for (i = 0; i < count; i++)
 		vm_page_xunbusy(ma[i]);
 
-	bp = sls_pager_readbuf(obj, pindex, npages);
+	do {
+		bp = sls_pager_readbuf(obj, pindex, npages, &retry);
+	} while (retry);
+
 	if (bp == NULL)
 		return (VM_PAGER_FAIL);
 

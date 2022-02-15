@@ -140,18 +140,13 @@ void slsrest_kqattach_locked(struct proc *p, struct kqueue *kq);
 void slsrest_kqattach(struct proc *p, struct kqueue *kq);
 void slsrest_kqdetach(struct kqueue *kq);
 
-/* The range in which OIDs can fall. */
-#define SLS_OIDRANGE (64 * 1024)
-#define SLS_OIDMIN (1)
-#define SLS_OIDMAX ((SLS_OIDMIN) + (SLS_OIDRANGE))
-
 extern struct sysctl_ctx_list aurora_ctx;
 
 /* Statistics and configuration variables accessible through sysctl. */
-extern uint64_t sls_metadata_sent;
-extern uint64_t sls_metadata_received;
-extern uint64_t sls_data_sent;
-extern uint64_t sls_data_received;
+extern uint64_t sls_bytes_written_vfs;
+extern uint64_t sls_bytes_read_vfs;
+extern uint64_t sls_bytes_written_direct;
+extern uint64_t sls_bytes_read_direct;
 extern int sls_vfs_sync;
 extern int sls_drop_io;
 extern uint64_t sls_pages_grabbed;

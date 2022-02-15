@@ -1223,6 +1223,7 @@ slsfs_setattr(struct vop_setattr_args *args)
 		default:
 			return (0);
 		}
+
 		error = slos_truncate(vp, vap->va_size);
 		if (error) {
 			return (error);

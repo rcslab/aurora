@@ -381,6 +381,11 @@ slssock_restore_afinet(struct slssock *slssock, int fd, uint64_t slsmetr_sockid)
 	 * XXXHACK If this is a listening socket for a Metropolis function,
 	 * assign it a random port, much like accept() does.
 	 *  Try randomly picking a number from 1024 to 65535
+	 *
+	 *  TODO: Every time accept() gets called from this special
+	 *  socket the Metropolis function goes into hibernation, waiting for
+	 *  a warm invocation. Metropolis cleans up unused functions after a
+	 *  timeout.
 	 */
 	if (slsmetr_sockid == slssock->slsid) {
 

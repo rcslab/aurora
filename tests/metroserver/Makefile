@@ -1,4 +1,4 @@
-NAME=pymetro-partition
+NAME=metroserver
 
 PROG= $(NAME)
 SRC= $(NAME).c

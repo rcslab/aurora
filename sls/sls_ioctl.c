@@ -606,17 +606,17 @@ sls_sysctl_init(void)
 	    0, "Aurora statistics and configuration variables");
 
 	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
-	    "metadata_sent", CTLFLAG_RD, &sls_metadata_sent, 0,
-	    "Bytes of metadata sent to the disk");
+	    "bytes_written_vfs", CTLFLAG_RD, &sls_bytes_written_vfs, 0,
+	    "Bytes written using the VFS interface");
 	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
-	    "metadata_received", CTLFLAG_RD, &sls_metadata_sent, 0,
-	    "Bytes of metadata received from the disk");
+	    "bytes_read_vfs", CTLFLAG_RD, &sls_bytes_read_vfs, 0,
+	    "Bytes read using the VFS interface");
 	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
-	    "data_sent", CTLFLAG_RD, &sls_data_sent, 0,
-	    "Bytes of data sent to the disk");
+	    "bytes_written_direct", CTLFLAG_RD, &sls_bytes_written_direct, 0,
+	    "Bytes written using direct SLOS IO");
 	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
-	    "data_received", CTLFLAG_RD, &sls_data_sent, 0,
-	    "Bytes of data received from the disk");
+	    "bytes_read_direct", CTLFLAG_RD, &sls_bytes_read_direct, 0,
+	    "Bytes read using direct SLOS IO");
 	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "pages_grabbed", CTLFLAG_RD, &sls_pages_grabbed, 0,
 	    "Pages grabbed by the SLS");

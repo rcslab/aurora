@@ -47,8 +47,7 @@ slsmetropolis_register(struct thread *td, int s, int flags)
 	struct file *fp;
 	int error;
 
-	/* Lock to avoid races with the slsmetropolis_fork() call that created
-	 * us. */
+	/* Avoid races with the slsmetropolis_fork() call that created us. */
 	SLS_LOCK();
 	if (SLS_EXITING()) {
 		SLS_UNLOCK();

@@ -5,7 +5,7 @@
 aursetup
 
 echo "$PWD"
-./pymetro-partition/pymetro-partition -c 1>&2 &
+./metroparts/metroparts -c 1>&2 &
 PID=$!
 
 wait $PID

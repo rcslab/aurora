@@ -31,6 +31,7 @@ static MALLOC_DEFINE(M_SLOS_INO, "slos inodes", "SLOSI");
 struct unrhdr *slsid_unr;
 uma_zone_t slos_node_zone;
 struct sysctl_ctx_list slos_ctx;
+uint64_t slos_bytes_opened;
 
 #ifdef INVARIANTS
 static void
@@ -102,6 +103,10 @@ slos_init(void)
 	    "checkpointtime", CTLFLAG_RW, &checkpointtime, 0,
 	    "Checkpoint every X ms");
 
+	(void)SYSCTL_ADD_U64(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "bytes_opened", CTLFLAG_RD, &slos_bytes_opened, 0,
+	    "Total byte count of opened files");
+
 	/* Get a new unique identifier generator. */
 	slsid_unr = new_unrhdr(SLOS_SYSTEM_MAX, INT_MAX, NULL);
 
@@ -160,6 +165,37 @@ slsfs_root_rc(void *ctx, bnode_ptr p)
 {
 	struct slos_node *svp = (struct slos_node *)ctx;
 	svp->sn_ino.ino_btree.offset = p;
+}
+
+/*
+ * Measure the bytes of data occupied by an imported file.
+ * Ignores the data occupied by the backing btrees.
+ */
+static int
+slos_svpsize(struct slos_node *svp)
+{
+	struct fbtree *tree = &svp->sn_tree;
+	struct slos_diskptr ptr;
+	struct fnode_iter iter;
+	uint64_t offset = 0;
+	size_t bytecount = 0;
+	int error;
+
+	/* Start from the beginning of the file. */
+	error = fbtree_keymin_iter(tree, &offset, &iter);
+	if (error != 0)
+		return (error);
+
+	/* Each key-value pair is an extent. */
+	for (; !ITER_ISNULL(iter); ITER_NEXT(iter)) {
+		/* Get size from the physical disk pointer. */
+		ptr = ITER_VAL_T(iter, diskptr_t);
+		bytecount += ptr.size;
+	}
+
+	atomic_add_64(&slos_bytes_opened, bytecount);
+
+	return (0);
 }
 
 /*
@@ -233,6 +269,7 @@ slos_svpimport(
 	return (0);
 
 error:
+
 	DEBUG1("failed with %d", error);
 	uma_zfree(slos_node_zone, svp);
 	return (error);

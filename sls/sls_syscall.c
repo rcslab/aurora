@@ -69,6 +69,7 @@ static int
 slssyscall_fork(struct thread *td, void *data)
 {
 	struct fork_args *uap = (struct fork_args *)data;
+	bool in_metropolis;
 	struct proc *p;
 	int error;
 	pid_t pid;
@@ -95,10 +96,10 @@ slssyscall_fork(struct thread *td, void *data)
 		return (0);
 	}
 
-	/* If the system call vector is not the regular one, it is the
-	 * Metropolis one. */
-	sls_procadd(
-	    curproc->p_auroid, p, (curproc->p_sysent != &slssyscall_sysvec));
+	/* If the vector isn't the vanilla Aurora one, we we're in Metropolis.
+	 */
+	in_metropolis = curproc->p_sysent != &slssyscall_sysvec;
+	sls_procadd(curproc->p_auroid, p, in_metropolis);
 
 	PROC_UNLOCK(p);
 	SLS_UNLOCK();

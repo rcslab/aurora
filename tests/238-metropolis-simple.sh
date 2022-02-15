@@ -5,14 +5,15 @@
 aursetup
 
 echo "$PWD"
-./pymetro-partition/pymetro-partition  1>&2 &
+./metrosimple/metrosimple 1>&2 &
 PID=$!
 
 wait $PID
-if [ $? -ne 0 ];
+RET=$?
+if [ $RET -ne 0 ];
 then
-	echo "Metropolis mode failed"
-	aurteardown
+	echo "Metropolis mode failed with $RET"
+	aurteardown 
 	exit 1
 fi
 
