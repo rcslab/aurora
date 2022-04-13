@@ -153,6 +153,35 @@ slos_blkalloc(struct slos *slos, size_t bytes, diskptr_t *ptr)
 	}
 }
 
+/* Returns the amount of free bytes in the SLOS. */
+/*
+ * HACKS HACKS HACKS: Without GC what we're left with
+ * is a bump allocator. We just read the size of the
+ * leftover chunks to find how much space is left.
+ */
+int slos_freebytes(SYSCTL_HANDLER_ARGS)
+{
+	uint64_t freebytes;
+	struct fnode_iter iter;
+	uint64_t asked = 0;
+	int error;
+
+	error = fbtree_keymax_iter(STREE(&slos), &asked, &iter);
+	if (error != 0) {
+		return (error);
+	}
+
+	if (ITER_ISNULL(iter)) {
+		printf("SLOS is full!\n");
+		return (ENOSPC);
+	}
+
+	freebytes = ITER_KEY_T(iter, uint64_t);
+	error = SYSCTL_OUT(req, &freebytes, sizeof(freebytes));
+
+	return (error);
+}
+
 /*
  * Initialize the in-memory allocator state at mount time.
  */

@@ -1258,11 +1258,18 @@ sls_restored(struct sls_restored_args *args)
 	struct slspart *slsp = args->slsp;
 	int error;
 
+	if (!slsp_restorable(slsp)) {
+		error = EINVAL;
+		printf("WARN: Non restorable partition passed to sls_restored");
+		goto out;
+	}
+
 	/* Restore the old process. */
 	error = sls_rest(args->slsp, args->rest_stopped);
 	if (error != 0)
 		DEBUG1("Error: sls_rest failed with %d", error);
 
+out:
 	/* The caller is waiting for us, propagate the return value. */
 	slsp_signal(slsp, error);
 

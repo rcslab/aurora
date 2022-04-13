@@ -251,6 +251,9 @@ int sls_restore(struct sls_restore_args *args);
 void sls_procadd(uint64_t oid, struct proc *p, bool metropolis);
 void sls_procremove(struct proc *p);
 
+bool sls_proc_inpart(uint64_t oid, struct proc *p);
+bool sls_proc_insls(struct proc *p);
+
 MALLOC_DECLARE(M_SLSMM);
 MALLOC_DECLARE(M_SLSREC);
 

@@ -335,38 +335,6 @@ sls_readrec_buf(struct vnode *vp, size_t len, struct sbuf **sbp)
 }
 
 /*
- * Bring in a record from the backend.
- */
-static int
-sls_readrec_slos(struct vnode *vp, uint64_t slsid, struct sls_record **recp)
-{
-	struct sls_record *rec;
-	struct slos_rstat st;
-	struct sbuf *sb;
-	int error;
-
-	/* Get the record type. */
-	error = sls_get_rstat(vp, &st);
-	if (error != 0) {
-		SLS_DBG("getting record type failed with %d\n", error);
-		return (error);
-	}
-
-	KASSERT(st.len != 0,
-	    ("record of type %lx with SLS ID %lx is empty\n", st.type, slsid));
-
-	error = sls_readrec_buf(vp, st.len, &sb);
-	if (error != 0)
-		return (error);
-
-	/* Bundle the data into an SLS record. */
-	rec = sls_getrecord(sb, slsid, st.type);
-	*recp = rec;
-
-	return (0);
-}
-
-/*
  * Reads in the metadata record representing one or more SLS info structs.
  */
 static int
@@ -797,9 +765,7 @@ sls_read_slos_datarec(struct slspart *slsp, uint64_t oid,
 	}
 
 	/* Get the record type. */
-	VOP_UNLOCK(vp, LK_EXCLUSIVE);
-	error = VOP_IOCTL(vp, SLS_GET_RSTAT, &st, 0, NULL, td);
-	vn_lock(vp, LK_EXCLUSIVE);
+	error = sls_get_rstat(vp, &st);
 	if (error != 0) {
 		vput(vp);
 		DEBUG1("getting record type failed with %d\n", error);
@@ -946,7 +912,7 @@ sls_writeobj_bitmap(vm_object_t object)
  * This function is not inlined in order to be able to use DTrace on it.
  */
 static int __attribute__((noinline))
-sls_writeobj_data(struct vnode *vp, vm_object_t obj)
+sls_writeobj_data(struct vnode *vp, vm_object_t obj, size_t offset)
 {
 	vm_pindex_t pindex;
 	struct buf *bp;
@@ -987,6 +953,12 @@ sls_writeobj_data(struct vnode *vp, vm_object_t obj)
 		 */
 		pindex = bp->b_pages[bp->b_npages - 1]->pindex + 1;
 
+		/*
+		 * Apply an offset to the IO, useful for adding multiple
+		 * small data records in the same file.
+		 */
+		bp->b_lblkno += offset;
+
 		/* Update the counter. */
 		sls_bytes_written_direct += bp->b_resid;
 
@@ -1026,7 +998,8 @@ sls_createmeta_slos(uint64_t oid, struct vnode **vpp)
  * The record is contiguous, and only has data in the beginning.
  */
 static int
-sls_writemeta_slos(struct sls_record *rec, struct vnode **vpp, bool overwrite)
+sls_writemeta_slos(
+    struct sls_record *rec, struct vnode **vpp, bool overwrite, uint64_t offset)
 {
 	struct sbuf *sb = rec->srec_sb;
 	struct thread *td = curthread;
@@ -1059,7 +1032,7 @@ sls_writemeta_slos(struct sls_record *rec, struct vnode **vpp, bool overwrite)
 		goto error;
 
 	st.type = rec->srec_type;
-	st.len = len;
+	st.len = offset + len;
 
 	KASSERT(st.type != 0, ("invalid record type"));
 	KASSERT(st.len > 0, ("Writing out empty record of type %ld", st.type));
@@ -1075,7 +1048,7 @@ sls_writemeta_slos(struct sls_record *rec, struct vnode **vpp, bool overwrite)
 	/* Create the UIO for the disk. */
 	aiov.iov_base = record;
 	aiov.iov_len = len;
-	slos_uioinit(&auio, 0, UIO_WRITE, &aiov, 1);
+	slos_uioinit(&auio, offset, UIO_WRITE, &aiov, 1);
 
 	/* Keep reading until we get all the info. */
 	error = sls_doio(vp, &auio);
@@ -1122,39 +1095,41 @@ error:
  * in the VM object.
  */
 static int
-sls_writedata_slos(struct sls_record *rec, struct slskv_table *objtable)
+sls_writedata_slos(struct sls_record *rec, struct slsckpt_data *sckpt_data)
 {
+	size_t amplification = sckpt_data->sckpt_attr.attr_amplification;
 	struct sbuf *sb = rec->srec_sb;
 	struct thread *td = curthread;
 	int mode = FREAD | FWRITE;
 	struct slsvmobject *vminfo;
+	struct vnode *vp, **invp;
+	size_t offset;
 	vm_object_t obj;
-	struct vnode *vp;
 	int error, ret = 0;
+	size_t i;
 
-	/* The record number returned is the unique record ID. */
-	error = sls_writemeta_slos(rec, &vp, false);
-	if (error != 0)
-		return (error);
-
-	/* The node will exist, since we called sls_writemeta_slos().*/
-	error = VOP_OPEN(vp, mode, NULL, td, NULL);
-	if (error != 0)
-		return (error);
+	KASSERT(amplification > 0, ("amplification is 0"));
 
 	/*
-	 * We know that the sbuf holds a slsvmobject struct,
-	 * that's why we are in this function in the first place.
+	 * Send out the object's metadata. The amplification factor
+	 * is used when testing to stress the store quickly simulate
+	 * the creation of multiple checkpoints at once.
 	 */
-	if (rec->srec_type == SLOSREC_VMOBJ) {
-		vminfo = (struct slsvmobject *)sbuf_data(sb);
-		/* Get the object itself. */
-		obj = (vm_object_t)vminfo->objptr;
-	} else {
-		panic("invalid type %lx for metadata", rec->srec_type);
-		return (error);
+	for (i = 0; i < amplification; i++) {
+		offset = i * sbuf_len(rec->srec_sb);
+		/* Only the last iteration returns the locked vnode. */
+		invp = (i == amplification - 1) ? &vp : NULL;
+		error = sls_writemeta_slos(rec, invp, false, offset);
+		if (error != 0)
+			return (error);
 	}
 
+	if (rec->srec_type != SLOSREC_VMOBJ)
+		panic("invalid type %lx for metadata", rec->srec_type);
+
+	/* Get the object itself. */
+	vminfo = (struct slsvmobject *)sbuf_data(sb);
+	obj = (vm_object_t)vminfo->objptr;
 	VM_OBJECT_WLOCK(obj);
 
 	/*
@@ -1165,10 +1140,15 @@ sls_writedata_slos(struct sls_record *rec, struct slskv_table *objtable)
 	if (((obj->type != OBJT_DEFAULT) && (obj->type != OBJT_SWAP)))
 		goto out;
 
-	/* Send out the object's data. */
-	ret = sls_writeobj_data(vp, obj);
-	if (ret != 0)
-		goto out;
+	/*
+	 * Send out the object's data, possibly amplify (explained above).
+	 */
+	for (i = 0; i < amplification; i++) {
+		offset = i * obj->size * SLOS_OBJOFF;
+		ret = sls_writeobj_data(vp, obj, offset);
+		if (ret != 0)
+			goto out;
+	}
 
 out:
 	VM_OBJECT_WUNLOCK(obj);
@@ -1201,7 +1181,7 @@ sls_write_slos_manifest(uint64_t oid, struct sbuf *sb)
 		.srec_sb = sb,
 	};
 
-	error = sls_writemeta_slos(&rec, NULL, true);
+	error = sls_writemeta_slos(&rec, NULL, true, 0);
 	if (error != 0)
 		return (error);
 
@@ -1221,7 +1201,7 @@ sls_write_slos_dataregion(struct slsckpt_data *sckpt_data)
 		/* We only dump VM objects. */
 		KASSERT(sls_isdata(rec->srec_type),
 		    ("dumping non object %ld", rec->srec_type));
-		error = sls_writedata_slos(rec, sckpt_data->sckpt_objtable);
+		error = sls_writedata_slos(rec, sckpt_data);
 		if (error != 0) {
 			KV_ABORT(iter);
 			printf("Writing to the SLOS failed with %d\n", error);
@@ -1232,6 +1212,11 @@ sls_write_slos_dataregion(struct slsckpt_data *sckpt_data)
 	return (0);
 }
 
+/*
+ * XXX Check if the taskqueue actually helps us saturate the disk/network,
+ * it is possible that in a lot of cases issuing the IOs is very cheap
+ * compared to actually servicing them in the lower layers.
+ */
 static void
 slstable_task(void *ctx, int __unused pending)
 {
@@ -1243,7 +1228,7 @@ slstable_task(void *ctx, int __unused pending)
 	 * VM object records are special, since we need to dump
 	 * actual memory along with the metadata.
 	 */
-	error = sls_writemeta_slos(rec, NULL, true);
+	error = sls_writemeta_slos(rec, NULL, true, 0);
 	if (error != 0)
 		printf("Writing to the SLOS failed with %d\n", error);
 
@@ -1275,8 +1260,7 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 	{
 		/* Create eachkrecord in parallel. */
 		if (sls_isdata(rec->srec_type)) {
-			error = sls_writedata_slos(
-			    rec, sckpt_data->sckpt_objtable);
+			error = sls_writedata_slos(rec, sckpt_data);
 			if (error != 0)
 				printf("Writing to the SLOS failed with %d\n",
 				    error);
@@ -1349,7 +1333,6 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 	/*
 	 * Write the huge metadata block.
 	 */
-
 	error = sls_write_slos_manifest(oid, sb_manifest);
 	if (error != 0)
 		goto out;

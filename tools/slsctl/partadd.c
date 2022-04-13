@@ -22,6 +22,7 @@ static struct option partadd_longopts[] = {
 	{ "cached restore", required_argument, NULL, 'c' },
 	{ "prefault", required_argument, NULL, 'p' },
 	{ "precopy", required_argument, NULL, 'e' },
+	{ "amplification", required_argument, NULL, 'a' },
 	{ NULL, no_argument, NULL, 0 },
 };
 
@@ -56,11 +57,16 @@ partadd_main(int argc, char *argv[])
 		.attr_mode = SLS_FULL,
 		.attr_period = 0,
 		.attr_flags = 0,
+		.attr_amplification = 1,
 	};
 
-	while ((opt = getopt_long(argc, argv, "b:cdilo:p:t:", partadd_longopts,
-		    NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv,
+		    "a:b:cdilo:p:t:", partadd_longopts, NULL)) != -1) {
 		switch (opt) {
+		case 'a':
+			/* Checkpoint amplification factor. */
+			attr.attr_amplification = strtol(optarg, NULL, 10);
+			break;
 		case 'c':
 			/* Prefaults only make sense for lazy restores. */
 			attr.attr_flags |= (SLSATTR_CACHEREST |

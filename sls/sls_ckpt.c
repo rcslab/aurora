@@ -60,6 +60,7 @@
 	(atomic_load_int(&slsp->slsp_status) != 0 && SLS_PROCALIVE(proc))
 
 int sls_vfs_sync = 0;
+int sls_only_flush_deltas = 0;
 uint64_t sls_ckpt_attempted;
 uint64_t sls_ckpt_done;
 uint64_t sls_ckpt_duration;
@@ -378,9 +379,19 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 
 	/* Initiate IO, if necessary. */
 	if (slsp->slsp_target == SLS_OSD) {
-		error = slsckpt_initio(slsp, sckpt_data);
-		if (error != 0)
-			DEBUG1("slsckpt_initio failed with %d", error);
+		/*
+		 * HACK: For Metropolis we want to measure
+		 * the storage density only of deltas, since
+		 * full checkpoint space usage is amortized.
+		 * Use a sysctl to blackhole full checkpoints.
+		 */
+		if (!sls_only_flush_deltas ||
+		    ((slsp->slsp_mode == SLS_DELTA) &&
+			(slsp->slsp_sckpt != NULL))) {
+			error = slsckpt_initio(slsp, sckpt_data);
+			if (error != 0)
+				DEBUG1("slsckpt_initio failed with %d", error);
+		}
 
 		SDT_PROBE1(sls, , sls_ckpt, , "Initiating IO to disk");
 	}
@@ -390,7 +401,6 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
 	if (slsp->slsp_target == SLS_OSD) {
 		taskqueue_drain_all(slos.slos_tq);
-		/* XXX Using MNT_WAIT is causing a deadlock right now. */
 		error = slsfs_wakeup_syncer(0);
 		if (error != 0)
 			printf(

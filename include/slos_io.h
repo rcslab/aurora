@@ -28,4 +28,7 @@ void slos_io_uninit(void);
 
 extern int slos_pbufcnt;
 
+extern uint64_t slos_io_initiated;
+extern uint64_t slos_io_done;
+
 #endif /* _SLOS_IO_H_ */

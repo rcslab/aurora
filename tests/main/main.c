@@ -70,6 +70,7 @@ checkpoint(pid_t pid, int period)
 		.attr_target = SLS_OSD,
 		.attr_mode = SLS_FULL,
 		.attr_period = period,
+		.attr_amplification = 1,
 	};
 
 	error = sls_partadd(oid, attr);

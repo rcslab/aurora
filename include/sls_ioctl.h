@@ -19,6 +19,7 @@ struct sls_attr {
 	int attr_mode;	 /* Full checkpoints or one of the delta modes? */
 	int attr_period; /* Checkpoint Period in ms */
 	int attr_flags;	 /* Control flags */
+	size_t attr_amplification; /* Partition amplification factor */
 };
 
 struct sls_checkpoint_args {

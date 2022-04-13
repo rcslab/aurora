@@ -32,6 +32,7 @@ struct unrhdr *slsid_unr;
 uma_zone_t slos_node_zone;
 struct sysctl_ctx_list slos_ctx;
 uint64_t slos_bytes_opened;
+static int slos_count_opened_bytes;
 
 #ifdef INVARIANTS
 static void
@@ -106,6 +107,16 @@ slos_init(void)
 	(void)SYSCTL_ADD_U64(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "bytes_opened", CTLFLAG_RD, &slos_bytes_opened, 0,
 	    "Total byte count of opened files");
+
+	(void)SYSCTL_ADD_INT(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "count_opened_bytes", CTLFLAG_RW, &slos_count_opened_bytes, 0,
+	    "Count size of opened files in bytes");
+
+	(void)SYSCTL_ADD_U64(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "io_initiated", CTLFLAG_RD, &slos_io_initiated, 0,
+	    "Direct buffer IOs initiated");
+	(void)SYSCTL_ADD_U64(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "io_done", CTLFLAG_RD, &slos_io_done, 0, "Direct buffer IOs done");
 
 	/* Get a new unique identifier generator. */
 	slsid_unr = new_unrhdr(SLOS_SYSTEM_MAX, INT_MAX, NULL);
@@ -264,6 +275,20 @@ slos_svpimport(
 		fbtree_reg_rootchange(&svp->sn_tree, &slos_generic_rc, svp);
 	}
 
+	/* Measure the size in bytes of the imported inode. */
+
+	/*
+	 * CAREFUL: Calling this every svpimport means we
+	 * measure a file multiple times if the userspace
+	 * access pattern causes us to constantly
+	 * deallocate/reallocate a vnode for it.
+	 */
+	if (!system && slos_count_opened_bytes) {
+		error = slos_svpsize(svp);
+		if (error)
+			printf("Error %d for slos_svpsize\n", error);
+	}
+
 	*svpp = svp;
 
 	return (0);
@@ -302,10 +327,10 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 	// For now we will use the blkno for our svpids
 	VOP_LOCK(root_vp, LK_EXCLUSIVE);
 	error = slsfs_lookupbln(svp, svpid, &iter);
+	VOP_UNLOCK(root_vp, LK_EXCLUSIVE);
 	if (error) {
 		return (error);
 	}
-	VOP_UNLOCK(root_vp, LK_EXCLUSIVE);
 
 	if (ITER_ISNULL(iter) || ITER_KEY_T(iter, uint64_t) != svpid) {
 		ITER_RELEASE(iter);

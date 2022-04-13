@@ -45,8 +45,7 @@ struct slspart {
 	struct mtx slsp_syncmtx; /* Mutex used for synchronization by the SLS */
 	struct cv slsp_synccv;	 /* CV used for synchronization by the SLS */
 	bool slsp_syncdone;	 /* Variable for slsp_signal/waitfor */
-	int slsp_retval; /* Return value of an operation done on the partition
-			  */
+	int slsp_retval;	 /* Return value of a partition operation */
 
 	struct mtx slsp_epochmtx; /* Mutex used for guarding the epoch */
 	struct cv slsp_epochcv;	  /* CV used for epoch events */
@@ -57,12 +56,16 @@ struct slspart {
 	struct slsmetr slsp_metr; /* Local Metropolis state */
 
 	LIST_ENTRY(slspart) slsp_parts; /* List of active SLS partitions */
+	bool slsp_restorable; /* Is the partition restorable or just for
+				 testing? */
 #define slsp_target slsp_attr.attr_target
 #define slsp_mode slsp_attr.attr_mode
+#define slsp_amplification slsp_attr.attr_amplification
 };
 
 LIST_HEAD(slsp_list, slspart);
 
+struct slspart *slsp_find_locked(uint64_t oid);
 struct slspart *slsp_find(uint64_t oid);
 
 int slsp_attach(uint64_t oid, pid_t pid);
@@ -90,6 +93,7 @@ int slsp_getstate(struct slspart *slsp);
 
 bool slsp_hasproc(struct slspart *slsp, pid_t pid);
 bool slsp_rest_from_mem(struct slspart *slsp);
+bool slsp_restorable(struct slspart *slsp);
 
 #define SLSP_IGNUNLINKED(slsp) (SLSATTR_ISIGNUNLINKED((slsp)->slsp_attr))
 #define SLSP_LAZYREST(slsp) (SLSATTR_ISLAZYREST((slsp)->slsp_attr))

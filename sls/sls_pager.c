@@ -105,7 +105,8 @@ sls_pager_done(struct buf *bp)
 
 	bp->b_npages = 0;
 	bp->b_bcount = bp->b_bufsize = 0;
-	bp->b_flags |= B_DONE;
+	/* Disassociate from the VM object ID. */
+	bp->b_aurobj = NULL;
 
 	bdone(bp);
 
@@ -133,6 +134,8 @@ sls_pager_done_setup(struct buf *bp)
 		bp->b_pages[i]->oflags |= VPO_SWAPINPROG;
 
 	bp->b_iodone = sls_pager_done;
+	/* Associate with a VM object ID. */
+	bp->b_aurobj = (void *)obj->objid;
 }
 
 struct buf *
@@ -220,6 +223,10 @@ sls_pager_writebuf(
 		KASSERT(pagesizes[m->psind] <= PAGE_SIZE,
 		    ("dumping page %p with size %ld", m, pagesizes[m->psind]));
 
+		/*
+		 * We do not need physical contiguity for pages
+		 * since we insert each page separately.
+		 */
 		m->oflags |= VPO_SWAPINPROG;
 		bp->b_pages[npages++] = m;
 		bp->b_resid += pagesizes[m->psind];

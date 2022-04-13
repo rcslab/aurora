@@ -15,4 +15,6 @@ void sls_pager_swapoff(void);
 
 int sls_pager_obj_init(vm_object_t obj);
 
+#define b_aurobj b_fsprivate2
+
 #endif /* _SLS_SWAPPER_H_ */

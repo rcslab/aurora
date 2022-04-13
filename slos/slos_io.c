@@ -49,6 +49,8 @@ struct slos slos;
 
 /* The SLOS can use as many physical buffers as it needs to. */
 int slos_pbufcnt = -1;
+uint64_t slos_io_initiated;
+uint64_t slos_io_done;
 
 static uma_zone_t slos_taskctx_zone;
 
@@ -321,6 +323,7 @@ slos_io_getdaddr(struct slos_node *svp, struct buf *bp)
 	struct fbtree *tree = &svp->sn_tree;
 	daddr_t lblkno;
 
+	atomic_add_64(&slos_io_initiated, 1);
 	VOP_LOCK(tree->bt_backend, LK_EXCLUSIVE);
 	BTREE_LOCK(&svp->sn_tree, LK_SHARED);
 
@@ -399,6 +402,8 @@ slos_io(void *ctx, int __unused pending)
 
 	BUF_ASSERT_LOCKED(bp);
 
+	KASSERT(bp->b_iodone != NULL, ("buffer %p has no callback", bp));
+
 	if (iocmd == BIO_WRITE) {
 		/* Create the physical segment backing the write. */
 		error = slos_io_setdaddr(svp, bp->b_resid, bp);
@@ -423,6 +428,18 @@ slos_io(void *ctx, int __unused pending)
 	}
 
 	slos_io_physaddr(bp, &slos);
+	/*
+	 * Test again, we have seen corruption in the past due to
+	 * multiple entities using the buffer at the same time.
+	 */
+	KASSERT(bp->b_blkno <= slos.slos_sb->sb_size *
+		    (SLOS_BSIZE(slos) / SLOS_DEVBSIZE(slos)),
+	    ("buffer has invalid physical address %lx, maximum is %lx",
+		bp->b_blkno,
+		slos.slos_sb->sb_bsize *
+		    (SLOS_BSIZE(slos) / SLOS_DEVBSIZE(slos))));
+	KASSERT(bp->b_iodone != NULL, ("buffer %p has no callback", bp));
+
 	g_vfs_strategy(&slos.slos_vp->v_bufobj, bp);
 
 	/*
@@ -431,11 +448,16 @@ slos_io(void *ctx, int __unused pending)
 	 * taskqueue to be drained is equivalent to waiting until all data has
 	 * hit the disk.
 	 */
-	bwait(bp, PRIBIO, "slsrw");
-	vrele(vp);
+	error = bufwait(bp);
+	if (error != 0)
+		DEBUG1("ERROR: bufwait returned %d", error);
+
+	atomic_add_64(&slos_io_done, 1);
 out:
 	BUF_ASSERT_LOCKED(bp);
 	relpbuf(bp, &slos_pbufcnt);
+
+	vrele(vp);
 
 	uma_zfree(slos_taskctx_zone, task);
 }

@@ -103,8 +103,12 @@ retry_create:
 		 * we're calling this from the SLS and we don't care. Just
 		 * return success.
 		 */
-		*slsidp = slsid;
-		return (0);
+		if (error == EEXIST) {
+			*slsidp = slsid;
+			return (0);
+		}
+
+		return (error);
 	}
 
 	*slsidp = slsid;

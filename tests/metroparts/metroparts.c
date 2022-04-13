@@ -267,6 +267,7 @@ main(int argc, char **argv)
 				.attr_mode = SLS_DELTA,
 				.attr_flags = SLSATTR_IGNUNLINKED |
 				    SLSATTR_LAZYREST,
+				.attr_amplification = 1,
 			};
 
 			if (cached)

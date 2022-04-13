@@ -38,7 +38,9 @@ MALLOC_DEFINE(M_SLSREC, "slsrec", "SLSREC");
 
 SDT_PROVIDER_DEFINE(sls);
 
+/* Variables set using sysctls. */
 extern int sls_objprotect;
+extern int sls_only_flush_deltas;
 
 struct sls_metadata slsm;
 struct sysctl_ctx_list aurora_ctx;
@@ -94,7 +96,33 @@ sls_zonewarm(uma_zone_t zone)
 	return (error);
 }
 
-static bool
+bool
+sls_proc_inpart(uint64_t oid, struct proc *p)
+{
+	struct slskv_iter iter;
+	struct slspart *slsp;
+	uint64_t slsp_pid;
+
+	SLS_ASSERT_LOCKED();
+
+	slsp = slsp_find_locked(oid);
+	if (slsp == NULL)
+		return (false);
+
+	KVSET_FOREACH(slsp->slsp_procs, iter, slsp_pid)
+	{
+		if (p->p_pid == slsp_pid) {
+			KV_ABORT(iter);
+			slsp_deref_locked(slsp);
+			return (true);
+		}
+	}
+
+	slsp_deref_locked(slsp);
+	return (false);
+}
+
+bool
 sls_proc_insls(struct proc *p)
 {
 	struct proc *aurp;
@@ -229,6 +257,12 @@ sls_metropolis_spawn(struct sls_metropolis_spawn_args *args)
 		return (EINVAL);
 	slsmetr = &slsp->slsp_metr;
 
+	/* Check if the partition is restorable. */
+	if (!slsp_restorable(slsp)) {
+		slsp_deref(slsp);
+		return (EINVAL);
+	}
+
 	/*
 	 * Get the new connected socket, save it in the partition. This call
 	 * also fills in any information the restore process might need.
@@ -353,6 +387,12 @@ sls_restore(struct sls_restore_args *args)
 	/* Get the partition to be checkpointed. */
 	slsp = slsp_find(args->oid);
 	if (slsp == NULL) {
+		error = EINVAL;
+		goto error;
+	}
+
+	/* Check if the partition is restorable. */
+	if (!slsp_restorable(slsp)) {
 		error = EINVAL;
 		goto error;
 	}
@@ -646,6 +686,9 @@ sls_sysctl_init(void)
 	(void)SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "objprotect", CTLFLAG_RW, &sls_objprotect, 0,
 	    "Traverse VM objects instead of entries when applying COW");
+	(void)SYSCTL_ADD_INT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "only_flush_deltas", CTLFLAG_RD, &sls_only_flush_deltas, 0,
+	    "Only flush delta checkponits, blackhole the full ones");
 
 	return (0);
 }
@@ -738,6 +781,7 @@ sls_partadd_default_osd(void)
 	partadd_args.attr.attr_target = SLS_OSD;
 	partadd_args.attr.attr_period = 0;
 	partadd_args.attr.attr_flags = 0;
+	partadd_args.attr.attr_amplification = 1;
 
 	return (sls_partadd(&partadd_args));
 }
@@ -752,6 +796,7 @@ sls_partadd_default_mem(void)
 	partadd_args.attr.attr_target = SLS_MEM;
 	partadd_args.attr.attr_period = 0;
 	partadd_args.attr.attr_flags = 0;
+	partadd_args.attr.attr_amplification = 1;
 
 	return (sls_partadd(&partadd_args));
 }

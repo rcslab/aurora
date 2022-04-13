@@ -147,6 +147,22 @@ slsckpt_zonefini(void)
 		uma_zdestroy(slsckpt_zone);
 }
 
+struct slspart *
+slsp_find_locked(uint64_t oid)
+{
+	struct slspart *slsp;
+	SLS_ASSERT_LOCKED();
+
+	/* Get the partition if it exists. */
+	if (slskv_find(slsm.slsm_parts, oid, (uintptr_t *)&slsp) != 0)
+		return (NULL);
+
+	/* We found the process, take a reference to it. */
+	slsp_ref(slsp);
+
+	return (slsp);
+}
+
 /* Find a process in the SLS with the given PID. */
 struct slspart *
 slsp_find(uint64_t oid)
@@ -156,15 +172,7 @@ slsp_find(uint64_t oid)
 	/* Use the SLS module lock to serialize accesses to the partition table.
 	 */
 	SLS_LOCK();
-
-	/* Get the partition if it exists. */
-	if (slskv_find(slsm.slsm_parts, oid, (uintptr_t *)&slsp) != 0) {
-		SLS_UNLOCK();
-		return (NULL);
-	}
-
-	/* We found the process, take a reference to it. */
-	slsp_ref(slsp);
+	slsp = slsp_find_locked(oid);
 	SLS_UNLOCK();
 
 	return (slsp);
@@ -187,7 +195,6 @@ int
 slsp_attach(uint64_t oid, pid_t pid)
 {
 	struct slspart *slsp;
-	uintptr_t oldoid;
 	int error;
 
 	/* We cannot checkpoint the kernel. */
@@ -197,7 +204,7 @@ slsp_attach(uint64_t oid, pid_t pid)
 	}
 
 	/* Make sure the PID isn't in the SLS already. */
-	if (slskv_find(slsm.slsm_procs, pid, &oldoid) == 0)
+	if (slsset_find(slsm.slsm_procs, pid) == 0)
 		return (EINVAL);
 
 	/* Make sure the partition actually exists. */
@@ -413,8 +420,20 @@ slsp_deref_locked(struct slspart *slsp)
 	SLS_ASSERT_LOCKED();
 	atomic_add_int(&slsp->slsp_refcount, -1);
 
-	if (slsp->slsp_refcount == 0)
-		slsp_del(slsp->slsp_oid);
+	/*
+	 * Deleting a partition is a heavyweight
+	 * operation during which we sleep. Only
+	 * hold the lock until we remove it from
+	 * the hash table. Destroying the partition
+	 * safe since there is no way another thread
+	 * can get a reference.
+	 */
+	if (slsp->slsp_refcount == 0) {
+		slskv_del(slsm.slsm_parts, slsp->slsp_oid);
+		SLS_UNLOCK();
+		slsp_fini(slsp);
+		SLS_LOCK();
+	}
 }
 
 void
@@ -559,4 +578,15 @@ slsp_rest_from_mem(struct slspart *slsp)
 		return (SLSP_CACHEREST(slsp));
 
 	return (false);
+}
+
+bool
+slsp_restorable(struct slspart *slsp)
+{
+	KASSERT(slsp->slsp_amplification > 0,
+	    ("invalid amplification %lx", slsp->slsp_amplification));
+	if (slsp->slsp_amplification > 1)
+		return (false);
+
+	return (true);
 }
