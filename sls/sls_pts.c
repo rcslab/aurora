@@ -283,11 +283,13 @@ slspts_checkpoint_vnode(struct vnode *vp, struct sls_record *rec)
 }
 
 static int
-slspts_restore_slv(struct tty *tty, int *fdp)
+slspts_restore_slv(struct tty *tty, struct file **fpp)
 {
 	struct thread *td = curthread;
+	struct file *fp;
 	char *path;
 	int error;
+	int fd;
 
 	/* Get the name of the slave side. */
 	path = malloc(PATH_MAX, M_SLSMM, M_WAITOK);
@@ -299,7 +301,14 @@ slspts_restore_slv(struct tty *tty, int *fdp)
 	if (error != 0)
 		return (error);
 
-	*fdp = td->td_retval[0];
+	fd = td->td_retval[0];
+	error = slsfile_extractfp(fd, &fp);
+	if (error != 0) {
+		slsfile_attemptclose(fd);
+		return (error);
+	}
+
+	*fpp = fp;
 
 	return (0);
 }
@@ -338,9 +347,6 @@ slspts_restore(void *slsbacker, struct slsfile *finfo,
 	struct slspts *slspts = (struct slspts *)slsbacker;
 	struct file *masterfp, *slavefp;
 	struct file *localfp, *peerfp;
-	int masterfd, slavefd;
-	int localfd, peerfd;
-	struct vnode *vp;
 	struct tty *tty;
 	uintptr_t peer;
 	uint64_t slsid;
@@ -359,7 +365,7 @@ slspts_restore(void *slsbacker, struct slsfile *finfo,
 	 * type restore routines create one, so we do too and
 	 * get it fixed up back in the common path.
 	 */
-	error = falloc(curthread, &masterfp, &masterfd, 0);
+	error = falloc_noinstall(curthread, &masterfp);
 	if (error != 0)
 		return (error);
 
@@ -369,7 +375,7 @@ slspts_restore(void *slsbacker, struct slsfile *finfo,
 	 */
 	error = pts_alloc(FREAD | FWRITE | O_NOCTTY, curthread, masterfp);
 	if (error != 0) {
-		fdclose(curthread, masterfp, masterfd);
+		fdrop(masterfp, curthread);
 		return (error);
 	}
 
@@ -385,13 +391,10 @@ slspts_restore(void *slsbacker, struct slsfile *finfo,
 	 */
 
 	/* As in the case of pipes, we add the peer to the table ourselves. */
-	error = slspts_restore_slv(tty, &slavefd);
+	error = slspts_restore_slv(tty, &slavefp);
 	if (error != 0) {
 		return (error);
 	}
-	slavefp = FDTOFP(curproc, slavefd);
-	vp = slavefp->f_vnode;
-	vref(vp);
 
 	/*
 	 * We always save the peer in this function, regardless of whether it's
@@ -399,38 +402,26 @@ slspts_restore(void *slsbacker, struct slsfile *finfo,
 	 * and combines it with the fd that we return to it.
 	 */
 	if (slspts->ismaster != 0) {
-		localfd = masterfd;
-		peerfd = slavefd;
+		localfp = masterfp;
+		peerfp = slavefp;
 	} else {
-		localfd = slavefd;
-		peerfd = masterfd;
+		localfp = slavefp;
+		peerfp = masterfp;
 	}
 
-	localfp = FDTOFP(curproc, localfd);
-	peerfp = FDTOFP(curproc, peerfd);
+	/*
+	 * Externalize here so that we clean up in the caller if the
+	 * rest of the function fails.
+	 */
+	*fpp = localfp;
+
 	error = slskv_add(restdata->fptable, slspts->peerid, (uintptr_t)peerfp);
 	if (error != 0) {
-		slsfile_attemptclose(peerfd);
-		goto error;
+		fdrop(peerfp, curthread);
+		return (error);
 	}
 
-	error = slsfile_extractfp(peerfd, &peerfp);
-	if (error != 0)
-		goto error;
-
 	error = slspts_restore_ttyq(slspts, tty);
-	if (error != 0)
-		return (error);
-
-	if (!fhold(slavefp))
-		return (EBADF);
-
-	*fpp = FDTOFP(curproc, localfd);
-
-	return (0);
-
-error:
-	fdclose(curthread, localfp, localfd);
 
 	return (error);
 }

@@ -337,7 +337,7 @@ slskv_iternextbucket(struct slskv_iter *iter)
 
 		/* If the index is out of bounds we're done. */
 		if (curbucket > iter->table->mask)
-			break;
+			return;
 
 		/* Have the global index point to the next unchecked bucket. */
 		iter->bucket += 1;
@@ -347,10 +347,8 @@ slskv_iternextbucket(struct slskv_iter *iter)
 			break;
 	}
 
-	/* If there is a nonempty bucket, the iterator points to its first
-	 * element. */
-	if (curbucket <= iter->table->mask)
-		iter->pair = LIST_FIRST(&iter->table->buckets[curbucket]);
+	/* If there is a nonempty bucket, point to its first element. */
+	iter->pair = LIST_FIRST(&iter->table->buckets[curbucket]);
 }
 
 /*
@@ -364,13 +362,11 @@ slskv_iterstart(struct slskv_table *table)
 {
 	struct slskv_iter iter;
 
+	sx_xlock(&table->sx);
+
+	iter.table = table;
 	iter.bucket = 0;
 	iter.pair = NULL;
-	iter.table = table;
-
-	/* Find the next valid element, if it exists. */
-	sx_xlock(&iter.table->sx);
-	slskv_iternextbucket(&iter);
 
 	return (iter);
 }
@@ -382,6 +378,7 @@ slskv_iterstart(struct slskv_table *table)
 int
 slskv_itercont(struct slskv_iter *iter, uint64_t *key, uintptr_t *value)
 {
+	sx_assert(&iter->table->sx, SX_LOCKED);
 
 	if (iter->pair == NULL) {
 
@@ -389,7 +386,7 @@ slskv_itercont(struct slskv_iter *iter, uint64_t *key, uintptr_t *value)
 		slskv_iternextbucket(iter);
 
 		/* If we have no more buckets to look at, iteration is done. */
-		if (iter->bucket > iter->table->mask) {
+		if (iter->pair == NULL && iter->bucket > iter->table->mask) {
 			sx_xunlock(&iter->table->sx);
 			return (SLSKV_ITERDONE);
 		}

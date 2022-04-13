@@ -344,14 +344,6 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 
 	SDT_PROBE1(sls, , sls_ckpt, , "Getting the metadata");
 
-	KVSET_FOREACH(procset, iter, p)
-	{
-		KASSERT(P_SHOULDSTOP(p), ("process not stopped"));
-		FOREACH_THREAD_IN_PROC (p, td)
-			KASSERT(
-			    TD_IS_INHIBITED(td), ("thread is not inhibited"));
-	}
-
 	SDT_PROBE0(sls, , , meta_finish);
 	/* Shadow the objects to be dumped. */
 	error = slsvm_procset_shadow(
@@ -363,6 +355,14 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 	}
 
 	SDT_PROBE1(sls, , sls_ckpt, , "Shadowing the objects");
+
+	KVSET_FOREACH(procset, iter, p)
+	{
+		KASSERT(P_SHOULDSTOP(p), ("process not stopped"));
+		FOREACH_THREAD_IN_PROC (p, td)
+			KASSERT(
+			    TD_IS_INHIBITED(td), ("thread is not inhibited"));
+	}
 
 	/*
 	 * Let the process execute ASAP. For a one-off checkpoint, the process

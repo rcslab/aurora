@@ -17,6 +17,7 @@
 #define SLOSREC_VNODE 0x00000008    /* VNode */
 #define SLOSREC_DATA 0x00000009	    /* Data */
 #define SLOSREC_MANIFEST 0x0000000a /* Checkpoint Manifest */
+#define SLOSREC_META 0x0000000b	    /* Generic metadata block */
 
 #define SLOS_RMAGIC 0x51058A1CUL
 

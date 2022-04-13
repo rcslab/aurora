@@ -22,7 +22,7 @@
 #define PARENTSOCK (7776)
 #define PARENTSOCKSTR ("7776")
 #define SOCKET (7777)
-#define SCALING (5)
+#define SCALING (8)
 #define BACKLOG (4)
 #define REPEATS (4)
 #define BUFSIZE (128)
@@ -196,7 +196,7 @@ testaccept_parent(void)
 		/* Create as many forks as we need. */
 		for (j = 0; j < SCALING; j++) {
 		retry:
-			error = sls_metropolis_spawn(OID + i, listsock);
+			error = sls_metropolis_spawn(OID + j, listsock);
 			if (error == EAGAIN) {
 				printf(
 				    "PID of function already in use, retrying...\n");
