@@ -31,6 +31,19 @@
 #define SLSP_DETACHED 2	     /* Partition has been detached */
 #define SLSP_RESTORING 3     /* Partition is being restored */
 
+/* On-disk partition. */
+struct slspart_serial {
+	bool sspart_valid;
+	uint64_t sspart_oid;
+	struct sls_attr sspart_attr;
+	uint64_t sspart_epoch;
+	int sspart_proc;
+	int sspart_td;
+	int sspart_flags;
+	int sspart_sockid;
+};
+
+/**/
 struct slspart {
 	uint64_t slsp_oid; /* OID of the partition */
 
@@ -56,8 +69,6 @@ struct slspart {
 	struct slsmetr slsp_metr; /* Local Metropolis state */
 
 	LIST_ENTRY(slspart) slsp_parts; /* List of active SLS partitions */
-	bool slsp_restorable; /* Is the partition restorable or just for
-				 testing? */
 #define slsp_target slsp_attr.attr_target
 #define slsp_mode slsp_attr.attr_mode
 #define slsp_amplification slsp_attr.attr_amplification
@@ -102,5 +113,8 @@ bool slsp_restorable(struct slspart *slsp);
 #define SLSP_PRECOPY(slsp) (SLSATTR_ISPRECOPY((slsp->slsp_attr)))
 
 extern uma_zone_t slsckpt_zone;
+
+extern struct slspart_serial ssparts[];
+int sslsp_deserialize(void);
 
 #endif /* _SLSPART_H_ */

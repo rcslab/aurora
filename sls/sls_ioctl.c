@@ -489,8 +489,11 @@ sls_partadd(struct sls_partadd_args *args)
 	if (error != 0)
 		return (error);
 
-	/* Specify the checkpointing strategy and the backend. */
-	slsp->slsp_attr = args->attr;
+	/* Write out the serial representation. */
+	ssparts[args->oid].sspart_valid = true;
+	ssparts[args->oid].sspart_oid = slsp->slsp_oid;
+	ssparts[args->oid].sspart_attr = slsp->slsp_attr;
+	ssparts[args->oid].sspart_epoch = 0;
 
 	return (0);
 }
@@ -775,6 +778,14 @@ static int
 sls_partadd_default_osd(void)
 {
 	struct sls_partadd_args partadd_args;
+	struct slspart *slsp;
+
+	/* Check if there is already a partition. */
+	slsp = slsp_find(SLS_DEFAULT_PARTITION);
+	if (slsp != NULL) {
+		slsp_deref(slsp);
+		return (0);
+	}
 
 	partadd_args.oid = SLS_DEFAULT_PARTITION;
 	partadd_args.attr.attr_mode = SLS_FULL;
@@ -790,6 +801,14 @@ static int
 sls_partadd_default_mem(void)
 {
 	struct sls_partadd_args partadd_args;
+	struct slspart *slsp;
+
+	/* Check if there is already a partition. */
+	slsp = slsp_find(SLS_DEFAULT_MPARTITION);
+	if (slsp != NULL) {
+		slsp_deref(slsp);
+		return (0);
+	}
 
 	partadd_args.oid = SLS_DEFAULT_MPARTITION;
 	partadd_args.attr.attr_mode = SLS_FULL;
@@ -943,6 +962,11 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		slos_setstate(&slos, SLOS_WITHSLS);
 		SLOS_UNLOCK(&slos);
 
+		/* Read in the serialized partition metadata. */
+		error = sls_import_ssparts();
+		if (error != 0)
+			return (error);
+
 		/* Enable the hashtables.*/
 		error = slskv_init();
 		if (error != 0)
@@ -974,6 +998,9 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		/* Commandeer the swap pager. */
 		sls_pager_register();
 
+		/* Import existing partitions. */
+		sslsp_deserialize();
+
 		/* Create a default on-disk and in-memory partition. */
 		sls_partadd_default();
 
@@ -996,18 +1023,31 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		if (error != 0)
 			return (EBUSY);
 
+		SLS_UNLOCK();
+
 		DEBUG("Turning off the swapper...");
+
+		/* Export and destroy all in-memory partition data. */
+		error = sls_export_ssparts();
+		if (error != 0)
+			return (error);
+
+		slsp_delall();
+
+		SLS_LOCK();
 
 		/* Swap off the Aurora swapper. */
 		sls_pager_swapoff();
 		KASSERT(slsm.slsm_swapobjs == 0, ("sls_pager_swapoff failed"));
-		sls_pager_unregister();
 		SLS_UNLOCK();
 
-		/* Destroy all in-memory partition data. */
-		slsp_delall();
-
 		sls_hook_detach();
+		/*
+		 * Unregister the pager. By now there are no Aurora processes
+		 * alive and no objects active, so we are safe doing this
+		 * operation outside the lock.
+		 */
+		sls_pager_unregister();
 
 		/*
 		 * Destroy the device, wait for all ioctls in progress. We do
@@ -1024,6 +1064,10 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		slstable_fini();
 		slsm_fini_contents();
 		slskv_fini();
+
+		error = sls_export_ssparts();
+		if (error != 0)
+			return (error);
 
 		SLOS_LOCK(&slos);
 		/*

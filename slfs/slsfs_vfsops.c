@@ -1170,15 +1170,20 @@ static void
 slsfs_init_vnode(struct vnode *vp, uint64_t ino)
 {
 	struct slos_node *mp = SLSVP(vp);
-	if (ino == SLOS_ROOT_INODE) {
+
+	switch (ino) {
+	case SLOS_ROOT_INODE:
 		vp->v_vflag |= VV_ROOT;
 		vp->v_type = VDIR;
 		SLSVP(vp)->sn_ino.ino_gid = 0;
 		SLSVP(vp)->sn_ino.ino_uid = 0;
-	} else if (ino == SLOS_INODES_ROOT) {
+		break;
+	case SLOS_INODES_ROOT:
+	case SLOS_SLSPART_INODE:
 		vp->v_type = VREG;
 		vp->v_vflag |= VV_SYSTEM;
-	} else {
+		break;
+	default:
 		vp->v_type = IFTOVT(mp->sn_ino.ino_mode);
 	}
 

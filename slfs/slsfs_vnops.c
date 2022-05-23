@@ -540,7 +540,7 @@ slsfs_write(struct vop_write_args *args)
 	case VLNK:
 		break;
 	default:
-		panic("bad file type");
+		panic("bad file type %d", vp->v_type);
 	}
 
 	if (ioflag & IO_APPEND) {

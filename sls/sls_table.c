@@ -61,6 +61,7 @@ size_t sls_bytes_read_direct = 0;
 uint64_t sls_pages_grabbed = 0;
 uint64_t sls_io_initiated = 0;
 unsigned int sls_async_slos = 1;
+static bool ssparts_imported = 0;
 
 static uma_zone_t slstable_task_zone;
 
@@ -1343,5 +1344,115 @@ out:
 	sbuf_delete(sb_manifest);
 	taskqueue_drain_all(slsm.slsm_tabletq);
 
+	return (error);
+}
+
+int
+sls_export_ssparts(void)
+{
+	size_t ssparts_len = sizeof(ssparts[0]) * SLS_OIDRANGE;
+	struct thread *td = curthread;
+	int mode = FREAD | FWRITE;
+	struct iovec aiov;
+	struct vnode *vp;
+	struct uio auio;
+	int close_error;
+	int error;
+
+	if (!ssparts_imported)
+		return (0);
+
+	/* Get the vnode for the record and open it. */
+	error = VFS_VGET(
+	    slos.slsfs_mount, SLOS_SLSPART_INODE, LK_EXCLUSIVE, &vp);
+	if (error != 0)
+		return (0);
+
+	/* Open the record for writing. */
+	error = VOP_OPEN(vp, mode, NULL, td, NULL);
+	if (error != 0) {
+		vput(vp);
+		return (error);
+	}
+
+	slos_uioinit(&auio, 0, UIO_WRITE, &aiov, 1);
+
+	auio.uio_resid = ssparts_len;
+	aiov.iov_base = ssparts;
+	aiov.iov_len = ssparts_len;
+
+	error = sls_doio(vp, &auio);
+
+	close_error = VOP_CLOSE(vp, mode, NULL, td);
+	if (close_error != 0)
+		SLS_DBG("error %d, could not close slos node", close_error);
+
+	vput(vp);
+	return (error);
+}
+
+int
+sls_import_ssparts(void)
+{
+	size_t ssparts_len = sizeof(ssparts[0]) * SLS_OIDRANGE;
+	struct thread *td = curthread;
+	int mode = FREAD | FWRITE;
+	struct iovec aiov;
+	struct vnode *vp;
+	struct vattr va;
+	struct uio auio;
+	int close_error;
+	int error;
+
+	bzero(ssparts, ssparts_len);
+
+	/* Get the vnode for the record and open it. */
+	error = VFS_VGET(
+	    slos.slsfs_mount, SLOS_SLSPART_INODE, LK_EXCLUSIVE, &vp);
+	if (error != 0)
+		return (error);
+
+	/* Open the record for writing. */
+	error = VOP_OPEN(vp, mode, NULL, td, NULL);
+	if (error != 0) {
+		vput(vp);
+		return (error);
+	}
+
+	error = VOP_GETATTR(vp, &va, NULL);
+	if (error != 0)
+		goto done;
+
+	/* If not created yet, write out the zeroed out array. */
+	if (va.va_size == 0) {
+		slos_uioinit(&auio, 0, UIO_WRITE, &aiov, 1);
+
+		auio.uio_resid = ssparts_len;
+		aiov.iov_base = ssparts;
+		aiov.iov_len = ssparts_len;
+
+		error = sls_doio(vp, &auio);
+		goto done;
+	}
+
+	/* The only other sane value is that of the size of the array. */
+	if (va.va_size != ssparts_len)
+		goto done;
+
+	/* Read in the values then. */
+	slos_uioinit(&auio, 0, UIO_READ, &aiov, 1);
+	auio.uio_resid = ssparts_len;
+	aiov.iov_base = ssparts;
+	aiov.iov_len = ssparts_len;
+	error = sls_doio(vp, &auio);
+
+	if (error == 0)
+		ssparts_imported = true;
+done:
+	close_error = VOP_CLOSE(vp, mode, NULL, td);
+	if (close_error != 0)
+		SLS_DBG("error %d, could not close slos node", close_error);
+
+	vput(vp);
 	return (error);
 }

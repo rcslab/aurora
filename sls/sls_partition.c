@@ -39,6 +39,7 @@
 #include "sls_vm.h"
 
 uma_zone_t slsckpt_zone;
+struct slspart_serial ssparts[SLS_OIDRANGE];
 
 static int
 slsckpt_zone_init(void *mem, int size, int flags __unused)
@@ -364,7 +365,8 @@ slsp_add(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
 	}
 
 	/* Export the partition to the caller. */
-	*slspp = slsp;
+	if (slspp != NULL)
+		*slspp = slsp;
 
 	return (0);
 }
@@ -490,6 +492,11 @@ slsp_epoch_advance(struct slspart *slsp, uint64_t next_epoch)
 
 	KASSERT(slsp->slsp_epoch != UINT64_MAX, ("Epoch overflow"));
 	slsp->slsp_epoch += 1;
+
+	/* Update the on-disk representation, it will be sent out automatically.
+	 */
+	ssparts[slsp->slsp_oid].sspart_epoch = slsp->slsp_epoch;
+
 	cv_broadcast(&slsp->slsp_epochcv);
 
 	KASSERT(slsp->slsp_epoch == next_epoch, ("Unexpected epoch"));
@@ -589,4 +596,35 @@ slsp_restorable(struct slspart *slsp)
 		return (false);
 
 	return (true);
+}
+
+/* Deserialize the already read on-disk partitions. */
+int
+sslsp_deserialize(void)
+{
+	struct slspart *slsp;
+	int error;
+	int i;
+
+	for (i = 0; i < SLS_OIDRANGE; i++) {
+		if (!ssparts[i].sspart_valid)
+			continue;
+
+		/* Create the in-memory representation. */
+		error = slsp_add(
+		    ssparts[i].sspart_oid, ssparts[i].sspart_attr, &slsp);
+		if (error != 0)
+			return (error);
+
+		/* Fill in Metropolis state. */
+		slsp->slsp_metr.slsmetr_proc =
+		    ssparts[slsp->slsp_oid].sspart_proc;
+		slsp->slsp_metr.slsmetr_td = ssparts[slsp->slsp_oid].sspart_td;
+		slsp->slsp_metr.slsmetr_flags =
+		    ssparts[slsp->slsp_oid].sspart_flags;
+		slsp->slsp_metr.slsmetr_sockid =
+		    ssparts[slsp->slsp_oid].sspart_sockid;
+	}
+
+	return (0);
 }

@@ -33,6 +33,11 @@ slsmetropolis_set(uint64_t oid, struct file *fp, int flags)
 	slsp->slsp_metr.slsmetr_flags = flags;
 	slsp->slsp_metr.slsmetr_sockid = (uint64_t)fp->f_data;
 
+	ssparts[p->p_auroid].sspart_proc = (uint64_t)p;
+	ssparts[p->p_auroid].sspart_td = (uint64_t)curthread;
+	ssparts[p->p_auroid].sspart_flags = flags;
+	ssparts[p->p_auroid].sspart_sockid = (uint64_t)fp->f_data;
+
 	slsp_deref(slsp);
 
 	return (0);
