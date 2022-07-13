@@ -68,6 +68,8 @@
 #include "sls_vnode.h"
 #include "sysv_internal.h"
 
+#define SLSREST_ZONEWARM (64)
+
 SDT_PROBE_DEFINE0(sls, , , filerest_start);
 SDT_PROBE_DEFINE1(sls, , , filerest_return, "int");
 SDT_PROBE_DEFINE1(sls, , sls_rest, , "char *");
@@ -255,17 +257,13 @@ slsrest_zone_fini(void *mem, int size)
 int
 slsrest_zoneinit(void)
 {
-	int error;
-
 	slsrest_zone = uma_zcreate("slsrest", sizeof(struct slsrest_data),
 	    slsrest_zone_ctor, slsrest_zone_dtor, slsrest_zone_init,
 	    slsrest_zone_fini, UMA_ALIGNOF(struct slsrest_data), 0);
 	if (slsrest_zone == NULL)
 		return (ENOMEM);
 
-	error = sls_zonewarm(slsrest_zone);
-	if (error != 0)
-		printf("WARNING: Zone slsrest not warmed up\n");
+	uma_prealloc(slsrest_zone, SLSREST_ZONEWARM);
 
 	return (0);
 }

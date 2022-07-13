@@ -61,41 +61,6 @@ sls_register_fault(vm_map_entry_t entry)
 		return;
 }
 
-/*
- * XXXHACK: Populate the zones used in the SLS to avoid slab allocations. We
- * tend to unload and load the module a lot, in order to ensure there is no
- * leftover state influencing our benchmark numbers. This, however, means that
- * we always use the zones cold. By calling sls_zonewarm(), we warm up the zones
- * to avoid these performance hits.
- */
-int
-sls_zonewarm(uma_zone_t zone)
-{
-	void **warmdata;
-	int error = 0;
-	int i;
-
-	/* Warm up the zone by creating and then freeing structures. */
-	warmdata = malloc(
-	    sizeof(*warmdata) * SLS_ZONEWARM, M_SLSMM, M_WAITOK | M_ZERO);
-
-	/* Initialize a certain number of items in the zone. */
-	for (i = 0; i < SLS_ZONEWARM; i++) {
-		warmdata[i] = uma_zalloc(zone, M_NOWAIT);
-		if (warmdata[i] == NULL) {
-			error = ENOMEM;
-			break;
-		}
-	}
-
-	/* Free them. The items are still warm after freeing. */
-	for (i = 0; i < SLS_ZONEWARM; i++)
-		uma_zfree(zone, warmdata[i]);
-	free(warmdata, M_SLSMM);
-
-	return (error);
-}
-
 bool
 sls_proc_inpart(uint64_t oid, struct proc *p)
 {

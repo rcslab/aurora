@@ -13,6 +13,8 @@
 
 /* Hash function from keys to buckets. */
 #define SLSKV_BUCKETNO(table, key) (((u_long)key & table->mask))
+#define SLSKVPAIR_ZONEWARM (8192)
+#define SLSKV_ZONEWARM (256)
 
 static uma_zone_t slskvpair_zone = NULL;
 uma_zone_t slskv_zone = NULL;
@@ -99,17 +101,13 @@ slskv_zone_fini(void *mem, int size)
 int
 slskv_init(void)
 {
-	int error;
-
 	slskv_zone = uma_zcreate("slstable", sizeof(struct slskv_table),
 	    slskv_zone_ctor, slskv_zone_dtor, slskv_zone_init, slskv_zone_fini,
 	    UMA_ALIGNOF(struct slskv_table), 0);
 	if (slskv_zone == NULL)
 		return (ENOMEM);
 
-	error = sls_zonewarm(slskv_zone);
-	if (error != 0)
-		printf("WARNING: Zone slstable not warmed up\n");
+	uma_prealloc(slskv_zone, SLSKVPAIR_ZONEWARM);
 
 	slskvpair_zone = uma_zcreate("slkvpair", sizeof(struct slskv_pair),
 	    NULL, NULL, NULL, NULL, UMA_ALIGNOF(struct slskv_pair), 0);
@@ -119,9 +117,7 @@ slskv_init(void)
 		return (ENOMEM);
 	}
 
-	error = sls_zonewarm(slskvpair_zone);
-	if (error != 0)
-		printf("WARNING: Zone slskvpair not warmed up\n");
+	uma_prealloc(slskvpair_zone, SLSKVPAIR_ZONEWARM);
 
 	return (0);
 }

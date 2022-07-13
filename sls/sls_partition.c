@@ -38,6 +38,8 @@
 #include "sls_table.h"
 #include "sls_vm.h"
 
+#define SLSCKPT_ZONEWARM (64)
+
 uma_zone_t slsckpt_zone;
 struct slspart_serial ssparts[SLS_OIDRANGE];
 
@@ -126,17 +128,13 @@ slsckpt_zone_dtor(void *mem, int size, void *arg)
 int
 slsckpt_zoneinit(void)
 {
-	int error;
-
 	slsckpt_zone = uma_zcreate("slsckpt", sizeof(struct slsckpt_data),
 	    slsckpt_zone_ctor, slsckpt_zone_dtor, slsckpt_zone_init,
 	    slsckpt_zone_fini, UMA_ALIGNOF(struct slsckpt_data), 0);
 	if (slsckpt_zone == NULL)
 		return (ENOMEM);
 
-	error = sls_zonewarm(slsckpt_zone);
-	if (error != 0)
-		printf("WARNING: Zone slsckpt not warmed up\n");
+	uma_prealloc(slsckpt_zone, SLSCKPT_ZONEWARM);
 
 	return (0);
 }

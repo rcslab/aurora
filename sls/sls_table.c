@@ -51,6 +51,8 @@
 #include "sls_partition.h"
 #include "sls_table.h"
 
+#define SLSTABLE_TASKWARM (32)
+
 /* The maximum size of a single data transfer */
 uint64_t sls_contig_limit = MAXBCACHEBUF;
 int sls_drop_io = 0;
@@ -92,9 +94,7 @@ slstable_init(void)
 	if (slstable_task_zone == NULL)
 		return (ENOMEM);
 
-	error = sls_zonewarm(slstable_task_zone);
-	if (error != 0)
-		printf("WARNING: Zone slsrest not warmed up\n");
+	uma_prealloc(slstable_task_zone, SLSTABLE_TASKWARM);
 
 	return (0);
 }
