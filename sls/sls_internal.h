@@ -42,7 +42,6 @@ struct sls_metadata {
 	struct taskqueue *slsm_tabletq; /* Write taskqueue */
 	LIST_HEAD(, proc) slsm_plist; /* List of processes in Aurora */
 	struct slskv_table *slsm_prefault; /* Prefault table */
-	struct slskv_table *slsm_resident; /* Resident tables */
 };
 
 struct slsckpt_data {

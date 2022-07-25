@@ -103,7 +103,7 @@ slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt_data)
 	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t)cur_obj.slsid,
 	    (uintptr_t)rec);
 	if (error != 0) {
-		free(rec, M_SLSREC);
+		sls_record_destroy(rec);
 		goto error;
 	}
 

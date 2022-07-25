@@ -46,6 +46,7 @@
 #include "debug.h"
 #include "sls_file.h"
 #include "sls_internal.h"
+#include "sls_table.h"
 #include "sls_vnode.h"
 
 /*
@@ -218,8 +219,7 @@ slsckpt_vnode_serialize(struct slsckpt_data *sckpt_data)
 		    sckpt_data->sckpt_rectable, (uint64_t)vp, (uintptr_t)rec);
 		if (error != 0) {
 			KV_ABORT(iter);
-			free(rec, M_SLSREC);
-			sbuf_delete(sb);
+			sls_record_destroy(rec);
 			return (error);
 		}
 	}

@@ -832,10 +832,6 @@ slsm_init_contents(void)
 	if (error != 0)
 		return (error);
 
-	error = slskv_create(&slsm.slsm_resident);
-	if (error != 0)
-		return (error);
-
 	return (0);
 }
 
@@ -852,13 +848,7 @@ slsm_fini_contents(void)
 		slskv_destroy(slsm.slsm_prefault);
 	}
 
-	/* Destroy the resident page bitmaps . */
-	if (slsm.slsm_resident != NULL) {
-		KV_FOREACH_POP(slsm.slsm_resident, objid, bitmap)
-		free(bitmap, M_SLSMM);
-		slskv_destroy(slsm.slsm_resident);
-	}
-
+	/* Destroy partitions. */
 	if (slsm.slsm_parts != NULL) {
 		slskv_destroy(slsm.slsm_parts);
 		slsm.slsm_parts = NULL;

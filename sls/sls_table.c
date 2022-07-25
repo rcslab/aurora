@@ -118,6 +118,12 @@ slstable_fini(void)
 }
 
 static int
+sls_isdata(uint64_t type)
+{
+	return (type == SLOSREC_VMOBJ);
+}
+
+static int
 sls_doio(struct vnode *vp, struct uio *auio)
 {
 	int error = 0;
@@ -210,12 +216,6 @@ sls_record_destroy(struct sls_record *rec)
 {
 	sbuf_delete(rec->srec_sb);
 	free(rec, M_SLSREC);
-}
-
-static int
-sls_isdata(uint64_t type)
-{
-	return (type == SLOSREC_VMOBJ);
 }
 
 /*
@@ -622,7 +622,7 @@ sls_readdata(struct slspart *slsp, struct vnode *vp, uint64_t slsid,
 	error = sls_readdata_slos_vmobj(rectable, slsid, rec, &obj);
 	VOP_LOCK(vp, LK_EXCLUSIVE);
 	if (error != 0) {
-		free(rec, M_SLSREC);
+		sls_record_destroy(rec);
 		return (error);
 	}
 
@@ -666,7 +666,7 @@ error:
 	VM_OBJECT_WUNLOCK(obj);
 	vm_object_deallocate(obj);
 
-	free(rec, M_SLSREC);
+	sls_record_destroy(rec);
 
 	return (error);
 }
@@ -883,29 +883,6 @@ error:
 	return (error);
 }
 
-static void
-sls_writeobj_bitmap(vm_object_t object)
-{
-	bitstr_t *bitmap = NULL;
-	vm_page_t m;
-	int error;
-
-	error = slskv_find(
-	    slsm.slsm_resident, object->objid, (uintptr_t *)&bitmap);
-	if (error != 0) {
-		bitmap = bit_alloc(object->size, M_SLSMM, M_WAITOK);
-		error = slskv_add(
-		    slsm.slsm_resident, object->objid, (uintptr_t)bitmap);
-		if (error != 0) {
-			free(bitmap, M_SLSMM);
-			return;
-		}
-	}
-
-	TAILQ_FOREACH (m, &object->memq, listq)
-		bit_set(bitmap, m->pindex);
-}
-
 /*
  * Get the pages of an object in the form of a
  * linked list of contiguous memory areas.
@@ -921,7 +898,6 @@ sls_writeobj_data(struct vnode *vp, vm_object_t obj, size_t offset)
 	int error;
 
 	VM_OBJECT_ASSERT_WLOCKED(obj);
-	sls_writeobj_bitmap(obj);
 
 	pindex = 0;
 	for (;;) {

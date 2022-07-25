@@ -69,9 +69,10 @@ slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 	rec = sls_getrecord(sb, (uint64_t)shmsegs, SLOSREC_SYSVSHM);
 	error = slskv_add(
 	    sckpt_data->sckpt_rectable, (uint64_t)shmsegs, (uintptr_t)rec);
+
 	if (error != 0) {
-		free(rec, M_SLSREC);
-		goto error;
+		sls_record_destroy(rec);
+		return (error);
 	}
 
 	return (0);

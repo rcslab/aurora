@@ -183,20 +183,13 @@ slsckpt_metadata(
 	rec = sls_getrecord(sb, (uint64_t)p, SLOSREC_PROC);
 	error = slskv_add(
 	    sckpt_data->sckpt_rectable, (uint64_t)p, (uintptr_t)rec);
-	if (error != 0) {
-		free(rec, M_SLSREC);
-		goto out;
-	}
+	if (error != 0)
+		sls_record_destroy(rec);
 
 out:
 
-	if (error != 0) {
-		slskv_del(sckpt_data->sckpt_rectable, (uint64_t)sb);
-		sbuf_delete(sb);
-	}
-
 	SDT_PROBE1(sls, , sls_ckpt, , "Metadata done");
-	return error;
+	return (error);
 }
 
 static bool
@@ -224,7 +217,7 @@ slsckpt_compact_single(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 	{
 		slskv_pop(slsp->slsp_sckpt->sckpt_rectable, &slsid,
 		    (uintptr_t *)&oldrec);
-		free(oldrec, M_SLSREC);
+		sls_record_destroy(oldrec);
 		error = slskv_add(
 		    slsp->slsp_sckpt->sckpt_rectable, slsid, (uintptr_t)rec);
 		KASSERT(error == 0, ("Could not add new record"));
