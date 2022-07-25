@@ -762,7 +762,7 @@ slsckpt_gather_processes(
 		}
 
 		/* Add it to the set of processes to be checkpointed. */
-		error = slsset_add_unlocked(procset, (uint64_t)p);
+		error = slsset_add(procset, (uint64_t)p);
 		if (error != 0) {
 			KV_ABORT(iter);
 			return (error);
@@ -795,8 +795,7 @@ slsckpt_gather_children_once(
 	{
 		/* Check for new children. */
 		LIST_FOREACH (pchild, &p->p_children, p_sibling) {
-			if (slsset_find_unlocked(procset, (uint64_t)pchild) !=
-			    0) {
+			if (slsset_find(procset, (uint64_t)pchild) != 0) {
 				/* We found a child that didn't exist before. */
 				if (!SLS_PROCALIVE(pchild))
 					continue;
@@ -804,8 +803,7 @@ slsckpt_gather_children_once(
 				new_procs += 1;
 
 				PHOLD(pchild);
-				error = slsset_add_unlocked(
-				    procset, (uint64_t)pchild);
+				error = slsset_add(procset, (uint64_t)pchild);
 				if (error != 0) {
 					KV_ABORT(iter);
 					return (error);

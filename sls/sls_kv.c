@@ -11,6 +11,17 @@
 #include "sls_internal.h"
 #include "sls_kv.h"
 
+/*
+ * NOTE: Iterating through a table while doing other operations
+ * on it is undefined. This is a deliberate inconsistency in the design of
+ * the data structure which does not affect us because at no point during
+ * normal operation are the two operations supposed to overlap. We still
+ * use per-bucket mutexes. Even if an add/delete overlaps with an
+ * iteration there is no possibility of data corruption. What _does_ happen
+ * is that iteration operates on an inconsistent view of the KV store, and
+ * might thus return erroneous results. The same holds for a popall operation.
+ */
+
 /* Hash function from keys to buckets. */
 #define SLSKV_BUCKETNO(table, key) (((u_long)key & table->mask))
 #define SLSKVPAIR_ZONEWARM (8192)
@@ -38,7 +49,6 @@ slskv_zone_dtor(void *mem, int size, void *args __unused)
 
 	table = (struct slskv_table *)mem;
 
-	/* XXX Put in KASSERTs */
 	/* Iterate all buckets. */
 	for (i = 0; i <= table->mask; i++) {
 		LIST_FOREACH_SAFE (kv, &table->buckets[i], next, tmpkv) {
@@ -70,10 +80,7 @@ slskv_zone_init(void *mem, int size, int flags __unused)
 
 	/* Initialize the mutexes. */
 	for (i = 0; i < SLSKV_BUCKETS; i++)
-		mtx_init(&table->mtx[i], "slskvmtx", NULL, MTX_DEF);
-
-	/* Shared lock for mutation, exclusive for iteration. */
-	sx_init(&table->sx, "slskvsx");
+		mtx_init(&table->mtx[i], "slskvmtx", NULL, MTX_SPIN);
 
 	table->data = NULL;
 
@@ -94,8 +101,6 @@ slskv_zone_fini(void *mem, int size)
 	/* Destroy the lock. */
 	for (i = 0; i < SLSKV_BUCKETS; i++)
 		mtx_destroy(&table->mtx[i]);
-
-	sx_destroy(&table->sx);
 }
 
 int
@@ -155,23 +160,18 @@ slskv_destroy(struct slskv_table *table)
 }
 
 /* Find a value corresponding to a 64bit key. */
-int
+static int
 slskv_find_unlocked(struct slskv_table *table, uint64_t key, uintptr_t *value)
 {
 	struct slskv_pair *kv;
 
-	mtx_lock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
-
 	/* Traverse the bucket for the specific key. */
 	LIST_FOREACH (kv, &table->buckets[SLSKV_BUCKETNO(table, key)], next) {
 		if (kv->key == key) {
-			mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 			*value = kv->value;
 			return (0);
 		}
 	}
-
-	mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 
 	/* We failed to find the key. */
 	return (EINVAL);
@@ -182,41 +182,32 @@ slskv_find(struct slskv_table *table, uint64_t key, uintptr_t *value)
 {
 	int error;
 
-	sx_slock(&table->sx);
+	mtx_lock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 	error = slskv_find_unlocked(table, key, value);
-	sx_sunlock(&table->sx);
+	mtx_unlock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 
 	return (error);
 }
 
-int
-slskv_add_unlocked(struct slskv_table *table, uint64_t key, uintptr_t value)
+static int
+slskv_add_unlocked(struct slskv_table *table, struct slskv_pair *newkv)
 {
 	struct slskv_pairs *bucket;
-	struct slskv_pair *newkv, *kv;
-
-	newkv = uma_zalloc(slskvpair_zone, M_WAITOK);
-	newkv->key = key;
-	newkv->value = value;
+	struct slskv_pair *kv;
 
 	/* Get the bucket for the key. */
-	bucket = &table->buckets[SLSKV_BUCKETNO(table, key)];
 
-	mtx_lock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+	bucket = &table->buckets[SLSKV_BUCKETNO(table, newkv->key)];
 
 	/* Try to find existing instances of the key. */
 	LIST_FOREACH (kv, bucket, next) {
 		/* We found the key, so we cannot insert. */
-		if (kv->key == key) {
-			uma_zfree(slskvpair_zone, newkv);
-			mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+		if (kv->key == newkv->key)
 			return (EINVAL);
-		}
 	}
 
 	/* We didn't find the key, so we are free to insert. */
 	LIST_INSERT_HEAD(bucket, newkv, next);
-	mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 
 	return (0);
 }
@@ -225,22 +216,29 @@ slskv_add_unlocked(struct slskv_table *table, uint64_t key, uintptr_t value)
 int
 slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value)
 {
+	struct slskv_pair *newkv;
 	int error;
 
-	sx_slock(&table->sx);
-	error = slskv_add_unlocked(table, key, value);
-	sx_sunlock(&table->sx);
+	newkv = uma_zalloc(slskvpair_zone, M_WAITOK);
+	newkv->key = key;
+	newkv->value = value;
+
+	mtx_lock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+	error = slskv_add_unlocked(table, newkv);
+	mtx_unlock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+
+	if (error != 0)
+		uma_zfree(slskvpair_zone, newkv);
 
 	return (error);
 }
 
-void
+static struct slskv_pair *
 slskv_del_unlocked(struct slskv_table *table, uint64_t key)
 {
 	struct slskv_pairs *bucket;
 	struct slskv_pair *kv, *tmpkv;
 
-	mtx_lock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 	/* Get the bucket for the key and traverse it. */
 	bucket = &table->buckets[SLSKV_BUCKETNO(table, key)];
 
@@ -251,14 +249,11 @@ slskv_del_unlocked(struct slskv_table *table, uint64_t key)
 		 */
 		if (kv->key == key) {
 			LIST_REMOVE(kv, next);
-			uma_zfree(slskvpair_zone, kv);
-
-			/* We remove at most one pair. */
-			break;
+			return (kv);
 		}
 	}
 
-	mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+	return (NULL);
 }
 
 /*
@@ -267,19 +262,22 @@ slskv_del_unlocked(struct slskv_table *table, uint64_t key)
 void
 slskv_del(struct slskv_table *table, uint64_t key)
 {
-	sx_slock(&table->sx);
-	slskv_del_unlocked(table, key);
-	sx_sunlock(&table->sx);
+	struct slskv_pair *kv;
+
+	mtx_lock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+	kv = slskv_del_unlocked(table, key);
+	mtx_unlock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+
+	uma_zfree(slskvpair_zone, kv);
 }
 
-static int
+static struct slskv_pair *
 slskv_pop_unlocked(struct slskv_table *table, uint64_t *key, uintptr_t *value)
 {
 	struct slskv_pairs *bucket;
 	struct slskv_pair *kv;
-	int error = EINVAL, i;
+	int i;
 
-	mtx_lock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 	for (i = 0; i <= table->mask; i++) {
 		bucket = &table->buckets[i];
 		if (!LIST_EMPTY(bucket)) {
@@ -289,16 +287,11 @@ slskv_pop_unlocked(struct slskv_table *table, uint64_t *key, uintptr_t *value)
 			*value = kv->value;
 
 			LIST_REMOVE(kv, next);
-			uma_zfree(slskvpair_zone, kv);
-			error = 0;
-
-			break;
+			return (kv);
 		}
 	}
 
-	mtx_unlock(&table->mtx[SLSKV_BUCKETNO(table, key)]);
-
-	return (error);
+	return (NULL);
 }
 
 /*
@@ -308,13 +301,18 @@ slskv_pop_unlocked(struct slskv_table *table, uint64_t *key, uintptr_t *value)
 int
 slskv_pop(struct slskv_table *table, uint64_t *key, uintptr_t *value)
 {
-	int error;
+	struct slskv_pair *kv;
 
-	sx_xlock(&table->sx);
-	error = slskv_pop_unlocked(table, key, value);
-	sx_xunlock(&table->sx);
+	mtx_lock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+	kv = slskv_pop_unlocked(table, key, value);
+	mtx_unlock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 
-	return (error);
+	if (kv != NULL) {
+		uma_zfree(slskvpair_zone, kv);
+		return (0);
+	}
+
+	return (EINVAL);
 }
 
 /*
@@ -325,26 +323,24 @@ slskv_pop(struct slskv_table *table, uint64_t *key, uintptr_t *value)
 static void
 slskv_iternextbucket(struct slskv_iter *iter)
 {
-	int curbucket;
-
 	/* Find the first nonempty bucket. */
 	for (;;) {
-		curbucket = iter->bucket;
 
 		/* If the index is out of bounds we're done. */
-		if (curbucket > iter->table->mask)
+		if (iter->bucket > iter->table->mask)
 			return;
+
+		/* Inspect the current bucket, break if we find any data. */
+		if (!LIST_EMPTY(&iter->table->buckets[iter->bucket]))
+			break;
 
 		/* Have the global index point to the next unchecked bucket. */
 		iter->bucket += 1;
-
-		/* Inspect the current bucket, break if we find any data. */
-		if (!LIST_EMPTY(&iter->table->buckets[curbucket]))
-			break;
 	}
 
 	/* If there is a nonempty bucket, point to its first element. */
-	iter->pair = LIST_FIRST(&iter->table->buckets[curbucket]);
+	iter->pair = LIST_FIRST(&iter->table->buckets[iter->bucket]);
+	iter->bucket += 1;
 }
 
 /*
@@ -358,7 +354,7 @@ slskv_iterstart(struct slskv_table *table)
 {
 	struct slskv_iter iter;
 
-	sx_xlock(&table->sx);
+	KASSERT(table != NULL, ("iterating on NULL table\n"));
 
 	iter.table = table;
 	iter.bucket = 0;
@@ -374,16 +370,15 @@ slskv_iterstart(struct slskv_table *table)
 int
 slskv_itercont(struct slskv_iter *iter, uint64_t *key, uintptr_t *value)
 {
-	sx_assert(&iter->table->sx, SX_LOCKED);
-
 	if (iter->pair == NULL) {
 
 		/* We need to find the another bucket. */
 		slskv_iternextbucket(iter);
 
 		/* If we have no more buckets to look at, iteration is done. */
-		if (iter->pair == NULL && iter->bucket > iter->table->mask) {
-			sx_xunlock(&iter->table->sx);
+		if (iter->pair == NULL) {
+			KASSERT(iter->bucket > iter->table->mask,
+			    ("stopped iteration on bucket %d", iter->bucket));
 			return (SLSKV_ITERDONE);
 		}
 	}
@@ -402,85 +397,7 @@ slskv_itercont(struct slskv_iter *iter, uint64_t *key, uintptr_t *value)
 void
 slskv_iterabort(struct slskv_iter *iter)
 {
-	sx_xunlock(&iter->table->sx);
 	bzero(iter, sizeof(*iter));
-}
-
-int
-slskv_serial_unlocked(struct slskv_table *table, struct sbuf *sb)
-{
-	uintptr_t value;
-	uint64_t key;
-	int error;
-
-	/* Iterate the hashtable, saving the key-value pairs. */
-	KV_FOREACH_POP_UNLOCKED(table, key, value)
-	{
-		error = sbuf_bcat(sb, (void *)&key, sizeof(key));
-		if (error != 0)
-			return (error);
-
-		sbuf_bcat(sb, (void *)&value, sizeof(value));
-		if (error != 0)
-			return (error);
-	}
-
-	return (0);
-}
-
-/*
- * Serialize a table into a linear buffer.
- * Used for exporting the table to disk.
- */
-int
-slskv_serial(struct slskv_table *table, struct sbuf *sb)
-{
-	int error;
-
-	sx_xlock(&table->sx);
-	error = slskv_serial_unlocked(table, sb);
-	sx_xunlock(&table->sx);
-	return (error);
-}
-
-/*
- * Deserialize a table from a linear buffer.
- * Used from importing the table from disk.
- */
-int
-slskv_deserial(char *buf, size_t len, struct slskv_table **tablep)
-{
-	struct slskv_table *table;
-	uintptr_t value;
-	char *pairaddr;
-	uint64_t key;
-	int i, error;
-	size_t pairs;
-
-	KASSERT(buf != NULL, ("buffer is not finalized"));
-
-	error = slskv_create(&table);
-	if (error != 0)
-		return (error);
-
-	/* Find out how many pairs there are. */
-	pairs = len / (sizeof(uint64_t) + sizeof(uintptr_t));
-	for (i = 0; i < pairs; i++) {
-		pairaddr = &buf[i * (sizeof(uint64_t) + sizeof(uintptr_t))];
-		memcpy(&key, (void *)pairaddr, sizeof(key));
-		memcpy(&value, (void *)(pairaddr + sizeof(key)), sizeof(value));
-
-		error = slskv_add(table, key, value);
-		if (error != 0) {
-			slskv_destroy(table);
-			return (error);
-		}
-	}
-
-	/* Export the resulting table to the caller. */
-	*tablep = table;
-
-	return (0);
 }
 
 int
@@ -492,23 +409,9 @@ slsset_find(slsset *table, uint64_t key)
 }
 
 int
-slsset_find_unlocked(slsset *table, uint64_t key)
-{
-	uintptr_t nothing;
-
-	return (slskv_find_unlocked(table, key, &nothing));
-}
-
-int
 slsset_add(slsset *table, uint64_t key)
 {
 	return (slskv_add(table, key, (uintptr_t)key));
-}
-
-int
-slsset_add_unlocked(slsset *table, uint64_t key)
-{
-	return (slskv_add_unlocked(table, key, (uintptr_t)key));
 }
 
 int

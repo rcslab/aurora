@@ -434,7 +434,7 @@ slsrest_ttyrelease(struct slsrest_data *restdata)
 	KV_FOREACH(restdata->fptable, iter, slsid, fp)
 	{
 		if (fp->f_type == DTYPE_PTS) {
-			slskv_del_unlocked(restdata->fptable, slsid);
+			slskv_del(restdata->fptable, slsid);
 			fdrop(fp, curthread);
 		}
 	}
