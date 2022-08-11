@@ -273,8 +273,6 @@ sls_pager_obj_init(vm_object_t obj)
 	uint64_t oid;
 	int error;
 
-	VM_OBJECT_ASSERT_WLOCKED(obj);
-
 	/* If it's already prepared, nothing else to do. */
 	if ((obj->type == OBJT_SWAP) && ((obj->flags & OBJ_AURORA) != 0))
 		return (0);
@@ -437,10 +435,16 @@ sls_pager_getpages(
 	vm_pindex_t pindex;
 	struct buf *bp;
 	int error, i;
+	bool present;
 	bool retry;
 
+	KASSERT(obj->paging_in_progress > 0, ("object not marked as PIP"));
+	VM_OBJECT_WUNLOCK(obj);
+	present = sls_pager_haspage(obj, ma[0]->pindex, &maxbehind, &maxahead);
+	VM_OBJECT_WLOCK(obj);
+
 	/* Make sure we have all pages, not just the one we looked for. */
-	if (!sls_pager_haspage(obj, ma[0]->pindex, &maxbehind, &maxahead))
+	if (!present)
 		return (VM_PAGER_FAIL);
 
 	KASSERT(count < btoc(MAXPHYS), ("pagein does not fit in a buffer"));
@@ -576,10 +580,8 @@ sls_pager_alloc(void *handle, vm_offset_t size, vm_prot_t prot,
 	oldid = obj->objid;
 	obj->objid = (uint64_t)handle;
 
-	VM_OBJECT_WLOCK(obj);
 	if (sls_pager_obj_init(obj) != 0)
 		goto error;
-	VM_OBJECT_WUNLOCK(obj);
 
 	if (cred != NULL) {
 		obj->cred = cred;
@@ -648,6 +650,8 @@ sls_pager_fini(vm_object_t obj)
 static void
 sls_pager_dealloc(vm_object_t obj)
 {
+	struct vnode *vp;
+
 	VM_OBJECT_ASSERT_LOCKED(obj);
 	KASSERT((obj->flags & OBJ_DEAD) != 0, ("dealloc of reachable object"));
 
@@ -659,15 +663,18 @@ sls_pager_dealloc(vm_object_t obj)
 	}
 
 	vm_object_pip_wait(obj, "slsdea");
+	obj->type = OBJT_DEAD;
 
 	/* Release the vnode backing the object, if it exists. */
 	if ((obj->flags & OBJ_AURORA) != 0) {
-		vrele(SLS_VMOBJ_SWAPVP(obj));
+		vp = SLS_VMOBJ_SWAPVP(obj);
 		SLS_VMOBJ_SWAPVP(obj) = NULL;
-		sls_swapderef();
-	}
 
-	obj->type = OBJT_DEAD;
+		VM_OBJECT_WUNLOCK(obj);
+		vrele(vp);
+		sls_swapderef();
+		VM_OBJECT_WLOCK(obj);
+	}
 }
 
 static struct pagerops slspagerops = {

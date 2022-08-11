@@ -21,23 +21,29 @@ sls_exit_procremove(struct proc *p)
 {
 #ifdef INVARIANTS
 	struct slspart *slsp;
+	uint64_t oid = p->p_auroid;
+#endif
 
-	KASSERT(p->p_auroid != 0, ("Process not in Metropolis mode"));
-	slsp = slsp_find(p->p_auroid);
-	KASSERT(slsp != NULL,
-	    ("Process in nonexistent partition %lu", p->p_auroid));
-	if (slsp == NULL)
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+
+	/* Temporarily drop the process lock to prevent deadlocks. */
+
+	PROC_UNLOCK(p);
+
+#ifdef INVARIANTS
+
+	KASSERT(oid != 0, ("Process not in Metropolis mode"));
+	slsp = slsp_find(oid);
+	KASSERT(slsp != NULL, ("Process in nonexistent partition %lu", oid));
+	if (slsp == NULL) {
+		PROC_LOCK(p);
 		return;
+	}
 
 	slsp_deref(slsp);
 
 #endif /* INVARIANTS*/
 
-	PROC_LOCK_ASSERT(p, MA_OWNED);
-
-	/* Temporarily drop the process lock and get it back to prevent
-	 * deadlocks. */
-	PROC_UNLOCK(p);
 	SLS_LOCK();
 	PROC_LOCK(p);
 

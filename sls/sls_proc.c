@@ -586,8 +586,8 @@ slsproc_restore_pid(
 	if (restdata->slsmetr.slsmetr_proc != 0)
 		return (0);
 
-	sx_xlock(&allproc_lock);
 	sx_xlock(&proctree_lock);
+	sx_xlock(&allproc_lock);
 
 	error = slsproc_check_pid_collision(p, slsproc->pid);
 	if (error != 0) {
@@ -630,8 +630,8 @@ slsproc_restore_pid(
 	}
 out:
 
-	sx_xunlock(&proctree_lock);
 	sx_xunlock(&allproc_lock);
+	sx_xunlock(&proctree_lock);
 
 	return (error);
 }
