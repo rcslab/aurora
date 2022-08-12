@@ -111,6 +111,7 @@ bool slsp_restorable(struct slspart *slsp);
 #define SLSP_CACHEREST(slsp) (SLSATTR_ISCACHEREST((slsp)->slsp_attr))
 #define SLSP_PREFAULT(slsp) (SLSATTR_ISPREFAULT((slsp)->slsp_attr))
 #define SLSP_PRECOPY(slsp) (SLSATTR_ISPRECOPY((slsp->slsp_attr)))
+#define SLSP_DELTAREST(slsp) (SLSATTR_ISDELTAREST((slsp->slsp_attr)))
 
 extern uma_zone_t slsckpt_zone;
 struct slsckpt_data *slsckpt_alloc(struct sls_attr *attr);

@@ -22,12 +22,14 @@
 #define PARENTSOCK (7776)
 #define PARENTSOCKSTR ("7776")
 #define SOCKET (7777)
-#define SCALING (8)
+#define SCALING (4)
 #define BACKLOG (4)
 #define REPEATS (4)
 #define BUFSIZE (128)
+#define MAXDIGITS (20)
 
 #define SERVER ("./metroserver/metroserver")
+#define DELTASERVER ("./metrodelta/metrodelta")
 #define CLIENT ("./metroclient/metroclient")
 
 char buf[BUFSIZE];
@@ -35,6 +37,7 @@ char buf[BUFSIZE];
 static struct option pymetro_longopts[] = {
 	{ "accept4", no_argument, NULL, '4' },
 	{ "cached", no_argument, NULL, 'c' },
+	{ "deltarestore", no_argument, NULL, 'd' },
 	{ NULL, no_argument, NULL, 0 },
 };
 
@@ -77,7 +80,7 @@ wait_child(void)
 	}
 
 	if (!WIFEXITED(wstatus)) {
-		fprintf(stderr, "Abnormal child exit\n");
+		fprintf(stderr, "Child has not exited\n");
 		exit(EX_SOFTWARE);
 	}
 
@@ -223,17 +226,20 @@ testaccept_parent(void)
 int
 main(int argc, char **argv)
 {
-	char *args[] = { SERVER, "-s", buf, NULL };
+	char *args[] = { SERVER, "-s", buf, NULL, NULL, NULL };
+	char *oidarg = "-o";
+	char oidstr[MAXDIGITS];
 	struct sls_attr attr;
 	bool cached = false;
 	bool isaccept4 = false;
+	bool deltarest = false;
 	uint64_t oid;
 	pid_t pid;
 	int error;
 	long opt;
 	int i;
 
-	while ((opt = getopt_long(argc, argv, "4c", pymetro_longopts, NULL)) !=
+	while ((opt = getopt_long(argc, argv, "4cd", pymetro_longopts, NULL)) !=
 	    -1) {
 		switch (opt) {
 		case '4':
@@ -244,8 +250,14 @@ main(int argc, char **argv)
 			cached = true;
 			break;
 
+		case 'd':
+			/* Delta restores. */
+			args[0] = DELTASERVER;
+			deltarest = true;
+			break;
+
 		default:
-			printf("Usage:./pymetro [-4]\n");
+			printf("Usage:./pymetro [-4cd]\n");
 			exit(EX_USAGE);
 			break;
 		}
@@ -273,6 +285,14 @@ main(int argc, char **argv)
 			if (cached)
 				attr.attr_flags |= SLSATTR_CACHEREST;
 
+			if (deltarest) {
+				attr.attr_flags |= SLSATTR_DELTAREST;
+
+				snprintf(oidstr, MAXDIGITS, "%lu", oid);
+				args[3] = oidarg;
+				args[4] = oidstr;
+			}
+
 			error = sls_partadd(oid, attr);
 			if (error != 0) {
 				perror("sls_partadd");
@@ -290,7 +310,7 @@ main(int argc, char **argv)
 			snprintf(buf, BUFSIZE, "%d", SOCKET + i);
 
 			/* Call the server. */
-			error = execve(SERVER, args, NULL);
+			error = execve(args[0], args, NULL);
 			if (error != 0)
 				perror("execve");
 

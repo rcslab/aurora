@@ -842,6 +842,13 @@ slsrest_make_checkpoint(struct slspart *slsp, struct slsrest_data *restdata)
 	char *buf;
 	int error;
 
+	/* Possibly preload the objtable with existing values. */
+	if (SLSP_DELTAREST(slsp)) {
+		error = slsrest_ckptshadow(restdata, slsp->slsp_sckpt);
+		if (error != 0)
+			return (error);
+	}
+
 	/* Bring in the whole checkpoint in the form of SLOS records. */
 	error = sls_read_slos(slsp, &sckpt, restdata->objtable);
 	if (error != 0) {

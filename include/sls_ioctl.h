@@ -116,6 +116,7 @@ struct sls_metropolis_spawn_args {
 #define SLSATTR_CACHEREST 0x4	/* Cache restore images in memory */
 #define SLSATTR_PREFAULT 0x8	/* Prefault popular pages */
 #define SLSATTR_PRECOPY 0x10	/* Eagerly copy pages at restore time */
+#define SLSATTR_DELTAREST 0x20	/* Delta restores */
 
 #define SLSATTR_FLAGISSET(attr, flag) (((attr).attr_flags & flag) != 0)
 #define SLSATTR_ISIGNUNLINKED(attr) \
@@ -124,6 +125,7 @@ struct sls_metropolis_spawn_args {
 #define SLSATTR_ISCACHEREST(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_CACHEREST))
 #define SLSATTR_ISPREFAULT(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_PREFAULT))
 #define SLSATTR_ISPRECOPY(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_PRECOPY))
+#define SLSATTR_ISDELTAREST(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_DELTAREST))
 
 #ifdef __cplusplus
 }

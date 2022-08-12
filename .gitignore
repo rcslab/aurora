@@ -30,6 +30,7 @@ tests/pipe/pipe
 tests/posixshm/posixshm
 tests/print/print
 tests/metroclient/metroclient
+tests/metrodelta/metrodelta
 tests/metroparts/metroparts
 tests/metroserver/metroserver
 tests/metrosimple/metrosimple

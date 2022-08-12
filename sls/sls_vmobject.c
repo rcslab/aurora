@@ -1,4 +1,5 @@
 #include <sys/param.h>
+#include <sys/bitstring.h>
 #include <sys/conf.h>
 #include <sys/fcntl.h>
 #include <sys/file.h>
@@ -34,6 +35,55 @@
 #include "sls_vm.h"
 #include "sls_vmobject.h"
 #include "sls_vnode.h"
+
+static int
+slsvmobj_prefault_empty(uint64_t objid, size_t size)
+{
+	bitstr_t *bitmap;
+	int error;
+
+	/* Destroy any previous prefault maps. */
+	error = slskv_pop(slsm.slsm_prefault, &objid, (uintptr_t *)&bitmap);
+	if (error == 0)
+		free(bitmap, M_SLSMM);
+
+	bitmap = bit_alloc(size, M_SLSMM, M_WAITOK);
+	error = slskv_add(slsm.slsm_prefault, objid, (uintptr_t)bitmap);
+	if (error != 0)
+		free(bitmap, M_SLSMM);
+
+	return (error);
+}
+
+static int
+slsvmobj_prefault(vm_object_t obj)
+{
+	bitstr_t *bitmap = NULL;
+	uint64_t objid = obj->objid;
+	vm_page_t m;
+	int error;
+	int size;
+
+	/* Destroy any previous prefault maps. */
+	error = slskv_pop(slsm.slsm_prefault, &objid, (uintptr_t *)&bitmap);
+	if (error == 0)
+		free(bitmap, M_SLSMM);
+
+	bitmap = bit_alloc(obj->size, M_SLSMM, M_WAITOK);
+
+	if (obj != NULL) {
+		TAILQ_FOREACH (m, &obj->memq, listq)
+			bit_set(bitmap, m->pindex);
+	}
+
+	bit_count(bitmap, 0, obj->size, &size);
+
+	error = slskv_add(slsm.slsm_prefault, objid, (uintptr_t)bitmap);
+	if (error != 0)
+		free(bitmap, M_SLSMM);
+
+	return (error);
+}
 
 int
 slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt)
@@ -115,6 +165,11 @@ slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt)
 		goto error;
 	}
 
+	if (SLSATTR_ISDELTAREST(sckpt->sckpt_attr) &&
+	    ((obj->type == OBJT_DEFAULT) || (obj->type == OBJT_SWAP))) {
+		slsvmobj_prefault(obj);
+	}
+
 	return (0);
 
 error:
@@ -175,29 +230,6 @@ slsvmobj_checkpoint_shm(vm_object_t *objp, struct slsckpt_data *sckpt_data)
 	*objp = shadow;
 	return (0);
 }
-
-static void
-slsvmobj_prefault(struct slsvmobject *info)
-{
-	size_t bmp_size;
-	char *bitmap;
-	int error;
-
-	error = slskv_find(
-	    slsm.slsm_prefault, info->slsid, (uintptr_t *)&bitmap);
-	if (error == 0)
-		return;
-
-	bmp_size = info->size / 8;
-	if ((info->size % 8) != 0)
-		bmp_size += 1;
-	bitmap = malloc(bmp_size, M_SLSMM, M_WAITOK | M_ZERO);
-
-	error = slskv_add(slsm.slsm_prefault, info->slsid, (uintptr_t)bitmap);
-	if (error != 0)
-		free(bitmap, M_SLSMM);
-}
-
 static int
 slsvmobj_restore(struct slsvmobject *info, struct slsckpt_data *sckpt,
     struct slskv_table *objtable)
@@ -223,7 +255,7 @@ slsvmobj_restore(struct slsvmobject *info, struct slsckpt_data *sckpt,
 		 */
 
 		if (SLSATTR_ISPREFAULT(sckpt->sckpt_attr))
-			slsvmobj_prefault(info);
+			slsvmobj_prefault_empty(info->slsid, info->size);
 
 		return (0);
 

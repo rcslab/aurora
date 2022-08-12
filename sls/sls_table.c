@@ -566,6 +566,8 @@ sls_readdata_prefault(struct vnode *vp, vm_object_t obj, bitstr_t *bitmap)
 	vm_pindex_t offset;
 	int error;
 
+	ASSERT_VOP_LOCKED(vp, ("prefaulting with unlocked backing vnode"));
+
 	DEBUG1("Prefaulting object %lx", obj->objid);
 	offset = 0;
 	for (;;) {
@@ -628,11 +630,11 @@ sls_readdata(struct slspart *slsp, struct vnode *vp, uint64_t slsid,
 
 	/* Create a new object if we did not already find it. */
 	if (slskv_find(objtable, slsid, (uintptr_t *)&obj) == 0) {
+		sls_record_destroy(rec);
+
 		error = sls_pager_obj_init(obj);
-		if (error != 0) {
-			sls_record_destroy(rec);
+		if (error != 0)
 			return (error);
-		}
 	} else {
 		/* Store the record for later and possibly make a new object. */
 		VOP_UNLOCK(vp, 0);
@@ -662,7 +664,7 @@ sls_readdata(struct slspart *slsp, struct vnode *vp, uint64_t slsid,
 
 		if (error != 0)
 			goto error;
-	} else if (SLSP_PREFAULT(slsp)) {
+	} else if (SLSP_PREFAULT(slsp) || SLSP_DELTAREST(slsp)) {
 		/*
 		 * Even we have no prefault vector or can't prefault
 		 * pages in, we can keep going since we have created

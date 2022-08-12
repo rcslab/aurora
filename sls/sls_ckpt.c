@@ -422,7 +422,10 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 	 * Collapse the shadows. Do it before making the partition available to
 	 * safely execute with region checkpoints.
 	 */
-	slsckpt_compact(slsp, sckpt);
+	if (SLSP_DELTAREST(slsp) && slsp->slsp_sckpt != NULL)
+		slsckpt_drop(sckpt);
+	else
+		slsckpt_compact(slsp, sckpt);
 
 	/*
 	 * Mark the partition as available. We don't have pipelining, so we wait
