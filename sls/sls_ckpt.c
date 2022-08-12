@@ -203,7 +203,7 @@ slsckpt_isfullckpt(struct slspart *slsp)
 }
 
 static void
-slsckpt_compact_single(struct slspart *slsp, struct slsckpt_data *sckpt_data)
+slsckpt_compact_single(struct slspart *slsp, struct slsckpt_data *sckpt)
 {
 	struct sls_record *oldrec, *rec;
 	uint64_t slsid;
@@ -213,7 +213,7 @@ slsckpt_compact_single(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 	    ("Invalid single object compaction"));
 
 	/* Replace any metadata records we have in the old table. */
-	KV_FOREACH_POP(sckpt_data->sckpt_rectable, slsid, rec)
+	KV_FOREACH_POP(sckpt->sckpt_rectable, slsid, rec)
 	{
 		slskv_pop(slsp->slsp_sckpt->sckpt_rectable, &slsid,
 		    (uintptr_t *)&oldrec);
@@ -225,17 +225,30 @@ slsckpt_compact_single(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 
 	/* Collapse the new table into the old one. */
 	slsvm_objtable_collapsenew(
-	    slsp->slsp_sckpt->sckpt_objtable, sckpt_data->sckpt_objtable);
-	uma_zfree(slsckpt_zone, sckpt_data);
+	    slsp->slsp_sckpt->sckpt_shadowtable, sckpt->sckpt_shadowtable);
+	slsckpt_drop(sckpt);
 }
 
 static void
-slsckpt_compact(struct slspart *slsp, struct slsckpt_data *sckpt_data)
+slsckpt_compact(struct slspart *slsp, struct slsckpt_data *sckpt)
 {
-	if (slsp->slsp_target == SLS_MEM || slsp->slsp_mode == SLS_DELTA) {
+	struct slsckpt_data *old_sckpt;
+	struct slskv_table *objtable;
+
+	if ((slsp->slsp_target == SLS_MEM || slsp->slsp_mode == SLS_DELTA)) {
+
 		/* Replace the old checkpoint in the partition. */
-		uma_zfree_arg(slsckpt_zone, slsp->slsp_sckpt, sckpt_data);
-		slsp->slsp_sckpt = sckpt_data;
+		old_sckpt = slsp->slsp_sckpt;
+		slsp->slsp_sckpt = sckpt;
+
+		if (old_sckpt != NULL) {
+			objtable = (sckpt != NULL) ? sckpt->sckpt_shadowtable :
+						     0;
+			slsvm_objtable_collapse(
+			    old_sckpt->sckpt_shadowtable, objtable);
+			slsckpt_drop(old_sckpt);
+		}
+
 		return;
 	}
 
@@ -245,7 +258,7 @@ slsckpt_compact(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 	/* Destroy the shadows. We don't keep any between iterations. */
 	DEBUG("Compacting full checkpoint");
 	KASSERT(slsp->slsp_sckpt == NULL, ("Full disk checkpoint has data"));
-	uma_zfree(slsckpt_zone, sckpt_data);
+	slsckpt_drop(sckpt);
 }
 
 static int
@@ -284,7 +297,7 @@ slsckpt_initio(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 static int __attribute__((noinline)) sls_ckpt(slsset *procset,
     struct proc *pcaller, struct slspart *slsp, uint64_t nextepoch)
 {
-	struct slsckpt_data *sckpt_data;
+	struct slsckpt_data *sckpt;
 	struct slskv_iter iter;
 	struct thread *td;
 	struct proc *p;
@@ -297,15 +310,15 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 #ifdef KTR
 	KVSET_FOREACH(procset, iter, p) { slsvm_print_vmspace(p->p_vmspace); }
 #endif
-	sckpt_data = uma_zalloc_arg(slsckpt_zone, &slsp->slsp_attr, M_WAITOK);
-	if (sckpt_data == NULL)
+	sckpt = slsckpt_alloc(&slsp->slsp_attr);
+	if (sckpt == NULL)
 		return (ENOMEM);
 
 	SDT_PROBE0(sls, , , meta_start);
 	SDT_PROBE1(sls, , sls_ckpt, , "Creating the checkpoint");
 
 	/* Shadow SYSV shared memory. */
-	error = slsckpt_sysvshm(sckpt_data, sckpt_data->sckpt_objtable);
+	error = slsckpt_sysvshm(sckpt);
 	if (error != 0) {
 		DEBUG1("Checkpointing SYSV failed with %d\n", error);
 		slsckpt_cont(procset, pcaller);
@@ -326,7 +339,7 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 		PROC_UNLOCK(p);
 		SLS_UNLOCK();
 
-		error = slsckpt_metadata(p, procset, sckpt_data);
+		error = slsckpt_metadata(p, procset, sckpt);
 		if (error != 0) {
 			DEBUG2("Checkpointing process %d failed with %d\n",
 			    p->p_pid, error);
@@ -340,8 +353,7 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 
 	SDT_PROBE0(sls, , , meta_finish);
 	/* Shadow the objects to be dumped. */
-	error = slsvm_procset_shadow(
-	    procset, sckpt_data->sckpt_objtable, slsckpt_isfullckpt(slsp));
+	error = slsvm_procset_shadow(procset, sckpt, slsckpt_isfullckpt(slsp));
 	if (error != 0) {
 		DEBUG1("shadowing failed with %d\n", error);
 		slsckpt_cont(procset, pcaller);
@@ -381,7 +393,7 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 		if (!sls_only_flush_deltas ||
 		    ((slsp->slsp_mode == SLS_DELTA) &&
 			(slsp->slsp_sckpt != NULL))) {
-			error = slsckpt_initio(slsp, sckpt_data);
+			error = slsckpt_initio(slsp, sckpt);
 			if (error != 0)
 				DEBUG1("slsckpt_initio failed with %d", error);
 		}
@@ -410,7 +422,7 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 	 * Collapse the shadows. Do it before making the partition available to
 	 * safely execute with region checkpoints.
 	 */
-	slsckpt_compact(slsp, sckpt_data);
+	slsckpt_compact(slsp, sckpt);
 
 	/*
 	 * Mark the partition as available. We don't have pipelining, so we wait
@@ -426,8 +438,8 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 
 error:
 	/* Undo existing VM object tree modifications. */
-	if (sckpt_data != NULL)
-		uma_zfree(slsckpt_zone, sckpt_data);
+	if (sckpt != NULL)
+		slsckpt_drop(sckpt);
 
 	if (slsp->slsp_attr.attr_period == 0)
 		slsp_signal(slsp, error);
@@ -513,7 +525,7 @@ slsckpt_dataregion_fillckpt(struct slspart *slsp, struct proc *p,
 	    sls, , slsckpt_dataregion_fillckpt, , "Object checkpointing");
 	/* Get the data and shadow it for the entry. */
 	error = slsvm_entry_shadow(
-	    p, sckpt_data->sckpt_objtable, entry, slsckpt_isfullckpt(slsp));
+	    p, sckpt_data->sckpt_shadowtable, entry, slsckpt_isfullckpt(slsp));
 	if (error != 0)
 		return (error);
 
@@ -569,7 +581,7 @@ slsckpt_dataregion_dump(struct slsckpt_dataregion_dump_args *args)
 	if ((slsp->slsp_target == SLS_MEM) || (slsp->slsp_mode == SLS_DELTA))
 		slsckpt_compact_single(slsp, sckpt_data);
 	else
-		uma_zfree(slsckpt_zone, sckpt_data);
+		slsckpt_drop(sckpt_data);
 
 	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Compacting the data");
 
@@ -609,7 +621,7 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
     uint64_t *nextepoch)
 {
 	struct slsckpt_dataregion_dump_args *dump_args;
-	struct slsckpt_data *sckpt_data = NULL;
+	struct slsckpt_data *sckpt = NULL;
 	int stateerr, error;
 
 	/*
@@ -642,8 +654,8 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 		goto error_single;
 	}
 
-	sckpt_data = uma_zalloc_arg(slsckpt_zone, &slsp->slsp_attr, M_WAITOK);
-	if (sckpt_data == NULL) {
+	sckpt = slsckpt_alloc(&slsp->slsp_attr);
+	if (sckpt == NULL) {
 		error = ENOMEM;
 		goto error_single;
 	}
@@ -661,7 +673,7 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	SDT_PROBE1(sls, , slsckpt_dataregion, , "Single threading");
 
 	/* Add the data and metadata. This also shadows the object. */
-	error = slsckpt_dataregion_fillckpt(slsp, p, addr, sckpt_data);
+	error = slsckpt_dataregion_fillckpt(slsp, p, addr, sckpt);
 	if (error != 0) {
 		error = EINVAL;
 		goto error;
@@ -686,14 +698,13 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	dump_args = malloc(sizeof(*dump_args), M_SLSMM, M_WAITOK);
 	*dump_args = (struct slsckpt_dataregion_dump_args) {
 		.slsp = slsp,
-		.sckpt_data = sckpt_data,
+		.sckpt_data = sckpt,
 		.nextepoch = *nextepoch,
 	};
 	error = kthread_add((void (*)(void *))slsckpt_dataregion_dump,
 	    dump_args, NULL, NULL, 0, 0, "slsckpt_dataregion_dump");
 	if (error != 0) {
-		DEBUG1(
-		    "ERROR: Calling sls_dataregion_dump failed with %d", error);
+		DEBUG1("ERROR: sls_dataregion_dump failed with %d", error);
 		slsp_epoch_advance(slsp, *nextepoch);
 		return (error);
 	}
@@ -713,7 +724,7 @@ error_single:
 	    slsp, SLSP_CHECKPOINTING, SLSP_AVAILABLE, false);
 	KASSERT(stateerr == 0, ("partition not in ckpt state"));
 
-	uma_zfree(slsckpt_zone, sckpt_data);
+	slsckpt_drop(sckpt);
 
 	/* Remove the reference taken by the initial ioctl call. */
 	slsp_deref(slsp);

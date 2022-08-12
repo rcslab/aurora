@@ -251,8 +251,8 @@ slsvmspace_restore_entry_file(
 		return (EPERM);
 
 	/* Retrieve the restored vnode pointer. */
-	error = slskv_find(
-	    restdata->vntable, (uint64_t)entry->vp, (uintptr_t *)&vp);
+	error = slskv_find(restdata->sckpt->sckpt_vntable, (uint64_t)entry->vp,
+	    (uintptr_t *)&vp);
 	if (error != 0)
 		return (error);
 

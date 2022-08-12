@@ -50,6 +50,7 @@
 #include "sls_pager.h"
 #include "sls_partition.h"
 #include "sls_table.h"
+#include "sls_vm.h"
 
 #define SLSTABLE_TASKWARM (32)
 
@@ -176,7 +177,7 @@ sls_getrecord(struct sbuf *sb, uint64_t slsid, uint64_t type)
 	KASSERT(type != 0, ("attempting to get record invalid type"));
 	KASSERT(sbuf_done(sb) != 0, ("record sbuf is not done"));
 	KASSERT(sbuf_len(sb) != 0, ("sbuf length 0"));
-	rec = malloc(sizeof(*rec), M_SLSREC, M_WAITOK);
+	rec = malloc(sizeof(*rec), M_SLSREC, M_WAITOK | M_ZERO);
 	rec->srec_id = slsid;
 	rec->srec_sb = sb;
 	rec->srec_type = type;
@@ -194,7 +195,7 @@ sls_getrecord_empty(uint64_t slsid, uint64_t type)
 
 	KASSERT(slsid != 0, ("attempting to get record with SLS ID 0"));
 	KASSERT(type != 0, ("attempting to get record invalid type"));
-	rec = malloc(sizeof(*rec), M_SLSREC, M_WAITOK);
+	rec = malloc(sizeof(*rec), M_SLSREC, M_WAITOK | M_ZERO);
 	rec->srec_id = slsid;
 	rec->srec_sb = sb;
 	rec->srec_type = type;
@@ -214,6 +215,14 @@ sls_record_seal(struct sls_record *rec)
 void
 sls_record_destroy(struct sls_record *rec)
 {
+	struct slsvmobject *info;
+
+	if (rec->srec_type == SLOSREC_VMOBJ) {
+		info = (struct slsvmobject *)sbuf_data(rec->srec_sb);
+		if (info->objptr != NULL)
+			vm_object_deallocate(info->objptr);
+	}
+
 	sbuf_delete(rec->srec_sb);
 	free(rec, M_SLSREC);
 }
@@ -617,20 +626,35 @@ sls_readdata(struct slspart *slsp, struct vnode *vp, uint64_t slsid,
 	rec = sls_getrecord(sb, slsid, SLOSREC_VMOBJ);
 	KASSERT(rec != NULL, ("No record allocated"));
 
-	/* Store the record for later and possibly make a new object.  */
-	VOP_UNLOCK(vp, 0);
-	error = sls_readdata_slos_vmobj(rectable, slsid, rec, &obj);
-	VOP_LOCK(vp, LK_EXCLUSIVE);
-	if (error != 0) {
-		sls_record_destroy(rec);
-		return (error);
+	/* Create a new object if we did not already find it. */
+	if (slskv_find(objtable, slsid, (uintptr_t *)&obj) == 0) {
+		error = sls_pager_obj_init(obj);
+		if (error != 0) {
+			sls_record_destroy(rec);
+			return (error);
+		}
+	} else {
+		/* Store the record for later and possibly make a new object. */
+		VOP_UNLOCK(vp, 0);
+		error = sls_readdata_slos_vmobj(rectable, slsid, rec, &obj);
+		VOP_LOCK(vp, LK_EXCLUSIVE);
+		if (error != 0) {
+			sls_record_destroy(rec);
+			return (error);
+		}
+
+		/* The object is NULL for non-anonymous objects. */
+		if (obj == NULL)
+			return (0);
+
+		/* Add the object to the table. */
+		error = slskv_add(objtable, slsid, (uintptr_t)obj);
+		if (error != 0)
+			goto error;
 	}
 
-	/* The object is NULL for non-anonymous objects. */
-	if (obj == NULL)
-		return (0);
+	KASSERT(obj != NULL, ("No object found"));
 
-	/* XXX Add VFS backend handling. */
 	if (SLSP_LAZYREST(slsp) == 0) {
 		VOP_UNLOCK(vp, 0);
 		error = sls_readdata_slos(vp, obj);
@@ -647,25 +671,19 @@ sls_readdata(struct slspart *slsp, struct vnode *vp, uint64_t slsid,
 		error = slskv_find(
 		    slsm.slsm_prefault, slsid, (uintptr_t *)&bitmap);
 		if (error != 0)
-			goto out;
+			return (0);
 
 		error = sls_readdata_prefault(vp, obj, bitmap);
 		if (error != 0)
-			goto out;
+			return (0);
 	}
 
-out:
-	/* Add the object to the table. */
-	error = slskv_add(objtable, slsid, (uintptr_t)obj);
-	if (error != 0)
-		goto error;
 
 	return (0);
 
 error:
 	VM_OBJECT_WUNLOCK(obj);
 	vm_object_deallocate(obj);
-
 	sls_record_destroy(rec);
 
 	return (error);
@@ -717,18 +735,13 @@ sls_read_slos_manifest(uint64_t oid, char **bufp, size_t *buflenp)
 	/* Get the record length. */
 	error = sls_get_rstat(vp, &st);
 	if (error != 0) {
-		SLS_DBG("getting record type failed with %d\n", error);
-		vput(vp);
-		return (error);
+		goto error;
 	}
 
 	buf = malloc(st.len, M_SLSMM, M_WAITOK);
 	error = sls_readrec_raw(vp, st.len, buf);
-	if (error != 0) {
-		free(buf, M_SLSMM);
-		vput(vp);
-		return (error);
-	}
+	if (error != 0)
+		goto error;
 
 	close_error = VOP_CLOSE(vp, mode, NULL, td);
 	if (close_error != 0)
@@ -741,6 +754,14 @@ sls_read_slos_manifest(uint64_t oid, char **bufp, size_t *buflenp)
 	*buflenp = st.len;
 
 	return (0);
+
+error:
+	close_error = VOP_CLOSE(vp, mode, NULL, td);
+	if (close_error != 0)
+		SLS_DBG("error %d, could not close slos node", close_error);
+
+	vput(vp);
+	return (error);
 }
 
 static int
@@ -835,23 +856,22 @@ sls_read_slos_datarec_all(struct slspart *slsp, char **bufp, size_t *buflenp,
 
 /* Reads in a record from the SLOS and saves it in the record table. */
 int
-sls_read_slos(struct slspart *slsp, struct slskv_table **rectablep,
+sls_read_slos(struct slspart *slsp, struct slsckpt_data **sckptp,
     struct slskv_table *objtable)
 {
-	struct slskv_table *rectable;
+	struct slsckpt_data *sckpt;
 	char *input_buf, *buf;
 	size_t buflen;
 	int error;
 
-	/* Create the tables for the data and metadata of the checkpoint. */
-	error = slskv_create(&rectable);
-	if (error != 0)
-		return (error);
+	sckpt = slsckpt_alloc(&slsp->slsp_attr);
+	if (sckpt == NULL)
+		return (ENOMEM);
 
 	/* Read the manifest, get the record number for the checkpoint. */
 	error = sls_read_slos_manifest(slsp->slsp_oid, &buf, &buflen);
 	if (error != 0) {
-		sls_free_rectable(rectable);
+		slsckpt_drop(sckpt);
 		return (error);
 	}
 
@@ -859,26 +879,26 @@ sls_read_slos(struct slspart *slsp, struct slskv_table **rectablep,
 
 	/* Extract the list of VM records, return the array of metadata. */
 	error = sls_read_slos_datarec_all(
-	    slsp, &buf, &buflen, rectable, objtable);
+	    slsp, &buf, &buflen, sckpt->sckpt_rectable, objtable);
 	if (error != 0)
 		goto error;
 
 	/* Extract all metadata records. */
-	error = sls_readmeta_slos(buf, buflen, rectable);
+	error = sls_readmeta_slos(buf, buflen, sckpt->sckpt_rectable);
 	if (error != 0)
 		goto error;
-
-	*rectablep = rectable;
 
 	free(input_buf, M_SLSMM);
 
 	taskqueue_drain_all(slos.slos_tq);
 
+	*sckptp = sckpt;
+
 	return (0);
 
 error:
 	free(input_buf, M_SLSMM);
-	sls_free_rectable(rectable);
+	slsckpt_drop(sckpt);
 
 	return (error);
 }
@@ -1072,20 +1092,28 @@ error:
  * in the VM object.
  */
 static int
-sls_writedata_slos(struct sls_record *rec, struct slsckpt_data *sckpt_data)
+sls_writedata_slos(struct sls_record *rec, struct slsckpt_data *sckpt)
 {
-	size_t amplification = sckpt_data->sckpt_attr.attr_amplification;
+	size_t amplification = sckpt->sckpt_attr.attr_amplification;
 	struct sbuf *sb = rec->srec_sb;
 	struct thread *td = curthread;
 	int mode = FREAD | FWRITE;
 	struct slsvmobject *vminfo;
 	struct vnode *vp, **invp;
-	size_t offset;
 	vm_object_t obj;
+	size_t offset;
 	int error, ret = 0;
 	size_t i;
 
+	if (rec->srec_type != SLOSREC_VMOBJ)
+		panic("invalid type %lx for metadata", rec->srec_type);
+
 	KASSERT(amplification > 0, ("amplification is 0"));
+
+	/* Get the object itself, clean up the pointer when writing out. */
+	vminfo = (struct slsvmobject *)sbuf_data(sb);
+	obj = (vm_object_t)vminfo->objptr;
+	vminfo->objptr = NULL;
 
 	/*
 	 * Send out the object's metadata. The amplification factor
@@ -1101,21 +1129,15 @@ sls_writedata_slos(struct sls_record *rec, struct slsckpt_data *sckpt_data)
 			return (error);
 	}
 
-	if (rec->srec_type != SLOSREC_VMOBJ)
-		panic("invalid type %lx for metadata", rec->srec_type);
-
-	/* Get the object itself. */
-	vminfo = (struct slsvmobject *)sbuf_data(sb);
-	obj = (vm_object_t)vminfo->objptr;
-	VM_OBJECT_WLOCK(obj);
-
 	/*
 	 * The ID of the info struct and the in-memory pointer
 	 * are identical at checkpoint time, so we use it to
 	 * retrieve the object and grab its data.
 	 */
-	if (((obj->type != OBJT_DEFAULT) && (obj->type != OBJT_SWAP)))
+	if (obj == NULL || !OBJT_ISANONYMOUS(obj))
 		goto out;
+
+	VM_OBJECT_WLOCK(obj);
 
 	/*
 	 * Send out the object's data, possibly amplify (explained above).
@@ -1124,11 +1146,14 @@ sls_writedata_slos(struct sls_record *rec, struct slsckpt_data *sckpt_data)
 		offset = i * obj->size * SLOS_OBJOFF;
 		ret = sls_writeobj_data(vp, obj, offset);
 		if (ret != 0)
-			goto out;
+			break;
 	}
 
-out:
 	VM_OBJECT_WUNLOCK(obj);
+
+	/* Release the reference this function holds. */
+	vm_object_deallocate(obj);
+out:
 
 	error = VOP_CLOSE(vp, mode, NULL, td);
 	if (error != 0) {
@@ -1218,7 +1243,7 @@ slstable_task(void *ctx, int __unused pending)
  * need to be sent to the SLOS.
  */
 int
-sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
+sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt)
 {
 	struct sbuf *sb_manifest, *sb_meta, *sb_data;
 	uint64_t data_records = 0;
@@ -1233,11 +1258,11 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt_data)
 	sb_meta = sbuf_new_auto();
 	sb_data = sbuf_new_auto();
 
-	KV_FOREACH(sckpt_data->sckpt_rectable, iter, slsid, rec)
+	KV_FOREACH(sckpt->sckpt_rectable, iter, slsid, rec)
 	{
 		/* Create eachkrecord in parallel. */
 		if (sls_isdata(rec->srec_type)) {
-			error = sls_writedata_slos(rec, sckpt_data);
+			error = sls_writedata_slos(rec, sckpt);
 			if (error != 0)
 				printf("Writing to the SLOS failed with %d\n",
 				    error);

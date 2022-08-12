@@ -492,7 +492,8 @@ slssock_restore_aflocal(
 	 * Find the checkpoint time working directory to properly resolve
 	 * UNIX socket names.
 	 */
-	error = slskv_find(restdata->vntable, slssock->vnode, (uintptr_t *)&vp);
+	error = slskv_find(
+	    restdata->sckpt->sckpt_vntable, slssock->vnode, (uintptr_t *)&vp);
 	if (error != 0)
 		return (error);
 

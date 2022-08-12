@@ -6,9 +6,7 @@
 #include "sls_internal.h"
 #include "sls_kv.h"
 
-int slsckpt_sysvshm(
-    struct slsckpt_data *sckpt_data, struct slskv_table *objtable);
-int slsrest_sysvshm(
-    struct slssysvshm *slssysvshm, struct slskv_table *objtable);
+int slsckpt_sysvshm(struct slsckpt_data *sckpt);
+int slsrest_sysvshm(struct slssysvshm *info, struct slskv_table *objtable);
 
 #endif /* _SLS_SYSV_H_ */

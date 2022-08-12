@@ -113,6 +113,9 @@ bool slsp_restorable(struct slspart *slsp);
 #define SLSP_PRECOPY(slsp) (SLSATTR_ISPRECOPY((slsp->slsp_attr)))
 
 extern uma_zone_t slsckpt_zone;
+struct slsckpt_data *slsckpt_alloc(struct sls_attr *attr);
+void slsckpt_hold(struct slsckpt_data *sckpt);
+void slsckpt_drop(struct slsckpt_data *sckpt);
 
 extern struct slspart_serial ssparts[];
 int sslsp_deserialize(void);

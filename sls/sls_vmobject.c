@@ -36,22 +36,21 @@
 #include "sls_vnode.h"
 
 int
-slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt_data)
+slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt)
 {
-	struct slsvmobject cur_obj;
-	struct sls_record *rec;
 	vm_object_t curobj, backer;
+	struct slsvmobject info;
+	struct sls_record *rec;
 	struct sbuf *sb;
 	int error;
 
 	/* Find if we have already checkpointed the object. */
-	if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t)obj->objid,
+	if (slskv_find(sckpt->sckpt_rectable, (uint64_t)obj->objid,
 		(uintptr_t *)&sb) == 0)
 		return (0);
 
 	/* We don't need the anonymous objects for in-memory checkpointing. */
-	if ((sckpt_data->sckpt_attr.attr_target == SLS_MEM) &&
-	    OBJT_ISANONYMOUS(obj))
+	if ((sckpt->sckpt_attr.attr_target == SLS_MEM) && OBJT_ISANONYMOUS(obj))
 		return (0);
 
 	DEBUG3("Checkpointing metadata for object %p (ID %lx, type %d)", obj,
@@ -59,9 +58,18 @@ slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt_data)
 	/* First time we come across it, create a buffer for the info struct. */
 	sb = sbuf_new_auto();
 
-	cur_obj.size = obj->size;
-	cur_obj.type = obj->type;
-	cur_obj.objptr = obj;
+	info.size = obj->size;
+	info.type = obj->type;
+	info.objptr = NULL;
+
+	/*
+	 * Get a reference for anonymous objects we are flushing out to the OSD.
+	 * We remove the reference after we are done creating the IOs.
+	 */
+	if (OBJT_ISANONYMOUS(obj)) {
+		vm_object_reference(obj);
+		info.objptr = obj;
+	}
 
 	/*
 	 * If the backer has the same ID as we do, we're an Aurora shadow. Find
@@ -74,18 +82,18 @@ slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt_data)
 		backer = backer->backing_object;
 	}
 
-	cur_obj.backer = (backer != NULL) ? backer->objid : 0UL;
-	cur_obj.backer_off = (backer != NULL) ? obj->backing_object_offset : 0;
-	cur_obj.magic = SLSVMOBJECT_ID;
-	cur_obj.slsid = obj->objid;
+	info.backer = (backer != NULL) ? backer->objid : 0UL;
+	info.backer_off = (backer != NULL) ? obj->backing_object_offset : 0;
+	info.magic = SLSVMOBJECT_ID;
+	info.slsid = obj->objid;
 	if (obj->type == OBJT_VNODE) {
-		error = slsckpt_vnode((struct vnode *)obj->handle, sckpt_data);
+		error = slsckpt_vnode((struct vnode *)obj->handle, sckpt);
 		if (error != 0)
 			goto error;
-		cur_obj.vnode = (uint64_t)obj->handle;
+		info.vnode = (uint64_t)obj->handle;
 	}
 
-	error = sbuf_bcat(sb, (void *)&cur_obj, sizeof(cur_obj));
+	error = sbuf_bcat(sb, (void *)&info, sizeof(info));
 	if (error != 0)
 		goto error;
 
@@ -93,15 +101,15 @@ slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt_data)
 	if (error != 0)
 		goto error;
 
-	cur_obj.backer = (backer != NULL) ? backer->objid : 0UL;
-	KASSERT((cur_obj.type != OBJT_DEVICE) || (cur_obj.backer == 0),
+	info.backer = (backer != NULL) ? backer->objid : 0UL;
+	KASSERT((info.type != OBJT_DEVICE) || (info.backer == 0),
 	    ("device object has a backer"));
-	KASSERT(cur_obj.slsid != 0, ("object has an ID of 0"));
+	KASSERT(info.slsid != 0, ("object has an ID of 0"));
 
-	rec = sls_getrecord(sb, cur_obj.slsid, SLOSREC_VMOBJ);
+	rec = sls_getrecord(sb, info.slsid, SLOSREC_VMOBJ);
 
-	error = slskv_add(sckpt_data->sckpt_rectable, (uint64_t)cur_obj.slsid,
-	    (uintptr_t)rec);
+	error = slskv_add(
+	    sckpt->sckpt_rectable, (uint64_t)info.slsid, (uintptr_t)rec);
 	if (error != 0) {
 		sls_record_destroy(rec);
 		goto error;
@@ -110,7 +118,8 @@ slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt_data)
 	return (0);
 
 error:
-	slskv_del(sckpt_data->sckpt_rectable, (uint64_t)cur_obj.slsid);
+	vm_object_deallocate(obj);
+	slskv_del(sckpt->sckpt_rectable, (uint64_t)info.slsid);
 	sbuf_delete(sb);
 
 	return (error);
@@ -129,7 +138,7 @@ slsvmobj_checkpoint_shm(vm_object_t *objp, struct slsckpt_data *sckpt_data)
 
 	/* Lookup whether we have already shadowed the object. */
 	error = slskv_find(
-	    sckpt_data->sckpt_objtable, (uint64_t)obj, (uintptr_t *)&shadow);
+	    sckpt_data->sckpt_shadowtable, (uint64_t)obj, (uintptr_t *)&shadow);
 
 	/*
 	 * Either the VM object is already mapped, or it is not. If it
@@ -158,7 +167,7 @@ slsvmobj_checkpoint_shm(vm_object_t *objp, struct slsckpt_data *sckpt_data)
 		/* Actually shadow it. */
 		shadow = obj;
 		error = slsvm_object_shadow(
-		    sckpt_data->sckpt_objtable, &shadow);
+		    sckpt_data->sckpt_shadowtable, &shadow);
 		if (error != 0)
 			return (error);
 	}
@@ -190,7 +199,8 @@ slsvmobj_prefault(struct slsvmobject *info)
 }
 
 static int
-slsvmobj_restore(struct slsvmobject *info, struct slsrest_data *restdata)
+slsvmobj_restore(struct slsvmobject *info, struct slsckpt_data *sckpt,
+    struct slskv_table *objtable)
 {
 	vm_object_t object;
 	struct vnode *vp;
@@ -203,8 +213,7 @@ slsvmobj_restore(struct slsvmobject *info, struct slsrest_data *restdata)
 	case OBJT_SWAP:
 
 #ifdef INVARIANTS
-		error = slskv_find(
-		    restdata->objtable, info->slsid, (uintptr_t *)&object);
+		error = slskv_find(objtable, info->slsid, (uintptr_t *)&object);
 		KASSERT(error == 0, ("object %lx not found", info->slsid));
 #endif /* INVARIANTS */
 
@@ -213,7 +222,7 @@ slsvmobj_restore(struct slsvmobject *info, struct slsrest_data *restdata)
 		 * SYSV_SHM. It is already restored and set up.
 		 */
 
-		if (SLSP_PREFAULT(restdata->slsp))
+		if (SLSATTR_ISPREFAULT(sckpt->sckpt_attr))
 			slsvmobj_prefault(info);
 
 		return (0);
@@ -227,7 +236,7 @@ slsvmobj_restore(struct slsvmobject *info, struct slsrest_data *restdata)
 		 */
 
 		error = slskv_find(
-		    restdata->vntable, info->vnode, (uintptr_t *)&vp);
+		    sckpt->sckpt_vntable, info->vnode, (uintptr_t *)&vp);
 		if (error != 0)
 			return (error);
 
@@ -266,7 +275,7 @@ slsvmobj_restore(struct slsvmobject *info, struct slsrest_data *restdata)
 
 	DEBUG2("Restored object for %lx is %p", info->slsid, object);
 	/* Export the newly created/found object to the table. */
-	error = slskv_add(restdata->objtable, info->slsid, (uintptr_t)object);
+	error = slskv_add(objtable, info->slsid, (uintptr_t)object);
 	if (error != 0)
 		return error;
 
@@ -292,10 +301,9 @@ slsvmobj_deserialize(struct slsvmobject *obj, char **bufp, size_t *bufsizep)
 }
 
 int
-slsvmobj_restore_all(
-    struct slskv_table *rectable, struct slsrest_data *restdata)
+slsvmobj_restore_all(struct slsckpt_data *sckpt, struct slskv_table *objtable)
 {
-	struct slsvmobject slsvmobject, *slsvmobjectp;
+	struct slsvmobject info, *infop;
 	vm_object_t parent, object;
 	struct slskv_iter iter;
 	struct sls_record *rec;
@@ -305,7 +313,7 @@ slsvmobj_restore_all(
 	int error;
 
 	/* First pass; create of find all objects to be used. */
-	KV_FOREACH(rectable, iter, slsid, rec)
+	KV_FOREACH(sckpt->sckpt_rectable, iter, slsid, rec)
 	{
 		buf = (char *)sbuf_data(rec->srec_sb);
 		buflen = sbuf_len(rec->srec_sb);
@@ -314,14 +322,17 @@ slsvmobj_restore_all(
 			continue;
 
 		/* Get the data associated with the object in the table. */
-		error = slsvmobj_deserialize(&slsvmobject, &buf, &buflen);
+		error = slsvmobj_deserialize(&info, &buf, &buflen);
 		if (error != 0) {
 			KV_ABORT(iter);
 			return (error);
 		}
 
+		if (slskv_find(objtable, slsid, (uintptr_t *)&object) == 0)
+			continue;
+
 		/* Restore the object. */
-		error = slsvmobj_restore(&slsvmobject, restdata);
+		error = slsvmobj_restore(&info, sckpt, objtable);
 		if (error != 0) {
 			KV_ABORT(iter);
 			return (error);
@@ -329,7 +340,7 @@ slsvmobj_restore_all(
 	}
 
 	/* Second pass; link up the objects to their shadows. */
-	KV_FOREACH(rectable, iter, slsid, rec)
+	KV_FOREACH(sckpt->sckpt_rectable, iter, slsid, rec)
 	{
 
 		if (rec->srec_type != SLOSREC_VMOBJ)
@@ -341,27 +352,30 @@ slsvmobj_restore_all(
 		 * struct is the first thing in the record to typecast
 		 * the latter into the former, skipping the parse function.
 		 */
-		slsvmobjectp = (struct slsvmobject *)sbuf_data(rec->srec_sb);
-		if (slsvmobjectp->backer == 0)
+		infop = (struct slsvmobject *)sbuf_data(rec->srec_sb);
+		if (infop->backer == 0)
 			continue;
 
-		error = slskv_find(restdata->objtable, slsvmobjectp->slsid,
-		    (uintptr_t *)&object);
+		error = slskv_find(
+		    objtable, infop->slsid, (uintptr_t *)&object);
 		if (error != 0) {
 			KV_ABORT(iter);
 			return (error);
 		}
 
+		if (object == NULL)
+			continue;
+
 		/* Find a parent for the restored object, if it exists. */
-		error = slskv_find(restdata->objtable,
-		    (uint64_t)slsvmobjectp->backer, (uintptr_t *)&parent);
+		error = slskv_find(
+		    objtable, infop->backer, (uintptr_t *)&parent);
 		if (error != 0) {
 			KV_ABORT(iter);
 			return (error);
 		}
 
 		vm_object_reference(parent);
-		slsvm_forceshadow(object, parent, slsvmobjectp->backer_off);
+		slsvm_forceshadow(object, parent, infop->backer_off);
 	}
 	SLS_DBG("Restoration of VM Objects\n");
 

@@ -45,8 +45,9 @@ struct sls_metadata {
 };
 
 struct slsckpt_data {
+	u_int sckpt_refcount;		       /* Reference count */
 	struct slskv_table *sckpt_rectable; /* In-memory records */
-	struct slskv_table *sckpt_objtable; /* In-memory live VM Objects */
+	struct slskv_table *sckpt_shadowtable; /* Object-Shadow table */
 	slsset *sckpt_vntable;		    /* In-memory active vnodes */
 	struct sls_attr sckpt_attr;	    /* Attributes of the partition */
 #define sckpt_mode sckpt_attr.attr_mode
@@ -62,20 +63,17 @@ struct sls_record {
 
 /* The data needed to restore an SLS partition. */
 struct slsrest_data {
+	struct slsckpt_data *sckpt;
 	struct slskv_table
 	    *objtable; /* Holds the new VM Objects, indexed by ID */
 	struct slskv_table
 	    *proctable; /* Holds the process records, indexed by ID */
-	struct slskv_table
-	    *oldvntable;	     /* The old vnode table that is not used */
 	struct slskv_table *fptable; /* Holds the new files, indexed by ID */
 	struct slskv_table
 	    *kevtable; /* Holds the kevents for a kq, indexed by kq */
 	struct slskv_table
 	    *pgidtable; /* Holds the old-new process group ID pairs */
 	struct slskv_table *sesstable; /* Holds the old-new session ID pairs */
-	struct slskv_table *mbuftable; /* Holds the mbufs used by processes */
-	struct slskv_table *vntable; /* Holds all vnodes, indexed by vnode ID */
 	struct slspart *slsp;	     /* The partition being restored */
 
 	struct cv proccv;   /* Used for synchronization during restores */

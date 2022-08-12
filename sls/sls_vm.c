@@ -496,22 +496,9 @@ slsvm_entry_shadow(struct proc *p, struct slskv_table *table,
 	 * stupid.
 	 */
 
-	/* Checkpoint down the tree. */
-	obj = obj->backing_object;
-	while (OBJT_ISANONYMOUS(obj) &&
-	    (is_fullckpt || ((obj->flags & OBJ_AURORA) == 0))) {
-		vm_object_reference(obj);
-		obj->flags |= OBJ_AURORA;
-		DEBUG2("Shadow pair (%p, %p)", obj, NULL);
-		/* These objects have no shadows. */
-		error = slskv_add(table, (uint64_t)obj, (uintptr_t)NULL);
-		if (error != 0) {
-			/* Already in the table. */
-			vm_object_deallocate(obj);
-			break;
-		}
-
+	while (OBJT_ISANONYMOUS(obj) && ((obj->flags & OBJ_AURORA) == 0)) {
 		obj = obj->backing_object;
+		obj->flags |= OBJ_AURORA;
 	}
 
 	return (0);
@@ -523,14 +510,15 @@ slsvm_entry_shadow(struct proc *p, struct slskv_table *table,
  * two.
  */
 static int
-slsvm_proc_shadow(struct proc *p, struct slskv_table *table, bool is_fullckpt)
+slsvm_proc_shadow(struct proc *p, struct slsckpt_data *sckpt, bool is_fullckpt)
 {
 	struct vm_map_entry *entry, *header;
 	int error;
 
 	header = &p->p_vmspace->vm_map.header;
 	for (entry = header->next; entry != header; entry = entry->next) {
-		error = slsvm_entry_shadow(p, table, entry, is_fullckpt);
+		error = slsvm_entry_shadow(
+		    p, sckpt->sckpt_shadowtable, entry, is_fullckpt);
 		if (error != 0)
 			return (error);
 	}
@@ -541,7 +529,7 @@ slsvm_proc_shadow(struct proc *p, struct slskv_table *table, bool is_fullckpt)
 /* Collapse the backing objects of all processes under checkpoint. */
 int
 slsvm_procset_shadow(
-    slsset *procset, struct slskv_table *table, bool is_fullckpt)
+    slsset *procset, struct slsckpt_data *sckpt, bool is_fullckpt)
 {
 	struct slskv_iter iter;
 	struct proc *p;
@@ -550,7 +538,7 @@ slsvm_procset_shadow(
 	KVSET_FOREACH(procset, iter, p)
 	{
 		SDT_PROBE0(sls, , , procset_loop);
-		error = slsvm_proc_shadow(p, table, is_fullckpt);
+		error = slsvm_proc_shadow(p, sckpt, is_fullckpt);
 		if (error != 0) {
 			KV_ABORT(iter);
 			return (error);

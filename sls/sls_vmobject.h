@@ -13,6 +13,6 @@
 int slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt_data);
 int slsvmobj_checkpoint_shm(vm_object_t *objp, struct slsckpt_data *sckpt_data);
 int slsvmobj_restore_all(
-    struct slskv_table *rectable, struct slsrest_data *restdata);
+    struct slsckpt_data *sckpt_data, struct slskv_table *objtable);
 
 #endif /* _SLS_VMOBJECT_H_ */

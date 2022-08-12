@@ -337,8 +337,8 @@ slsproc_restore_textvp(
 	int error;
 
 	/* Restore the original executable pointer. */
-	error = slskv_find(
-	    restdata->vntable, slsproc->textvp, (uintptr_t *)&textvp);
+	error = slskv_find(restdata->sckpt->sckpt_vntable, slsproc->textvp,
+	    (uintptr_t *)&textvp);
 	if (error != 0)
 		return (error);
 

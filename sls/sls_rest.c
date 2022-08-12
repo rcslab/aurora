@@ -84,6 +84,7 @@ slsrest_zone_ctor(void *mem, int size, void *args __unused, int flags __unused)
 {
 	struct slsrest_data *restdata = (struct slsrest_data *)mem;
 
+	KASSERT(restdata->sckpt == NULL, ("sckpt in uninitialized restdata"));
 	restdata->proctds = 0;
 
 	return (0);
@@ -93,18 +94,21 @@ static void
 slsrest_zone_dtor(void *mem, int size, void *args __unused)
 {
 	struct slsrest_data *restdata = (struct slsrest_data *)mem;
-	struct mbuf *m, *headm;
 	struct session *sess;
 	struct kqueue *kq;
 	uint64_t slskn;
 	slsset *kevset;
 	void *slskev;
 	uint64_t slsid;
-	struct vnode *vp;
 	vm_object_t obj;
 	struct file *fp;
 	struct proc *p;
 	struct pgrp *pgrp;
+
+	if (restdata->sckpt != NULL) {
+		slsckpt_drop(restdata->sckpt);
+		restdata->sckpt = NULL;
+	}
 
 	KV_FOREACH_POP(restdata->fptable, slsid, fp)
 	{
@@ -137,17 +141,6 @@ slsrest_zone_dtor(void *mem, int size, void *args __unused)
 		free(kevset->data, M_SLSMM);
 		slsset_destroy(kevset);
 	}
-	KV_FOREACH_POP(restdata->mbuftable, slsid, headm)
-	{
-		while (headm != NULL) {
-			m = headm;
-			headm = headm->m_nextpkt;
-			m_free(m);
-		}
-	}
-
-	KVSET_FOREACH_POP(restdata->vntable, vp)
-	vrele(vp);
 
 	KV_FOREACH_POP(restdata->sesstable, slsid, sess)
 	sess_release(sess);
@@ -172,6 +165,7 @@ slsrest_zone_init(void *mem, int size, int flags __unused)
 	mtx_init(&restdata->procmtx, "SLS proc mutex", NULL, MTX_DEF);
 	cv_init(&restdata->proccv, "SLS proc cv");
 	restdata->proctds = -1;
+	restdata->sckpt = NULL;
 
 	/* Initialize the necessary tables. */
 	error = slskv_create(&restdata->objtable);
@@ -198,23 +192,9 @@ slsrest_zone_init(void *mem, int size, int flags __unused)
 	if (error != 0)
 		goto error;
 
-	error = slskv_create(&restdata->mbuftable);
-	if (error != 0)
-		goto error;
-
-	error = slskv_create(&restdata->vntable);
-	if (error != 0)
-		goto error;
-
 	return (0);
 
 error:
-	if (restdata->vntable != NULL)
-		slskv_destroy(restdata->vntable);
-
-	if (restdata->mbuftable != NULL)
-		slskv_destroy(restdata->mbuftable);
-
 	if (restdata->sesstable != NULL)
 		slskv_destroy(restdata->sesstable);
 
@@ -241,8 +221,6 @@ slsrest_zone_fini(void *mem, int size)
 {
 	struct slsrest_data *restdata = (struct slsrest_data *)mem;
 
-	slskv_destroy(restdata->vntable);
-	slskv_destroy(restdata->mbuftable);
 	slskv_destroy(restdata->sesstable);
 	slskv_destroy(restdata->pgidtable);
 	slskv_destroy(restdata->objtable);
@@ -276,7 +254,7 @@ slsrest_zonefini(void)
 }
 
 static int
-slsrest_dovnode(struct slsrest_data *restdata, char **bufp, size_t *buflenp)
+slsrest_dovnode(struct slsckpt_data *sckpt, char **bufp, size_t *buflenp)
 {
 	struct slsvnode slsvnode;
 	int error;
@@ -287,7 +265,7 @@ slsrest_dovnode(struct slsrest_data *restdata, char **bufp, size_t *buflenp)
 		return (error);
 	}
 
-	error = slsvn_restore_vnode(&slsvnode, restdata);
+	error = slsvn_restore_vnode(&slsvnode, sckpt);
 	if (error != 0) {
 		DEBUG1("Error in slsrest_vnode %d", error);
 		return (error);
@@ -386,33 +364,6 @@ slsrest_dosysvshm(char *buf, size_t bufsize, struct slskv_table *objtable)
 		error = slsrest_sysvshm(&slssysvshm, objtable);
 		if (error != 0)
 			return (error);
-	}
-
-	return (0);
-}
-
-static int
-slsrest_dosockbuf(char *buf, size_t bufsize, struct slskv_table *table)
-{
-	struct mbuf *m, *errm;
-	uint64_t sbid;
-	int error;
-
-	panic("slsrest_dosockbuf called\n");
-	error = slsload_sockbuf(&m, &sbid, &buf, &bufsize);
-	if (error != 0)
-		return (error);
-
-	error = slskv_add(table, sbid, (uintptr_t)m);
-	if (error != 0) {
-		errm = m;
-		while (errm != NULL) {
-			m = errm;
-			errm = errm->m_nextpkt;
-			m_free(m);
-		}
-
-		return (error);
 	}
 
 	return (0);
@@ -814,14 +765,14 @@ slsrest_fork(uint64_t rest_stopped, char *buf, size_t buflen,
 }
 
 static int
-slsrest_dofiles(struct slskv_table *rectable, struct slsrest_data *restdata)
+slsrest_dofiles(struct slsrest_data *restdata)
 {
 	struct slskv_iter iter;
 	struct sls_record *rec;
 	uint64_t slsid;
 	int error;
 
-	KV_FOREACH(rectable, iter, slsid, rec)
+	KV_FOREACH(restdata->sckpt->sckpt_rectable, iter, slsid, rec)
 	{
 		if (rec->srec_type != SLOSREC_FILE)
 			continue;
@@ -842,16 +793,20 @@ slsrest_dofiles(struct slskv_table *rectable, struct slsrest_data *restdata)
  * do not destroy the in-memory checkpoint by restoring.
  */
 static int
-slsrest_ckptshadow(
-    struct slskv_table *newtable, struct slskv_table *shadowtable)
+slsrest_ckptshadow(struct slsrest_data *restdata, struct slsckpt_data *sckpt)
 {
 	vm_object_t obj, shadow;
 	struct slskv_iter iter;
 	vm_ooffset_t offset;
 	int error;
 
-	KV_FOREACH(shadowtable, iter, obj, shadow)
+	/*
+	 * Go through the original table apply shadowing. We do not need to
+	 */
+	KV_FOREACH(sckpt->sckpt_shadowtable, iter, obj, shadow)
 	{
+		/* XXX This should never happen afaik. Make sure and remove. */
+		KASSERT(OBJT_ISANONYMOUS(obj), ("Type %d object\n", obj->type));
 		DEBUG2("Object %p has ID %lx", obj, obj->objid);
 		vm_object_reference(obj);
 
@@ -859,8 +814,8 @@ slsrest_ckptshadow(
 		offset = 0;
 		vm_object_shadow(&shadow, &offset, ptoa(obj->size));
 
-		error = slskv_add(
-		    newtable, (uint64_t)obj->objid, (uintptr_t)shadow);
+		error = slskv_add(restdata->objtable, (uint64_t)obj->objid,
+		    (uintptr_t)shadow);
 		if (error != 0) {
 			DEBUG1("Tried to add object %lx twice", obj->objid);
 			vm_object_deallocate(shadow);
@@ -873,95 +828,13 @@ slsrest_ckptshadow(
 }
 
 /*
- * Create a shadow for each leaf object in the VM object table.
- */
-static int
-slsrest_shadowtable(
-    struct slskv_table *shadowtable, struct slskv_table *objtable)
-{
-	vm_object_t object;
-	uint64_t slsid;
-	int error;
-
-	KV_FOREACH_POP(objtable, slsid, object)
-	{
-		if (object == NULL)
-			continue;
-
-		error = slskv_add(
-		    shadowtable, (uint64_t)object, (uintptr_t)NULL);
-		if (error != 0)
-			goto error;
-	}
-
-	return (0);
-
-error:
-	slsvm_objtable_collapse(shadowtable, NULL);
-	return (error);
-}
-
-/*
- * Cache the data brought in from the disk so that subsequent checkpoints
- * are from memory.
- */
-static int
-slsrest_data_cache(struct slspart *slsp, struct slsrest_data *restdata,
-    struct slskv_table *rectable)
-{
-	struct slsckpt_data *sckpt_data;
-	int error;
-
-	DEBUG1("Caching the checkpoint for partition %d\n", slsp->slsp_oid);
-	sckpt_data = uma_zalloc_arg(slsckpt_zone, &slsp->slsp_attr, M_WAITOK);
-	if (sckpt_data == NULL)
-		return (ENOMEM);
-
-	error = slsrest_shadowtable(
-	    sckpt_data->sckpt_objtable, restdata->objtable);
-	if (error != 0)
-		return (error);
-
-	slskv_destroy(sckpt_data->sckpt_rectable);
-	sckpt_data->sckpt_rectable = rectable;
-
-	restdata->oldvntable = sckpt_data->sckpt_vntable;
-	sckpt_data->sckpt_vntable = restdata->vntable;
-
-	slsp->slsp_sckpt = sckpt_data;
-
-	/* Create the private shadows from the shadow table. */
-	error = slsrest_ckptshadow(
-	    restdata->objtable, sckpt_data->sckpt_objtable);
-	if (error != 0)
-		return (error);
-
-	return (0);
-}
-
-/*
- * Restore data from data currently in memory. The image is retained
- * after checkpointing and can be reused.
- */
-static int
-slsrest_data_mem(struct slspart *slsp, struct slsrest_data *restdata)
-{
-	/* Replace the vnode table with that of the checkpoint. */
-	restdata->oldvntable = restdata->vntable;
-	restdata->vntable = slsp->slsp_sckpt->sckpt_vntable;
-
-	return (slsrest_ckptshadow(
-	    restdata->objtable, slsp->slsp_sckpt->sckpt_objtable));
-}
-
-/*
  * Restore an image after bringing it from the SLOS. The image is used up.
  * after restoring.
  */
 static int
-slsrest_data_slos(struct slspart *slsp, struct slsrest_data *restdata,
-    struct slskv_table **rectablep)
+slsrest_make_checkpoint(struct slspart *slsp, struct slsrest_data *restdata)
 {
+	struct slsckpt_data *sckpt;
 	struct slskv_iter iter;
 	struct sls_record *rec;
 	uint64_t slsid;
@@ -970,14 +843,15 @@ slsrest_data_slos(struct slspart *slsp, struct slsrest_data *restdata,
 	int error;
 
 	/* Bring in the whole checkpoint in the form of SLOS records. */
-	error = sls_read_slos(slsp, rectablep, restdata->objtable);
+	error = sls_read_slos(slsp, &sckpt, restdata->objtable);
 	if (error != 0) {
 		DEBUG1("Reading the SLOS failed with %d", error);
+		slsckpt_drop(sckpt);
 		return (error);
 	}
 
 	/* We already have the vnodes for memory checkpoints. */
-	KV_FOREACH((*rectablep), iter, slsid, rec)
+	KV_FOREACH(sckpt->sckpt_rectable, iter, slsid, rec)
 	{
 		if (rec->srec_type != SLOSREC_VNODE)
 			continue;
@@ -985,7 +859,7 @@ slsrest_data_slos(struct slspart *slsp, struct slsrest_data *restdata,
 		buf = sbuf_data(rec->srec_sb);
 		buflen = sbuf_len(rec->srec_sb);
 
-		error = slsrest_dovnode(restdata, &buf, &buflen);
+		error = slsrest_dovnode(sckpt, &buf, &buflen);
 		if (error != 0) {
 			KV_ABORT(iter);
 			return (error);
@@ -993,9 +867,13 @@ slsrest_data_slos(struct slspart *slsp, struct slsrest_data *restdata,
 	}
 
 	/* Create all memory objects. */
-	error = slsvmobj_restore_all(*rectablep, restdata);
-	if (error != 0)
+	error = slsvmobj_restore_all(sckpt, restdata->objtable);
+	if (error != 0) {
+		slsckpt_drop(sckpt);
 		return (error);
+	}
+
+	restdata->sckpt = sckpt;
 
 	return (0);
 }
@@ -1015,11 +893,9 @@ slsrest_data_slos(struct slspart *slsp, struct slsrest_data *restdata,
  * case Aurora shadows the data like it does for a memory checkpoint.
  */
 static int
-slsrest_data(struct slspart *slsp, struct slsrest_data **restdatap,
-    struct slskv_table **rectablep)
+slsrest_data(struct slspart *slsp, struct slsrest_data **restdatap)
 {
 	struct slsrest_data *restdata;
-	struct slskv_table *rectable;
 	int error;
 
 	SDT_PROBE0(sls, , slsrest_start, );
@@ -1035,30 +911,41 @@ slsrest_data(struct slspart *slsp, struct slsrest_data **restdatap,
 	restdata->slsmetr = slsp->slsp_metr;
 	restdata->slsp = slsp;
 
-	/* If we already have a checkpoint in memory, use that. */
-	if (slsp_rest_from_mem(slsp)) {
-		error = slsrest_data_mem(slsp, restdata);
+	SDT_PROBE1(sls, , sls_rest, , "Initializing restdata");
+	/* If we already have a checkpoint in memory, reuse it. */
+	if (slsp->slsp_target != SLS_OSD) {
+		if (slsp->slsp_sckpt == NULL) {
+			error = EINVAL;
+			goto error;
+		}
+		slsckpt_hold(slsp->slsp_sckpt);
+		restdata->sckpt = slsp->slsp_sckpt;
+
+		/* Create the VM object shadow table. */
+		error = slsrest_ckptshadow(restdata, slsp->slsp_sckpt);
 		if (error != 0)
 			goto error;
 
-		/* Grab the record table of the checkpoint directly. */
-		*rectablep = slsp->slsp_sckpt->sckpt_rectable;
+		SDT_PROBE1(sls, , sls_rest, , "Creating objtable");
 		*restdatap = restdata;
 		return (0);
 	}
 
-	/* If not in memory or the disk, restoring the partition is invalid. */
-	if (slsp->slsp_target != SLS_OSD) {
-		error = EINVAL;
-		goto error;
-	}
+	/*
+	 * If there is no checkpoint in memory, bring one in. This incidentally
+	 * creates a new sckpt_data structure we can reuse after we are done.
+	 */
 
-	error = slsrest_data_slos(slsp, restdata, &rectable);
+	/*
+	 * Read in the SLOS. This call creates the sckpt's vnode and
+	 * VM object tables.
+	 */
+	error = slsrest_make_checkpoint(slsp, restdata);
 	if (error != 0)
 		goto error;
 
+	SDT_PROBE1(sls, , sls_rest, , "Creating sckpt");
 	*restdatap = restdata;
-	*rectablep = rectable;
 
 	return (0);
 
@@ -1072,10 +959,8 @@ static int __attribute__((noinline))
 sls_rest(struct slspart *slsp, uint64_t rest_stopped)
 {
 	struct slsrest_data *restdata;
-	struct slskv_table *rectable;
 	struct sls_record *rec;
 	struct slskv_iter iter;
-	bool cached = false;
 	int stateerr;
 	uint64_t slsid;
 	size_t buflen;
@@ -1101,8 +986,8 @@ sls_rest(struct slspart *slsp, uint64_t rest_stopped)
 		return (error);
 	}
 
-	/* Get the record table from the appropriate backend. */
-	error = slsrest_data(slsp, &restdata, &rectable);
+	/* Get the restore data from the appropriate backend. */
+	error = slsrest_data(slsp, &restdata);
 	if (error != 0) {
 		stateerr = slsp_setstate(
 		    slsp, SLSP_RESTORING, SLSP_AVAILABLE, true);
@@ -1110,24 +995,17 @@ sls_rest(struct slspart *slsp, uint64_t rest_stopped)
 		return (error);
 	}
 
+	SDT_PROBE1(sls, , sls_rest, , "Caching data");
+
 	/*
 	 * Recreate the VM object tree. When restoring from the SLOS we recreate
 	 * everything, while when restoring from memory all anonymous objects
 	 * are already there.
 	 */
-	if (!slsp_rest_from_mem(slsp)) {
-		DEBUG1("Restoring partition %lx from disk", slsp->slsp_oid);
+	if (!slsp_rest_from_mem(slsp) && SLSP_CACHEREST(slsp)) {
 		/* Cache the data if we want to. */
-		if ((slsp->slsp_attr.attr_flags & SLSATTR_CACHEREST) != 0) {
-			error = slsrest_data_cache(slsp, restdata, rectable);
-			if (error != 0)
-				goto out;
-
-			cached = true;
-			DEBUG1("Cached partition %lx\n", slsp->slsp_oid);
-		}
-	} else {
-		DEBUG1("Restoring partition %lx from memory", slsp->slsp_oid);
+		slsckpt_hold(restdata->sckpt);
+		slsp->slsp_sckpt = restdata->sckpt;
 	}
 
 	taskqueue_drain_all(slos.slos_tq);
@@ -1145,32 +1023,14 @@ sls_rest(struct slspart *slsp, uint64_t rest_stopped)
 	 * of the soon-to-be-restored object's record.
 	 */
 
-	/* Recreate all mbufs (to be inserted into socket buffers later). */
-	KV_FOREACH(rectable, iter, slsid, rec)
-	{
-		if (rec->srec_type != SLOSREC_SOCKBUF)
-			continue;
-
-		buf = sbuf_data(rec->srec_sb);
-		buflen = sbuf_len(rec->srec_sb);
-
-		error = slsrest_dosockbuf(buf, buflen, restdata->mbuftable);
-		if (error != 0) {
-			KV_ABORT(iter);
-			goto out;
-		}
-	}
-
-	SDT_PROBE1(sls, , sls_rest, , "Restoring sockbufs");
-
-	error = slsrest_dofiles(rectable, restdata);
+	error = slsrest_dofiles(restdata);
 	if (error != 0)
 		goto out;
 
 	SDT_PROBE1(sls, , sls_rest, , "Restoring files");
 
 	/* Restore all memory segments. */
-	KV_FOREACH(rectable, iter, slsid, rec)
+	KV_FOREACH(restdata->sckpt->sckpt_rectable, iter, slsid, rec)
 	{
 		if (rec->srec_type != SLOSREC_SYSVSHM)
 			continue;
@@ -1191,7 +1051,7 @@ sls_rest(struct slspart *slsp, uint64_t rest_stopped)
 	 * Fourth pass; restore processes. These depend on the objects
 	 * restored above, which we pass through the object table.
 	 */
-	KV_FOREACH(rectable, iter, slsid, rec)
+	KV_FOREACH(restdata->sckpt->sckpt_rectable, iter, slsid, rec)
 	{
 		if (rec->srec_type != SLOSREC_PROC)
 			continue;
@@ -1227,22 +1087,11 @@ out:
 
 	SDT_PROBE1(sls, , sls_rest, , "Waiting for processes");
 
-	/* Clean up the restore data if coming here from an error. */
-	if (restdata != NULL) {
-		/* Undo any fixups we did in the beginning of the function. */
-		if (restdata->oldvntable != NULL)
-			restdata->vntable = restdata->oldvntable;
-
-		KASSERT(restdata->proctds == -1,
-		    ("proctds is %d at free", restdata->proctds));
-		uma_zfree(slsrest_zone, restdata);
-	}
-
 	stateerr = slsp_setstate(slsp, SLSP_RESTORING, SLSP_AVAILABLE, false);
 	KASSERT(stateerr == 0, ("invalid state transition"));
 
-	if (!slsp_rest_from_mem(slsp) && !cached)
-		sls_free_rectable(rectable);
+	if (restdata != NULL)
+		uma_zfree(slsrest_zone, restdata);
 
 	SDT_PROBE1(sls, , sls_rest, , "Cleanup");
 	DEBUG1("Restore daemon done with %d", error);

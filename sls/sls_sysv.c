@@ -22,7 +22,7 @@
  */
 
 int
-slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
+slsckpt_sysvshm(struct slsckpt_data *sckpt)
 {
 	struct slssysvshm slssysvshm;
 	struct sls_record *rec;
@@ -53,7 +53,7 @@ slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 			goto error;
 
 		KASSERT(shmsegs[i].object != NULL, ("segment has no object"));
-		error = slsvmobj_checkpoint_shm(&shmsegs[i].object, sckpt_data);
+		error = slsvmobj_checkpoint_shm(&shmsegs[i].object, sckpt);
 		if (error != 0)
 			goto error;
 	}
@@ -68,7 +68,7 @@ slsckpt_sysvshm(struct slsckpt_data *sckpt_data, struct slskv_table *objtable)
 
 	rec = sls_getrecord(sb, (uint64_t)shmsegs, SLOSREC_SYSVSHM);
 	error = slskv_add(
-	    sckpt_data->sckpt_rectable, (uint64_t)shmsegs, (uintptr_t)rec);
+	    sckpt->sckpt_rectable, (uint64_t)shmsegs, (uintptr_t)rec);
 
 	if (error != 0) {
 		sls_record_destroy(rec);
@@ -84,7 +84,7 @@ error:
 }
 
 int
-slsrest_sysvshm(struct slssysvshm *slssysvshm, struct slskv_table *objtable)
+slsrest_sysvshm(struct slssysvshm *info, struct slskv_table *objtable)
 {
 	struct ucred *cred = curthread->td_ucred;
 	struct shmid_kernel *shmseg;
@@ -98,14 +98,14 @@ slsrest_sysvshm(struct slssysvshm *slssysvshm, struct slskv_table *objtable)
 	 * clean slate to work with shared memory-wise is a reasonable
 	 * assumption.
 	 */
-	KASSERT(shmalloced > slssysvshm->segnum,
-	    ("shmalloced %d, segnum %d", shmalloced, slssysvshm->segnum));
-	shmseg = &shmsegs[slssysvshm->segnum];
+	KASSERT(shmalloced > info->segnum,
+	    ("shmalloced %d, segnum %d", shmalloced, info->segnum));
+	shmseg = &shmsegs[info->segnum];
 	if ((shmseg->u.shm_perm.mode & SHMSEG_ALLOCATED) != 0)
 		return (EINVAL);
 
 	/* Get the restored object for the segment. */
-	error = slskv_find(objtable, slssysvshm->slsid, (uintptr_t *)&obj);
+	error = slskv_find(objtable, info->slsid, (uintptr_t *)&obj);
 	if (error != 0)
 		return (EINVAL);
 
@@ -118,17 +118,16 @@ slsrest_sysvshm(struct slssysvshm *slssysvshm, struct slskv_table *objtable)
 	shmseg->object = obj;
 	shmseg->u.shm_perm.cuid = shmseg->u.shm_perm.uid = cred->cr_uid;
 	shmseg->u.shm_perm.cgid = shmseg->u.shm_perm.gid = cred->cr_gid;
-	shmseg->u.shm_perm.mode = (slssysvshm->mode & ACCESSPERMS) |
-	    SHMSEG_ALLOCATED;
-	shmseg->u.shm_perm.key = slssysvshm->key;
-	shmseg->u.shm_perm.seq = slssysvshm->seq;
+	shmseg->u.shm_perm.mode = (info->mode & ACCESSPERMS) | SHMSEG_ALLOCATED;
+	shmseg->u.shm_perm.key = info->key;
+	shmseg->u.shm_perm.seq = info->seq;
 	shmseg->cred = crhold(cred);
-	shmseg->u.shm_segsz = slssysvshm->shm_segsz;
+	shmseg->u.shm_segsz = info->shm_segsz;
 	shmseg->u.shm_cpid = curthread->td_proc->p_pid;
 	shmseg->u.shm_lpid = shmseg->u.shm_nattch = 0;
 	shmseg->u.shm_atime = shmseg->u.shm_dtime = 0;
 	shmseg->u.shm_ctime = time_second;
-	shm_committed += btoc(slssysvshm->shm_segsz);
+	shm_committed += btoc(info->shm_segsz);
 	shm_nused++;
 
 	return (0);

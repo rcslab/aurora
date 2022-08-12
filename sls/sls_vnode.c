@@ -279,7 +279,7 @@ slsvn_restore_ino(struct slsvnode *info, struct vnode **vpp)
 }
 
 int
-slsvn_restore_vnode(struct slsvnode *info, struct slsrest_data *restdata)
+slsvn_restore_vnode(struct slsvnode *info, struct slsckpt_data *sckpt)
 {
 	struct vnode *vp;
 	int error;
@@ -296,7 +296,7 @@ slsvn_restore_vnode(struct slsvnode *info, struct slsrest_data *restdata)
 		return (error);
 
 	/* Add it to the table of open vnodes. */
-	error = slskv_add(restdata->vntable, info->slsid, (uintptr_t)vp);
+	error = slskv_add(sckpt->sckpt_vntable, info->slsid, (uintptr_t)vp);
 	if (error != 0) {
 		vrele(vp);
 		return (error);
@@ -372,7 +372,8 @@ slsvn_restore(void *slsbacker, struct slsfile *finfo,
 	struct file *fp;
 	int error;
 
-	error = slskv_find(restdata->vntable, finfo->vnode, (uintptr_t *)&vp);
+	error = slskv_find(
+	    restdata->sckpt->sckpt_vntable, finfo->vnode, (uintptr_t *)&vp);
 	if (error != 0) {
 		/* XXX Ignore the error if ignoring unlinked files. */
 		DEBUG("Probably restoring an unlinked file");

@@ -10,6 +10,7 @@
 #include <sys/proc.h>
 #include <sys/ptrace.h>
 #include <sys/queue.h>
+#include <sys/refcount.h>
 #include <sys/rwlock.h>
 #include <sys/shm.h>
 #include <sys/signalvar.h>
@@ -46,18 +47,18 @@ struct slspart_serial ssparts[SLS_OIDRANGE];
 static int
 slsckpt_zone_init(void *mem, int size, int flags __unused)
 {
-	struct slsckpt_data *sckpt_data = (struct slsckpt_data *)mem;
+	struct slsckpt_data *sckpt = (struct slsckpt_data *)mem;
 	int error;
 
-	error = slskv_create(&sckpt_data->sckpt_rectable);
+	error = slskv_create(&sckpt->sckpt_rectable);
 	if (error != 0)
 		goto error;
 
-	error = slskv_create(&sckpt_data->sckpt_objtable);
+	error = slskv_create(&sckpt->sckpt_shadowtable);
 	if (error != 0)
 		goto error;
 
-	error = slsset_create(&sckpt_data->sckpt_vntable);
+	error = slsset_create(&sckpt->sckpt_vntable);
 	if (error != 0)
 		goto error;
 
@@ -65,10 +66,10 @@ slsckpt_zone_init(void *mem, int size, int flags __unused)
 
 error:
 
-	if (sckpt_data != NULL) {
-		slskv_destroy(sckpt_data->sckpt_vntable);
-		slskv_destroy(sckpt_data->sckpt_objtable);
-		slskv_destroy(sckpt_data->sckpt_rectable);
+	if (sckpt != NULL) {
+		slskv_destroy(sckpt->sckpt_vntable);
+		slskv_destroy(sckpt->sckpt_shadowtable);
+		slskv_destroy(sckpt->sckpt_rectable);
 	}
 
 	return (error);
@@ -77,23 +78,24 @@ error:
 static void
 slsckpt_zone_fini(void *mem, int size)
 {
-	struct slsckpt_data *sckpt_data = (struct slsckpt_data *)mem;
+	struct slsckpt_data *sckpt = (struct slsckpt_data *)mem;
 
-	slsset_destroy(sckpt_data->sckpt_vntable);
-	slskv_destroy(sckpt_data->sckpt_objtable);
-	slskv_destroy(sckpt_data->sckpt_rectable);
+	slsset_destroy(sckpt->sckpt_vntable);
+	slskv_destroy(sckpt->sckpt_shadowtable);
+	slskv_destroy(sckpt->sckpt_rectable);
 }
 
 static int
 slsckpt_zone_ctor(void *mem, int size, void *arg, int flags __unused)
 {
-	struct slsckpt_data *sckpt_data = (struct slsckpt_data *)mem;
+	struct slsckpt_data *sckpt = (struct slsckpt_data *)mem;
 	struct sls_attr *attr;
+
+	refcount_init(&sckpt->sckpt_refcount, 0);
 
 	if (arg != NULL) {
 		attr = (struct sls_attr *)arg;
-		memcpy(&sckpt_data->sckpt_attr, attr,
-		    sizeof(sckpt_data->sckpt_attr));
+		memcpy(&sckpt->sckpt_attr, attr, sizeof(sckpt->sckpt_attr));
 	}
 
 	return (0);
@@ -102,26 +104,25 @@ slsckpt_zone_ctor(void *mem, int size, void *arg, int flags __unused)
 static void
 slsckpt_zone_dtor(void *mem, int size, void *arg)
 {
-	struct slsckpt_data *sckpt_data = (struct slsckpt_data *)mem;
-	struct slsckpt_data *sckpt_new = (struct slsckpt_data *)arg;
-	struct slskv_table *newtable;
+	struct slsckpt_data *sckpt = (struct slsckpt_data *)mem;
+	vm_object_t obj, shadow;
 	struct sls_record *rec;
 	struct vnode *vp;
 	uint64_t slsid;
 
-	/*
-	 * Collapse all objects created for the checkpoint. If delta
-	 * checkpointing, update the new table's keys to be the backers of
-	 * the shadows being destroyed here, instead of the shadows themselves.
-	 */
-	newtable = (sckpt_new != NULL) ? sckpt_new->sckpt_objtable : NULL;
-	slsvm_objtable_collapse(sckpt_data->sckpt_objtable, newtable);
+	KASSERT(sckpt->sckpt_refcount == 0, ("freeing referenced sckpt"));
+
+	/* Collapse all objects now being backed. */
+	KV_FOREACH_POP(sckpt->sckpt_shadowtable, obj, shadow)
+	{
+		vm_object_deallocate(obj);
+	}
 
 	/* Release all held vnodes. */
-	KVSET_FOREACH_POP(sckpt_data->sckpt_vntable, vp)
+	KVSET_FOREACH_POP(sckpt->sckpt_vntable, vp)
 	vrele(vp);
 
-	KV_FOREACH_POP(sckpt_data->sckpt_rectable, slsid, rec)
+	KV_FOREACH_POP(sckpt->sckpt_rectable, slsid, rec)
 	sls_record_destroy(rec);
 }
 
@@ -144,6 +145,44 @@ slsckpt_zonefini(void)
 {
 	if (slsckpt_zone != NULL)
 		uma_zdestroy(slsckpt_zone);
+}
+
+struct slsckpt_data *
+slsckpt_alloc(struct sls_attr *attr)
+{
+	struct slsckpt_data *sckpt;
+
+	sckpt = uma_zalloc_arg(slsckpt_zone, attr, M_WAITOK);
+	/*
+	 * Reinitialize the reference count. We initialize to 0 in
+	 * the constructor because sls_zonewarm() directly uses
+	 * the destructor instead of slsckpt_drop(). If we initialized
+	 * to 1, the destructor would be freeing an sckpt that is
+	 * still being referenced, causing a KASSERT fail.
+	 */
+	refcount_init(&sckpt->sckpt_refcount, 1);
+
+	return (sckpt);
+}
+
+void
+slsckpt_hold(struct slsckpt_data *sckpt)
+{
+	KASSERT(sckpt->sckpt_refcount > 0, ("holding unreferenced sckpt"));
+	refcount_acquire(&sckpt->sckpt_refcount);
+}
+
+void
+slsckpt_drop(struct slsckpt_data *sckpt)
+{
+	bool release;
+
+	KASSERT(sckpt->sckpt_refcount > 0, ("dropping unreferenced sckpt"));
+	release = refcount_release(&sckpt->sckpt_refcount);
+
+	/* Free if that was the last reference. */
+	if (release)
+		uma_zfree(slsckpt_zone, sckpt);
 }
 
 struct slspart *
@@ -314,19 +353,11 @@ slsp_fini(struct slspart *slsp)
 	cv_destroy(&slsp->slsp_epochcv);
 	mtx_destroy(&slsp->slsp_epochmtx);
 
-	/*
-	 * XXX TEMP Remove the partition from the SLOS. This is due to us not
-	 * importing existing partitions from the SLOS, and thus having
-	 * collisions on the partition numbers. If we implement sls ps, the user
-	 * will be able to find which IDs are available.
-	 */
-	slos_iremove(&slos, slsp->slsp_oid);
-
 	/* Destroy the proc bookkeeping structure. */
 	slsset_destroy(slsp->slsp_procs);
 
 	if (slsp->slsp_sckpt != NULL)
-		uma_zfree(slsckpt_zone, slsp->slsp_sckpt);
+		slsckpt_drop(slsp->slsp_sckpt);
 
 	free(slsp, M_SLSMM);
 }

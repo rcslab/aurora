@@ -394,11 +394,13 @@ slsrest_filedesc(
 	uint64_t fd;
 	int res;
 
-	error = slskv_find(restdata->vntable, info->cdir, (uintptr_t *)&cdir);
+	error = slskv_find(
+	    restdata->sckpt->sckpt_vntable, info->cdir, (uintptr_t *)&cdir);
 	if (error != 0)
 		return (EINVAL);
 
-	error = slskv_find(restdata->vntable, info->rdir, (uintptr_t *)&rdir);
+	error = slskv_find(
+	    restdata->sckpt->sckpt_vntable, info->rdir, (uintptr_t *)&rdir);
 	if (error != 0)
 		return (EINVAL);
 
