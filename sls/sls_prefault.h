@@ -16,7 +16,8 @@ int slspre_create(size_t size, struct sls_prefault **slsprep);
 void slspre_destroy(struct sls_prefault *slsprep);
 
 int slspre_vector_populated(uint64_t objid, vm_object_t obj);
-int slspre_vector_empty(uint64_t objid, size_t size);
+int slspre_vector_empty(
+    uint64_t objid, size_t size, struct sls_prefault **slsprep);
 
 void slspre_mark(uint64_t prefaultid, vm_pindex_t start, vm_pindex_t stop);
 

@@ -38,7 +38,8 @@ slspre_destroy(struct sls_prefault *slspre)
  * The SLS pager callback marks the pages it retrieves in the vector instead.
  */
 int
-slspre_vector_empty(uint64_t prefaultid, size_t size)
+slspre_vector_empty(
+    uint64_t prefaultid, size_t size, struct sls_prefault **slsprep)
 {
 	struct sls_prefault *slspre;
 	int error;
@@ -56,6 +57,9 @@ slspre_vector_empty(uint64_t prefaultid, size_t size)
 	error = slskv_add(slsm.slsm_prefault, prefaultid, (uintptr_t)slspre);
 	if (error != 0)
 		slspre_destroy(slspre);
+
+	if (slsprep != NULL)
+		*slsprep = slspre;
 
 	return (error);
 }
