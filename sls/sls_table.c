@@ -49,6 +49,7 @@
 #include "sls_kv.h"
 #include "sls_pager.h"
 #include "sls_partition.h"
+#include "sls_prefault.h"
 #include "sls_table.h"
 #include "sls_vm.h"
 
@@ -125,36 +126,41 @@ sls_isdata(uint64_t type)
 }
 
 static int
-sls_doio(struct vnode *vp, struct uio *auio)
+sls_doio(struct vnode *vp, void *buf, size_t len, size_t offset, enum uio_rw rw)
 {
-	int error = 0;
 	size_t iosize = 0;
 	uint64_t back = 0;
+	struct iovec aiov;
+	struct uio auio;
+	int error = 0;
 
 	ASSERT_VOP_LOCKED(vp, ("vnode %p is unlocked", vp));
 
+	aiov.iov_base = buf;
+	aiov.iov_len = len;
+	slos_uioinit(&auio, offset, rw, &aiov, 1);
+	auio.uio_resid = len;
+
 	/* If we don't want to do anything just return. */
-	if (sls_drop_io) {
-		auio->uio_resid = 0;
+	if (sls_drop_io)
 		return (0);
-	}
 
 	/* Do the IO itself. */
-	iosize = auio->uio_resid;
+	iosize = auio.uio_resid;
 
-	while (auio->uio_resid > 0) {
-		back = auio->uio_resid;
-		if (auio->uio_rw == UIO_WRITE) {
-			error = VOP_WRITE(vp, auio, 0, NULL);
+	while (auio.uio_resid > 0) {
+		back = auio.uio_resid;
+		if (auio.uio_rw == UIO_WRITE) {
+			error = VOP_WRITE(vp, &auio, 0, NULL);
 		} else {
-			error = VOP_READ(vp, auio, 0, NULL);
+			error = VOP_READ(vp, &auio, 0, NULL);
 		}
 		if (error != 0) {
 			goto out;
 		}
-		MPASS(back != auio->uio_resid);
+		MPASS(back != auio.uio_resid);
 	}
-	if (auio->uio_rw == UIO_WRITE)
+	if (auio.uio_rw == UIO_WRITE)
 		sls_bytes_written_vfs += iosize;
 	else
 		sls_bytes_read_vfs += iosize;
@@ -286,26 +292,6 @@ sls_readrec_sbuf(char *buf, size_t len, struct sbuf **sbp)
 	return (0);
 }
 
-static int
-sls_readrec_raw(struct vnode *vp, size_t len, char *buf)
-{
-	struct iovec aiov;
-	struct uio auio;
-	int error;
-
-	/* Create the UIO for the disk. */
-	slos_uioinit(&auio, 0, UIO_READ, &aiov, 1);
-
-	auio.uio_resid = len;
-	aiov.iov_base = buf;
-	aiov.iov_len = len;
-	error = sls_doio(vp, &auio);
-	if (error != 0)
-		return (error);
-
-	return (0);
-}
-
 /*
  * Read the data from the beginning of the node into an sbuf.
  */
@@ -325,7 +311,7 @@ sls_readrec_buf(struct vnode *vp, size_t len, struct sbuf **sbp)
 		return (ENOMEM);
 
 	/* Read the data from the vnode. */
-	error = sls_readrec_raw(vp, len, buf);
+	error = sls_doio(vp, buf, len, 0, UIO_READ);
 	if (error != 0) {
 		SBFREE(buf);
 		return (error);
@@ -396,8 +382,8 @@ sls_readmeta_slos(char *buf, size_t buflen, struct slskv_table *table)
 
 /* Check if a VM object record is not anonymous, and if so, store it.  */
 static int
-sls_readdata_slos_vmobj(struct slskv_table *table, uint64_t slsid,
-    struct sls_record *rec, vm_object_t *objp)
+sls_readdata_slos_vmobj(struct slspart *slsp, struct slskv_table *table,
+    uint64_t slsid, struct sls_record *rec, vm_object_t *objp)
 {
 	struct slsvmobject *info;
 	vm_object_t obj;
@@ -434,6 +420,9 @@ sls_readdata_slos_vmobj(struct slskv_table *table, uint64_t slsid,
 		slskv_del(table, slsid);
 		return (EBUSY);
 	}
+
+	if (SLSP_PREFAULT(slsp))
+		slspre_vector_empty(slsid, size);
 
 	*objp = obj;
 
@@ -560,7 +549,8 @@ error:
 }
 
 static int
-sls_readdata_prefault(struct vnode *vp, vm_object_t obj, bitstr_t *bitmap)
+sls_readdata_prefault(
+    struct vnode *vp, vm_object_t obj, struct sls_prefault *slspre)
 {
 	struct slos_extent extent;
 	vm_pindex_t offset;
@@ -573,7 +563,7 @@ sls_readdata_prefault(struct vnode *vp, vm_object_t obj, bitstr_t *bitmap)
 	for (;;) {
 		/* Go over the blocks we don't need */
 		while (offset < obj->size) {
-			if (bit_test(bitmap, offset) != 0)
+			if (bit_test(slspre->pre_map, offset) != 0)
 				break;
 			offset += 1;
 		}
@@ -581,7 +571,7 @@ sls_readdata_prefault(struct vnode *vp, vm_object_t obj, bitstr_t *bitmap)
 		extent.sxt_lblkno = offset + SLOS_OBJOFF;
 		extent.sxt_cnt = 0;
 		while (offset < obj->size) {
-			if (bit_test(bitmap, offset) == 0)
+			if (bit_test(slspre->pre_map, offset) == 0)
 				break;
 			offset += 1;
 			extent.sxt_cnt += 1;
@@ -611,10 +601,10 @@ static int
 sls_readdata(struct slspart *slsp, struct vnode *vp, uint64_t slsid,
     struct slskv_table *rectable, struct slskv_table *objtable)
 {
+	struct sls_prefault *slspre;
 	struct sls_record *rec;
 	vm_object_t obj = NULL;
 	struct sbuf *sb;
-	bitstr_t *bitmap;
 	int error;
 
 	/*
@@ -638,7 +628,8 @@ sls_readdata(struct slspart *slsp, struct vnode *vp, uint64_t slsid,
 	} else {
 		/* Store the record for later and possibly make a new object. */
 		VOP_UNLOCK(vp, 0);
-		error = sls_readdata_slos_vmobj(rectable, slsid, rec, &obj);
+		error = sls_readdata_slos_vmobj(
+		    slsp, rectable, slsid, rec, &obj);
 		VOP_LOCK(vp, LK_EXCLUSIVE);
 		if (error != 0) {
 			sls_record_destroy(rec);
@@ -671,11 +662,11 @@ sls_readdata(struct slspart *slsp, struct vnode *vp, uint64_t slsid,
 		 * the object.
 		 */
 		error = slskv_find(
-		    slsm.slsm_prefault, slsid, (uintptr_t *)&bitmap);
+		    slsm.slsm_prefault, slsid, (uintptr_t *)&slspre);
 		if (error != 0)
 			return (0);
 
-		error = sls_readdata_prefault(vp, obj, bitmap);
+		error = sls_readdata_prefault(vp, obj, slspre);
 		if (error != 0)
 			return (0);
 	}
@@ -741,7 +732,7 @@ sls_read_slos_manifest(uint64_t oid, char **bufp, size_t *buflenp)
 	}
 
 	buf = malloc(st.len, M_SLSMM, M_WAITOK);
-	error = sls_readrec_raw(vp, st.len, buf);
+	error = sls_doio(vp, buf, st.len, 0, UIO_READ);
 	if (error != 0)
 		goto error;
 
@@ -1006,8 +997,6 @@ sls_writemeta_slos(
 	int error, close_error;
 	struct slos_rstat st;
 	struct vnode *vp;
-	struct iovec aiov;
-	struct uio auio;
 	void *record;
 	size_t len;
 
@@ -1044,13 +1033,8 @@ sls_writemeta_slos(
 		return (error);
 	}
 
-	/* Create the UIO for the disk. */
-	aiov.iov_base = record;
-	aiov.iov_len = len;
-	slos_uioinit(&auio, offset, UIO_WRITE, &aiov, 1);
-
 	/* Keep reading until we get all the info. */
-	error = sls_doio(vp, &auio);
+	error = sls_doio(vp, record, len, offset, UIO_WRITE);
 	if (error != 0)
 		goto error;
 
@@ -1152,6 +1136,10 @@ sls_writedata_slos(struct sls_record *rec, struct slsckpt_data *sckpt)
 	}
 
 	VM_OBJECT_WUNLOCK(obj);
+
+	/* Populate the prefault vector if we are doing delta restores. */
+	if (SLSATTR_ISDELTAREST(sckpt->sckpt_attr))
+		slspre_vector_populated(obj->objid, obj);
 
 	/* Release the reference this function holds. */
 	vm_object_deallocate(obj);
@@ -1356,9 +1344,7 @@ sls_export_ssparts(void)
 	size_t ssparts_len = sizeof(ssparts[0]) * SLS_OIDRANGE;
 	struct thread *td = curthread;
 	int mode = FREAD | FWRITE;
-	struct iovec aiov;
 	struct vnode *vp;
-	struct uio auio;
 	int close_error;
 	int error;
 
@@ -1378,13 +1364,7 @@ sls_export_ssparts(void)
 		return (error);
 	}
 
-	slos_uioinit(&auio, 0, UIO_WRITE, &aiov, 1);
-
-	auio.uio_resid = ssparts_len;
-	aiov.iov_base = ssparts;
-	aiov.iov_len = ssparts_len;
-
-	error = sls_doio(vp, &auio);
+	error = sls_doio(vp, ssparts, ssparts_len, 0, UIO_WRITE);
 
 	close_error = VOP_CLOSE(vp, mode, NULL, td);
 	if (close_error != 0)
@@ -1400,18 +1380,15 @@ sls_import_ssparts(void)
 	size_t ssparts_len = sizeof(ssparts[0]) * SLS_OIDRANGE;
 	struct thread *td = curthread;
 	int mode = FREAD | FWRITE;
-	struct iovec aiov;
 	struct vnode *vp;
 	struct vattr va;
-	struct uio auio;
 	int close_error;
 	int error;
 
 	bzero(ssparts, ssparts_len);
 
 	/* Get the vnode for the record and open it. */
-	error = VFS_VGET(
-	    slos.slsfs_mount, SLOS_SLSPART_INODE, LK_EXCLUSIVE, &vp);
+	error = sls_createmeta_slos(SLOS_SLSPART_INODE, &vp);
 	if (error != 0)
 		return (error);
 
@@ -1427,30 +1404,173 @@ sls_import_ssparts(void)
 		goto done;
 
 	/* If not created yet, write out the zeroed out array. */
-	if (va.va_size == 0) {
-		slos_uioinit(&auio, 0, UIO_WRITE, &aiov, 1);
+	if (va.va_size == 0)
+		error = sls_doio(vp, ssparts, ssparts_len, 0, UIO_WRITE);
+	else
+		error = sls_doio(vp, ssparts, ssparts_len, 0, UIO_READ);
 
-		auio.uio_resid = ssparts_len;
-		aiov.iov_base = ssparts;
-		aiov.iov_len = ssparts_len;
-
-		error = sls_doio(vp, &auio);
-		goto done;
-	}
-
-	/* The only other sane value is that of the size of the array. */
-	if (va.va_size != ssparts_len)
-		goto done;
-
-	/* Read in the values then. */
-	slos_uioinit(&auio, 0, UIO_READ, &aiov, 1);
-	auio.uio_resid = ssparts_len;
-	aiov.iov_base = ssparts;
-	aiov.iov_len = ssparts_len;
-	error = sls_doio(vp, &auio);
-
+done:
 	if (error == 0)
 		ssparts_imported = true;
+
+	close_error = VOP_CLOSE(vp, mode, NULL, td);
+	if (close_error != 0)
+		SLS_DBG("error %d, could not close slos node", close_error);
+
+	vput(vp);
+	return (error);
+}
+
+int
+slspre_export(void)
+{
+	struct thread *td = curthread;
+	struct sls_prefault *slspre;
+	int mode = FREAD | FWRITE;
+	struct vnode *vp;
+	int close_error;
+	struct sbuf *sb;
+	uint64_t objid;
+	size_t iosize;
+	uint64_t objsize;
+	int error;
+
+	if (slos.slsfs_mount == NULL)
+		return (0);
+
+	/* Get the vnode for the record and open it. */
+	error = VFS_VGET(
+	    slos.slsfs_mount, SLOS_SLSPREFAULT_INODE, LK_EXCLUSIVE, &vp);
+	if (error != 0)
+		return (0);
+
+	/* Open the record for writing. */
+	error = VOP_OPEN(vp, mode, NULL, td, NULL);
+	if (error != 0) {
+		vput(vp);
+		return (error);
+	}
+
+	sb = sbuf_new_auto();
+
+	KV_FOREACH_POP(slsm.slsm_prefault, objid, slspre)
+	{
+		error = sbuf_bcat(sb, &objid, sizeof(objid));
+		if (error != 0)
+			goto done;
+
+		/* Find a way to get bitmap sizes. */
+		objsize = slspre->pre_size;
+		error = sbuf_bcat(sb, &objsize, sizeof(objsize));
+		if (error != 0)
+			goto done;
+
+		error = sbuf_bcat(sb, slspre->pre_map, bitstr_size(objsize));
+		if (error != 0)
+			goto done;
+
+		slspre_destroy(slspre);
+	}
+
+	error = sbuf_finish(sb);
+	if (error != 0)
+		goto done;
+
+	iosize = sbuf_len(sb);
+
+	error = sls_doio(vp, &iosize, sizeof(iosize), 0, UIO_WRITE);
+	if (error != 0)
+		goto done;
+
+	error = sls_doio(vp, sbuf_data(sb), iosize, sizeof(iosize), UIO_WRITE);
+	if (error != 0)
+		goto done;
+
+done:
+	sbuf_delete(sb);
+
+	close_error = VOP_CLOSE(vp, mode, NULL, td);
+	if (close_error != 0)
+		SLS_DBG("error %d, could not close slos node", close_error);
+
+	vput(vp);
+	return (error);
+}
+
+int
+slspre_import(void)
+{
+	struct thread *td = curthread;
+	struct sls_prefault *slspre;
+	int mode = FREAD | FWRITE;
+	struct vnode *vp;
+	struct vattr va;
+	uint64_t offset;
+	int close_error;
+	uint64_t objid;
+	size_t bitlen;
+	size_t size;
+	int error;
+
+	/* XXX Create custom kern_openat() call to remove direct vnode IO. */
+
+	/* Get the vnode for the record and open it. */
+	error = sls_createmeta_slos(SLOS_SLSPREFAULT_INODE, &vp);
+	if (error != 0)
+		return (error);
+
+	/* Open the record for writing. */
+	error = VOP_OPEN(vp, mode, NULL, td, NULL);
+	if (error != 0) {
+		vput(vp);
+		return (error);
+	}
+
+	error = VOP_GETATTR(vp, &va, NULL);
+	if (error != 0)
+		goto done;
+
+	if (va.va_size == 0)
+		goto done;
+
+	error = sls_doio(vp, &size, sizeof(size), 0, UIO_READ);
+
+	offset = sizeof(size);
+	if (error != 0)
+		goto done;
+
+	while (size > 0) {
+		error = sls_doio(vp, &objid, sizeof(objid), offset, UIO_READ);
+		if (error != 0)
+			goto done;
+
+		size -= sizeof(objid);
+		offset += sizeof(objid);
+
+		error = sls_doio(vp, &bitlen, sizeof(bitlen), offset, UIO_READ);
+		if (error != 0)
+			goto done;
+
+		size -= sizeof(bitlen);
+		offset += sizeof(bitlen);
+
+		error = slspre_create(bitlen, &slspre);
+		if (error != 0)
+			goto done;
+
+		error = sls_doio(
+		    vp, slspre->pre_map, bitstr_size(bitlen), offset, UIO_READ);
+		if (error != 0)
+			goto done;
+
+		size -= bitstr_size(bitlen);
+		offset += bitstr_size(bitlen);
+
+		error = slskv_add(slsm.slsm_prefault, objid, (uintptr_t)slspre);
+		if (error != 0)
+			goto done;
+	}
+
 done:
 	close_error = VOP_CLOSE(vp, mode, NULL, td);
 	if (close_error != 0)

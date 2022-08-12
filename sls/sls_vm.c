@@ -25,6 +25,7 @@
 #include "sls_internal.h"
 #include "sls_kv.h"
 #include "sls_pager.h"
+#include "sls_prefault.h"
 #include "sls_vm.h"
 
 int sls_objprotect = 0;
@@ -42,15 +43,15 @@ slsvm_object_precopy(vm_object_t object, vm_object_t parent)
 {
 	vm_page_t ma[SLS_PRECOPY_MAX];
 	vm_page_t mb[SLS_PRECOPY_MAX];
+	struct sls_prefault *slspre;
 	vm_pindex_t offset, pstart;
 	int count, npages;
-	bitstr_t *bitmap;
 	vm_page_t m;
 	int error;
 	int i;
 
 	error = slskv_find(
-	    slsm.slsm_prefault, parent->objid, (uintptr_t *)&bitmap);
+	    slsm.slsm_prefault, parent->objid, (uintptr_t *)&slspre);
 	if (error != 0)
 		return;
 
@@ -66,7 +67,7 @@ slsvm_object_precopy(vm_object_t object, vm_object_t parent)
 	while (offset < object->size) {
 		/* Go over the blocks we don't need */
 		while (offset < object->size) {
-			if (bit_test(bitmap, offset) != 0)
+			if (bit_test(slspre->pre_map, offset) != 0)
 				break;
 			offset += 1;
 		}
@@ -74,7 +75,7 @@ slsvm_object_precopy(vm_object_t object, vm_object_t parent)
 		pstart = offset;
 		count = 0;
 		while (offset < object->size) {
-			if (bit_test(bitmap, offset) == 0)
+			if (bit_test(slspre->pre_map, offset) == 0)
 				break;
 
 			m = vm_page_lookup(parent, offset);

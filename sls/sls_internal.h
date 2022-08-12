@@ -2,6 +2,7 @@
 #define _SLS_INTERNAL_H_
 
 #include <sys/param.h>
+#include <sys/bitstring.h>
 #include <sys/condvar.h>
 #include <sys/fcntl.h>
 #include <sys/lock.h>

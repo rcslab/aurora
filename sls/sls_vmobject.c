@@ -1,5 +1,4 @@
 #include <sys/param.h>
-#include <sys/bitstring.h>
 #include <sys/conf.h>
 #include <sys/fcntl.h>
 #include <sys/file.h>
@@ -35,55 +34,6 @@
 #include "sls_vm.h"
 #include "sls_vmobject.h"
 #include "sls_vnode.h"
-
-static int
-slsvmobj_prefault_empty(uint64_t objid, size_t size)
-{
-	bitstr_t *bitmap;
-	int error;
-
-	/* Destroy any previous prefault maps. */
-	error = slskv_pop(slsm.slsm_prefault, &objid, (uintptr_t *)&bitmap);
-	if (error == 0)
-		free(bitmap, M_SLSMM);
-
-	bitmap = bit_alloc(size, M_SLSMM, M_WAITOK);
-	error = slskv_add(slsm.slsm_prefault, objid, (uintptr_t)bitmap);
-	if (error != 0)
-		free(bitmap, M_SLSMM);
-
-	return (error);
-}
-
-static int
-slsvmobj_prefault(vm_object_t obj)
-{
-	bitstr_t *bitmap = NULL;
-	uint64_t objid = obj->objid;
-	vm_page_t m;
-	int error;
-	int size;
-
-	/* Destroy any previous prefault maps. */
-	error = slskv_pop(slsm.slsm_prefault, &objid, (uintptr_t *)&bitmap);
-	if (error == 0)
-		free(bitmap, M_SLSMM);
-
-	bitmap = bit_alloc(obj->size, M_SLSMM, M_WAITOK);
-
-	if (obj != NULL) {
-		TAILQ_FOREACH (m, &obj->memq, listq)
-			bit_set(bitmap, m->pindex);
-	}
-
-	bit_count(bitmap, 0, obj->size, &size);
-
-	error = slskv_add(slsm.slsm_prefault, objid, (uintptr_t)bitmap);
-	if (error != 0)
-		free(bitmap, M_SLSMM);
-
-	return (error);
-}
 
 int
 slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt)
@@ -163,11 +113,6 @@ slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt)
 	if (error != 0) {
 		sls_record_destroy(rec);
 		goto error;
-	}
-
-	if (SLSATTR_ISDELTAREST(sckpt->sckpt_attr) &&
-	    ((obj->type == OBJT_DEFAULT) || (obj->type == OBJT_SWAP))) {
-		slsvmobj_prefault(obj);
 	}
 
 	return (0);
@@ -253,9 +198,6 @@ slsvmobj_restore(struct slsvmobject *info, struct slsckpt_data *sckpt,
 		 * OBJT_SWAP is just a default object which has swapped, or is
 		 * SYSV_SHM. It is already restored and set up.
 		 */
-
-		if (SLSATTR_ISPREFAULT(sckpt->sckpt_attr))
-			slsvmobj_prefault_empty(info->slsid, info->size);
 
 		return (0);
 
@@ -359,9 +301,6 @@ slsvmobj_restore_all(struct slsckpt_data *sckpt, struct slskv_table *objtable)
 			KV_ABORT(iter);
 			return (error);
 		}
-
-		if (slskv_find(objtable, slsid, (uintptr_t *)&object) == 0)
-			continue;
 
 		/* Restore the object. */
 		error = slsvmobj_restore(&info, sckpt, objtable);

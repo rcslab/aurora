@@ -1179,7 +1179,6 @@ slsfs_init_vnode(struct vnode *vp, uint64_t ino)
 		SLSVP(vp)->sn_ino.ino_uid = 0;
 		break;
 	case SLOS_INODES_ROOT:
-	case SLOS_SLSPART_INODE:
 		vp->v_type = VREG;
 		vp->v_vflag |= VV_SYSTEM;
 		break;

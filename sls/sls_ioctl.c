@@ -28,6 +28,7 @@
 #include "sls_kv.h"
 #include "sls_metropolis.h"
 #include "sls_pager.h"
+#include "sls_prefault.h"
 #include "sls_syscall.h"
 #include "sls_table.h"
 #include "sls_vm.h"
@@ -44,22 +45,6 @@ extern int sls_only_flush_deltas;
 
 struct sls_metadata slsm;
 struct sysctl_ctx_list aurora_ctx;
-
-static void
-sls_register_fault(vm_map_entry_t entry)
-{
-	vm_object_t object;
-
-	object = entry->object.vm_object;
-	if (object == NULL)
-		return;
-
-	if (object->type != OBJT_VNODE)
-		return;
-
-	if (((struct vnode *)object->handle)->v_mount != slos.slsfs_mount)
-		return;
-}
 
 bool
 sls_proc_inpart(uint64_t oid, struct proc *p)
@@ -838,13 +823,13 @@ slsm_init_contents(void)
 static void
 slsm_fini_contents(void)
 {
+	struct sls_prefault *slspre;
 	uint64_t objid;
-	bitstr_t *bitmap;
 
 	/* Destroy the prefault bitmaps. */
 	if (slsm.slsm_prefault != NULL) {
-		KV_FOREACH_POP(slsm.slsm_prefault, objid, bitmap)
-		free(bitmap, M_SLSMM);
+		KV_FOREACH_POP(slsm.slsm_prefault, objid, slspre)
+		slspre_destroy(slspre);
 		slskv_destroy(slsm.slsm_prefault);
 	}
 
@@ -868,13 +853,11 @@ sls_hook_attach(void)
 	slssyscall_initsysvec();
 	slsmetropolis_initsysvec();
 	sls_exit_hook = sls_exit_procremove;
-	vm_fault_metropolis_hook = sls_register_fault;
 }
 
 static void
 sls_hook_detach(void)
 {
-	vm_fault_metropolis_hook = NULL;
 	sls_exit_hook = NULL;
 	slsmetropolis_finisysvec();
 	slssyscall_finisysvec();
@@ -959,6 +942,10 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		/* Create a default on-disk and in-memory partition. */
 		sls_partadd_default();
 
+		error = slspre_import();
+		if (error != 0)
+			return (error);
+
 		/* Make the SLS available to userspace. */
 		slsm.slsm_cdev = make_dev(
 		    &slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "sls");
@@ -983,7 +970,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		DEBUG("Turning off the swapper...");
 
 		/* Export and destroy all in-memory partition data. */
-		error = sls_export_ssparts();
+		error = slspre_export();
 		if (error != 0)
 			return (error);
 

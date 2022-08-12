@@ -36,4 +36,5 @@ void slstable_fini(void);
 
 int sls_import_ssparts(void);
 int sls_export_ssparts(void);
+
 #endif /* _SLSTABLE_H_ */

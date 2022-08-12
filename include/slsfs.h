@@ -4,6 +4,7 @@
 struct fbtree;
 
 #define SLOS_INODES_ROOT (0)
+#define SLOS_SLSPREFAULT_INODE (9998)
 #define SLOS_SLSPART_INODE (9999)
 #define SLOS_ROOT_INODE (10000)
 #define SLOS_SYSTEM_MAX (10001)

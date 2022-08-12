@@ -19,25 +19,13 @@
 #include "debug.h"
 #include "sls_internal.h"
 #include "sls_pager.h"
+#include "sls_prefault.h"
 
 #define SLS_SWAPOFF_RETRIES (100)
 #define SLS_VMOBJ_SWAPVP(obj) ((obj)->un_pager.swp.swp_tmpfs)
 
 /* The initial swap pager operations vector. */
 static struct pagerops swappagerops_old;
-
-static void
-sls_pager_mark_prefault(uint64_t objid, vm_pindex_t start, vm_pindex_t stop)
-{
-	bitstr_t *bitmap;
-	int error;
-
-	error = slskv_find(slsm.slsm_prefault, objid, (uintptr_t *)&bitmap);
-	if (error != 0)
-		return;
-
-	bit_nset(bitmap, start, stop);
-}
 
 /*
  * Mark the buffer as invalid and wake up any waiters on the object.
@@ -111,7 +99,7 @@ sls_pager_done(struct buf *bp)
 	bdone(bp);
 
 	if (objid != 0)
-		sls_pager_mark_prefault(objid, start, end);
+		slspre_mark(objid, start, end);
 }
 
 /*
@@ -438,7 +426,6 @@ sls_pager_getpages(
 	bool present;
 	bool retry;
 
-	KASSERT(obj->paging_in_progress > 0, ("object not marked as PIP"));
 	VM_OBJECT_WUNLOCK(obj);
 	present = sls_pager_haspage(obj, ma[0]->pindex, &maxbehind, &maxahead);
 	VM_OBJECT_WLOCK(obj);
@@ -665,16 +652,17 @@ sls_pager_dealloc(vm_object_t obj)
 	vm_object_pip_wait(obj, "slsdea");
 	obj->type = OBJT_DEAD;
 
-	/* Release the vnode backing the object, if it exists. */
-	if ((obj->flags & OBJ_AURORA) != 0) {
-		vp = SLS_VMOBJ_SWAPVP(obj);
-		SLS_VMOBJ_SWAPVP(obj) = NULL;
+	if ((obj->flags & OBJ_AURORA) == 0)
+		return;
 
-		VM_OBJECT_WUNLOCK(obj);
-		vrele(vp);
-		sls_swapderef();
-		VM_OBJECT_WLOCK(obj);
-	}
+	/* Release the vnode backing the object, if it exists. */
+	vp = SLS_VMOBJ_SWAPVP(obj);
+	SLS_VMOBJ_SWAPVP(obj) = NULL;
+
+	VM_OBJECT_WUNLOCK(obj);
+	vrele(vp);
+	sls_swapderef();
+	VM_OBJECT_WLOCK(obj);
 }
 
 static struct pagerops slspagerops = {
@@ -736,10 +724,8 @@ sls_pager_swapoff_one(void)
 	vm_object_t obj, tmp;
 
 	/*
-	 * XXX For now just change the object back and damn the consequences
-	 * (i.e. have the processes crash since we pulled their data from under
-	 * them). The right solution is to rig the module to kill all processes
-	 * before exiting.
+	 * We currently kill all Aurora processes before swapping off.
+	 * The pager is not active while we are executing this call.
 	 */
 	mtx_lock(&vm_object_list_mtx);
 	TAILQ_FOREACH_SAFE (obj, &vm_object_list, object_list, tmp) {

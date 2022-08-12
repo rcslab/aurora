@@ -37,10 +37,10 @@ struct slspart_serial {
 	uint64_t sspart_oid;
 	struct sls_attr sspart_attr;
 	uint64_t sspart_epoch;
-	int sspart_proc;
-	int sspart_td;
+	uint64_t sspart_proc;
+	uint64_t sspart_td;
 	int sspart_flags;
-	int sspart_sockid;
+	uint64_t sspart_sockid;
 };
 
 /**/
