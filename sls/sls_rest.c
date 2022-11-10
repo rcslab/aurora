@@ -797,7 +797,6 @@ slsrest_ckptshadow(struct slsrest_data *restdata, struct slsckpt_data *sckpt)
 {
 	vm_object_t obj, shadow;
 	struct slskv_iter iter;
-	vm_ooffset_t offset;
 	int error;
 
 	/*
@@ -811,8 +810,7 @@ slsrest_ckptshadow(struct slsrest_data *restdata, struct slsckpt_data *sckpt)
 		vm_object_reference(obj);
 
 		shadow = obj;
-		offset = 0;
-		vm_object_shadow(&shadow, &offset, ptoa(obj->size));
+		slsvm_object_shadowexact(&shadow);
 
 		error = slskv_add(restdata->objtable, (uint64_t)obj->objid,
 		    (uintptr_t)shadow);
@@ -843,7 +841,7 @@ slsrest_make_checkpoint(struct slspart *slsp, struct slsrest_data *restdata)
 	int error;
 
 	/* Possibly preload the objtable with existing values. */
-	if (SLSP_DELTAREST(slsp)) {
+	if (SLSP_DELTAREST(slsp) && slsp->slsp_sckpt != NULL) {
 		error = slsrest_ckptshadow(restdata, slsp->slsp_sckpt);
 		if (error != 0)
 			return (error);

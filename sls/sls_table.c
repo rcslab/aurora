@@ -501,6 +501,38 @@ sls_readdata_slos_vmobj(struct slspart *slsp, struct slskv_table *table,
 	return (0);
 }
 
+static int
+sls_object_populate(vm_object_t object, vm_pindex_t start, vm_pindex_t end)
+{
+	size_t count = end - start;
+	vm_pindex_t offset;
+	vm_page_t m;
+	int rahead, orig;
+	int rv;
+
+	for (offset = 0; offset != count; offset += (1 + rahead)) {
+		m = vm_page_grab(object, start + offset, VM_ALLOC_NORMAL);
+		if (m == NULL) {
+			printf("No page with offset %ld for %lx\n",
+			    start + offset, object->objid);
+			continue;
+		}
+
+		KASSERT(
+		    m->valid == 0, ("page has valid bitfield %d", m->valid));
+
+		rahead = count - offset - 1;
+		orig = rahead;
+		rv = vm_pager_get_pages(object, &m, 1, NULL, &rahead);
+		vm_page_xunbusy(m);
+
+		if (rv != VM_PAGER_OK)
+			return (rv);
+	}
+
+	return (0);
+}
+
 /* Read data from the SLOS into a VM object. */
 static int
 sls_readpages_slos(struct vnode *vp, vm_object_t obj, struct slos_extent sxt)
@@ -587,6 +619,7 @@ sls_readdata_slos(struct vnode *vp, vm_object_t obj)
 {
 	struct thread *td = curthread;
 	struct slos_extent extent;
+	vm_pindex_t start, end;
 	int error;
 
 	/* Start from the beginning of the data region. */
@@ -597,7 +630,7 @@ sls_readdata_slos(struct vnode *vp, vm_object_t obj)
 		error = VOP_IOCTL(vp, SLS_SEEK_EXTENT, &extent, 0, NULL, td);
 		if (error != 0) {
 			SLS_DBG("extent seek failed with %d\n", error);
-			goto error;
+			return (error);
 		}
 
 		/* Get the new extent. If we get no more data, we're done. */
@@ -605,26 +638,25 @@ sls_readdata_slos(struct vnode *vp, vm_object_t obj)
 			break;
 
 		/* Otherwise get the VM object pages for the data. */
-		error = sls_readpages_slos(vp, obj, extent);
+		start = extent.sxt_lblkno - SLOS_OBJOFF;
+		end = start + extent.sxt_cnt;
+		VM_OBJECT_WLOCK(obj);
+		error = sls_object_populate(obj, start, end);
+		VM_OBJECT_WUNLOCK(obj);
 		if (error != 0)
-			goto error;
+			return (error);
 
 		extent.sxt_lblkno += extent.sxt_cnt;
 		extent.sxt_cnt = 0;
 	}
 
 	return (0);
-
-error:
-	VOP_UNLOCK(vp, 0);
-	return (error);
 }
 
-static int
-sls_readdata_prefault(
-    struct vnode *vp, vm_object_t obj, struct sls_prefault *slspre)
+int
+sls_readdata_prefault(vm_object_t obj, struct sls_prefault *slspre)
 {
-	struct slos_extent extent;
+	vm_pindex_t start, end;
 	vm_pindex_t offset;
 	int error;
 
@@ -640,24 +672,26 @@ sls_readdata_prefault(
 			offset += 1;
 		}
 
-		extent.sxt_lblkno = offset + SLOS_OBJOFF;
-		extent.sxt_cnt = 0;
+		start = offset;
+		end = start;
 		while (offset < obj->size) {
 			if (bit_test(slspre->pre_map, offset) == 0)
 				break;
 			offset += 1;
-			extent.sxt_cnt += 1;
+			end += 1;
 
-			if (extent.sxt_cnt == (sls_contig_limit / PAGE_SIZE))
+			if (end == (sls_contig_limit / PAGE_SIZE))
 				break;
 		}
 
 		if (offset == obj->size)
 			break;
 
-		KASSERT(extent.sxt_cnt > 0, ("Empty extent"));
+		KASSERT(end > 0, ("Empty extent"));
 
-		error = sls_readpages_slos(vp, obj, extent);
+		VM_OBJECT_WLOCK(obj);
+		error = sls_object_populate(obj, start, end);
+		VM_OBJECT_WUNLOCK(obj);
 		if (error != 0)
 			return (error);
 	}
@@ -692,11 +726,9 @@ sls_readdata(struct slspart *slsp, struct file *fp, uint64_t slsid,
 
 	/* Create a new object if we did not already find it. */
 	if (slskv_find(objtable, slsid, (uintptr_t *)&obj) == 0) {
+		KASSERT(
+		    obj->objid == slsid, ("Existing object's objid is wrong"));
 		sls_record_destroy(rec);
-
-		error = sls_pager_obj_init(obj);
-		if (error != 0)
-			return (error);
 	} else {
 		/* Store the record for later and possibly make a new object. */
 		error = sls_readdata_slos_vmobj(
@@ -710,11 +742,16 @@ sls_readdata(struct slspart *slsp, struct file *fp, uint64_t slsid,
 		if (obj == NULL)
 			return (0);
 
+		KASSERT(obj->objid == slsid, ("New object's objid is wrong"));
 		/* Add the object to the table. */
 		error = slskv_add(objtable, slsid, (uintptr_t)obj);
 		if (error != 0)
 			goto error;
 	}
+
+	error = sls_pager_obj_init(obj);
+	if (error != 0)
+		return (error);
 
 	KASSERT(obj != NULL, ("No object found"));
 
@@ -737,9 +774,10 @@ sls_readdata(struct slspart *slsp, struct file *fp, uint64_t slsid,
 		if (error != 0)
 			return (0);
 
-		error = sls_readdata_prefault(fp->f_vnode, obj, slspre);
+		KASSERT(obj->objid == slsid, ("New object's objid is wrong"));
+		error = sls_readdata_prefault(obj, slspre);
 		if (error != 0)
-			return (0);
+			printf("Failed to prefault data for %ld\n", obj->objid);
 	}
 
 

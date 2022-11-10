@@ -1182,6 +1182,10 @@ slsfs_init_vnode(struct vnode *vp, uint64_t ino)
 		vp->v_type = VREG;
 		vp->v_vflag |= VV_SYSTEM;
 		break;
+	case SLOS_SLSPART_INODE:
+	case SLOS_SLSPREFAULT_INODE:
+		vp->v_type = VREG;
+		break;
 	default:
 		vp->v_type = IFTOVT(mp->sn_ino.ino_mode);
 	}

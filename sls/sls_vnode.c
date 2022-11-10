@@ -281,8 +281,10 @@ slsvn_restore_ino(struct slsvnode *info, struct vnode **vpp)
 int
 slsvn_restore_vnode(struct slsvnode *info, struct slsckpt_data *sckpt)
 {
+	struct sls_prefault *slspre;
 	struct vnode *vp;
 	int error;
+	int ret;
 
 	/* Get the vnode either from the inode or the path. */
 	if (info->has_path == 1) {
@@ -291,6 +293,22 @@ slsvn_restore_vnode(struct slsvnode *info, struct slsckpt_data *sckpt)
 	} else {
 		DEBUG1("Restoring vnode with inode number 0x%lx", info->ino);
 		error = slsvn_restore_ino(info, &vp);
+		if (error != 0)
+			return (error);
+
+		if (SLSATTR_ISPREFAULT(sckpt->sckpt_attr) ||
+		    SLSATTR_ISDELTAREST(sckpt->sckpt_attr)) {
+			error = slskv_find(slsm.slsm_prefault, INUM(SLSVP(vp)),
+			    (uintptr_t *)&slspre);
+			if (error == 0) {
+				ret = sls_readdata_prefault(
+				    vp->v_object, slspre);
+				if (ret != 0)
+					printf(
+					    "Pager error %d when prefaulting object %lx\n",
+					    ret, vp->v_object->objid);
+			}
+		}
 	}
 	if (error != 0)
 		return (error);

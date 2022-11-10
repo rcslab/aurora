@@ -36,6 +36,7 @@
 #include "sls_data.h"
 #include "sls_internal.h"
 #include "sls_partition.h"
+#include "sls_prefault.h"
 #include "sls_table.h"
 #include "sls_vm.h"
 
@@ -120,7 +121,11 @@ slsckpt_zone_dtor(void *mem, int size, void *arg)
 
 	/* Release all held vnodes. */
 	KVSET_FOREACH_POP(sckpt->sckpt_vntable, vp)
-	vrele(vp);
+	{
+		if (vp->v_mount == slos.slsfs_mount)
+			slspre_vector_populated(INUM(SLSVP(vp)), vp->v_object);
+		vrele(vp);
+	}
 
 	KV_FOREACH_POP(sckpt->sckpt_rectable, slsid, rec)
 	sls_record_destroy(rec);

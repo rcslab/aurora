@@ -115,7 +115,7 @@ slsvm_object_precopy(vm_object_t object, vm_object_t parent)
 /*
  * Create a shadow of the same size as the object, perfectly aligned.
  */
-static void
+void
 slsvm_object_shadowexact(vm_object_t *objp)
 {
 	vm_ooffset_t offset = 0;

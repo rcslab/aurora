@@ -72,10 +72,14 @@ int
 slspre_vector_populated(uint64_t prefaultid, vm_object_t obj)
 {
 	struct sls_prefault *slspre;
+	size_t size;
 	vm_page_t m;
 	int error;
 
 	if (obj == NULL)
+		return (0);
+
+	if (obj->size == 0)
 		return (0);
 
 	/* Do not replace existing maps. */
@@ -84,12 +88,27 @@ slspre_vector_populated(uint64_t prefaultid, vm_object_t obj)
 	if (error == 0)
 		return (0);
 
-	error = slspre_create(obj->size, &slspre);
+	size = obj->size;
+	error = slspre_create(size, &slspre);
 	if (error != 0)
 		return (error);
 
-	TAILQ_FOREACH (m, &obj->memq, listq)
+	VM_OBJECT_RLOCK(obj);
+
+	/*
+	 * We currently do not handle shrinking or expanding objects.
+	 * This should not be an issue with these objects, since they
+	 * are part of the in-memory representation of the checkpoint,
+	 * and as such are not modified by running applications.
+	 */
+	KASSERT(size == obj->size, ("object size changed"));
+
+	TAILQ_FOREACH (m, &obj->memq, listq) {
+		if (m->pindex >= obj->size)
+			continue;
 		bit_set(slspre->pre_map, m->pindex);
+	}
+	VM_OBJECT_RUNLOCK(obj);
 
 	error = slskv_add(slsm.slsm_prefault, prefaultid, (uintptr_t)slspre);
 	if (error != 0)
