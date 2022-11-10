@@ -374,7 +374,7 @@ sls_readrec_buf(struct file *fp, size_t len, struct sbuf **sbp)
 	 * Allocate the receiving buffer and associate it with the record.  Use
 	 * the sbuf allocator so we can wrap it around an sbuf later.
 	 */
-	buf = SBMALLOC(len + 1);
+	buf = SBMALLOC(len + 1, M_WAITOK);
 	if (buf == NULL)
 		return (ENOMEM);
 

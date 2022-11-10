@@ -318,22 +318,6 @@ slsvm_objtable_collapse(
 	}
 }
 
-/*
- * Destroy all physical process memory mappings for the entry. Only makes
- * sense for writable entries, read-only entries are retained.
- */
-static void
-slsvm_entry_protect_obj(struct proc *p, struct vm_map_entry *entry)
-{
-	if (((entry->eflags & MAP_ENTRY_NEEDS_COPY) == 0) &&
-	    ((entry->protection & VM_PROT_WRITE) != 0)) {
-		pmap_protect_pglist(&p->p_vmspace->vm_pmap, entry->start,
-		    entry->end, entry->start - entry->offset,
-		    &entry->object.vm_object->memq,
-		    entry->protection & ~VM_PROT_WRITE, AURORA_PMAP_TEST_FULL);
-	}
-}
-
 static void
 slsvm_entry_protect(struct proc *p, struct vm_map_entry *entry)
 {
@@ -467,10 +451,7 @@ slsvm_entry_shadow(struct proc *p, struct slskv_table *table,
 		 * There is no race with the process here for the
 		 * entry, so there is no need to lock the map.
 		 */
-		if (sls_objprotect == 1)
-			slsvm_entry_protect_obj(p, entry);
-		else
-			slsvm_entry_protect(p, entry);
+		slsvm_entry_protect(p, entry);
 		entry->object.vm_object = vmshadow;
 		VM_OBJECT_WLOCK(vmshadow);
 		vm_object_clear_flag(vmshadow, OBJ_ONEMAPPING);
@@ -480,10 +461,7 @@ slsvm_entry_shadow(struct proc *p, struct slskv_table *table,
 	}
 
 	/* Shadow the object, retain it in Aurora. */
-	if (sls_objprotect == 1)
-		slsvm_entry_protect_obj(p, entry);
-	else
-		slsvm_entry_protect(p, entry);
+	slsvm_entry_protect(p, entry);
 	error = slsvm_object_shadow(table, &entry->object.vm_object);
 	if (error != 0)
 		return (error);

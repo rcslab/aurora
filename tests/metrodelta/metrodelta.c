@@ -14,7 +14,7 @@
 #include <sysexits.h>
 #include <unistd.h>
 
-#define LOCALHOST ("localhost")
+#define LOCALHOST ("127.0.0.1")
 #define SOCKET (7779)
 #define BACKLOG (512)
 

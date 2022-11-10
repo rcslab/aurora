@@ -605,14 +605,14 @@ slsproc_restore_pid(
 		sess = malloc(sizeof(*sess), M_SESSION, M_WAITOK | M_ZERO);
 
 	if (slsproc->pid == slsproc->pgid)
-		pgrp = malloc(sizeof(*pgrp), M_PGRP, M_WAITOK | M_ZERO);
+		pgrp = uma_zalloc(pgrp_zone, M_WAITOK);
 
 	if (pgrp != NULL) {
 		/* We are changing the process tree with this. */
 		error = enterpgrp(p, p->p_pid, pgrp, sess);
 		if (error != 0) {
 			free(sess, M_SESSION);
-			free(pgrp, M_PGRP);
+			uma_zfree(pgrp_zone, pgrp);
 			goto out;
 		}
 	} else {

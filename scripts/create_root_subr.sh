@@ -8,7 +8,8 @@ get_distribution_mirror()
     MIRROR="ftp://ftp.freebsd.org"
 
     _UNAME_R=`uname -r`
-    case _UNAME_R=${_UNAME_R%-p*} in
+    _UNAME_R=${_UNAME_R%-p*} 
+    case $_UNAME_R in
     *-ALPHA*|*-CURRENT|*-STABLE|*-PRERELEASE)
 	RELDIR="snapshots"
 	;;
