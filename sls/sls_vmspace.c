@@ -349,9 +349,17 @@ slsvmspace_restore_entry(
 		 */
 	case OBJT_DEVICE:
 		error = kern_openat(curthread, AT_FDCWD, "/dev/hpet0",
-		    UIO_SYSSPACE, O_RDWR, S_IRWXU);
-		if (error != 0)
+		    UIO_SYSSPACE, O_RDONLY, S_IRWXU);
+		if (error != 0 && error != ENOENT)
 			return (error);
+
+		if (error == ENOENT) {
+			/* If in a VM we use a paravirt clock instead. */
+			error = kern_openat(curthread, AT_FDCWD, "/dev/pvclock",
+			    UIO_SYSSPACE, O_RDONLY, S_IRWXU);
+			if (error != 0)
+				return (error);
+		}
 
 		fd = curthread->td_retval[0];
 		error = kern_mmap(curthread, entry->start,

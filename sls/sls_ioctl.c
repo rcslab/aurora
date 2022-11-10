@@ -849,13 +849,11 @@ sls_hook_attach(void)
 	slssyscall_initsysvec();
 	slsmetropolis_initsysvec();
 	sls_exit_hook = sls_exit_procremove;
-	vm_fault_metropolis_hook = sls_register_fault;
 }
 
 static void
 sls_hook_detach(void)
 {
-	vm_fault_metropolis_hook = NULL;
 	sls_exit_hook = NULL;
 	slsmetropolis_finisysvec();
 	slssyscall_finisysvec();
