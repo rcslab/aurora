@@ -134,10 +134,6 @@ int slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 void sls_checkpointd(struct sls_checkpointd_args *args);
 void sls_restored(struct sls_restored_args *args);
 
-void slsrest_kqattach_locked(struct proc *p, struct kqueue *kq);
-void slsrest_kqattach(struct proc *p, struct kqueue *kq);
-void slsrest_kqdetach(struct kqueue *kq);
-
 extern struct sysctl_ctx_list aurora_ctx;
 
 /* Statistics and configuration variables accessible through sysctl. */
@@ -155,14 +151,6 @@ extern uint64_t sls_ckpt_attempted;
 extern uint64_t sls_ckpt_done;
 extern uint64_t sls_ckpt_duration;
 SDT_PROVIDER_DECLARE(sls);
-
-#define KTR_SLS KTR_SPARE4
-
-#define SLS_ERROR(func, error)                                              \
-	do {                                                                \
-		printf("%s: %s in line %d (%s) failed with %d\n", __FILE__, \
-		    #func, __LINE__, __func__, error);                      \
-	} while (0)
 
 #define SLS_ASSERT_LOCKED() (mtx_assert(&slsm.slsm_mtx, MA_OWNED))
 #define SLS_ASSERT_UNLOCKED() (mtx_assert(&slsm.slsm_mtx, MA_NOTOWNED))
@@ -193,43 +181,6 @@ sls_finishop(void)
 	SLS_LOCK();
 	slsm.slsm_inprog -= 1;
 	cv_broadcast(&slsm.slsm_exitcv);
-	SLS_UNLOCK();
-}
-
-/*
- * Reference the module, signaling it is in use.
- */
-static inline int
-sls_swapref(void)
-{
-	SLS_LOCK();
-	if (SLS_EXITING() != 0) {
-		SLS_UNLOCK();
-		return (EBUSY);
-	}
-	slsm.slsm_swapobjs += 1;
-	SLS_UNLOCK();
-
-	return (0);
-}
-
-/*
- * Remove a reference to the module owned by a swap object.
- */
-static inline void
-sls_swapderef_unlocked(void)
-{
-	SLS_ASSERT_LOCKED();
-	KASSERT(slsm.slsm_swapobjs > 0, ("module has no references left"));
-	slsm.slsm_swapobjs -= 1;
-	cv_broadcast(&slsm.slsm_exitcv);
-}
-
-static inline void
-sls_swapderef(void)
-{
-	SLS_LOCK();
-	sls_swapderef_unlocked();
 	SLS_UNLOCK();
 }
 

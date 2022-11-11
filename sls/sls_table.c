@@ -243,8 +243,6 @@ slsfp_doio(struct file *fp, void *buf, size_t len, enum uio_rw rw, bool *eof)
 out:
 
 	sls_io_initiated += 1;
-	if (error != 0)
-		SLS_ERROR(slsfp_doio, error);
 
 	return (error);
 }

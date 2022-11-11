@@ -28,6 +28,36 @@
 static struct pagerops swappagerops_old;
 
 /*
+ * Reference the module, signaling it is in use.
+ */
+static inline int
+sls_swapref(void)
+{
+	SLS_LOCK();
+	if (SLS_EXITING() != 0) {
+		SLS_UNLOCK();
+		return (EBUSY);
+	}
+	slsm.slsm_swapobjs += 1;
+	SLS_UNLOCK();
+
+	return (0);
+}
+
+/*
+ * Remove a reference to the module owned by a swap object.
+ */
+static inline void
+sls_swapderef(void)
+{
+	SLS_LOCK();
+	KASSERT(slsm.slsm_swapobjs > 0, ("module has no references left"));
+	slsm.slsm_swapobjs -= 1;
+	cv_broadcast(&slsm.slsm_exitcv);
+	SLS_UNLOCK();
+}
+
+/*
  * Mark the buffer as invalid and wake up any waiters on the object.
  */
 static void
@@ -268,6 +298,7 @@ sls_pager_obj_init(vm_object_t obj)
 	if (sls_swapref())
 		return (EBUSY);
 
+	DEBUG1("[VMREF] Referenced %lx", obj->objid);
 	/* Nowhere in the kernel are pager objects given a handle. */
 	KASSERT(obj->handle == NULL, ("object has a handle"));
 
@@ -626,9 +657,8 @@ sls_pager_fini(vm_object_t obj)
 	obj->type = OBJT_DEFAULT;
 	obj->flags &= ~OBJ_AURORA;
 
-	SLS_LOCK();
-	sls_swapderef_unlocked();
-	SLS_UNLOCK();
+	sls_swapderef();
+	DEBUG1("[VMREF] Dereferenced %lx", obj->objid);
 }
 
 /*
@@ -659,6 +689,7 @@ sls_pager_dealloc(vm_object_t obj)
 	vp = SLS_VMOBJ_SWAPVP(obj);
 	SLS_VMOBJ_SWAPVP(obj) = NULL;
 
+	DEBUG1("[VMREF] Dereferenced %lx", obj->objid);
 	VM_OBJECT_WUNLOCK(obj);
 	vrele(vp);
 	sls_swapderef();

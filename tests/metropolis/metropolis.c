@@ -82,7 +82,7 @@ wait_child(void)
 	}
 
 	if (!WIFEXITED(wstatus)) {
-		fprintf(stderr, "Abnormal child exit\n");
+		fprintf(stderr, "Child didn't exit\n");
 		exit(EX_SOFTWARE);
 	}
 
