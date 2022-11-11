@@ -78,7 +78,7 @@ SDT_PROBE_DEFINE0(sls, , , meta_finish);
 /*
  * Stop the processes, and wait until they are truly not running.
  */
-static void
+void
 slsckpt_stop(slsset *procset, struct proc *pcaller)
 {
 	struct slskv_iter iter;
@@ -100,7 +100,7 @@ slsckpt_stop(slsset *procset, struct proc *pcaller)
 /*
  * Let all processes continue executing.
  */
-static void
+void
 slsckpt_cont(slsset *procset, struct proc *pcaller)
 {
 	struct slskv_iter iter;
@@ -839,6 +839,80 @@ slsckpt_gather_children(slsset *procset, struct proc *pcaller)
 	return (0);
 }
 
+int
+slsckpt_gather(
+    struct slspart *slsp, slsset *procset, struct proc *pcaller, bool recurse)
+{
+	int error;
+
+	/* Gather all processes still running. */
+	error = slsckpt_gather_processes(slsp, pcaller, procset);
+	if (error != 0) {
+		slsp_signal(slsp, error);
+		DEBUG1("Failed to gather processes with error %d", error);
+		return (error);
+	}
+
+	if (slsp_isempty(slsp)) {
+		DEBUG("No processes left to checkpoint");
+		slsp_signal(slsp, 0);
+		return (EINVAL);
+	}
+
+	/*
+	 * If we recursively checkpoint, we don't actually enter the
+	 * children into the SLS permanently, but only checkpoint them
+	 * in this iteration. This only matters if the parent dies, in
+	 * which case the children will not be checkpointed anymore;
+	 * this makes sense because we mainly want the children because
+	 * they might be part of the state of the parent, if we actually
+	 * care about them we can add them to the SLS.
+	 */
+
+	/* If we're not checkpointing recursively we're done. */
+	if (!recurse)
+		return (0);
+
+	error = slsckpt_gather_children(procset, pcaller);
+	if (error != 0) {
+		slsp_signal(slsp, error);
+		return (error);
+	}
+
+	return (0);
+}
+
+bool
+slsckpt_prepare_state(struct slspart *slsp)
+{
+	/*
+	 * Check if the partition is available for checkpointing. If the
+	 * operation fails, the partition is detached. Note that this
+	 * allows multiple checkpoint daemons on the same partition.
+	 */
+	if (slsp_setstate(slsp, SLSP_AVAILABLE, SLSP_CHECKPOINTING, true) !=
+	    0) {
+
+		/* A detached partition cannot change state. */
+		KASSERT(slsp->slsp_status == SLSP_DETACHED,
+		    ("Blocking slsp_setstate() on live partition failed"));
+
+		return (false);
+	}
+
+	/* See if we're destroying the module. */
+	if (slsm.slsm_exiting != 0)
+		return (false);
+
+	/* Check if the partition got detached from the SLS. */
+	if (slsp->slsp_status != SLSP_CHECKPOINTING) {
+		DEBUG("Process not in checkpointing state, exiting");
+		return (false);
+	}
+
+	return (true);
+}
+
 /*
  * System process that continuously checkpoints a partition.
  */
@@ -849,13 +923,10 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	struct proc *pcaller = args->pcaller;
 	struct slspart *slsp = args->slsp;
 	struct timespec tstart, tend;
-	struct timespec tin, tout;
 	long msec_elapsed, msec_left;
+	int stateerr, error = 0;
 	slsset *procset = NULL;
 	struct proc *p;
-	int stateerr, error = 0;
-
-	nanotime(&tin);
 
 	/* The set of processes we are going to checkpoint. */
 	error = slsset_create(&procset);
@@ -869,65 +940,14 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 
 		sls_ckpt_attempted += 1;
 
-		/*
-		 * Check if the partition is available for checkpointing. If the
-		 * operation fails, the partition is detached. Note that this
-		 * allows multiple checkpoint daemons on the same partition.
-		 */
-		if (slsp_setstate(
-			slsp, SLSP_AVAILABLE, SLSP_CHECKPOINTING, true) != 0) {
-
-			/* Once a partition is detached its state cannot change.
-			 */
-			KASSERT(slsp->slsp_status == SLSP_DETACHED,
-			    ("Blocking slsp_setstate() on live partition failed"));
-
-			goto out;
-		}
-
-		/* See if we're destroying the module. */
-		if (slsm.slsm_exiting != 0)
+		if (!slsckpt_prepare_state(slsp))
 			break;
 
 		DEBUG1("Attempting checkpoint %d", sls_ckpt_attempted);
-		/* Check if the partition got detached from the SLS. */
-		if (slsp->slsp_status != SLSP_CHECKPOINTING) {
-			DEBUG("Process not in checkpointing state, exiting");
-			break;
-		}
-
-		/* Gather all processes still running. */
-		error = slsckpt_gather_processes(slsp, pcaller, procset);
+		error = slsckpt_gather(slsp, procset, pcaller, args->recurse);
 		if (error != 0) {
-			slsp_signal(slsp, error);
-			DEBUG1(
-			    "Failed to gather processes with error %d", error);
+			DEBUG1("slsckpt_prepare returned %d\n", error);
 			break;
-		}
-
-		if (slsp_isempty(slsp)) {
-			DEBUG("No processes left to checkpoint");
-			slsp_signal(slsp, 0);
-			break;
-		}
-
-		/*
-		 * If we recursively checkpoint, we don't actually enter the
-		 * children into the SLS permanently, but only checkpoint them
-		 * in this iteration. This only matters if the parent dies, in
-		 * which case the children will not be checkpointed anymore;
-		 * this makes sense because we mainly want the children because
-		 * they might be part of the state of the parent, if we actually
-		 * care about them we can add them to the SLS.
-		 */
-
-		/* If we're not recursively checkpointing, abort the search. */
-		if (args->recurse != 0) {
-			error = slsckpt_gather_children(procset, pcaller);
-			if (error != 0) {
-				slsp_signal(slsp, error);
-				break;
-			}
 		}
 
 		DEBUG("Gathered all processes");
@@ -968,11 +988,6 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 		if (msec_left > 0)
 			pause_sbt("slscpt", SBT_1MS * msec_left, 0,
 			    C_HARDCLOCK | C_CATCH);
-
-		nanotime(&tout);
-		sls_ckpt_duration += (TONANO(tout) - TONANO(tin)) /
-		    (1000 * 1000);
-		tin = tout;
 
 		DEBUG("Woke up");
 		/*

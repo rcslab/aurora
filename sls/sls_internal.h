@@ -201,6 +201,13 @@ void sls_procremove(struct proc *p);
 bool sls_proc_inpart(uint64_t oid, struct proc *p);
 bool sls_proc_insls(struct proc *p);
 
+int slsckpt_gather(
+    struct slspart *slsp, slsset *procset, struct proc *pcaller, bool recurse);
+bool slsckpt_prepare_state(struct slspart *slsp);
+void slsckpt_stop(slsset *procset, struct proc *pcaller);
+void slsckpt_cont(slsset *procset, struct proc *pcaller);
+int slspre_resident(struct slspart *slsp, struct file *fp);
+
 MALLOC_DECLARE(M_SLSMM);
 MALLOC_DECLARE(M_SLSREC);
 

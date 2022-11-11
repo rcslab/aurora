@@ -50,7 +50,8 @@ int sls_ffork(int fd);
 int sls_stat(int streamid, struct sls_stat *st);
 int sls_barrier(int streamid);
 
-extern struct slskv_table *megatable;
+/* Get list of resident pages in the partition. */
+int sls_pgresident(uint64_t oid, int fd);
 
 #ifdef __cplusplus
 }

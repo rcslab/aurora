@@ -1,6 +1,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bitstring.h>
+#include <sys/capsicum.h>
 #include <sys/conf.h>
 #include <sys/file.h>
 #include <sys/kernel.h>
@@ -596,6 +597,32 @@ out:
 }
 
 static int
+sls_pgresident(struct sls_pgresident_args *args)
+{
+	struct thread *td = curthread;
+	struct slspart *slsp;
+	struct file *fp;
+	int error;
+
+	slsp = slsp_find(args->oid);
+	if (slsp == NULL)
+		return (EINVAL);
+
+	error = fget_write(td, args->fd, &cap_write_rights, &fp);
+	if (error) {
+		slsp_deref(slsp);
+		return (error);
+	}
+
+	error = slspre_resident(slsp, fp);
+
+	slsp_deref(slsp);
+	fdrop(fp, td);
+
+	return (error);
+}
+
+static int
 sls_sysctl_init(void)
 {
 	struct sysctl_oid *root;
@@ -717,6 +744,10 @@ sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
 	case SLS_METROPOLIS_SPAWN:
 		error = sls_metropolis_spawn(
 		    (struct sls_metropolis_spawn_args *)data);
+		break;
+
+	case SLS_PGRESIDENT:
+		error = sls_pgresident((struct sls_pgresident_args *)data);
 		break;
 
 	default:

@@ -34,4 +34,7 @@ int epoch_main(int argc, char *argv[]);
 void spawn_usage(void);
 int spawn_main(int argc, char *argv[]);
 
+void pgresident_usage(void);
+int pgresident_main(int argc, char *argv[]);
+
 #endif /* _SLSCTL_H_ */

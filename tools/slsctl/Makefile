@@ -1,7 +1,7 @@
 PROG= slsctl
 SRCS= slsctl.c attach.c partadd.c partdel.c \
 	checkpoint.c restore.c spawn.c \
-	listsnaps.c
+	listsnaps.c pgresident.c
 MAN=
 
 LDADD= -lsls -lsbuf -ledit

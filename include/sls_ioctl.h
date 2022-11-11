@@ -76,6 +76,11 @@ struct sls_metropolis_spawn_args {
 	int s;	      /* The socket to be connected */
 };
 
+struct sls_pgresident_args {
+	uint64_t oid; /* The OID of the Metropolis partition */
+	int fd;	      /* The file descriptor in which to dump the data */
+};
+
 #define SLS_CHECKPOINT _IOW('d', 1, struct sls_checkpoint_args)
 #define SLS_RESTORE _IOW('d', 2, struct sls_restore_args)
 #define SLS_ATTACH _IOW('d', 3, struct sls_attach_args)
@@ -86,6 +91,7 @@ struct sls_metropolis_spawn_args {
 #define SLS_METROPOLIS _IOWR('d', 8, struct sls_metropolis_args)
 #define SLS_INSLS _IOWR('d', 9, struct sls_insls_args)
 #define SLS_METROPOLIS_SPAWN _IOWR('d', 10, struct sls_metropolis_spawn_args)
+#define SLS_PGRESIDENT _IOWR('d', 11, struct sls_pgresident_args)
 
 #define SLS_DEFAULT_PARTITION 5115
 #define SLS_DEFAULT_MPARTITION 5116

@@ -37,6 +37,7 @@ struct command {
 	{ "listsnaps", "ls", &listsnaps_usage, &listsnaps_main },
 	{ "mountsnap", "ms", &mountsnap_usage, &mountsnap_main },
 	{ "spawn", "sp", &spawn_usage, &spawn_main },
+	{ "pgresident", "pg", &pgresident_usage, &pgresident_main },
 	{ "help", "h", NULL, &cmd_help }, { "exit", "q", NULL, &cmd_exit },
 	{ NULL, NULL, NULL, NULL } };
 

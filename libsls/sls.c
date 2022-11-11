@@ -236,7 +236,7 @@ sls_insls(uint64_t *oid, bool *insls)
 }
 
 /*
- * Create a new Metropolis function
+ * Create a new Metropolis function.
  */
 int
 sls_metropolis_spawn(uint64_t oid, int s)
@@ -248,6 +248,25 @@ sls_metropolis_spawn(uint64_t oid, int s)
 
 	if (sls_ioctl(SLS_METROPOLIS_SPAWN, &args) < 0) {
 		perror("sls_metropolis_spawn");
+		return (-1);
+	}
+
+	return (0);
+}
+
+/*
+ * Create a new Metropolis function.
+ */
+int
+sls_pgresident(uint64_t oid, int fd)
+{
+	struct sls_pgresident_args args;
+
+	args.oid = oid;
+	args.fd = fd;
+
+	if (sls_ioctl(SLS_PGRESIDENT, &args) < 0) {
+		perror("sls_pgresident");
 		return (-1);
 	}
 

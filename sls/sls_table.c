@@ -245,13 +245,13 @@ out:
 	return (error);
 }
 
-static int
+int
 slsfp_read(struct file *fp, void *buf, size_t size)
 {
 	return (slsfp_doio(fp, buf, size, UIO_READ));
 }
 
-static int
+int
 slsfp_write(struct file *fp, void *buf, size_t size)
 {
 	return (slsfp_doio(fp, buf, size, UIO_WRITE));
