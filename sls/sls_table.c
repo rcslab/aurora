@@ -64,6 +64,7 @@ size_t sls_bytes_read_vfs = 0;
 size_t sls_bytes_written_direct = 0;
 size_t sls_bytes_read_direct = 0;
 uint64_t sls_pages_grabbed = 0;
+uint64_t sls_pages_prefaulted = 0;
 uint64_t sls_io_initiated = 0;
 unsigned int sls_async_slos = 1;
 static bool ssparts_imported = 0;
@@ -196,7 +197,7 @@ slsfp_open_vnode(uint64_t oid, bool create, struct file **fpp)
 }
 
 static int
-slsfp_doio(struct file *fp, void *buf, size_t len, enum uio_rw rw, bool *eof)
+slsfp_doio(struct file *fp, void *buf, size_t len, enum uio_rw rw)
 {
 	struct thread *td = curthread;
 	size_t iosize = 0;
@@ -229,11 +230,8 @@ slsfp_doio(struct file *fp, void *buf, size_t len, enum uio_rw rw, bool *eof)
 			goto out;
 		}
 
-		if (back == auio.uio_resid) {
-			if (eof != NULL)
-				*eof = true;
+		if (back == auio.uio_resid)
 			break;
-		}
 	}
 
 	if (auio.uio_rw == UIO_WRITE)
@@ -248,15 +246,15 @@ out:
 }
 
 static int
-slsfp_read(struct file *fp, void *buf, size_t size, bool *eof)
+slsfp_read(struct file *fp, void *buf, size_t size)
 {
-	return (slsfp_doio(fp, buf, size, UIO_READ, eof));
+	return (slsfp_doio(fp, buf, size, UIO_READ));
 }
 
 static int
 slsfp_write(struct file *fp, void *buf, size_t size)
 {
-	return (slsfp_doio(fp, buf, size, UIO_WRITE, NULL));
+	return (slsfp_doio(fp, buf, size, UIO_WRITE));
 }
 
 /* Creates an in-memory Aurora record. */
@@ -381,7 +379,7 @@ sls_readrec_buf(struct file *fp, size_t len, struct sbuf **sbp)
 		return (ENOMEM);
 
 	/* Read the data from the vnode. */
-	error = slsfp_read(fp, buf, len, NULL);
+	error = slsfp_read(fp, buf, len);
 	if (error != 0) {
 		SBFREE(buf);
 		return (error);
@@ -440,6 +438,7 @@ sls_readmeta_slos(char *buf, size_t buflen, struct slskv_table *table)
 
 		error = slskv_add(table, rec->srec_id, (uintptr_t)rec);
 		if (error != 0) {
+			DEBUG1("%s: duplicate record\n", __func__);
 			sls_record_destroy(rec);
 			return (error);
 		}
@@ -682,7 +681,7 @@ sls_readdata_prefault(vm_object_t obj, struct sls_prefault *slspre)
 				break;
 		}
 
-		if (offset == obj->size)
+		if (start == obj->size)
 			break;
 
 		KASSERT(end > 0, ("Empty extent"));
@@ -692,6 +691,8 @@ sls_readdata_prefault(vm_object_t obj, struct sls_prefault *slspre)
 		VM_OBJECT_WUNLOCK(obj);
 		if (error != 0)
 			return (error);
+
+		sls_pages_prefaulted += (end - start);
 	}
 
 	return (0);
@@ -716,8 +717,11 @@ sls_readdata(struct slspart *slsp, struct file *fp, uint64_t slsid,
 	 * so just read the whole first block of the node.
 	 */
 	error = sls_readrec_buf(fp, sizeof(struct slsvmobject), &sb);
-	if (error != 0)
+	if (error != 0) {
+		DEBUG2(
+		    "%s: reading the record failed with %d\n", __func__, error);
 		return (error);
+	}
 
 	rec = sls_getrecord(sb, slsid, SLOSREC_VMOBJ);
 	KASSERT(rec != NULL, ("No record allocated"));
@@ -743,8 +747,10 @@ sls_readdata(struct slspart *slsp, struct file *fp, uint64_t slsid,
 		KASSERT(obj->objid == slsid, ("New object's objid is wrong"));
 		/* Add the object to the table. */
 		error = slskv_add(objtable, slsid, (uintptr_t)obj);
-		if (error != 0)
+		if (error != 0) {
+			DEBUG1("%s: duplicate object\n", __func__);
 			goto error;
+		}
 	}
 
 	error = sls_pager_obj_init(obj);
@@ -755,8 +761,11 @@ sls_readdata(struct slspart *slsp, struct file *fp, uint64_t slsid,
 
 	if (SLSP_LAZYREST(slsp) == 0) {
 		error = sls_readdata_slos(fp->f_vnode, obj);
-		if (error != 0)
+		if (error != 0) {
+			DEBUG2("%s: data reading failed with %d\n", __func__,
+			    error);
 			goto error;
+		}
 
 		return (0);
 	}
@@ -769,8 +778,9 @@ sls_readdata(struct slspart *slsp, struct file *fp, uint64_t slsid,
 		 */
 		error = slskv_find(
 		    slsm.slsm_prefault, slsid, (uintptr_t *)&slspre);
-		if (error != 0)
+		if (error != 0) {
 			return (0);
+		}
 
 		KASSERT(obj->objid == slsid, ("New object's objid is wrong"));
 		error = sls_readdata_prefault(obj, slspre);
@@ -831,7 +841,7 @@ sls_read_slos_manifest(uint64_t oid, char **bufp, size_t *buflenp)
 	}
 
 	buf = malloc(st.len, M_SLSMM, M_WAITOK);
-	error = slsfp_read(fp, buf, st.len, NULL);
+	error = slsfp_read(fp, buf, st.len);
 	if (error != 0) {
 		fdrop(fp, td);
 		return (error);
@@ -862,7 +872,7 @@ sls_read_slos_datarec(struct slspart *slsp, uint64_t oid,
 
 	error = fo_ioctl(fp, SLS_GET_RSTAT, &st, td->td_ucred, td);
 	if (error != 0) {
-		DEBUG1("setting record type failed with %d\n", error);
+		DEBUG1("getting record type failed with %d\n", error);
 		fdrop(fp, td);
 		return (error);
 	}
@@ -909,8 +919,10 @@ sls_read_slos_datarec_all(struct slspart *slsp, char **bufp, size_t *buflenp,
 	for (i = 0; i < data_idlen; i++) {
 		error = sls_read_slos_datarec(
 		    slsp, data_ids[i], rectable, objtable);
-		if (error != 0)
+		if (error != 0) {
+			DEBUG("Reading data record failed\n");
 			return (error);
+		}
 	}
 
 	/* Include the terminating zero in the calculation.*/
@@ -937,6 +949,7 @@ sls_read_slos(struct slspart *slsp, struct slsckpt_data **sckptp,
 	/* Read the manifest, get the record number for the checkpoint. */
 	error = sls_read_slos_manifest(slsp->slsp_oid, &buf, &buflen);
 	if (error != 0) {
+		DEBUG1("%s: reading the manifest failed\n", __func__);
 		slsckpt_drop(sckpt);
 		return (error);
 	}
@@ -946,13 +959,17 @@ sls_read_slos(struct slspart *slsp, struct slsckpt_data **sckptp,
 	/* Extract the list of VM records, return the array of metadata. */
 	error = sls_read_slos_datarec_all(
 	    slsp, &buf, &buflen, sckpt->sckpt_rectable, objtable);
-	if (error != 0)
+	if (error != 0) {
+		DEBUG1("%s: reading the data records failed\n", __func__);
 		goto error;
+	}
 
 	/* Extract all metadata records. */
 	error = sls_readmeta_slos(buf, buflen, sckpt->sckpt_rectable);
-	if (error != 0)
+	if (error != 0) {
+		DEBUG1("%s: reading the metadata failed\n", __func__);
 		goto error;
+	}
 
 	free(input_buf, M_SLSMM);
 
@@ -1379,6 +1396,7 @@ sls_export_ssparts(void)
 		return (error);
 
 	error = slsfp_write(fp, ssparts, ssparts_len);
+	DEBUG1("Wrote %ld bytes for partitions\n", ssparts_len);
 
 	fdrop(fp, td);
 	return (error);
@@ -1391,14 +1409,22 @@ sls_import_ssparts(void)
 	struct thread *td = curthread;
 	struct file *fp;
 	int error;
-	bool eof;
+
+	DEBUG1("[SSPART] Reading %ld bytes for partitions\n", ssparts_len);
 
 	/* Get the vnode for the record and open it. */
-	error = slsfp_open_vnode(SLOS_SLSPART_INODE, true, &fp);
-	if (error != 0)
-		return (error);
+	error = slsfp_open_vnode(SLOS_SLSPART_INODE, false, &fp);
+	if (error != 0) {
+		/*
+		 * There were no partitions to speak of, because
+		 * this is the first time we are mounting this SLOS.
+		 */
+		DEBUG("[SSPART] No partitions found\n");
+		ssparts_imported = true;
+		return (0);
+	}
 
-	error = slsfp_read(fp, ssparts, ssparts_len, &eof);
+	error = slsfp_read(fp, ssparts, ssparts_len);
 	if (error != 0) {
 		fdrop(fp, td);
 		return (error);
@@ -1406,6 +1432,7 @@ sls_import_ssparts(void)
 
 	if (error == 0)
 		ssparts_imported = true;
+	DEBUG("[SSPART] Done reading partitions\n");
 
 	fdrop(fp, td);
 
@@ -1501,6 +1528,8 @@ slspre_export(void)
 	if (error != 0)
 		goto done;
 
+	DEBUG1("[SLSPRE] Wrote %ld bytes\n", iosize);
+
 done:
 	sbuf_delete(sb);
 
@@ -1517,24 +1546,30 @@ slspre_import(void)
 	uint64_t objid;
 	size_t bitlen;
 	size_t size;
-	bool eof;
 	int error;
 
 	/* Get the vnode for the record and open it. */
-	error = slsfp_open_vnode(SLOS_SLSPREFAULT_INODE, true, &fp);
-	if (error != 0)
-		return (error);
+	error = slsfp_open_vnode(SLOS_SLSPREFAULT_INODE, false, &fp);
+	if (error != 0) {
+		/*
+		 * There is no inode for prefault vectors if the SLOS
+		 * is brand new. In that case we just return without
+		 * needing to import anything.
+		 */
+		return (0);
+	}
 
-	error = slsfp_read(fp, &size, sizeof(size), &eof);
-	if (error != 0 || eof)
+	error = slsfp_read(fp, &size, sizeof(size));
+	if (error != 0)
 		goto done;
 
-	for (;;) {
-		error = slsfp_read(fp, &objid, sizeof(objid), &eof);
-		if (error != 0 || eof)
+	DEBUG1("[SLSPRE] Reading %ld bytes\n", size);
+	while (size > 0) {
+		error = slsfp_read(fp, &objid, sizeof(objid));
+		if (error != 0)
 			break;
 
-		error = slsfp_read(fp, &bitlen, sizeof(bitlen), &eof);
+		error = slsfp_read(fp, &bitlen, sizeof(bitlen));
 		if (error != 0)
 			break;
 
@@ -1544,11 +1579,13 @@ slspre_import(void)
 			break;
 
 		/* Read it in. */
-		error = slsfp_read(
-		    fp, slspre->pre_map, bitstr_size(bitlen), &eof);
-		if (error != 0 || eof)
+		error = slsfp_read(fp, slspre->pre_map, bitstr_size(bitlen));
+		if (error != 0)
 			break;
+
+		size -= (sizeof(objid) + sizeof(bitlen) + bitstr_size(bitlen));
 	}
+	DEBUG("[SLSPRE] Done reading prefault vectors\n");
 
 done:
 	fdrop(fp, td);

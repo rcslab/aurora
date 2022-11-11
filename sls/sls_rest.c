@@ -851,7 +851,6 @@ slsrest_make_checkpoint(struct slspart *slsp, struct slsrest_data *restdata)
 	error = sls_read_slos(slsp, &sckpt, restdata->objtable);
 	if (error != 0) {
 		DEBUG1("Reading the SLOS failed with %d", error);
-		slsckpt_drop(sckpt);
 		return (error);
 	}
 
@@ -866,6 +865,8 @@ slsrest_make_checkpoint(struct slspart *slsp, struct slsrest_data *restdata)
 
 		error = slsrest_dovnode(sckpt, &buf, &buflen);
 		if (error != 0) {
+			DEBUG2("%s: vnode restore failed with %d\n", __func__,
+			    error);
 			KV_ABORT(iter);
 			return (error);
 		}
@@ -874,6 +875,8 @@ slsrest_make_checkpoint(struct slspart *slsp, struct slsrest_data *restdata)
 	/* Create all memory objects. */
 	error = slsvmobj_restore_all(sckpt, restdata->objtable);
 	if (error != 0) {
+		DEBUG2("%s: restoring VM objects failed with %d\n", __func__,
+		    error);
 		slsckpt_drop(sckpt);
 		return (error);
 	}
@@ -928,8 +931,11 @@ slsrest_data(struct slspart *slsp, struct slsrest_data **restdatap)
 
 		/* Create the VM object shadow table. */
 		error = slsrest_ckptshadow(restdata, slsp->slsp_sckpt);
-		if (error != 0)
+		if (error != 0) {
+			DEBUG2("%s: shadowing objects failed with %d\n",
+			    __func__, error);
 			goto error;
+		}
 
 		SDT_PROBE1(sls, , sls_rest, , "Creating objtable");
 		*restdatap = restdata;
@@ -946,8 +952,11 @@ slsrest_data(struct slspart *slsp, struct slsrest_data **restdatap)
 	 * VM object tables.
 	 */
 	error = slsrest_make_checkpoint(slsp, restdata);
-	if (error != 0)
+	if (error != 0) {
+		DEBUG2("%s: checkpoint creation failed with %d\n", __func__,
+		    error);
 		goto error;
+	}
 
 	SDT_PROBE1(sls, , sls_rest, , "Creating sckpt");
 	*restdatap = restdata;
@@ -994,6 +1003,7 @@ sls_rest(struct slspart *slsp, uint64_t rest_stopped)
 	/* Get the restore data from the appropriate backend. */
 	error = slsrest_data(slsp, &restdata);
 	if (error != 0) {
+		DEBUG2("%s: restoring data failed with %d\n", __func__, error);
 		stateerr = slsp_setstate(
 		    slsp, SLSP_RESTORING, SLSP_AVAILABLE, true);
 		KASSERT(stateerr == 0, ("state error %d", stateerr));

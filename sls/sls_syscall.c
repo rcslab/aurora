@@ -27,7 +27,6 @@ sls_exit_procremove(struct proc *p)
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 
 	/* Temporarily drop the process lock to prevent deadlocks. */
-
 	PROC_UNLOCK(p);
 
 #ifdef INVARIANTS

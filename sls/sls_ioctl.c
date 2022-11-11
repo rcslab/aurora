@@ -203,12 +203,19 @@ sls_metropolis_spawn(struct sls_metropolis_spawn_args *args)
 	int error;
 
 	slsp = slsp_find(args->oid);
-	if (slsp == NULL)
-		return (EINVAL);
+	if (slsp == NULL) {
+		DEBUG1("%s: partition not found\n", __func__);
+		return (ENOENT);
+	}
 	slsmetr = &slsp->slsp_metr;
 
-	/* Check if the partition is restorable. */
+	/*
+	 * Check if the partition is restorable. Certain partitions are
+	 * used only for measuring checkpointing performance and do not
+	 * hold restorable data.
+	 */
 	if (!slsp_restorable(slsp)) {
+		DEBUG1("%s: partition not restorable\n", __func__);
 		slsp_deref(slsp);
 		return (EINVAL);
 	}
@@ -613,6 +620,9 @@ sls_sysctl_init(void)
 	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "pages_grabbed", CTLFLAG_RD, &sls_pages_grabbed, 0,
 	    "Pages grabbed by the SLS");
+	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "pages_prefaulted", CTLFLAG_RD, &sls_pages_prefaulted, 0,
+	    "Pages prefaulted by the SLS");
 	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "io_initiated", CTLFLAG_RD, &sls_io_initiated, 0,
 	    "IOs to disk initiated");
