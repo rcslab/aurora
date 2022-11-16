@@ -288,7 +288,7 @@ slsvmspace_restore_entry_file(
 
 	KASSERT(vp->v_object->handle == vp,
 	    ("vnode object is backed by another vnode"));
-	error = vn_mmap(fp, map, &start, entry->end - entry->start,
+	error = vn_mmap_aurora(fp, map, &start, entry->end - entry->start,
 	    entry->protection, entry->max_protection, flags, entry->offset, td);
 	KASSERT(start == entry->start,
 	    ("vn_mmap did not return requested address"));
