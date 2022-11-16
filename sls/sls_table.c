@@ -106,10 +106,6 @@ slstable_init(void)
 void
 slstable_fini(void)
 {
-	/* Drain the SLOS taskqueue, which might be doing IOs. */
-	if (slos.slos_tq != NULL)
-		taskqueue_drain_all(slos.slos_tq);
-
 	/* Drain the write task queue just in case. */
 	if (slsm.slsm_tabletq != NULL) {
 		taskqueue_drain_all(slsm.slsm_tabletq);
