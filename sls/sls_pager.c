@@ -21,7 +21,7 @@
 #include "sls_pager.h"
 #include "sls_prefault.h"
 
-#define SLS_SWAPOFF_RETRIES (100)
+#define SLS_SWAPOFF_RETRIES (10)
 #define SLS_VMOBJ_SWAPVP(obj) ((obj)->un_pager.swp.swp_tmpfs)
 
 /* The initial swap pager operations vector. */
@@ -298,9 +298,12 @@ sls_pager_obj_init(vm_object_t obj)
 	if (sls_swapref())
 		return (EBUSY);
 
-	DEBUG1("[VMREF] Referenced %lx", obj->objid);
 	/* Nowhere in the kernel are pager objects given a handle. */
-	KASSERT(obj->handle == NULL, ("object has a handle"));
+	KASSERT(obj->type == OBJT_DEFAULT,
+	    ("initializing object %lx of type %d in the Aurora pager",
+		obj->objid, obj->type));
+	KASSERT(obj->handle == NULL,
+	    ("anonymous object passed to Aurora pager has a handle"));
 
 	/*
 	 * Even if the object was a swap object that was initialized before we
@@ -325,8 +328,10 @@ sls_pager_obj_init(vm_object_t obj)
 	    ("error %d when getting newly created SLOS inode", error));
 
 	obj->type = OBJT_SWAP;
-	obj->flags |= OBJ_AURORA;
+	obj->flags |= (OBJ_AURORA | OBJ_NOSPLIT);
 	SLS_VMOBJ_SWAPVP(obj) = vp;
+
+	DEBUG2("referenced %lx with vnode %p", obj->objid, vp);
 	VOP_UNLOCK(vp, 0);
 
 	/*
@@ -628,40 +633,6 @@ error:
 }
 
 /*
- * Turn an Aurora object back into a regular object. We turn it back into a
- * regular object so that the regular swap pager can reinitialize it if it gets
- */
-static void
-sls_pager_fini(vm_object_t obj)
-{
-	SLS_ASSERT_UNLOCKED();
-	VM_OBJECT_ASSERT_LOCKED(obj);
-	KASSERT(obj->handle == NULL, ("object has handle"));
-	/* Dead objects are cleaned up by calling sls_pager_dealloc(). */
-	if ((obj->flags & OBJ_DEAD) != 0)
-		return;
-
-	/* Wait for any outstanding IOs. */
-	vm_object_pip_wait(obj, "slsfin");
-
-	if (obj->cred != NULL) {
-		swap_release_by_cred(obj->charge, obj->cred);
-		obj->charge = 0;
-		crfree(obj->cred);
-		obj->cred = NULL;
-	}
-
-	vrele(SLS_VMOBJ_SWAPVP(obj));
-	SLS_VMOBJ_SWAPVP(obj) = NULL;
-
-	obj->type = OBJT_DEFAULT;
-	obj->flags &= ~OBJ_AURORA;
-
-	sls_swapderef();
-	DEBUG1("[VMREF] Dereferenced %lx", obj->objid);
-}
-
-/*
  * Destroy an Aurora object.
  */
 static void
@@ -674,22 +645,27 @@ sls_pager_dealloc(vm_object_t obj)
 
 	/* This can be a swap object created before Aurora. */
 	if ((obj->flags & OBJ_AURORA) == 0) {
-		DEBUG1("Found non-Aurora swap object %p", obj);
+		DEBUG1("Aurora pager deallocating non-Aurora object%lx",
+		    obj->objid);
 		(*swappagerops_old.pgo_dealloc)(obj);
 		return;
 	}
 
 	vm_object_pip_wait(obj, "slsdea");
-	obj->type = OBJT_DEAD;
 
-	if ((obj->flags & OBJ_AURORA) == 0)
+	if ((obj->flags & OBJ_AURORA) == 0) {
+		DEBUG1("Aurora swap object %lx lost its flag", obj->objid);
 		return;
+	}
+
+	obj->type = OBJT_DEAD;
+	obj->flags &= ~OBJ_AURORA;
 
 	/* Release the vnode backing the object, if it exists. */
 	vp = SLS_VMOBJ_SWAPVP(obj);
+	DEBUG2("dereferenced %lx with handle %p", obj->objid, vp);
 	SLS_VMOBJ_SWAPVP(obj) = NULL;
 
-	DEBUG1("[VMREF] Dereferenced %lx", obj->objid);
 	VM_OBJECT_WUNLOCK(obj);
 	vrele(vp);
 	sls_swapderef();
@@ -752,28 +728,26 @@ sls_pager_unregister(void)
 static void
 sls_pager_swapoff_one(void)
 {
-	vm_object_t obj, tmp;
+	vm_object_t obj;
 
 	/*
 	 * We currently kill all Aurora processes before swapping off.
-	 * The pager is not active while we are executing this call.
+	 * This means we are expecting no active objects here, and that
+	 * this function only checks for live objects instead of killing them.
 	 */
 	mtx_lock(&vm_object_list_mtx);
-	TAILQ_FOREACH_SAFE (obj, &vm_object_list, object_list, tmp) {
-		if ((obj->type != OBJT_SWAP) || (obj->flags & OBJ_AURORA) == 0)
-			continue;
-
+	TAILQ_FOREACH (obj, &vm_object_list, object_list) {
 		mtx_unlock(&vm_object_list_mtx);
 		VM_OBJECT_WLOCK(obj);
-		if ((obj->flags & OBJ_DEAD) != 0)
-			goto next_object;
 
-		atomic_thread_fence_acq();
-		if (obj->type != OBJT_SWAP)
-			goto next_object;
+		if (obj->flags & OBJ_AURORA) {
+			DEBUG5(
+			    "Aurora object %lx (vp %p) type %d (refcount %x, dead: %s)",
+			    obj->objid, SLS_VMOBJ_SWAPVP(obj), obj->type,
+			    obj->ref_count,
+			    (obj->flags & OBJ_DEAD) ? "yes" : "no");
+		}
 
-		sls_pager_fini(obj);
-	next_object:
 		VM_OBJECT_WUNLOCK(obj);
 		mtx_lock(&vm_object_list_mtx);
 	}
@@ -793,9 +767,11 @@ sls_pager_swapoff(void)
 		sls_pager_swapoff_one();
 
 		retries += 1;
-		if (retries == SLS_SWAPOFF_RETRIES)
-			panic(
+		if (retries == SLS_SWAPOFF_RETRIES) {
+			DEBUG1(
 			    "failed to destroy %d objects", slsm.slsm_swapobjs);
+			break;
+		}
 
 		pause("slsswp", hz / 20);
 		SLS_LOCK();

@@ -126,6 +126,8 @@ slsvm_object_shadowexact(vm_object_t *objp)
 	DEBUG2("(PRE) Object %p has %d references", obj, obj->ref_count);
 #endif
 	vm_object_shadow(objp, &offset, ptoa((*objp)->size));
+	(*objp)->flags |= OBJ_NOSPLIT;
+	obj->flags |= OBJ_NOSPLIT;
 
 	KASSERT((obj != *objp), ("object %p wasn't shadowed", obj));
 #ifdef VERBOSE

@@ -727,6 +727,10 @@ sls_readdata(struct slspart *slsp, struct file *fp, uint64_t slsid,
 		KASSERT(
 		    obj->objid == slsid, ("Existing object's objid is wrong"));
 		sls_record_destroy(rec);
+
+		error = sls_pager_obj_init(obj);
+		if (error != 0)
+			return (error);
 	} else {
 		/* Store the record for later and possibly make a new object. */
 		error = sls_readdata_slos_vmobj(
@@ -749,11 +753,9 @@ sls_readdata(struct slspart *slsp, struct file *fp, uint64_t slsid,
 		}
 	}
 
-	error = sls_pager_obj_init(obj);
-	if (error != 0)
-		return (error);
-
 	KASSERT(obj != NULL, ("No object found"));
+	KASSERT(obj->type = OBJT_SWAP && (obj->flags & OBJ_AURORA),
+	    ("uninitialized object of type %d", obj->type));
 
 	if (SLSP_LAZYREST(slsp) == 0) {
 		error = sls_readdata_slos(fp->f_vnode, obj);
