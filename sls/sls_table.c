@@ -54,7 +54,7 @@
 #include "sls_table.h"
 #include "sls_vm.h"
 
-#define SLSTABLE_TASKWARM (32)
+#define SLSTABLE_TASKWARM (256)
 
 /* The maximum size of a single data transfer */
 uint64_t sls_contig_limit = MAXBCACHEBUF;
@@ -64,17 +64,21 @@ size_t sls_bytes_read_vfs = 0;
 size_t sls_bytes_written_direct = 0;
 size_t sls_bytes_read_direct = 0;
 uint64_t sls_pages_grabbed = 0;
-uint64_t sls_pages_prefaulted = 0;
 uint64_t sls_io_initiated = 0;
 unsigned int sls_async_slos = 1;
 static bool ssparts_imported = 0;
+uint64_t sls_prefault_anonpages = 0;
+uint64_t sls_prefault_anonios = 0;
 
 static uma_zone_t slstable_task_zone;
 
 struct slstable_taskctx {
 	struct task tk;
-	struct sls_record *rec;
+	struct slspart *slsp;
+	uint64_t oid;
+	struct slskv_table *rectable;
 	struct slskv_table *objtable;
+	uint64_t *error;
 };
 
 int
@@ -528,9 +532,9 @@ sls_object_populate(vm_object_t object, vm_pindex_t start, vm_pindex_t end)
 
 /* Read data from the SLOS into a VM object. */
 static int
-sls_readpages_slos(struct vnode *vp, vm_object_t obj, struct slos_extent sxt)
+sls_readpages_slos(struct vnode *vp, vm_object_t obj, struct slos_extent sxt,
+    vm_pindex_t pindex)
 {
-	vm_pindex_t pindex;
 	vm_page_t msucc;
 	struct buf *bp;
 	vm_page_t *ma;
@@ -541,9 +545,6 @@ sls_readpages_slos(struct vnode *vp, vm_object_t obj, struct slos_extent sxt)
 
 	ma = malloc(sizeof(*ma) * btoc(MAXPHYS), M_SLSMM, M_WAITOK);
 
-	KASSERT(sxt.sxt_lblkno >= SLOS_OBJOFF,
-	    ("Invalid start of extent %ld", sxt.sxt_lblkno));
-	KASSERT(obj->ref_count == 1, ("object under reconstruction is in use"));
 	VM_OBJECT_WLOCK(obj);
 
 	/*
@@ -551,7 +552,6 @@ sls_readpages_slos(struct vnode *vp, vm_object_t obj, struct slos_extent sxt)
 	 * process of being paged in. Make all necessary IOs to bring in any
 	 * pages not currently being paged in.
 	 */
-	pindex = sxt.sxt_lblkno - SLOS_OBJOFF;
 	for (pgleft = sxt.sxt_cnt; pgleft > 0; pgleft -= npages) {
 		msucc = vm_page_find_least(obj, pindex);
 		npages = (msucc != NULL) ? msucc->pindex - pindex : pgleft;
@@ -608,88 +608,162 @@ sls_readpages_slos(struct vnode *vp, vm_object_t obj, struct slos_extent sxt)
 }
 
 static int
-sls_readdata_slos(struct vnode *vp, vm_object_t obj)
+sls_get_extents(
+    struct vnode *vp, uint64_t *numextentsp, struct slos_extent **extentsp)
 {
 	struct thread *td = curthread;
-	struct slos_extent extent;
-	vm_pindex_t start, end;
+	struct slos_extent *extents;
+	uint64_t numextents;
 	int error;
 
-	/* Start from the beginning of the data region. */
-	extent.sxt_lblkno = SLOS_OBJOFF;
-	extent.sxt_cnt = 0;
-	for (;;) {
-		/* Find the extent starting with the offset provided. */
-		error = VOP_IOCTL(vp, SLS_SEEK_EXTENT, &extent, 0, NULL, td);
-		if (error != 0) {
-			SLS_DBG("extent seek failed with %d\n", error);
-			return (error);
-		}
-
-		/* Get the new extent. If we get no more data, we're done. */
-		if (extent.sxt_cnt == 0)
-			break;
-
-		/* Otherwise get the VM object pages for the data. */
-		start = extent.sxt_lblkno - SLOS_OBJOFF;
-		end = start + extent.sxt_cnt;
-		VM_OBJECT_WLOCK(obj);
-		error = sls_object_populate(obj, start, end);
-		VM_OBJECT_WUNLOCK(obj);
-		if (error != 0)
-			return (error);
-
-		extent.sxt_lblkno += extent.sxt_cnt;
-		extent.sxt_cnt = 0;
+	numextents = SLOS_OBJOFF;
+	/* Find the extent starting with the offset provided. */
+	error = VOP_IOCTL(vp, SLS_NUM_EXTENTS, &numextents, 0, NULL, td);
+	if (error != 0) {
+		SLS_DBG("extent seek failed with %d\n", error);
+		return (error);
 	}
 
+	extents = malloc(sizeof(*extents) * numextents, M_SLSMM, M_WAITOK);
+	if (extents == NULL)
+		return (ENOMEM);
+
+	/* The first extent holds the offset we should start from. */
+	extents[0].sxt_lblkno = SLOS_OBJOFF;
+
+	/* Find the extent starting with the offset provided. */
+	error = VOP_IOCTL(vp, SLS_GET_EXTENTS, extents, 0, NULL, td);
+	if (error != 0) {
+		SLS_DBG("extent seek failed with %d\n", error);
+		free(extents, M_SLSMM);
+		return (error);
+	}
+
+	*extentsp = extents;
+	*numextentsp = numextents;
+	return (0);
+}
+
+static int
+sls_readdata_slos(struct vnode *vp, vm_object_t obj)
+{
+	struct slos_extent *extents;
+	uint64_t numextents;
+	vm_pindex_t pindex;
+	int error;
+	int i;
+
+	/* Get all logically and physically contiguous regions. */
+	error = sls_get_extents(vp, &numextents, &extents);
+	if (error != 0)
+		return (error);
+
+	for (i = 0; i < numextents; i++) {
+		/* Otherwise get the VM object pages for the data. */
+		pindex = extents[i].sxt_lblkno - SLOS_OBJOFF;
+		error = sls_readpages_slos(vp, obj, extents[i], pindex);
+		if (error != 0) {
+			free(extents, M_SLSMM);
+			return (error);
+		}
+	}
+
+	free(extents, M_SLSMM);
 	return (0);
 }
 
 int
-sls_readdata_prefault(vm_object_t obj, struct sls_prefault *slspre)
+sls_readdata_prefault(
+    struct vnode *vp, vm_object_t obj, struct sls_prefault *slspre)
 {
-	vm_pindex_t start, end;
-	vm_pindex_t offset;
+	vm_pindex_t start, offset, pindex;
+	struct slos_extent *extents;
+	struct slos_extent sxt;
+	uint64_t numextents;
+	size_t count;
 	int error;
+	int i;
 
 	ASSERT_VOP_LOCKED(vp, ("prefaulting with unlocked backing vnode"));
 
 	DEBUG1("Prefaulting object %lx", obj->objid);
+
+	/* Get all logically and physically contiguous regions. */
+	error = sls_get_extents(vp, &numextents, &extents);
+	if (error != 0)
+		return (error);
+
 	offset = 0;
 	for (;;) {
-		/* Go over the blocks we don't need */
+		/* Go over the blocks we don't need. */
 		while (offset < obj->size) {
 			if (bit_test(slspre->pre_map, offset) != 0)
 				break;
 			offset += 1;
 		}
 
+		/* Find the extent the starting set block is in. */
+		for (i = 0; i < numextents; i++) {
+			/* Anonymous objects have their data offset in the
+			 * inode. */
+			KASSERT(extents[i].sxt_lblkno >= SLOS_OBJOFF,
+			    ("pindex underflow"));
+			pindex = extents[i].sxt_lblkno - SLOS_OBJOFF;
+
+			/* If the end of the extent is after the offset, we
+			 * found it. */
+			if (pindex + extents[i].sxt_cnt >= offset)
+				break;
+
+			sxt = extents[i];
+		}
+
+		/* All extents are before the offset. */
+		if (i == numextents) {
+			free(extents, M_SLSMM);
+			return (0);
+		}
+
+		KASSERT(pindex <= offset,
+		    ("page %ld outside of extent %ld", pindex, offset));
+
+		sxt = extents[i];
+
 		start = offset;
-		end = start;
+		count = 0;
 		while (offset < obj->size) {
 			if (bit_test(slspre->pre_map, offset) == 0)
 				break;
+			count += 1;
 			offset += 1;
-			end += 1;
 
-			if (end == (sls_contig_limit / PAGE_SIZE))
+			if (count >= sxt.sxt_cnt - (start - pindex))
+				break;
+
+			if (count >= (sls_contig_limit / PAGE_SIZE))
 				break;
 		}
 
 		if (start == obj->size)
 			break;
 
-		KASSERT(end > 0, ("Empty extent"));
+		KASSERT(count > 0, ("empty extent"));
 
-		VM_OBJECT_WLOCK(obj);
-		error = sls_object_populate(obj, start, end);
-		VM_OBJECT_WUNLOCK(obj);
-		if (error != 0)
+		sxt.sxt_lblkno = start + SLOS_OBJOFF;
+		sxt.sxt_cnt = count;
+
+		/* Otherwise get the VM object pages for the data. */
+		error = sls_readpages_slos(vp, obj, sxt, start);
+		if (error != 0) {
+			free(extents, M_SLSMM);
 			return (error);
+		}
 
-		sls_pages_prefaulted += (end - start);
+		atomic_add_64(&sls_prefault_anonpages, count);
+		atomic_add_64(&sls_prefault_anonios, 1);
 	}
+
+	free(extents, M_SLSMM);
 
 	return (0);
 }
@@ -720,17 +794,17 @@ sls_readdata(struct slspart *slsp, struct file *fp, uint64_t slsid,
 	}
 
 	rec = sls_getrecord(sb, slsid, SLOSREC_VMOBJ);
-	KASSERT(rec != NULL, ("No record allocated"));
+	KASSERT(rec != NULL, ("no record allocated"));
 
 	/* Create a new object if we did not already find it. */
 	if (slskv_find(objtable, slsid, (uintptr_t *)&obj) == 0) {
-		KASSERT(
-		    obj->objid == slsid, ("Existing object's objid is wrong"));
+		KASSERT(obj->objid == slsid, ("new object's objid is wrong"));
 		sls_record_destroy(rec);
 
 		error = sls_pager_obj_init(obj);
 		if (error != 0)
 			return (error);
+
 	} else {
 		/* Store the record for later and possibly make a new object. */
 		error = sls_readdata_slos_vmobj(
@@ -744,7 +818,7 @@ sls_readdata(struct slspart *slsp, struct file *fp, uint64_t slsid,
 		if (obj == NULL)
 			return (0);
 
-		KASSERT(obj->objid == slsid, ("New object's objid is wrong"));
+		KASSERT(obj->objid == slsid, ("new object's objid is wrong"));
 		/* Add the object to the table. */
 		error = slskv_add(objtable, slsid, (uintptr_t)obj);
 		if (error != 0) {
@@ -753,39 +827,27 @@ sls_readdata(struct slspart *slsp, struct file *fp, uint64_t slsid,
 		}
 	}
 
-	KASSERT(obj != NULL, ("No object found"));
+	KASSERT(obj != NULL, ("no object found"));
 	KASSERT(obj->type = OBJT_SWAP && (obj->flags & OBJ_AURORA),
 	    ("uninitialized object of type %d", obj->type));
 
-	if (SLSP_LAZYREST(slsp) == 0) {
-		error = sls_readdata_slos(fp->f_vnode, obj);
-		if (error != 0) {
-			DEBUG2("%s: data reading failed with %d\n", __func__,
-			    error);
-			goto error;
-		}
-
-		return (0);
-	}
-
 	if (SLSP_PREFAULT(slsp) || SLSP_DELTAREST(slsp)) {
-		/*
-		 * Even we have no prefault vector or can't prefault
-		 * pages in, we can keep going since we have created
-		 * the object.
-		 */
 		error = slskv_find(
 		    slsm.slsm_prefault, slsid, (uintptr_t *)&slspre);
-		if (error != 0) {
-			return (0);
-		}
 
-		KASSERT(obj->objid == slsid, ("New object's objid is wrong"));
-		error = sls_readdata_prefault(obj, slspre);
 		if (error != 0)
-			printf("Failed to prefault data for %ld\n", obj->objid);
-	}
+			return (ENOENT);
 
+		KASSERT(obj->objid == slsid, ("new object's objid is wrong"));
+		error = sls_readdata_prefault(fp->f_vnode, obj, slspre);
+		if (error != 0)
+			goto error;
+
+	} else if (SLSP_LAZYREST(slsp) == 0) {
+		error = sls_readdata_slos(fp->f_vnode, obj);
+		if (error != 0)
+			goto error;
+	}
 
 	return (0);
 
@@ -886,14 +948,37 @@ sls_read_slos_datarec(struct slspart *slsp, uint64_t oid,
 	return (ret);
 }
 
+static void
+slstable_task(void *ctx, int __unused pending)
+{
+	struct slstable_taskctx *task = (struct slstable_taskctx *)ctx;
+	int error;
+
+	/*
+	 * VM object records are special, since we need to dump
+	 * actual memory along with the metadata.
+	 */
+	error = sls_read_slos_datarec(
+	    task->slsp, task->oid, task->rectable, task->objtable);
+	/*
+	 * Just one error is enough to stop execution, so don't worry
+	 * about overwriting existing errors.
+	 */
+	if (error != 0)
+		atomic_set_64(task->error, 1);
+
+	uma_zfree(slstable_task_zone, task);
+}
+
 static int
 sls_read_slos_datarec_all(struct slspart *slsp, char **bufp, size_t *buflenp,
     struct slskv_table *rectable, struct slskv_table *objtable)
 {
 	size_t original_buflen, data_buflen, data_idlen;
+	struct slstable_taskctx *ctx;
+	uint64_t error = 0;
 	uint64_t *data_ids;
 	char *buf;
-	int error;
 	int i;
 
 	original_buflen = *buflenp;
@@ -915,13 +1000,21 @@ sls_read_slos_datarec_all(struct slspart *slsp, char **bufp, size_t *buflenp,
 	    ("VM data array larger than the buffer itself"));
 
 	for (i = 0; i < data_idlen; i++) {
-		error = sls_read_slos_datarec(
-		    slsp, data_ids[i], rectable, objtable);
-		if (error != 0) {
-			DEBUG("Reading data record failed\n");
-			return (error);
-		}
+		/* Create a new task. */
+		ctx = uma_zalloc(slstable_task_zone, M_WAITOK);
+		ctx->slsp = slsp;
+		ctx->oid = data_ids[i];
+		ctx->objtable = objtable;
+		ctx->rectable = rectable;
+		ctx->error = &error;
+		TASK_INIT(&ctx->tk, 0, &slstable_task, &ctx->tk);
+		taskqueue_enqueue(slsm.slsm_tabletq, &ctx->tk);
 	}
+
+	taskqueue_drain_all(slsm.slsm_tabletq);
+
+	if (error != 0)
+		return (error);
 
 	/* Include the terminating zero in the calculation.*/
 	*bufp = &buf[data_buflen];
@@ -1241,29 +1334,6 @@ sls_write_slos_dataregion(struct slsckpt_data *sckpt_data)
 	}
 
 	return (0);
-}
-
-/*
- * XXX Check if the taskqueue actually helps us saturate the disk/network,
- * it is possible that in a lot of cases issuing the IOs is very cheap
- * compared to actually servicing them in the lower layers.
- */
-static void
-slstable_task(void *ctx, int __unused pending)
-{
-	struct slstable_taskctx *task = (struct slstable_taskctx *)ctx;
-	struct sls_record *rec = task->rec;
-	int error;
-
-	/*
-	 * VM object records are special, since we need to dump
-	 * actual memory along with the metadata.
-	 */
-	error = sls_writemeta_slos(rec, NULL, true, 0);
-	if (error != 0)
-		printf("Writing to the SLOS failed with %d\n", error);
-
-	uma_zfree(slstable_task_zone, task);
 }
 
 /*

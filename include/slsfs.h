@@ -77,9 +77,11 @@ int slsfs_cksum(struct buf *bp);
 
 #endif // _KERNEL
 
-#define SLS_SEEK_EXTENT _IOWR('s', 1, struct uio *)
+#define SLS_SEEK_EXTENT _IOWR('s', 1, struct slos_extent *)
 #define SLS_SET_RSTAT _IOWR('s', 2, struct slos_rstat *)
 #define SLS_GET_RSTAT _IOWR('s', 3, struct slos_rstat *)
+#define SLS_NUM_EXTENTS _IOWR('s', 4, uint64_t *)
+#define SLS_GET_EXTENTS _IOWR('s', 5, struct slos_extent *)
 
 extern int checksum_enabled;
 

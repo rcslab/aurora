@@ -1618,20 +1618,15 @@ bad:
 	return (error);
 }
 
-/* Seek an extent. Gets the first start of an extent after the offset. */
+/* Get the number of extents for the inode. */
 static int
-slsfs_seekextent(struct slos_node *svp, struct slos_extent *extentp)
+slsfs_numextents(struct slos_node *svp, uint64_t *numextentsp)
 {
+	/* Read the offset we want to start from. */
+	uint64_t lblkno = *numextentsp;
+	uint64_t numextents = 0;
 	struct fnode_iter iter;
-	uint64_t lblkno, fileblkcnt;
-	uint64_t cnt, end;
 	int error;
-
-	lblkno = extentp->sxt_lblkno;
-	/* The size of the file in blocks. */
-	fileblkcnt = svp->sn_ino.ino_size / IOSIZE(svp);
-	if (svp->sn_ino.ino_size % IOSIZE(svp))
-		fileblkcnt += 1;
 
 	/* Find the first logical block after the given block number. */
 	BTREE_LOCK(&svp->sn_tree, LK_SHARED);
@@ -1643,41 +1638,56 @@ slsfs_seekextent(struct slos_node *svp, struct slos_extent *extentp)
 
 	/* There are no extentp after the limit, notify the caller. */
 	if (ITER_ISNULL(iter)) {
-		extentp->sxt_lblkno = 0;
-		extentp->sxt_cnt = 0;
-		goto out;
+		numextents = 0;
+		ITER_RELEASE(iter);
+		return (0);
 	}
 
-	/* Start from the key. */
-	lblkno = ITER_KEY_T(iter, uint64_t);
-	cnt = (ITER_VAL_T(iter, diskptr_t).size) / IOSIZE(svp);
+	for (; !ITER_ISNULL(iter); ITER_NEXT(iter))
+		numextents += 1;
 
-	/* If we'd read past the EOF, we're done. */
-	if (lblkno >= fileblkcnt) {
-		extentp->sxt_lblkno = 0;
-		extentp->sxt_cnt = 0;
-		goto out;
-	}
-
-	for (; !ITER_ISNULL(iter); ITER_NEXT(iter)) {
-		end = lblkno + cnt;
-		if (lblkno + cnt != ITER_KEY_T(iter, uint64_t))
-			break;
-
-		lblkno = ITER_KEY_T(iter, uint64_t);
-		cnt += ITER_VAL_T(iter, diskptr_t).size / IOSIZE(svp);
-		DEBUG2("block (%lu), size (%lu) blocks", lblkno, cnt);
-	}
-
-	/* If cnt would make us read over the EOF, shorten it. */
-	if (lblkno + cnt > fileblkcnt)
-		cnt = fileblkcnt - lblkno;
-
-	extentp->sxt_lblkno = lblkno;
-	extentp->sxt_cnt = cnt;
-
-out:
 	ITER_RELEASE(iter);
+
+	*numextentsp = numextents;
+	return (0);
+}
+
+/* Fill in the slos_extent structures with the file's extents. */
+static int
+slsfs_getextents(struct slos_node *svp, struct slos_extent *extents)
+{
+	/* Read the offset we want to start from. */
+	uint64_t lblkno = extents[0].sxt_lblkno;
+	struct fnode_iter iter;
+	uint64_t fileblkcnt;
+	int error;
+	int i;
+
+	/* Find the first logical block after the given block number. */
+	BTREE_LOCK(&svp->sn_tree, LK_SHARED);
+	error = fbtree_keymax_iter(&svp->sn_tree, &lblkno, &iter);
+	if (error != 0) {
+		BTREE_UNLOCK(&svp->sn_tree, 0);
+		return (error);
+	}
+
+	/* There are no extentp after the limit, notify the caller. */
+	if (ITER_ISNULL(iter)) {
+		ITER_RELEASE(iter);
+		return (0);
+	}
+
+	for (i = 0; !ITER_ISNULL(iter); ITER_NEXT(iter), i++) {
+		fileblkcnt = svp->sn_ino.ino_size / IOSIZE(svp);
+		KASSERT(lblkno < fileblkcnt, ("extent past the end of file"));
+
+		extents[i].sxt_lblkno = ITER_KEY_T(iter, uint64_t);
+		extents[i].sxt_cnt = (ITER_VAL_T(iter, diskptr_t).size) /
+		    IOSIZE(svp);
+	}
+
+	ITER_RELEASE(iter);
+
 	return (0);
 }
 
@@ -1718,14 +1728,19 @@ slsfs_ioctl(struct vop_ioctl_args *ap)
 	u_long com = ap->a_command;
 	struct slos_node *svp = SLSVP(vp);
 	struct slos_rstat *st = NULL;
-	struct slos_extent *extentp;
+	struct slos_extent *extents;
+	uint64_t *numextentsp;
 	uint64_t *checks;
 	struct slsfs_getsnapinfo *info = NULL;
 
 	switch (com) {
-	case SLS_SEEK_EXTENT:
-		extentp = (struct slos_extent *)ap->a_data;
-		return (slsfs_seekextent(svp, extentp));
+	case SLS_NUM_EXTENTS:
+		numextentsp = (uint64_t *)ap->a_data;
+		return (slsfs_numextents(svp, numextentsp));
+
+	case SLS_GET_EXTENTS:
+		extents = (struct slos_extent *)ap->a_data;
+		return (slsfs_getextents(svp, extents));
 
 	case SLS_SET_RSTAT:
 		st = (struct slos_rstat *)ap->a_data;

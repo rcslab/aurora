@@ -20,7 +20,8 @@
 int sls_read_slos(struct slspart *slsp, struct slsckpt_data **sckptp,
     struct slskv_table *objtable);
 
-int sls_readdata_prefault(vm_object_t obj, struct sls_prefault *slspre);
+int sls_readdata_prefault(
+    struct vnode *vp, vm_object_t obj, struct sls_prefault *slspre);
 int sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt);
 int sls_write_slos_dataregion(struct slsckpt_data *sckpt);
 

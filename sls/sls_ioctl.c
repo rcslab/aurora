@@ -648,9 +648,6 @@ sls_sysctl_init(void)
 	    "pages_grabbed", CTLFLAG_RD, &sls_pages_grabbed, 0,
 	    "Pages grabbed by the SLS");
 	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
-	    "pages_prefaulted", CTLFLAG_RD, &sls_pages_prefaulted, 0,
-	    "Pages prefaulted by the SLS");
-	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "io_initiated", CTLFLAG_RD, &sls_io_initiated, 0,
 	    "IOs to disk initiated");
 	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
@@ -679,6 +676,12 @@ sls_sysctl_init(void)
 	(void)SYSCTL_ADD_INT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "only_flush_deltas", CTLFLAG_RD, &sls_only_flush_deltas, 0,
 	    "Only flush delta checkponits, blackhole the full ones");
+	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "prefault_anonpages", CTLFLAG_RD, &sls_prefault_anonpages, 0,
+	    "Pages prefaulted by the SLS");
+	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "prefault_anonios", CTLFLAG_RD, &sls_prefault_anonios, 0,
+	    "Pages prefaulted by the SLS");
 
 	return (0);
 }
