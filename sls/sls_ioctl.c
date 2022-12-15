@@ -1013,12 +1013,12 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 
 		DEBUG("Turning off the swapper...");
 
-		/* Export and destroy all in-memory partition data. */
+		/* Destroy all in-memory partition data. */
+		slsp_delall();
+
 		error = slspre_export();
 		if (error != 0)
 			return (error);
-
-		slsp_delall();
 
 		SLS_LOCK();
 
