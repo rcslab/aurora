@@ -771,6 +771,7 @@ slsckpt_gather_processes(
 		/* Add it to the set of processes to be checkpointed. */
 		error = slsset_add(procset, (uint64_t)p);
 		if (error != 0) {
+			PRELE(p);
 			KV_ABORT(iter);
 			return (error);
 		}
@@ -813,6 +814,7 @@ slsckpt_gather_children_once(
 				error = slsset_add(procset, (uint64_t)pchild);
 				if (error != 0) {
 					KV_ABORT(iter);
+					PRELE(pchild);
 					return (error);
 				}
 			}
