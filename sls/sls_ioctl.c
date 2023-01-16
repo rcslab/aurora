@@ -229,8 +229,10 @@ sls_metropolis_spawn(struct sls_metropolis_spawn_args *args)
 	    &slsmetr->slsmetr_namelen, slsmetr->slsmetr_flags,
 	    &slsmetr->slsmetr_sockfp);
 	slsp_deref(slsp);
-	if (error != 0)
+	if (error != 0) {
+		DEBUG1("%s: could not accept connection\n", __func__);
 		return (error);
+	}
 
 	rest_args = (struct sls_restore_args) {
 		.oid = args->oid,
@@ -682,6 +684,12 @@ sls_sysctl_init(void)
 	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "prefault_anonios", CTLFLAG_RD, &sls_prefault_anonios, 0,
 	    "Pages prefaulted by the SLS");
+	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "prefault_vnpages", CTLFLAG_RD, &sls_prefault_vnpages, 0,
+	    "Total pages for vnode prefaulting");
+	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "prefault_vnios", CTLFLAG_RD, &sls_prefault_vnios, 0,
+	    "Total IOs for vnode prefaulted");
 
 	return (0);
 }

@@ -148,6 +148,8 @@ extern uint64_t sls_io_initiated;
 extern char *sls_basedir;
 extern uint64_t sls_prefault_anonios;
 extern uint64_t sls_prefault_anonpages;
+extern uint64_t sls_prefault_vnios;
+extern uint64_t sls_prefault_vnpages;
 
 extern uint64_t sls_ckpt_attempted;
 extern uint64_t sls_ckpt_done;

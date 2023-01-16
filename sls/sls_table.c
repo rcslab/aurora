@@ -1064,6 +1064,7 @@ sls_read_slos(struct slspart *slsp, struct slsckpt_data **sckptp,
 
 	free(input_buf, M_SLSMM);
 
+	taskqueue_drain_all(slsm.slsm_tabletq);
 	taskqueue_drain_all(slos.slos_tq);
 
 	*sckptp = sckpt;

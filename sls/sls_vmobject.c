@@ -214,6 +214,9 @@ slsvmobj_restore(struct slsvmobject *info, struct slsckpt_data *sckpt,
 		if (error != 0)
 			return (error);
 
+		if (sckpt->sckpt_attr.attr_target == SLS_OSD)
+			slspre_vnode(vp, sckpt->sckpt_attr);
+
 		/*
 		 * Get a reference for the vnode, since we're going to use it.
 		 * Do the same for the underlying object.
