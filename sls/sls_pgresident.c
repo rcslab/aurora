@@ -44,6 +44,40 @@ slspre_track_entries(vm_map_t map, char *buf, struct file *fp)
 	return (0);
 }
 
+static int
+slspre_track_vnodes(vm_map_t map, char *buf, struct file *fp)
+{
+	vm_map_entry_t entry;
+	vm_object_t obj;
+	int error;
+
+	/* Go through the process mappings. */
+	for (entry = map->header.next; entry != &map->header;
+	     entry = entry->next) {
+		for (obj = entry->object.vm_object; obj != NULL;
+		     obj = obj->backing_object) {
+			if (obj->type == OBJT_VNODE)
+				break;
+		}
+
+		if (obj == NULL)
+			continue;
+
+		KASSERT(
+		    obj->type == OBJT_VNODE, ("object doesn't back a vnode"));
+		snprintf(
+		    buf, SLSPG_BUFSZ, "V %p %ld\n", obj->handle, obj->size);
+
+		error = slsfp_write(fp, buf, strnlen(buf, SLSPG_BUFSZ));
+		if (error != 0) {
+			free(buf, M_SLSMM);
+			return (error);
+		}
+	}
+
+	return (0);
+}
+
 static void
 md5_page(vm_page_t m, char digest[MD5_DIGEST_LENGTH])
 {
@@ -140,6 +174,10 @@ slspre_track_map(struct vmspace *vm, struct file *fp)
 	char *buf;
 
 	buf = malloc(SLSPG_BUFSZ, M_SLSMM, M_WAITOK);
+
+	error = slspre_track_vnodes(&vm->vm_map, buf, fp);
+	if (error != 0)
+		goto done;
 
 	error = slspre_track_entries(&vm->vm_map, buf, fp);
 	if (error != 0)
