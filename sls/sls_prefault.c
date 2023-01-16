@@ -260,3 +260,17 @@ slspre_vnode(struct vnode *vp, struct sls_attr attr)
 
 	return (0);
 }
+
+int slspre_clear(SYSCTL_HANDLER_ARGS)
+{
+	struct sls_prefault *slspre;
+	uint64_t prefaultid;
+	const int done = 1;
+	int error;
+
+	KV_FOREACH_POP(slsm.slsm_prefault, prefaultid, slspre)
+	slspre_destroy(slspre);
+
+	error = SYSCTL_OUT(req, &done, sizeof(done));
+	return (error);
+}

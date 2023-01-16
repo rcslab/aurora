@@ -214,4 +214,7 @@ int slspre_resident(struct slspart *slsp, struct file *fp);
 MALLOC_DECLARE(M_SLSMM);
 MALLOC_DECLARE(M_SLSREC);
 
+SDT_PROVIDER_DECLARE(sls);
+SDT_PROBE_DECLARE(sls, , sls_rest, );
+
 #endif /* _SLS_INTERNAL_H_ */

@@ -78,6 +78,7 @@ SDT_PROBE_DEFINE0(sls, , slsrest_start, );
 SDT_PROBE_DEFINE0(sls, , slsrest_end, );
 
 static uma_zone_t slsrest_zone;
+uint64_t sls_successful_restores;
 
 static int
 slsrest_zone_ctor(void *mem, int size, void *args __unused, int flags __unused)
@@ -680,6 +681,9 @@ slsrest_metadata(void *args)
 
 	/* Restore the process in a stopped state if needed. */
 	SDT_PROBE1(sls, , slsrest_metadata, , "Ending single threading");
+
+	atomic_add_64(&sls_successful_restores, 1);
+
 	kthread_exit();
 
 	panic("Having the kthread exit failed");

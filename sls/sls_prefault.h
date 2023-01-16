@@ -26,4 +26,7 @@ int slspre_export(void);
 int slspre_import(void);
 
 int slspre_vnode(struct vnode *vp, struct sls_attr attr);
+
+int slspre_clear(SYSCTL_HANDLER_ARGS);
+
 #endif /* _SLS_PREFAULT_H_ */

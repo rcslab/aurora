@@ -1037,6 +1037,8 @@ sls_read_slos(struct slspart *slsp, struct slsckpt_data **sckptp,
 	if (sckpt == NULL)
 		return (ENOMEM);
 
+	SDT_PROBE1(sls, , sls_rest, , "Allocating checkpoint");
+
 	/* Read the manifest, get the record number for the checkpoint. */
 	error = sls_read_slos_manifest(slsp->slsp_oid, &buf, &buflen);
 	if (error != 0) {
@@ -1047,6 +1049,8 @@ sls_read_slos(struct slspart *slsp, struct slsckpt_data **sckptp,
 
 	input_buf = buf;
 
+	SDT_PROBE1(sls, , sls_rest, , "Getting manifest");
+
 	/* Extract the list of VM records, return the array of metadata. */
 	error = sls_read_slos_datarec_all(
 	    slsp, &buf, &buflen, sckpt->sckpt_rectable, objtable);
@@ -1055,6 +1059,8 @@ sls_read_slos(struct slspart *slsp, struct slsckpt_data **sckptp,
 		goto error;
 	}
 
+	SDT_PROBE1(sls, , sls_rest, , "Getting data");
+
 	/* Extract all metadata records. */
 	error = sls_readmeta_slos(buf, buflen, sckpt->sckpt_rectable);
 	if (error != 0) {
@@ -1062,11 +1068,14 @@ sls_read_slos(struct slspart *slsp, struct slsckpt_data **sckptp,
 		goto error;
 	}
 
+	SDT_PROBE1(sls, , sls_rest, , "Getting metadata");
+
 	free(input_buf, M_SLSMM);
 
 	taskqueue_drain_all(slsm.slsm_tabletq);
 	taskqueue_drain_all(slos.slos_tq);
 
+	SDT_PROBE1(sls, , sls_rest, , "Draining the taskqueues");
 	*sckptp = sckpt;
 
 	return (0);

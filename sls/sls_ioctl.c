@@ -43,6 +43,7 @@ SDT_PROVIDER_DEFINE(sls);
 /* Variables set using sysctls. */
 extern int sls_objprotect;
 extern int sls_only_flush_deltas;
+extern uint64_t sls_successful_restores;
 
 struct sls_metadata slsm;
 struct sysctl_ctx_list aurora_ctx;
@@ -690,6 +691,12 @@ sls_sysctl_init(void)
 	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "prefault_vnios", CTLFLAG_RD, &sls_prefault_vnios, 0,
 	    "Total IOs for vnode prefaulted");
+	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "successful_restores", CTLFLAG_RD, &sls_successful_restores, 0,
+	    "Total successful restores");
+	(void)SYSCTL_ADD_PROC(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "prefault_invalidate", CTLTYPE_U64 | CTLFLAG_RW, NULL, 0,
+	    &slspre_clear, "I", "Write 1 to invalidate all ");
 
 	return (0);
 }
