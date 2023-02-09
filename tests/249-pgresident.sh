@@ -19,7 +19,7 @@ slsunmount 2>&1
 PID=$!
 sleep 1
 
-$SLSCTL partadd -o $OID
+slsctl partadd -o $OID
 RET=$?
 if [ $RET -ne 0 ];
 then
@@ -27,7 +27,7 @@ then
     exit 1
 fi
 
-$SLSCTL attach -o $OID -p `jobid %1`
+slsctl attach -o $OID -p `jobid %1`
 RET=$?
 if [ $? -ne 0 ];
 then
@@ -35,7 +35,7 @@ then
     exit 1
 fi
 
-$SLSCTL pgresident -o $OID -f $FILENAME
+slsctl pgresident -o $OID -f $FILENAME
 RET=$?
 if [ $? -ne 0 ];
 then

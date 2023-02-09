@@ -3,12 +3,7 @@
 # Attempt to unload the slos twice. Should fail.
 
 . aurora
-
-aurstripe 2> /dev/null > /dev/null
-if [ $? -ne 0 ]; then
-    echo "Stripe failed"
-    exit 1
-fi
+SRCROOT="$PWD/.."
 
 aursetup 2> /dev/null > /dev/null
 if [ $? -ne 0 ]; then

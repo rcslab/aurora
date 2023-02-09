@@ -10,13 +10,13 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-$SRCROOT/tests/array/array >/dev/null 2>/dev/null &
+./array/array >/dev/null 2>/dev/null &
 PID="$!"
 
-$SLSCTL partadd -o $OID -b slos -a 50
-$SLSCTL attach -o $OID -p $PID
+slsctl partadd -o $OID -b slos -a 50
+slsctl attach -o $OID -p $PID
 
-$SLSCTL checkpoint -o $OID
+slsctl checkpoint -o $OID
 if [ $? -ne 0 ];
 then
     echo "Checkpoint failed with $?"
@@ -28,7 +28,7 @@ sleep 1
 killandwait $PID
 
 # This call is supposed to fail. 
-$SLSCTL restore -o $OID >/dev/null 2>/dev/null
+slsctl restore -o $OID >/dev/null 2>/dev/null
 if [ $? -eq 0 ];
 then
     echo "Restored amplified write"

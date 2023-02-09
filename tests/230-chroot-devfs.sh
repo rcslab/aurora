@@ -7,7 +7,7 @@ aursetup
 
 installroot
 
-cp $SRCROOT/tests/fd/fd "/$MNT/fd"
+cp ./fd/fd "/$MNT/fd"
 chroot "/$MNT" "/fd" / > /dev/null 2> /dev/null &
 PID=`pidof fd`
 sleep 1

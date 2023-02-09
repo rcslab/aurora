@@ -10,7 +10,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-loadsls 2> /dev/null
+kldload sls 2> /dev/null
 if [ $? -eq 0 ]; then
     echo "Remounted the SLS twice"
     exit 1

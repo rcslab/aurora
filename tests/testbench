@@ -1,12 +1,16 @@
 #!/bin/sh
 
+export MNT="/testmnt"
+export DISK="vtbd1"
+export DISKPATH="/dev/$DISK"
+
 export KTRLOG="ktrdump.log"
 export TESTLOG="testbench.log"
 
 TIMEOUT=30
 
-export SRCROOT="$PWD/.."
-. aurora
+TESTDIR="$PWD"
+. ./aurora
 
 ESC=`printf "\033"`
 CR=`printf "\015"`
@@ -120,7 +124,7 @@ run_all_tests()
     touch $TESTLOG
 
     test_banner
-    for t in `find $SRCROOT/tests -maxdepth 1 -name \*.sh | sort -n`; do
+    for t in `find $TESTDIR -maxdepth 1 -name \*.sh | sort -n`; do
 	    run_test $t
     done
 }
@@ -139,9 +143,9 @@ run_tests()
     test_banner
     for t in $1; do
 	if [ -z "$STRESS_TEST" ]; then
-	    run_test "$SRCROOT/tests/$t"
+	    run_test "$TESTDIR/$t"
 	else
-	    stress_test "$SRCROOT/tests/$t"
+	    stress_test "$TESTDIR/$t"
 	fi
     done
 }
@@ -149,15 +153,12 @@ run_tests()
 # Cleanup any leftover Aurora state.
 aurteardown 1>/dev/null 2>/dev/null
 
-createmd
-
-export MDDISK
-export DISK
-export DISKPATH
-
 # Create a directory tree for the root if needed
-if [ ! -f "$SLSROOT" ]; then
-    echo "SLSFS tarred root not found, please run image.sh"
+if [ ! -f "/usr/freebsd-dist/base.txz" ]; then
+    echo "SLSFS tarred root not found, please fetch base.txz:"
+    echo "'bsdinstall fetch' with the following exported env variables"
+    echo "BSDINSTALL_DISTDIR=/usr/freebsd-dist"
+    echo "BSDINSTALL_DISTSITE=ftp://ftp.freebsd.org/pub/FreeBSD/amd64/amd64/releases/12.3-RELEASE"
     exit 0
 fi
 

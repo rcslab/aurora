@@ -10,14 +10,14 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-unloadsls
+kldunload sls
 if [ $? -ne 0 ]; then
     echo "Failed to unload SLS"
     exit 1
 fi
 
 
-unloadslos 2>&1
+kldunload slos 2>&1
 if [ $? -eq 0 ]; then
     echo "Unloaded the SLOS with an FS mounted"
     exit 1
@@ -29,7 +29,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-unloadslos
+kldunload slos
 if [ $? -ne 0 ]; then
     echo "Failed to remove the SLOS"
     exit 1

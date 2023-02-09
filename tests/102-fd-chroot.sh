@@ -5,7 +5,7 @@
 . aurora
 
 # Load the SLOS and mount the SLSFS
-loadslos
+kldload slos
 slsnewfs
 slsmount
 
@@ -14,10 +14,10 @@ mkdir -p $MNT/dev
 mount -t devfs devfs $MNT/dev
 
 # Create the root
-installroot
+installroot 
 
 # Copy over the workload and run it
-cp $SRCROOT/tests/fd/fd "/$MNT/fd"
+cp ./fd/fd "/$MNT/fd"
 chroot "/$MNT" "/fd" / > /dev/null 2> /dev/null &
 PID=`pidof fd`
 
@@ -39,7 +39,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-unloadslos
+kldunload slos
 if [ $? -ne 0 ]; then
     echo "Failed to tear down Aurora"
     exit 1

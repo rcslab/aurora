@@ -3,12 +3,14 @@
 . aurora
 
 # Destroy any existing ramdisks that may have valid FSes from previous tests.
-destroymd $MDDISK
-createmd
+MDDISK=`mdconfig -a -t malloc -s 10g`
+DISK="$MDDISK"
+DISKPATH="/dev/$DISK"
 
-loadslos
+kldload slos
 if [ $? -ne 0 ]; then
 	echo "Failed to load SLOS"
+	mdconfig -d -u $MDDISK
 	exit 1
 fi
 
@@ -21,13 +23,16 @@ do
 	slsmount 2>&1
 	if [ $? -eq 0 ]; then
 		echo "Loaded corrupted SLOS"
+		mdconfig -d -u $MDDISK
 		exit 1
 	fi
 
 	sleep 1
 done
 
-unloadslos
+mdconfig -d -u $MDDISK
+
+kldunload slos
 if [ $? -ne 0 ]; then
 	echo "Failed to unload SLOS"
 	exit 1

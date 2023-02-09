@@ -1,7 +1,7 @@
 #!/bin/sh
 
 restore_and_wait() {
-    $SLSCTL restore -o $OID &
+    slsctl restore -o $OID &
     if [ $? -ne 0 ] && [ $? -ne 3 ];
     then
   echo "Restore failed with $?"
@@ -24,13 +24,13 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-$SRCROOT/tests/array/array >/dev/null 2>/dev/null &
+./array/array >/dev/null 2>/dev/null &
 PID="$!"
 
-$SLSCTL partadd -o $OID -c -l -b slos
-$SLSCTL attach -o $OID -p $PID
+slsctl partadd -o $OID -c -l -b slos
+slsctl attach -o $OID -p $PID
 
-$SLSCTL checkpoint -o $OID
+slsctl checkpoint -o $OID
 if [ $? -ne 0 ];
 then
     echo "Checkpoint failed with $?"

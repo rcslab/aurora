@@ -6,13 +6,13 @@
 
 for i in `seq 3`
 do
-    loadslos
+    kldload slos
     if [ $? -ne 0 ]; then
 	echo "Failed to load modules"
 	exit 1
     fi
 
-    unloadslos
+    kldunload slos
     if [ $? -ne 0 ]; then
 	echo "Failed to unload SLOS"
 	exit 1

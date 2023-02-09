@@ -13,7 +13,7 @@ make_file_with_data(){
 . aurora
 
 # Load the SLOS and mount the SLSFS
-loadslos
+kldload slos
 slsnewfs
 slsmount
 
@@ -53,7 +53,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-unloadslos
+kldunload slos
 if [ $? -ne 0 ]; then
     echo "Failed to tear down Aurora"
     exit 1

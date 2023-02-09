@@ -22,10 +22,10 @@ fi
 sleep 1
 killandwait $PID
 
-unloadsls
+kldunload sls
 slsunmount
 slsmount
-loadsls
+kldload sls
 
 slsosdrestore
 # Killing the workload using a signal makes the restore exit with 3.

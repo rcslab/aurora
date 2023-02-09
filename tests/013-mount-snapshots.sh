@@ -4,7 +4,7 @@
 
 . aurora
 
-loadslos
+kldload slos
 if [ $? -ne 0 ]; then
     echo "Failed to load the modules"
     exit 1
@@ -24,7 +24,7 @@ fi
 
 get_last()
 {
-	$SLSCTL ls -m /testmnt -l
+	slsctl ls -m /testmnt -l
 	return $?
 }
 
@@ -56,7 +56,7 @@ wait_till_change $SNAP
 
 # Only 1.out should be present and no data in 1.out
 
-$SLSCTL ms -m $MNT -i 0
+slsctl ms -m $MNT -i 0
 
 if [ ! -e $MNT/1.out ]; then
     echo "File 1.out is not present in snapshot 0"
@@ -74,7 +74,7 @@ if [ -s $MNT/1.out ]; then
 fi 
 
 # Both files should be present and no data in either
-$SLSCTL ms -m $MNT -i 1
+slsctl ms -m $MNT -i 1
 
 if [ ! -e $MNT/1.out ] || [ ! -e $MNT/2.out ]; then
     echo "File 1.out or 2.out is not present in snapshot 1"
@@ -93,7 +93,7 @@ fi
 
 
 # Both files should be present and data in file 1
-$SLSCTL ms -m $MNT -i 2
+slsctl ms -m $MNT -i 2
 
 if [ ! -e $MNT/1.out ] || [ ! -e $MNT/2.out ]; then
     echo "File 1.out or 2.out is not present in snapshot 2"
@@ -111,7 +111,7 @@ if [ -s $MNT/2.out ]; then
 fi 
 
 # Both File should be present and data in both files
-$SLSCTL ms -m $MNT -i 3
+slsctl ms -m $MNT -i 3
 if [ ! -e $MNT/1.out ] || [ ! -e $MNT/2.out ]; then
     echo "File 1.out or 2.out is not present in snapshot 3"
     exit 1
@@ -124,6 +124,6 @@ fi
 
 
 slsunmount
-unloadslos
+kldunload slos
 
 exit 0

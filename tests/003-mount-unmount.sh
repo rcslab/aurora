@@ -2,7 +2,7 @@
 
 . aurora
 
-loadslos
+kldload slos
 if [ $? -ne 0 ]; then
     echo "Failed to load the SLOS"
     exit 1
@@ -41,7 +41,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-unloadslos
+kldunload slos
 if [ $? -ne 0 ]; then
     echo "Failed to unload the SLOS"
     exit 1

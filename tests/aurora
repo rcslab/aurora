@@ -1,67 +1,11 @@
 #!/bin/sh
-
-NEWFS=$SRCROOT/tools/newfs_sls/newfs_sls
-MNT="/testmnt"
-
-SLSCTL=$SRCROOT/tools/slsctl/slsctl
-SLSROOT="$SRCROOT/root.tar"
-
-STRIPESIZE="$(( 64 * 1024 ))"
-STRIPENAME="st0"
-STRIPEDISKS="vtbd1 vtbd2 vtbd3 vtbd4"
-
-# Load and unload kernel modules
-loadsls()
-{
-    kldload "$SRCROOT/sls/sls.ko"
-}
-
-loadslos()
-{
-    kldload "$SRCROOT/slos/slos.ko"
-}
-
-loadmod()
-{
-    loadslos
-    loadsls
-}
-
-# Unload the SLS. Necessary for unmounting/unloading the SLOS
-unloadsls()
-{
-    kldunload sls
-}
-
-unloadslos()
-{
-    kldunload slos
-}
-
-unloadmod()
-{
-    unloadsls
-    unloadslos
-}
-
-# Create and destroy memory device
-createmd()
-{
-    MDDISK=`mdconfig -a -t malloc -s 20g`
-    DISK="$MDDISK"
-    DISKPATH="/dev/$MDDISK"
-}
-
-destroymd()
-{
-    mdconfig -d -u $1
-}
+#!/bin/sh
 
 slsnewfs()
 {
     # Pipe to /dev/null if there is no log
     TESTLOG=${TESTLOG:-"/dev/null"}
-    $NEWFS $DISKPATH >> $TESTLOG 2>> $TESTLOG
+    newfs_sls $DISKPATH >> $TESTLOG 2>> $TESTLOG
 }
 
 slsmount()
@@ -88,69 +32,53 @@ slsunmount()
     umount $MNT
 }
 
-aurstripe()
-{
-    gstripe load
-    gstripe stop "$STRIPENAME"
-    gstripe create -s "$STRIPESIZE" -v "$STRIPENAME" $STRIPEDISKS
-
-    DISK="stripe/$STRIPENAME"
-    DISKPATH="/dev/$DISK"
-}
-
-aurunstripe()
-{
-    gstripe destroy $STRIPENAME > /dev/null 2> /dev/null
-}
-
 aursetup()
 {
-    loadslos
-    #finddisk
+    kldload slos
     slsnewfs
     slsmount
-    loadsls
+    kldload sls
 }
 
 aurteardown()
 {
-    unloadsls
+    kldunload sls
     slsunmount
-    unloadslos
+    kldunload slos
 }
 
 slscheckpoint()
 {
-    $SLSCTL attach -p $1 -m
-    $SLSCTL checkpoint -m -r
+    slsctl attach -p $1 -m
+    slsctl checkpoint -m -r
 }
 
 slsrestore()
 {
-    $SLSCTL restore -m &
+    slsctl restore -m &
 }
 
 slsosdcheckpoint()
 {
-    $SLSCTL attach -p $1
-    $SLSCTL checkpoint -r
+    slsctl attach -p $1
+    slsctl checkpoint -r
 }
 
 slslazycheckpoint()
 {
-    $SLSCTL partadd -o $2 -l
-    $SLSCTL attach -p $1 -o $2
-    $SLSCTL checkpoint -o $2 -r
+    slsctl partadd -o $2 -l
+    slsctl attach -p $1 -o $2
+    slsctl checkpoint -o $2 -r
 }
 
 slsosdrestore()
 {
-    $SLSCTL restore &
+    slsctl restore &
 }
 
 slslazyrestore()
 {
-    $SLSCTL restore -o $1 &
+    slsctl restore -o $1 &
 }
 
 killandwait()
@@ -159,40 +87,10 @@ killandwait()
     wait $1
 }
 
-finddisk()
-{
-    if [ -f "$DISKPATH" ] ; then
-	return
-    fi
-
-    DISKS=$(ls -1 /dev/ | grep -wE '(vtbd|md|nvd)[0-9]*')
-    MOUNTED=$(mount | grep -oE '(vtbd|md|nvd)[0-9]*')
-
-    # Search for the first nonmounted disk
-    for d in $DISKS;
-    do
-	if [ -z "$(echo $MOUNTED | grep $d)" ];
-	then
-	    DISK="$d"
-	    DISKPATH="/dev/$DISK"
-	    break
-	fi
-    done
-}
-
-createroot()
-{
-    if [ ! -f "$SLSROOT" ]; then
-	$SRCROOT/scripts/image.sh
-    fi
-    if [ ! -f "$SLSROOT" ]; then
-	echo "Failed to create root image for testing!"
-	exit 1
-    fi
-}
-
 installroot()
 {
+    SLSROOT="/usr/freebsd-dist/base.txz"
+
     # Unpack the root into the mount if it exists
     tar -C "$MNT" -xf "$SLSROOT" --exclude "proc/*" --exclude "dev/*"
 }
