@@ -291,8 +291,8 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	}
 
 	/* Create the daemon. */
-	error = kthread_add((void (*)(void *))sls_checkpointd, ckptd_args, NULL,
-	    NULL, 0, 0, "sls_checkpointd");
+	error = kproc_create((void (*)(void *))sls_checkpointd, ckptd_args, NULL,
+	    0, 0, "sls_checkpointd");
 	if (error != 0) {
 		free(ckptd_args, M_SLSMM);
 		goto error;
