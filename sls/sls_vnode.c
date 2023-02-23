@@ -145,13 +145,13 @@ slsckpt_vnode_serialize_single(
 			DEBUG2(
 			    "vn_fullpath() failed for vnode %p with error %d",
 			    vp, error);
-			if (allow_unlinked)
+			if (!allow_unlinked)
 				panic("Unlinked vnode %p not in the SLOS", vp);
 
 			/* Otherwise clean up as if after an error. */
 			slsvnode.ino = 0;
 			error = 0;
-			goto error;
+			goto out;
 		}
 
 		/* Write out the struct file. */
@@ -168,6 +168,8 @@ slsckpt_vnode_serialize_single(
 		DEBUG1("Checkpointing vnode with inode 0x%lx", slsvnode.ino);
 	}
 
+
+out:
 	/* Write out the struct file. */
 	error = sbuf_bcat(sb, (void *)&slsvnode, sizeof(slsvnode));
 	if (error != 0)
