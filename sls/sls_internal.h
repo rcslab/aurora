@@ -206,7 +206,7 @@ bool sls_proc_insls(struct proc *p);
 
 int slsckpt_gather(
     struct slspart *slsp, slsset *procset, struct proc *pcaller, bool recurse);
-bool slsckpt_prepare_state(struct slspart *slsp);
+bool slsckpt_prepare_state(struct slspart *slsp, bool *retry);
 void slsckpt_stop(slsset *procset, struct proc *pcaller);
 void slsckpt_cont(slsset *procset, struct proc *pcaller);
 int slspre_resident(struct slspart *slsp, struct file *fp);

@@ -235,7 +235,7 @@ slsckpt_compact(struct slspart *slsp, struct slsckpt_data *sckpt)
 	struct slsckpt_data *old_sckpt;
 	struct slskv_table *objtable;
 
-	if ((slsp->slsp_target == SLS_MEM || slsp->slsp_mode == SLS_DELTA)) {
+	if ((slsp->slsp_target == SLS_MEM) || (slsp->slsp_mode == SLS_DELTA)) {
 
 		/* Replace the old checkpoint in the partition. */
 		old_sckpt = slsp->slsp_sckpt;
@@ -422,10 +422,7 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 	 * Collapse the shadows. Do it before making the partition available to
 	 * safely execute with region checkpoints.
 	 */
-	if (SLSP_DELTAREST(slsp) && slsp->slsp_sckpt != NULL)
-		slsckpt_drop(sckpt);
-	else
-		slsckpt_compact(slsp, sckpt);
+	slsckpt_compact(slsp, sckpt);
 
 	/*
 	 * Mark the partition as available. We don't have pipelining, so we wait
@@ -885,7 +882,7 @@ slsckpt_gather(
 }
 
 bool
-slsckpt_prepare_state(struct slspart *slsp)
+slsckpt_prepare_state(struct slspart *slsp, bool *retry)
 {
 	/*
 	 * Check if the partition is available for checkpointing. If the
@@ -899,16 +896,23 @@ slsckpt_prepare_state(struct slspart *slsp)
 		KASSERT(slsp->slsp_status == SLSP_DETACHED,
 		    ("Blocking slsp_setstate() on live partition failed"));
 
+		if (retry != NULL)
+			*retry = true;
 		return (false);
 	}
 
 	/* See if we're destroying the module. */
-	if (slsm.slsm_exiting != 0)
+	if (slsm.slsm_exiting != 0) {
+		if (retry != NULL)
+			*retry = false;
 		return (false);
+	}
 
 	/* Check if the partition got detached from the SLS. */
 	if (slsp->slsp_status != SLSP_CHECKPOINTING) {
 		DEBUG("Process not in checkpointing state, exiting");
+		if (retry != NULL)
+			*retry = false;
 		return (false);
 	}
 
@@ -921,14 +925,26 @@ slsckpt_prepare_state(struct slspart *slsp)
 void
 sls_checkpointd(struct sls_checkpointd_args *args)
 {
-	uint64_t *nextepoch = args->nextepoch;
 	struct proc *pcaller = args->pcaller;
 	struct slspart *slsp = args->slsp;
 	struct timespec tstart, tend;
 	long msec_elapsed, msec_left;
+	bool recurse = args->recurse;
 	int stateerr, error = 0;
 	slsset *procset = NULL;
+	uint64_t localepoch;
+	uint64_t *nextepoch;
 	struct proc *p;
+	bool retry;
+	const long period = slsp->slsp_attr.attr_period;
+
+	/* Use local storage for the epoch if the caller doesn't care. */
+	nextepoch = args->nextepoch;
+	if (nextepoch == NULL)
+		nextepoch = &localepoch;
+
+	/* Free the arguments, everything is now in the local stack. */
+	free(args, M_SLSMM);
 
 	/* The set of processes we are going to checkpoint. */
 	error = slsset_create(&procset);
@@ -942,11 +958,18 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 
 		sls_ckpt_attempted += 1;
 
-		if (!slsckpt_prepare_state(slsp))
-			break;
+		if (!slsckpt_prepare_state(slsp, &retry)) {
+			if (period == 0 || retry == false) {
+				break;
+			}
+
+			pause_sbt("slscpt", SBT_1MS * period, 0,
+			    C_HARDCLOCK | C_CATCH);
+			continue;
+		}
 
 		DEBUG1("Attempting checkpoint %d", sls_ckpt_attempted);
-		error = slsckpt_gather(slsp, procset, pcaller, args->recurse);
+		error = slsckpt_gather(slsp, procset, pcaller, recurse);
 		if (error != 0) {
 			DEBUG1("slsckpt_prepare returned %d\n", error);
 			break;
@@ -980,13 +1003,13 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 
 		/* If the interval is 0, checkpointing is non-periodic. Finish
 		 * up. */
-		if (slsp->slsp_attr.attr_period == 0)
+		if (period == 0)
 			goto out;
 
 		/* Else compute how long we need to wait until we need to
 		 * checkpoint again. */
 		msec_elapsed = (TONANO(tend) - TONANO(tstart)) / (1000 * 1000);
-		msec_left = slsp->slsp_attr.attr_period - msec_elapsed;
+		msec_left = period - msec_elapsed;
 		if (msec_left > 0)
 			pause_sbt("slscpt", SBT_1MS * msec_left, 0,
 			    C_HARDCLOCK | C_CATCH);
@@ -1021,8 +1044,7 @@ out:
 		slskv_destroy(procset);
 	}
 
-	/* Free the arguments of the kthread, and the module reference. */
-	free(args, M_SLSMM);
+	/* Release the module reference. */
 	sls_finishop();
 
 	kthread_exit();

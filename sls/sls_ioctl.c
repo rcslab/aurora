@@ -288,6 +288,7 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 		thread_single(p, SINGLE_BOUNDARY);
 		PROC_UNLOCK(p);
 		ckptd_args->pcaller = p;
+		ckptd_args->nextepoch = NULL;
 	}
 
 	/* Create the daemon. */
@@ -309,7 +310,8 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	error = slsp_waitfor(slsp);
 	PROC_LOCK(p);
 	thread_single_end(p, SINGLE_BOUNDARY);
-	_PRELE(p);
+	if (slsp->slsp_attr.attr_period == 0)
+		_PRELE(p);
 	PROC_UNLOCK(p);
 
 	if (error != 0)

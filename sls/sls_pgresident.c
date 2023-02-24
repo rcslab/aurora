@@ -209,7 +209,7 @@ slspre_resident(struct slspart *slsp, struct file *fp)
 	int error;
 
 	/* The set of processes we are going to checkpoint. */
-	if (!slsckpt_prepare_state(slsp)) {
+	if (!slsckpt_prepare_state(slsp, NULL)) {
 		return (EBUSY);
 	}
 
