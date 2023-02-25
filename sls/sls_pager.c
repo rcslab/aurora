@@ -601,7 +601,8 @@ sls_pager_alloc(void *handle, vm_offset_t size, vm_prot_t prot,
 	 * we can reuse the field freely.
 	 */
 	oldid = obj->objid;
-	obj->objid = (uint64_t)handle;
+	if (handle != NULL)
+		obj->objid = (uint64_t)handle;
 
 	if (sls_pager_obj_init(obj) != 0)
 		goto error;
