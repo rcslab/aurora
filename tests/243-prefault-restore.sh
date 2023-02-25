@@ -27,7 +27,7 @@ fi
 ./array/array >/dev/null 2>/dev/null &
 PID="$!"
 
-slsctl partadd -o $OID -p -l -b slos
+slsctl partadd -o $OID -p -l -i -b slos
 slsctl attach -o $OID -p $PID
 
 slsctl checkpoint -o $OID

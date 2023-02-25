@@ -802,7 +802,7 @@ sls_partadd_default_osd(void)
 	partadd_args.attr.attr_mode = SLS_FULL;
 	partadd_args.attr.attr_target = SLS_OSD;
 	partadd_args.attr.attr_period = 0;
-	partadd_args.attr.attr_flags = 0;
+	partadd_args.attr.attr_flags = SLSATTR_IGNUNLINKED;
 	partadd_args.attr.attr_amplification = 1;
 
 	return (sls_partadd(&partadd_args));
@@ -825,7 +825,7 @@ sls_partadd_default_mem(void)
 	partadd_args.attr.attr_mode = SLS_FULL;
 	partadd_args.attr.attr_target = SLS_MEM;
 	partadd_args.attr.attr_period = 0;
-	partadd_args.attr.attr_flags = 0;
+	partadd_args.attr.attr_flags = SLSATTR_IGNUNLINKED;
 	partadd_args.attr.attr_amplification = 1;
 
 	return (sls_partadd(&partadd_args));
