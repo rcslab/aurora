@@ -288,6 +288,8 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 		thread_single(p, SINGLE_BOUNDARY);
 		PROC_UNLOCK(p);
 		ckptd_args->pcaller = p;
+	} else {
+		/* The checkpoint daemon cannot be waited on. */
 		ckptd_args->nextepoch = NULL;
 	}
 
