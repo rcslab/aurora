@@ -524,8 +524,8 @@ slsckpt_dataregion_fillckpt(struct slspart *slsp, struct proc *p,
 	SDT_PROBE1(
 	    sls, , slsckpt_dataregion_fillckpt, , "Object checkpointing");
 	/* Get the data and shadow it for the entry. */
-	error = slsvm_entry_shadow(
-	    p, sckpt_data->sckpt_shadowtable, entry, slsckpt_isfullckpt(slsp));
+	error = slsvm_entry_shadow(p, sckpt_data->sckpt_shadowtable, entry,
+	    slsckpt_isfullckpt(slsp), true);
 	if (error != 0)
 		return (error);
 

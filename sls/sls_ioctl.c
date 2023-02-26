@@ -113,7 +113,6 @@ sls_procadd(uint64_t oid, struct proc *p, bool metropolis)
 void
 sls_procremove(struct proc *p)
 {
-
 	SLS_ASSERT_LOCKED();
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 

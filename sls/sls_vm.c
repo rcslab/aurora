@@ -31,6 +31,7 @@
 int sls_objprotect = 0;
 SDT_PROBE_DEFINE(sls, , , procset_loop);
 
+#define SLS_TRACEBUF_SIZE (32768)
 #define SLS_PRECOPY_MAX (64)
 
 /*
@@ -401,7 +402,7 @@ slsvm_object_copy(struct proc *p, struct vm_map_entry *entry, vm_object_t obj)
  */
 int
 slsvm_entry_shadow(struct proc *p, struct slskv_table *table,
-    vm_map_entry_t entry, bool is_fullckpt)
+    vm_map_entry_t entry, bool is_fullckpt, bool protect)
 {
 	vm_object_t obj, vmshadow;
 	int error;
@@ -453,7 +454,8 @@ slsvm_entry_shadow(struct proc *p, struct slskv_table *table,
 		 * There is no race with the process here for the
 		 * entry, so there is no need to lock the map.
 		 */
-		slsvm_entry_protect(p, entry);
+		if (protect)
+			slsvm_entry_protect(p, entry);
 		entry->object.vm_object = vmshadow;
 		VM_OBJECT_WLOCK(vmshadow);
 		vm_object_clear_flag(vmshadow, OBJ_ONEMAPPING);
@@ -463,7 +465,8 @@ slsvm_entry_shadow(struct proc *p, struct slskv_table *table,
 	}
 
 	/* Shadow the object, retain it in Aurora. */
-	slsvm_entry_protect(p, entry);
+	if (protect)
+		slsvm_entry_protect(p, entry);
 	error = slsvm_object_shadow(table, &entry->object.vm_object);
 	if (error != 0)
 		return (error);
@@ -485,6 +488,39 @@ slsvm_entry_shadow(struct proc *p, struct slskv_table *table,
 	return (0);
 }
 
+static bool
+slsvm_tracebuf_invalidate(struct proc *p)
+{
+	pmap_t pmap = &p->p_vmspace->vm_pmap;
+	struct pmap_tracebuf *pmt = &pmap->pm_tracebuf;
+	pt_entry_t pbits;
+	pt_entry_t *pte;
+	int i;
+
+	if (pmt->pmt_size == 0) {
+		PMAP_LOCK(pmap);
+		pmap_tracebuf_init(pmap, SLS_TRACEBUF_SIZE);
+		PMAP_UNLOCK(pmap);
+		return (true);
+	}
+
+	if (pmt->pmt_index == pmt->pmt_size)
+		return (true);
+
+	for (i = 0; i < pmt->pmt_index; i++) {
+		pte = pmt->pmt_ptes[i];
+		pbits = *pte;
+
+		if ((pbits & PG_V) == 0)
+			continue;
+
+		*pte = (pbits & (~(PG_RW | PG_M))) | pg_nx;
+	}
+
+	pmt->pmt_index = 0;
+	return (false);
+}
+
 /*
  * Get all objects accessible through the VM entries of the checkpointed
  * process. This causes any CoW objects shared among memory maps to split into
@@ -493,16 +529,24 @@ slsvm_entry_shadow(struct proc *p, struct slskv_table *table,
 static int
 slsvm_proc_shadow(struct proc *p, struct slsckpt_data *sckpt, bool is_fullckpt)
 {
+	pmap_t pmap = &p->p_vmspace->vm_pmap;
 	struct vm_map_entry *entry, *header;
+	bool protect;
 	int error;
+
+	protect = slsvm_tracebuf_invalidate(p);
 
 	header = &p->p_vmspace->vm_map.header;
 	for (entry = header->next; entry != header; entry = entry->next) {
 		error = slsvm_entry_shadow(
-		    p, sckpt->sckpt_shadowtable, entry, is_fullckpt);
+		    p, sckpt->sckpt_shadowtable, entry, is_fullckpt, protect);
 		if (error != 0)
 			return (error);
 	}
+
+	PMAP_LOCK(pmap);
+	pmap_invalidate_all(pmap);
+	PMAP_UNLOCK(pmap);
 
 	return (0);
 }

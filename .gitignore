@@ -12,6 +12,7 @@ tests/testbench.log
 tests/ktrdump.log
 tests/array/array
 tests/compute/compute
+tests/delta/delta
 tests/fd/fd
 tests/fifo/fifo
 tests/fork/fork

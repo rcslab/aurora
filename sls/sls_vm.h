@@ -23,7 +23,7 @@
 	    ((obj->type == OBJT_DEFAULT) || (obj->type == OBJT_SWAP)))
 
 int slsvm_entry_shadow(struct proc *p, struct slskv_table *table,
-    vm_map_entry_t entry, bool is_fullckpt);
+    vm_map_entry_t entry, bool is_fullckpt, bool protect);
 void slsvm_objtable_collapsenew(
     struct slskv_table *objtable, struct slskv_table *newtable);
 void slsvm_objtable_collapse(
