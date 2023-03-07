@@ -81,6 +81,7 @@ slsvmspace_checkpoint(
 	struct vm_map_entry *entry;
 	struct slsvmspace slsvmspace;
 	vm_object_t obj;
+	uint64_t objid;
 	int error;
 
 	slsvmspace = (struct slsvmspace) {
@@ -113,11 +114,16 @@ slsvmspace_checkpoint(
 	/* Checkpoint all objects, including their ancestors. */
 	for (entry = vm_map->header.next; entry != &vm_map->header;
 	     entry = entry->next) {
-		for (obj = entry->object.vm_object; obj != NULL;
+		for (objid = 0, obj = entry->object.vm_object; obj != NULL;
 		     obj = obj->backing_object) {
+			if (objid == obj->objid)
+				continue;
+
 			error = slsvmobj_checkpoint(obj, sckpt_data);
 			if (error != 0)
 				return (error);
+
+			objid = obj->objid;
 		}
 	}
 
