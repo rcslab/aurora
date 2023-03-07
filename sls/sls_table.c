@@ -1160,8 +1160,7 @@ sls_writeobj_data(struct vnode *vp, vm_object_t obj, size_t offset)
  * Creates a record in the SLOS with the metadata held in the sbuf.
  * The record is contiguous, and only has data in the beginning.
  */
-static int
-sls_writemeta_slos(
+static int __attribute__((noinline)) sls_writemeta_slos(
     struct sls_record *rec, struct file **fpp, bool overwrite, uint64_t offset)
 {
 	struct sbuf *sb = rec->srec_sb;
@@ -1298,7 +1297,7 @@ out:
 	return (ret);
 }
 
-static int
+static int __attribute__((noinline))
 sls_write_slos_manifest(uint64_t oid, struct sbuf *sb)
 {
 	struct sls_record rec;
