@@ -1,5 +1,8 @@
 #!/bin/sh
 
+CKPTDIR="$HOME/fileckpt"
+OID=10101
+
 . aurora
 
 aursetup
@@ -12,18 +15,41 @@ fi
 PID=$!
 sleep 1
 
-slscheckpoint $PID
+# Clean up file descriptor
+rm -rf $CKPTDIR
+mkdir $CKPTDIR
+
+slsctl partadd file -o $OID -f $CKPTDIR
+if [ $? -ne 0 ];
+then
+    echo "Partadd failed"
+    aurteardown
+    rmdir $CKPTDIR
+    exit 1
+fi
+
+slsctl attach -p $PID -o $OID
+if [ $? -ne 0 ];
+then
+    echo "Attach failed"
+    aurteardown
+    rmdir $CKPTDIR
+    exit 1
+fi
+
+slsctl checkpoint -o $OID -r
 if [ $? -ne 0 ];
 then
     echo Checkpoint failed
     aurteardown
+    rmdir $CKPTDIR
     exit 1
 fi
 
 sleep 1
 killandwait $PID
 
-slsrestore
+slsctl restore -o $OID &
 # Killing the workload using a signal makes the restore exit with 3.
 if [ $? -ne 0 ];
 then
@@ -48,5 +74,8 @@ then
     echo "Process exited with $EXIT"
     exit 1
 fi
+
+# Clean up file descriptor
+rm -r $CKPTDIR
 
 exit 0

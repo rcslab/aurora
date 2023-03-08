@@ -50,7 +50,7 @@ stress_aurora()
 {
 
 	aursetup
-	$AURORACTL partadd -o $OID -d -t $PERIOD -b $BACKEND 
+	$AURORACTL partadd $BACKEND -o $OID -d -t $PERIOD 
 
 	db_bench baseline --sync=false --disable_wal=true &
 	FUNC_PID="$!"

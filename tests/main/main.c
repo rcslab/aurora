@@ -73,7 +73,7 @@ checkpoint(pid_t pid, int period)
 		.attr_amplification = 1,
 	};
 
-	error = sls_partadd(oid, attr);
+	error = sls_partadd(oid, attr, -1);
 	if (error != 0) {
 		fprintf(stderr, "sls_partadd failed with %d\n", error);
 		return (error);

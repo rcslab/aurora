@@ -98,7 +98,7 @@ main(int argc, char *argv[])
 		.attr_period = 0,
 		.attr_flags = SLSATTR_IGNUNLINKED,
 	};
-	error = sls_partadd(OID, attr);
+	error = sls_partadd(OID, attr, -1);
 	if (error != 0) {
 		fprintf(stderr, "sls_partadd returned %d\n", error);
 		exit(0);

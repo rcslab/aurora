@@ -66,7 +66,7 @@ slsosdcheckpoint()
 
 slslazycheckpoint()
 {
-    slsctl partadd -o $2 -l -i
+    slsctl partadd slos -o $2 -l -i
     slsctl attach -p $1 -o $2
     slsctl checkpoint -o $2 -r
 }

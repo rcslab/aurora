@@ -293,7 +293,7 @@ main(int argc, char **argv)
 				args[4] = oidstr;
 			}
 
-			error = sls_partadd(oid, attr);
+			error = sls_partadd(oid, attr, -1);
 			if (error != 0) {
 				perror("sls_partadd");
 				exit(EX_OSERR);

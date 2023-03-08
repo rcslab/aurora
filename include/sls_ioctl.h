@@ -12,6 +12,7 @@ extern "C" {
 #define SLS_OIDRANGE ((1 << 16) - 1)
 #define SLS_OIDMIN (1)
 #define SLS_OIDMAX ((SLS_OIDMIN) + (SLS_OIDRANGE))
+#define SLOS_OBJOFF (64)
 
 /* The attributes of a process in the SLS. */
 struct sls_attr {
@@ -49,6 +50,7 @@ struct sls_attach_args {
 struct sls_partadd_args {
 	uint64_t oid;	      /* OID of the new partition. */
 	struct sls_attr attr; /* Checkpointing parameters for the process */
+	int backendfd;	      /* File descriptor for the backend */
 };
 
 struct sls_partdel_args {
@@ -114,7 +116,9 @@ struct sls_pgresident_args {
 #define SLS_FILE 0    /* Input/output is a file */
 #define SLS_MEM 1     /* Input/output is an in-memory dump */
 #define SLS_OSD 2     /* Input/output is a single-level store */
-#define SLS_TARGETS 3 /* Number of backends */
+#define SLS_SOCKSND 3 /* Input is a socket to a remote server */
+#define SLS_SOCKRCV 4 /* Output is a socket to a remote server */
+#define SLS_TARGETS 5 /* Number of backends */
 
 /* Control flags for partitions */
 #define SLSATTR_IGNUNLINKED 0x1 /* Ignore unlinked files */
@@ -123,6 +127,7 @@ struct sls_pgresident_args {
 #define SLSATTR_PREFAULT 0x8	/* Prefault popular pages */
 #define SLSATTR_PRECOPY 0x10	/* Eagerly copy pages at restore time */
 #define SLSATTR_DELTAREST 0x20	/* Delta restores */
+#define SLSATTR_NOCKPT 0x40	/* Partition is not checkpointable */
 
 #define SLSATTR_FLAGISSET(attr, flag) (((attr).attr_flags & flag) != 0)
 #define SLSATTR_ISIGNUNLINKED(attr) \
@@ -132,6 +137,7 @@ struct sls_pgresident_args {
 #define SLSATTR_ISPREFAULT(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_PREFAULT))
 #define SLSATTR_ISPRECOPY(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_PRECOPY))
 #define SLSATTR_ISDELTAREST(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_DELTAREST))
+#define SLSATTR_ISNOCKPT(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_NOCKPT))
 
 #ifdef __cplusplus
 }

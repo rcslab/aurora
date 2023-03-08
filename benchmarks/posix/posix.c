@@ -265,7 +265,7 @@ main(int argc, char *argv[])
 		.attr_mode = SLS_DELTA,
 		.attr_period = 0,
 	};
-	error = sls_partadd(oid, attr);
+	error = sls_partadd(oid, attr, -1);
 	if (error != 0) {
 		fprintf(stderr, "sls_partadd returned %d\n", error);
 		teardown_and_exit();

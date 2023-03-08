@@ -1,4 +1,4 @@
-SUBDIR = slsctl newfs_sls slsdb
+SUBDIR = slsctl newfs_sls slsdb server
 
 BINDIR=/sbin
 .MAKE.EXPORTED=BINDIR

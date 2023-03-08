@@ -55,6 +55,7 @@ tests/pgresident
 scripts/config.sh
 
 tools/newfs_sls/newfs_sls
+tools/server/server
 tools/slsctl/slsctl
 tools/slsdb/slsdb
 

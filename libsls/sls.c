@@ -88,13 +88,15 @@ sls_attach(uint64_t oid, uint64_t pid)
  * Add an empty partition to the SLS.
  */
 int
-sls_partadd(uint64_t oid, const struct sls_attr attr)
+sls_partadd(uint64_t oid, const struct sls_attr attr, int backendfd)
 {
 	struct sls_partadd_args args;
 	int ret;
 
 	args.oid = oid;
 	args.attr = attr;
+	args.backendfd = backendfd;
+
 	if (sls_ioctl(SLS_PARTADD, &args) != 0) {
 		perror("sls_partadd");
 		return (-1);

@@ -97,9 +97,6 @@ _Static_assert(sizeof(struct slos_sb) < DEV_BSIZE, "Block size wrong");
 #define SLOS_BSIZE(slos) ((&slos)->slos_sb->sb_bsize)
 #define SLOS_DEVBSIZE(slos) ((&slos)->slos_sb->sb_ssize)
 
-/* The offset size in blocks in the VM object inodes where the data starts */
-#define SLOS_OBJOFF (64)
-
 /* Turns an SLS ID to an identifier suitable for the SLOS. */
 #define OIDTOSLSID(OID) ((int)(OID & INT_MAX))
 

@@ -19,7 +19,7 @@ slsunmount 2>&1
 PID=$!
 sleep 1
 
-slsctl partadd -o $OID
+slsctl partadd slos -o $OID
 RET=$?
 if [ $RET -ne 0 ];
 then
