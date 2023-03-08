@@ -324,14 +324,24 @@ slsvm_objtable_collapse(
 static void
 slsvm_entry_protect(struct proc *p, struct vm_map_entry *entry)
 {
+	pmap_t pmap = &p->p_vmspace->vm_pmap;
+	vm_object_t obj = entry->object.vm_object;
+	vm_page_t m;
+
 	KASSERT(
 	    entry->wired_count == 0, ("wired count is %d", entry->wired_count));
 
-	if (((entry->eflags & MAP_ENTRY_NEEDS_COPY) == 0) &&
-	    ((entry->protection & VM_PROT_WRITE) != 0)) {
-		pmap_protect(&p->p_vmspace->vm_pmap, entry->start, entry->end,
-		    entry->protection & ~VM_PROT_WRITE);
+	if (obj->resident_page_count == 0)
+		return;
+
+	PMAP_LOCK(pmap);
+	TAILQ_FOREACH (m, &obj->memq, listq) {
+		vm_offset_t addr = entry->start - entry->offset +
+		    IDX_TO_OFF(m->pindex);
+		pmap_protect_page(
+		    pmap, addr, entry->protection & ~VM_PROT_WRITE);
 	}
+	PMAP_UNLOCK(pmap);
 }
 
 void
