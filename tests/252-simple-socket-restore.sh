@@ -23,7 +23,6 @@ if [ $? -ne 0 ];
 then
     echo "Recv partadd failed"
     aurteardown
-    rmdir $CKPTDIR
     exit 1
 fi
 
@@ -32,7 +31,6 @@ if [ $? -ne 0 ];
 then
     echo "Send partadd failed"
     aurteardown
-    rmdir $CKPTDIR
     exit 1
 fi
 
@@ -41,7 +39,6 @@ if [ $? -ne 0 ];
 then
     echo "Attach failed"
     aurteardown
-    rmdir $CKPTDIR
     exit 1
 fi
 
@@ -50,7 +47,6 @@ if [ $? -ne 0 ];
 then
     echo Checkpoint failed
     aurteardown
-    rmdir $CKPTDIR
     exit 1
 fi
 

@@ -1,9 +1,25 @@
 #!/bin/sh
 
-CKPTDIR="$HOME/fileckpt"
+CKPTDIR="/ckptdir"
 OID=10101
 
 . aurora
+
+# We need to store the checkpoints in a file system like FFS 
+# that has ioctl() calls for seeking holes and data.
+ffssetup()
+{
+	MD=`mdconfig -a -t malloc -s 1g`
+	newfs "/dev/$MD"
+	mount -t ufs "/dev/$MD" $CKPTDIR 
+}
+
+ffsteardown()
+{
+	umount $CKPTDIR
+	mdconfig -d -u $MD
+    	rm -r $CKPTDIR
+}
 
 aursetup
 if [ $? -ne 0 ]; then
@@ -11,20 +27,23 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# Clean up mount directory
+rm -rf $CKPTDIR
+mkdir $CKPTDIR
+
+ffssetup
+
 ./array/array > /dev/null 2> /dev/null &
 PID=$!
 sleep 1
 
-# Clean up file descriptor
-rm -rf $CKPTDIR
-mkdir $CKPTDIR
 
 slsctl partadd file -o $OID -f $CKPTDIR
 if [ $? -ne 0 ];
 then
     echo "Partadd failed"
     aurteardown
-    rmdir $CKPTDIR
+    ffsteardown	
     exit 1
 fi
 
@@ -33,7 +52,7 @@ if [ $? -ne 0 ];
 then
     echo "Attach failed"
     aurteardown
-    rmdir $CKPTDIR
+    ffsteardown	
     exit 1
 fi
 
@@ -42,7 +61,7 @@ if [ $? -ne 0 ];
 then
     echo Checkpoint failed
     aurteardown
-    rmdir $CKPTDIR
+    ffsteardown	
     exit 1
 fi
 
@@ -54,6 +73,8 @@ slsctl restore -o $OID &
 if [ $? -ne 0 ];
 then
     echo Restore failed
+    aurteardown
+    ffsteardown	
     exit 1
 fi
 
@@ -75,7 +96,6 @@ then
     exit 1
 fi
 
-# Clean up file descriptor
-rm -r $CKPTDIR
+ffsteardown	
 
 exit 0

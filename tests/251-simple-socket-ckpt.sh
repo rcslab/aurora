@@ -1,6 +1,6 @@
 #!/bin/sh
 
-CKPTDIR="/slsnet"
+CKPTDIR="/ckptdir"
 SOCKOID=10101
 FILEOID=10102
 PORT=5040
@@ -8,19 +8,38 @@ ADDR="127.0.0.1"
 
 . aurora
 
+# See test 250 for details.
+ffssetup()
+{
+	MD=`mdconfig -a -t malloc -s 1g`
+	newfs "/dev/$MD"
+	mount -t ufs "/dev/$MD" $CKPTDIR 
+}
+
+ffsteardown()
+{
+	umount $CKPTDIR
+	mdconfig -d -u $MD
+	rm -r $CKPTDIR
+}
+
+
 aursetup
 if [ $? -ne 0 ]; then
     echo "Failed to set up Aurora"
     exit 1
 fi
 
-./array/array > /dev/null 2> /dev/null &
-PID=$!
-sleep 1
 
 # Clean up file descriptor
 rm -rf $CKPTDIR
-mkdir $CKPTDIR
+mkdir -p $CKPTDIR
+
+ffssetup
+
+./array/array > /dev/null 2> /dev/null &
+PID=$!
+sleep 1
 
 # Start up the server
 $SRCROOT/tools/server/server $CKPTDIR &
@@ -32,7 +51,7 @@ if [ $? -ne 0 ];
 then
     echo "Partadd failed"
     aurteardown
-    rmdir $CKPTDIR
+    ffsteardown
     exit 1
 fi
 
@@ -41,7 +60,7 @@ if [ $? -ne 0 ];
 then
     echo "Attach failed"
     aurteardown
-    rmdir $CKPTDIR
+    ffsteardown
     exit 1
 fi
 
@@ -50,7 +69,7 @@ if [ $? -ne 0 ];
 then
     echo Checkpoint failed
     aurteardown
-    rmdir $CKPTDIR
+    ffsteardown
     exit 1
 fi
 
@@ -87,7 +106,6 @@ then
     exit 1
 fi
 
-# Clean up file descriptor
-rm -r $CKPTDIR
+ffsteardown
 
 exit 0
