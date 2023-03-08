@@ -2,6 +2,8 @@
 #include <sys/param.h>
 #include <sys/bio.h>
 #include <sys/buf.h>
+#include <sys/caprights.h>
+#include <sys/capsicum.h>
 #include <sys/dirent.h>
 #include <sys/filio.h>
 #include <sys/kernel.h>
@@ -12,6 +14,7 @@
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/stat.h>
+#include <sys/syscallsubr.h>
 #include <sys/ucred.h>
 #include <sys/unistd.h>
 #include <sys/vnode.h>
@@ -39,6 +42,9 @@
 SDT_PROVIDER_DEFINE(slos);
 SDT_PROBE_DEFINE3(slos, , , slsfs_deviceblk, "uint64_t", "uint64_t", "int");
 SDT_PROBE_DEFINE3(slos, , , slsfs_vnodeblk, "uint64_t", "uint64_t", "int");
+
+/* 5 GiB */
+static const size_t MAX_WAL_SIZE = 5368709000;
 
 static int
 slsfs_inactive(struct vop_inactive_args *args)
@@ -117,8 +123,6 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 		slos_vpfree(svp->sn_slos, svp);
 	}
 
-	DEBUG1("Done reclaiming vnode %p", vp);
-
 	return (0);
 }
 
@@ -195,6 +199,10 @@ slsfs_open(struct vop_open_args *args)
 	struct vnode *vp = args->a_vp;
 	struct slos_node *slsvp = SLSVP(vp);
 	vnode_create_vobject(vp, SLSVPSIZ(slsvp), args->a_td);
+
+	if (SLS_ISWAL(vp)) {
+		slsfs_mark_wal(vp);
+	}
 
 	return (0);
 }
@@ -1224,6 +1232,9 @@ slsfs_setattr(struct vop_setattr_args *args)
 			return (0);
 		}
 
+		if (SLS_ISWAL(vp))
+			return (EPERM);
+
 		error = slos_truncate(vp, vap->va_size);
 		if (error) {
 			return (error);
@@ -1724,14 +1735,19 @@ slsfs_mountsnapshot(int index)
 static int
 slsfs_ioctl(struct vop_ioctl_args *ap)
 {
+	uint64_t *numextentsp;
+	uint64_t *checks;
+	int fd;
+	int error;
+
 	struct vnode *vp = ap->a_vp;
+	struct thread *td = curthread;
 	u_long com = ap->a_command;
 	struct slos_node *svp = SLSVP(vp);
 	struct slos_rstat *st = NULL;
 	struct slos_extent *extents;
-	uint64_t *numextentsp;
-	uint64_t *checks;
 	struct slsfs_getsnapinfo *info = NULL;
+	struct slsfs_create_wal_args *wal_args = NULL;
 
 	switch (com) {
 	case SLS_NUM_EXTENTS:
@@ -1763,6 +1779,13 @@ slsfs_ioctl(struct vop_ioctl_args *ap)
 		checks = (uint64_t *)ap->a_data;
 		*checks = checkpoints;
 		return (0);
+
+	case SLSFS_CREATE_WAL:
+		wal_args = (struct slsfs_create_wal_args *)ap->a_data;
+		error = _slsfs_create_wal(wal_args->path, wal_args->flags,
+		    wal_args->mode, wal_args->size, &fd);
+		td->td_retval[0] = fd;
+		return (error);
 
 	case FIOSEEKDATA: // Fallthrough
 	case FIOSEEKHOLE:
@@ -1940,7 +1963,307 @@ slsfs_pathconf(struct vop_pathconf_args *args)
 	return (error);
 }
 
-struct vop_vector slfs_fifoops = {
+static int
+slsfs_wal_strategy(struct vop_strategy_args *args)
+{
+	struct vnode *vp = args->a_vp;
+	struct slos *slos = VPSLOS(vp);
+	struct buf *bp = args->a_bp;
+	KASSERT(SLS_ISWAL(vp), ("Using sls wal strategy not on a WAL object"));
+
+	g_vfs_strategy(&slos->slos_vp->v_bufobj, bp);
+	return 0;
+}
+
+static int
+slsfs_retrieve_wal_buf(struct vnode *vp, uint64_t offset, uint64_t size,
+    enum uio_rw rw, int gbflag, struct buf **bp)
+{
+	struct buf *tempbuf = NULL;
+	struct slos_node *svp = SLSVP(vp);
+	struct slos_diskptr ptr = svp->sn_ino.ino_wal_segment;
+	size_t blksize = IOSIZE(svp);
+	uint64_t lbno = (offset / blksize);
+	uint64_t pbno = ptr.offset + (offset / blksize);
+
+	tempbuf = getblk(vp, lbno, blksize, 0, 0, gbflag);
+	if (tempbuf == NULL) {
+		*bp = NULL;
+		return (EIO);
+	}
+
+	/* Check if this is a new block */
+	if (offset > roundup(SLSINO(SLSVP(vp)).ino_size, blksize)) {
+		vfs_bio_clrbuf(tempbuf);
+	}
+	tempbuf->b_blkno = pbno;
+	tempbuf->b_iooffset = dbtob(tempbuf->b_blkno);
+	*bp = tempbuf;
+
+	return (0);
+}
+
+/*
+ * Never mark a WAL section as dirty and it will always be skipped, easy to do
+ * if we have our own buffer look up etc.
+ */
+static int
+slsfs_wal_write(struct vop_write_args *args)
+{
+	struct buf *bp;
+	int xfersize;
+	size_t filesize;
+	uint64_t off;
+	int error = 0;
+	int gbflag = 0;
+
+	struct vnode *vp = args->a_vp;
+	struct slos_node *svp = SLSVP(vp);
+	size_t blksize = IOSIZE(svp);
+	struct uio *uio = args->a_uio;
+	int ioflag = args->a_ioflag;
+
+	filesize = svp->sn_ino.ino_size;
+
+	/* Check if full */
+	if (uio->uio_offset < 0) {
+		DEBUG1("Offset write at %lx", uio->uio_offset);
+		return (EINVAL);
+	}
+	if (uio->uio_resid == 0) {
+		return (0);
+	}
+
+	switch (vp->v_type) {
+	case VREG:
+		break;
+	case VDIR:
+		return (EISDIR);
+	case VLNK:
+		break;
+	default:
+		panic("bad file type %d", vp->v_type);
+	}
+
+	if (ioflag & IO_APPEND) {
+		uio->uio_offset = filesize;
+	}
+
+	/* If  we are larger then the WAL segment allocated then dont write */
+	if ((uio->uio_offset + uio->uio_resid) > SLS_WALSIZE(vp)) {
+		return (ENOMEM);
+	}
+
+	if (uio->uio_offset + uio->uio_resid > filesize) {
+		svp->sn_ino.ino_size = uio->uio_offset + uio->uio_resid;
+		vnode_pager_setsize(vp, svp->sn_ino.ino_size);
+		slos_update(svp);
+	}
+
+	while (uio->uio_resid) {
+		/*
+		 * Grab the key thats closest to offset, but not over it
+		 * Mask out the lower order bits so we just have the block
+		 */
+		if (!checksum_enabled) {
+			gbflag |= GB_UNMAPPED;
+		}
+
+		error = slsfs_retrieve_wal_buf(vp, uio->uio_offset,
+		    uio->uio_resid, uio->uio_rw, gbflag, &bp);
+		if (error) {
+			DEBUG1("Problem getting buffer for write %d", error);
+			return (error);
+		}
+
+		off = uio->uio_offset - (bp->b_lblkno * blksize);
+		KASSERT(off < bp->b_bcount,
+		    ("Offset should inside buf, %p", bp));
+		xfersize = omin(uio->uio_resid, bp->b_bcount - off);
+
+		KASSERT(xfersize != 0, ("No 0 uio moves slsfs write"));
+		KASSERT(xfersize <= uio->uio_resid, ("This should neveroccur"));
+		if (buf_mapped(bp)) {
+			error = vn_io_fault_uiomove((char *)bp->b_data + off,
+			    xfersize, uio);
+		} else {
+			error = vn_io_fault_pgmove(bp->b_pages, off, xfersize,
+			    uio);
+		}
+
+		vfs_bio_set_flags(bp, ioflag);
+
+		/* Taken from FFS code on how they deal with specific flags */
+		if (ioflag & IO_SYNC) {
+			bwrite(bp);
+		} else if (ioflag & IO_DIRECT) {
+			bp->b_flags |= B_CLUSTEROK;
+			bawrite(bp);
+		} else {
+			bp->b_flags |= B_CLUSTEROK;
+			bdwrite(bp);
+		}
+
+		if (error || xfersize == 0)
+			break;
+	}
+
+	return (error);
+}
+
+static int
+slsfs_wal_read(struct vop_read_args *args)
+{
+	struct slos_inode *sivp;
+	struct buf *bp;
+	size_t filesize;
+	uint64_t off;
+	size_t resid;
+	size_t toread;
+	int gbflag = 0;
+	int error = 0;
+
+	struct vnode *vp = args->a_vp;
+	struct slos_node *svp = SLSVP(vp);
+	size_t blksize = IOSIZE(svp);
+	struct uio *uio = args->a_uio;
+
+	svp = SLSVP(vp);
+	sivp = &SLSINO(svp);
+	filesize = sivp->ino_size;
+
+	// Check if full
+	if (uio->uio_offset < 0)
+		return (EINVAL);
+	if (uio->uio_resid == 0)
+		return (0);
+
+	if (uio->uio_offset >= filesize) {
+		return (0);
+	}
+
+	resid = omin(uio->uio_resid, (filesize - uio->uio_offset));
+#ifdef VERBOSE
+	DEBUG3("Reading filesize %lu - %lu, %lu", SLSVP(vp)->sn_pid, filesize,
+	    uio->uio_offset);
+#endif
+	gbflag |= GB_UNMAPPED;
+
+	while (resid > 0) {
+		error = slsfs_retrieve_wal_buf(vp, uio->uio_offset, resid,
+		    uio->uio_rw, gbflag, &bp);
+		if (error) {
+			DEBUG1("Problem getting buffer for write %d", error);
+			return (error);
+		}
+
+		off = uio->uio_offset - (bp->b_lblkno * blksize);
+		toread = omin(resid, bp->b_bcount - off);
+
+		/* One thing thats weird right now is our inodes and meta data
+		 * is currently not
+		 * in the buf cache, so we don't really have to worry about
+		 * dirtying those buffers,
+		 * but later we will have to dirty them.
+		 */
+		KASSERT(toread != 0, ("Should not occur"));
+		if (buf_mapped(bp)) {
+			error = vn_io_fault_uiomove((char *)bp->b_data + off,
+			    toread, uio);
+		} else {
+			error = vn_io_fault_pgmove(bp->b_pages, off, toread,
+			    uio);
+		}
+		brelse(bp);
+		resid -= toread;
+		if (error || toread == 0)
+			break;
+	}
+
+	return (error);
+}
+
+void
+slsfs_mark_wal(struct vnode *vp)
+{
+	vp->v_op = &slsfs_wal_vnodeops;
+}
+
+static int
+slsfs_wal_allocate_extent(struct vnode *vp, size_t size)
+{
+	struct slos_node *svp;
+	struct slos_inode *ino;
+	struct slos *slos;
+	int error;
+
+	svp = SLSVP(vp);
+	ino = &svp->sn_ino;
+	slos = VPSLOS(vp);
+
+	error = slos_blkalloc(slos, size, &ino->ino_wal_segment);
+	if (error != 0)
+		return error;
+
+	svp->sn_ino.ino_size = 0;
+	slos_update(svp);
+
+	return 0;
+}
+
+static int
+slsfs_wal_fsync(struct vop_fsync_args *ap)
+{
+	return (vn_fsync_buf(ap->a_vp, MNT_WAIT));
+}
+
+int
+_slsfs_create_wal(char *path, int flags, int mode, size_t size, int *ret)
+{
+	struct file *fp;
+	struct vnode *vp;
+	int error;
+	int fd = -1;
+
+	struct thread *td = curthread;
+	if (size == 0) {
+		*ret = fd;
+		return EINVAL;
+	}
+
+	if (size > MAX_WAL_SIZE) {
+		return EINVAL;
+	}
+
+	error = kern_openat(td, AT_FDCWD, path, UIO_SYSSPACE, flags, mode);
+	if (error != 0) {
+		*ret = fd;
+		return (error);
+	}
+
+	fd = td->td_retval[0];
+	error = fget(td, fd, &cap_no_rights, &fp);
+	if (error != 0) {
+		*ret = fd;
+		return (error);
+	}
+
+	vp = fp->f_vnode;
+	fdrop(fp, td);
+
+	slsfs_mark_wal(vp);
+
+	error = slsfs_wal_allocate_extent(vp, size);
+	if (error != 0) {
+		*ret = fd;
+		return (error);
+	}
+
+	*ret = fd;
+	return 0;
+}
+
+struct vop_vector slsfs_fifoops = {
 	.vop_default = &fifo_specops,
 	.vop_fsync = VOP_PANIC,
 	.vop_access = slsfs_access,
@@ -1953,7 +2276,7 @@ struct vop_vector slfs_fifoops = {
 	.vop_write = VOP_PANIC,
 };
 
-struct vop_vector slfs_vnodeops = {
+struct vop_vector slsfs_vnodeops = {
 	.vop_default = &default_vnodeops,
 	.vop_fsync = slsfs_fsync,
 	.vop_read = slsfs_read,
@@ -1984,6 +2307,41 @@ struct vop_vector slfs_vnodeops = {
 	.vop_rmdir = slsfs_rmdir,
 	.vop_setattr = slsfs_setattr,
 	.vop_strategy = slsfs_strategy,
+	.vop_symlink = slsfs_symlink,
+	.vop_whiteout = VOP_PANIC, // TODO
+};
+
+struct vop_vector slsfs_wal_vnodeops = {
+	.vop_default = &default_vnodeops,
+	.vop_fsync = slsfs_wal_fsync,
+	.vop_read = slsfs_wal_read,
+	.vop_reallocblks = VOP_PANIC, // TODO
+	.vop_write = slsfs_wal_write,
+	.vop_access = slsfs_access,
+	.vop_bmap = vop_stdbmap,
+	.vop_cachedlookup = slsfs_lookup,
+	.vop_close = slsfs_close,
+	.vop_create = slsfs_create,
+	.vop_getattr = slsfs_getattr,
+	.vop_inactive = slsfs_inactive,
+	.vop_ioctl = slsfs_ioctl,
+	.vop_link = slsfs_link,
+	.vop_lookup = vfs_cache_lookup,
+	.vop_pathconf = slsfs_pathconf,
+	.vop_markatime = slsfs_markatime,
+	.vop_mkdir = slsfs_mkdir,
+	.vop_mknod = slsfs_mknod,
+	.vop_open = slsfs_open,
+	.vop_poll = vop_stdpoll,
+	.vop_print = slsfs_print,
+	.vop_readdir = slsfs_readdir,
+	.vop_readlink = slsfs_readlink,
+	.vop_reclaim = slsfs_reclaim,
+	.vop_remove = slsfs_remove,
+	.vop_rename = slsfs_rename,
+	.vop_rmdir = slsfs_rmdir,
+	.vop_setattr = slsfs_setattr,
+	.vop_strategy = slsfs_wal_strategy,
 	.vop_symlink = slsfs_symlink,
 	.vop_whiteout = VOP_PANIC, // TODO
 };

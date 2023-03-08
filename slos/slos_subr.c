@@ -3,6 +3,7 @@
 #include <sys/systm.h>
 #include <sys/bio.h>
 #include <sys/buf.h>
+#include <sys/bufobj.h>
 #include <sys/dirent.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
@@ -123,7 +124,7 @@ slos_setupfakedev(struct slos *slos, struct slos_node *vp)
 	int error;
 
 	error = getnewvnode("SLSFS Fake VNode", slos->slsfs_mount,
-	    &slfs_vnodeops, &vp->sn_fdev);
+	    &slsfs_vnodeops, &vp->sn_fdev);
 	if (error) {
 		panic("Problem getting fake vnode for device\n");
 	}
@@ -230,6 +231,10 @@ int
 slos_bufsync(struct bufobj *bufobj, int waitfor)
 {
 	/* Add a check of whether it's dirty. */
+	struct vnode *vp = bo2vnode(bufobj);
+	if (SLS_ISWAL(vp))
+		return (bufsync(bufobj, waitfor));
+
 	return (slos_sync_vp(bo2vnode(bufobj), 0));
 }
 

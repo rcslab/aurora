@@ -359,6 +359,9 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 	ino.ino_blocks = 0;
 	ino.ino_rstat.type = 0;
 	ino.ino_rstat.len = 0;
+	ino.ino_wal_segment.size = 0;
+	ino.ino_wal_segment.offset = -1;
+	ino.ino_wal_segment.epoch = -1;
 	error = slos_blkalloc(slos, BLKSIZE(slos), &ptr);
 	if (error) {
 		return (error);
@@ -505,6 +508,8 @@ slos_update(struct slos_node *svp)
 		return (error);
 	}
 
+	KASSERT(!SLS_ISWAL(slos.slsfs_inodes),
+	    ("slsfs_inodes should not be marked as a WAL object"));
 	memcpy(bp->b_data, &svp->sn_ino, sizeof(svp->sn_ino));
 	slsfs_bdirty(bp);
 	SLSVP(slos.slsfs_inodes)->sn_status |= SLOS_DIRTY;

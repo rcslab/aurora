@@ -79,6 +79,8 @@ struct slos_inode {
 	uint64_t ino_blocks; /* Number of on IO blocks */
 	struct slos_rstat
 	    ino_rstat; /* Type and length of the records held in the node */
+	struct slos_diskptr ino_wal_segment; /* If the inode is a WAL, location
+						of the WAL segment */
 };
 
 /* In-memory SLOS inode. */

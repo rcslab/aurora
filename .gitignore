@@ -49,6 +49,7 @@ tests/udplisten/udplisten
 tests/unixlisten/unixlisten
 tests/unlink/unlink
 tests/wal/wal
+tests/walfd/walfd
 tests/pgresident
 
 scripts/config.sh

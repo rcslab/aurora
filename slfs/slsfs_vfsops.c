@@ -1189,9 +1189,11 @@ slsfs_init_vnode(struct vnode *vp, uint64_t ino)
 	default:
 		vp->v_type = IFTOVT(mp->sn_ino.ino_mode);
 	}
+	SLSVP(vp)->sn_ino.ino_wal_segment.size = 0;
+	SLSVP(vp)->sn_ino.ino_wal_segment.offset = -1;
 
 	if (vp->v_type == VFIFO) {
-		vp->v_op = &slfs_fifoops;
+		vp->v_op = &slsfs_fifoops;
 	}
 
 	vnode_create_vobject(vp, 0, curthread);
@@ -1235,7 +1237,7 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	}
 
 	/* Get a new blank vnode. */
-	error = getnewvnode("slsfs", mp, &slfs_vnodeops, &vp);
+	error = getnewvnode("slsfs", mp, &slsfs_vnodeops, &vp);
 	if (error) {
 		DEBUG("Problem getting new inode");
 		*vpp = NULL;
@@ -1295,7 +1297,7 @@ slsfs_sync(struct mount *mp, int waitfor)
 	return (0);
 }
 
-static struct vfsops slfs_vfsops = { .vfs_init = slsfs_init,
+static struct vfsops slsfs_vfsops = { .vfs_init = slsfs_init,
 	.vfs_uninit = slsfs_uninit,
 	.vfs_root = slsfs_root,
 	.vfs_statfs = slsfs_statfs,
@@ -1304,5 +1306,5 @@ static struct vfsops slfs_vfsops = { .vfs_init = slsfs_init,
 	.vfs_vget = slsfs_vget,
 	.vfs_sync = slsfs_sync };
 
-VFS_SET(slfs_vfsops, slsfs, 0);
+VFS_SET(slsfs_vfsops, slsfs, 0);
 MODULE_VERSION(slsfs, 0);

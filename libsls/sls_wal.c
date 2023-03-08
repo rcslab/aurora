@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <libgen.h>
 #include <pthread.h>
 #include <stdalign.h>
 #include <stdatomic.h>
@@ -10,8 +11,10 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "slos.h"
 #include "sls.h"
 #include "sls_wal.h"
+#include "slsfs.h"
 
 /* A single block of written memory in the log. */
 struct sls_wal_block {
@@ -248,4 +251,35 @@ sls_wal_close(struct sls_wal *wal)
 
 	errno = error;
 	return (ret);
+}
+
+int
+slsfs_create_wal(char *path, int flags, int mode, size_t size)
+{
+	char *dir;
+	int pfd;
+	int walfd;
+
+	char dupstr[PATH_MAX];
+	struct slsfs_create_wal_args args;
+
+	memset(args.path, '\0', PATH_MAX);
+	strncpy(args.path, path, strlen(path));
+	args.size = size;
+	args.mode = mode;
+	args.flags = flags | O_CREAT;
+
+	memset(dupstr, '\0', PATH_MAX);
+	strncpy(dupstr, path, strlen(path));
+
+	dir = dirname(dupstr);
+	if (dir == NULL) {
+		return (EINVAL);
+	}
+
+	pfd = open(dir, O_RDONLY);
+	walfd = ioctl(pfd, SLSFS_CREATE_WAL, &args);
+	close(pfd);
+
+	return (walfd);
 }
