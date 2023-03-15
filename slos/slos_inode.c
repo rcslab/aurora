@@ -21,6 +21,8 @@
 #include <slsfs.h>
 #include <slsfs_buf.h>
 
+#include <btree.h>
+
 #include "debug.h"
 #include "slos_alloc.h"
 #include "slos_subr.h"
@@ -360,8 +362,8 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 	ino.ino_rstat.type = 0;
 	ino.ino_rstat.len = 0;
 	ino.ino_wal_segment.size = 0;
-	ino.ino_wal_segment.offset = -1;
-	ino.ino_wal_segment.epoch = -1;
+	ino.ino_wal_segment.offset = 0;
+	ino.ino_wal_segment.epoch = 0;
 	error = slos_blkalloc(slos, BLKSIZE(slos), &ptr);
 	if (error) {
 		return (error);
@@ -526,6 +528,7 @@ initialize_inode(struct slos *slos, uint64_t pid, diskptr_t *p)
 	int error;
 
 	struct slos_inode ino = {};
+	struct dnode *dn;
 	// We can use the fake device from the allocators they should be inited
 	struct vnode *fdev = slos->slos_alloc.a_offset->sn_fdev;
 
@@ -552,6 +555,8 @@ initialize_inode(struct slos *slos, uint64_t pid, diskptr_t *p)
 	MPASS(bp);
 
 	vfs_bio_clrbuf(bp);
+	dn = (struct dnode *)bp->b_data;
+	dn->dn_magic = DN_MAGIC;
 	bwrite(bp);
 
 	return (0);

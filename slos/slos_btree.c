@@ -358,6 +358,8 @@ fnode_first_greater(struct fnode *node, const void *target)
 
 	while (start < end) {
 		mid = start + (end - start) / 2;
+		KASSERT(mid < NODE_SIZE(node),
+		    ("Trying to grab key out of range of dnode"));
 		key = fnode_getkey(node, mid);
 		if (NODE_COMPARE(node, key, target) <= 0) {
 			start = mid + 1;
@@ -526,9 +528,9 @@ fnode_cow(struct fbtree *tree, struct buf *bp)
 		fbtree_execrc(tree);
 	}
 
+	KASSERT(cur->fn_dnode->dn_magic == DN_MAGIC,
+	    ("Incorrect dnode magic value"));
 	cur->fn_buf->b_flags |= B_MANAGED;
-	/*  Before we flush we should set magic value */
-	cur->fn_dnode->dn_magic = DN_MAGIC;
 	bdwrite(cur->fn_buf);
 
 	return 0;
@@ -633,6 +635,7 @@ fbtree_sync(struct fbtree *tree)
 	int error = 0;
 	struct buf *bp, *tbd;
 	struct fnode *node;
+	struct dnode *dn;
 	struct bufobj *bo = &tree->bt_backend->v_bufobj;
 	int attempts = 0;
 
@@ -674,6 +677,9 @@ tryagain:
 			if (!BP_ISCOWED(bp)) {
 				panic("Buffer is not COW anymore");
 			}
+			dn = (struct dnode *)bp->b_data;
+			KASSERT(dn->dn_magic == DN_MAGIC,
+			    ("Bad magic value before bawrite"));
 			bawrite(bp);
 			BO_LOCK(bo);
 		}
@@ -723,6 +729,9 @@ tryagain:
 
 /*
  * Marks B-Tree buffers as clean to track all future modifications.
+ *
+ * XXX:Fix this this seems not correct - We are not even using the allocated
+ * ptr, and applying not COW to the allocator Btrees.
  *
  * XXX: Not all callers of this function check the return value.
  */
@@ -1076,6 +1085,8 @@ fbtree_destroy(struct fbtree *tree)
 		brelse(bp);
 	}
 
+	vinvalbuf(tree->bt_backend, 0, 0, 0);
+
 	while (!SLIST_EMPTY(&tree->bt_rcfn)) {
 		entry = SLIST_FIRST(&tree->bt_rcfn);
 		SLIST_REMOVE_HEAD(&tree->bt_rcfn, rc_entry);
@@ -1095,7 +1106,16 @@ fbtree_destroy(struct fbtree *tree)
 	KASSERT(pctrie_is_empty(&tree->bt_trie), ("Trie should be empty"));
 	rw_wunlock(&tree->bt_trie_lock);
 	BTREE_UNLOCK(tree, 0);
+	lockdestroy(&tree->bt_lock);
+	rw_destroy(&tree->bt_trie_lock);
+	VI_LOCK(tree->bt_backend);
+
+	tree->bt_backend->v_data = NULL;
 	vnode_destroy_vobject(tree->bt_backend);
+	tree->bt_backend->v_op = &dead_vnodeops;
+
+	VI_UNLOCK(tree->bt_backend);
+
 	vput(tree->bt_backend);
 }
 
@@ -1270,6 +1290,8 @@ fnode_setup(struct fnode *node, struct fbtree *tree, bnode_ptr ptr)
 	node->fn_tree = tree;
 	node->fn_bsize = slos->slos_sb->sb_bsize;
 
+	KASSERT(node->fn_dnode->dn_magic == DN_MAGIC, ("Fnode corrupt"));
+
 	if (NODE_TYPE(node) == BT_INTERNAL) {
 		node->fn_types = NULL;
 		node->fn_keys = (char *)node->fn_dnode->dn_data;
@@ -1312,6 +1334,7 @@ fnode_create(
 	node->fn_dnode = (struct dnode *)node->fn_buf->b_data;
 	node->fn_dnode->dn_flags = type;
 	node->fn_dnode->dn_numkeys = 0;
+	node->fn_dnode->dn_magic = DN_MAGIC;
 	BP_UNCOWED(node->fn_buf);
 
 	fnode_setup(node, tree, ptr);
@@ -1435,6 +1458,8 @@ fnode_newroot(struct fnode *node, struct fnode **root)
 
 	newroot->fn_dnode->dn_numkeys = 0;
 	newroot->fn_dnode->dn_flags = BT_INTERNAL;
+	KASSERT(newroot->fn_dnode->dn_magic == DN_MAGIC,
+	    ("Incorrect magic value"));
 
 	/*
 	 * The new root's child is the old root. This makes it imbalanced,
@@ -2206,6 +2231,8 @@ fnode_write(struct fnode *node)
 		bremfree(node->fn_buf);
 	}
 
+	KASSERT(node->fn_dnode->dn_magic == DN_MAGIC,
+	    ("Bad magic value for dnode in fnode_write"));
 	bdwrite(node->fn_buf);
 }
 
@@ -2279,6 +2306,7 @@ int
 fbtree_sysinit(struct slos *slos, size_t offset, diskptr_t *ptr)
 {
 	struct buf *bp;
+	struct dnode *dn;
 	struct slos_inode ino = {};
 	ino.ino_magic = SLOS_IMAGIC;
 	ptr->offset = offset;
@@ -2298,6 +2326,8 @@ fbtree_sysinit(struct slos *slos, size_t offset, diskptr_t *ptr)
 	MPASS(bp);
 
 	bzero(bp->b_data, bp->b_bcount);
+	dn = (struct dnode *)bp->b_data;
+	dn->dn_magic = DN_MAGIC;
 	bwrite(bp);
 
 	VOP_FSYNC(slos->slos_vp, MNT_WAIT, curthread);

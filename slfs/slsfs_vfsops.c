@@ -1190,7 +1190,7 @@ slsfs_init_vnode(struct vnode *vp, uint64_t ino)
 		vp->v_type = IFTOVT(mp->sn_ino.ino_mode);
 	}
 	SLSVP(vp)->sn_ino.ino_wal_segment.size = 0;
-	SLSVP(vp)->sn_ino.ino_wal_segment.offset = -1;
+	SLSVP(vp)->sn_ino.ino_wal_segment.offset = 0;
 
 	if (vp->v_type == VFIFO) {
 		vp->v_op = &slsfs_fifoops;

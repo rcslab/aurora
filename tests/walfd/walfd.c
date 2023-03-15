@@ -21,20 +21,44 @@ main()
 {
 	char readme[256];
 	memset(readme, '\0', 256);
-	char *mystring = "HelloWorld";
+	char mywrite[MB];
+	int rand = open("/dev/random", O_RDONLY);
 	int written;
+	int total_write = 0;
 
-	int wal_fd = slsfs_create_wal("test_wal.log", O_RDWR, 0600, 1 * MB);
+	int wal_fd = slsfs_create_wal("test_wal.log", O_RDWR, 0600, 1 * GB);
 	if (wal_fd < 0) {
 		return -1;
 	}
-	written = pwrite(wal_fd, mystring, strlen(mystring), 0);
-	if (written != strlen(mystring)) {
-		perror("Problem writing to the WAL");
+
+	written = read(rand, mywrite, MB);
+	if (written != MB) {
+		perror("Problem reading random");
 		return errno;
 	}
 
-	written = read(wal_fd, readme, 256);
+	for (int i = 0; i < 1024; i++) {
+		written = write(wal_fd, mywrite, MB);
+		if (written != MB) {
+			perror("Problem writing to the WAL");
+			return errno;
+		}
+		total_write += MB;
+	}
+	written = write(wal_fd, mywrite, MB);
+	if (errno != ENOMEM) {
+		printf("Should be an error\n");
+		return -1;
+	}
+
+	if (total_write != GB) {
+		printf("Not enough written");
+		return -1;
+	}
+
+	fsync(wal_fd);
+
+	written = pread(wal_fd, readme, 256, 0);
 	if (written < 0) {
 		perror("Problem reading from the WAL");
 		return errno;
@@ -42,7 +66,7 @@ main()
 
 	close(wal_fd);
 
-	if (strncmp(readme, mystring, 10) != 0) {
+	if (strncmp(readme, mywrite, 10) != 0) {
 		printf("What was written to the WAL was not what was read\n");
 		return -1;
 	}
@@ -59,7 +83,7 @@ main()
 		return errno;
 	}
 
-	if (strncmp(readme, mystring, 10) != 0) {
+	if (strncmp(readme, mywrite, 10) != 0) {
 		perror(
 		    "What was written to the W#AL was not what was read in regular open");
 		return -1;

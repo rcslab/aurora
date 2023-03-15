@@ -16,8 +16,18 @@
 #include "slsfs_buf.h"
 
 #define NEWOSDSIZE (30)
-#define AMORTIZED_CHUNK (1024)
 
+/*
+ * Blocks are always allocated where offset is the block offset (not byte
+ * addressable) and size is the size in bytes
+ */
+#define KB ((size_t)1024)
+#define MB ((size_t)((KB) * (size_t)1024))
+#define GB ((size_t)((MB) * (size_t)1024))
+
+static const size_t CHUNK_SIZE = (16 * MB);
+static const size_t WAL_CHUNK = (50 * GB);
+static diskptr_t wal_allocations;
 /*
  * Generic uint64_t comparison function.
  */
@@ -35,18 +45,45 @@ uint64_t_comp(const void *k1, const void *k2)
 	return 0;
 }
 
+/*
+ * General hack to work with postgres, for all the WALs in the system make one
+ * large allocation. XXX: Fix the bug which causes corruption of a WAL
+ * allocation bumping into a file. Add more tests to make sure each allocation
+ * is what it should be!
+ */
+int
+slos_blkalloc_wal(struct slos *slos, size_t bytes, diskptr_t *ptr)
+{
+	uint64_t blksize = BLKSIZE(slos);
+	size_t rounded = roundup(bytes, blksize);
+	size_t blocks = rounded / blksize;
+
+	if (wal_allocations.size >= blocks * blksize) {
+		ptr->offset = wal_allocations.offset;
+		ptr->size = rounded;
+		ptr->epoch = slos->slos_sb->sb_epoch;
+		wal_allocations.offset += blocks;
+		wal_allocations.size -= rounded;
+		return (0);
+	}
+	panic("Not enough wal space");
+	return (-1);
+}
+
 static int
-fast_path(struct slos *slos, uint64_t blocks, diskptr_t *ptr)
+fast_path(struct slos *slos, uint64_t bytes, diskptr_t *ptr)
 {
 	uint64_t blksize = BLKSIZE(slos);
 	diskptr_t *chunk = &slos->slos_alloc.chunk;
+	size_t rounded = roundup(bytes, blksize);
+	size_t blocks = rounded / blksize;
 
 	if (chunk->size >= blocks * blksize) {
 		ptr->offset = chunk->offset;
-		ptr->size = blocks * blksize;
+		ptr->size = rounded;
 		ptr->epoch = slos->slos_sb->sb_epoch;
 		chunk->offset += blocks;
-		chunk->size -= blocks * blksize;
+		chunk->size -= rounded;
 		return (0);
 	}
 
@@ -54,7 +91,7 @@ fast_path(struct slos *slos, uint64_t blocks, diskptr_t *ptr)
 }
 
 static int
-allocate_chunk(struct slos *slos, diskptr_t *ptr)
+slos_blkalloc_large_unlocked(struct slos *slos, size_t size, diskptr_t *ptr)
 {
 	struct fnode_iter iter;
 	uint64_t temp;
@@ -63,7 +100,7 @@ allocate_chunk(struct slos *slos, diskptr_t *ptr)
 	uint64_t location;
 
 	uint64_t blksize = BLKSIZE(slos);
-	uint64_t asked = AMORTIZED_CHUNK;
+	uint64_t asked = roundup(size, blksize);
 	int error;
 
 	error = fbtree_keymax_iter(STREE(slos), &asked, &iter);
@@ -91,31 +128,39 @@ allocate_chunk(struct slos *slos, diskptr_t *ptr)
 		panic("Failure in allocation - %d", error);
 	}
 
-	/*
-	 * Carve off as much as we need, and put the rest back in.
-	 * XXX Implement buckets.
-	 */
-	if (fullsize > asked) {
-		KASSERT(temp == fullsize, ("Should be reverse mappings"));
-		fullsize -= asked;
-		off += asked;
+	KASSERT(temp == fullsize, ("Should be reverse mappings"));
+	fullsize -= asked;
+	off += (asked / blksize);
 
-		error = fbtree_insert(STREE(slos), &fullsize, &off);
-		if (error) {
-			panic("Problem removing element in allocation");
-		}
+	error = fbtree_insert(STREE(slos), &fullsize, &off);
+	if (error) {
+		panic("Problem removing element in allocation");
+	}
 
-		error = fbtree_insert(OTREE(slos), &off, &fullsize);
-		if (error) {
-			panic("Problem removing element in allocation");
-		}
+	error = fbtree_insert(OTREE(slos), &off, &fullsize);
+	if (error) {
+		panic("Problem removing element in allocation");
 	}
 
 	ptr->offset = location;
-	ptr->size = asked * blksize;
+	ptr->size = asked;
 	ptr->epoch = slos->slos_sb->sb_epoch;
 
 	return (0);
+}
+
+int
+slos_blkalloc_large(struct slos *slos, size_t size, diskptr_t *ptr)
+{
+	int error;
+
+	BTREE_LOCK(STREE(slos), LK_EXCLUSIVE);
+	BTREE_LOCK(OTREE(slos), LK_EXCLUSIVE);
+	error = slos_blkalloc_large_unlocked(slos, size, ptr);
+	BTREE_UNLOCK(OTREE(slos), 0);
+	BTREE_UNLOCK(STREE(slos), 0);
+
+	return (error);
 }
 
 /*
@@ -124,16 +169,13 @@ allocate_chunk(struct slos *slos, diskptr_t *ptr)
 int
 slos_blkalloc(struct slos *slos, size_t bytes, diskptr_t *ptr)
 {
-	uint64_t asked;
-	uint64_t blksize = BLKSIZE(slos);
 	diskptr_t *chunk = &slos->slos_alloc.chunk;
 	int error;
 
 	/* Get an extent large enough to cover the allocation. */
-	asked = (bytes + blksize - 1) / blksize;
 	BTREE_LOCK(STREE(slos), LK_EXCLUSIVE);
 	while (true) {
-		if (!fast_path(slos, asked, ptr)) {
+		if (!fast_path(slos, bytes, ptr)) {
 			BTREE_UNLOCK(STREE(slos), 0);
 			return (0);
 		}
@@ -144,7 +186,8 @@ slos_blkalloc(struct slos *slos, size_t bytes, diskptr_t *ptr)
 			continue;
 		}
 
-		error = allocate_chunk(slos, &slos->slos_alloc.chunk);
+		error = slos_blkalloc_large_unlocked(slos, CHUNK_SIZE,
+		    &slos->slos_alloc.chunk);
 		if (error != 0) {
 			panic("Problem allocating %d\n", error);
 		}
@@ -192,6 +235,7 @@ slos_allocator_init(struct slos *slos)
 	struct slos_node *sizet;
 	diskptr_t ptr;
 	uint64_t off;
+	uint64_t wal_off;
 	uint64_t total;
 	int error;
 
@@ -271,8 +315,12 @@ slos_allocator_init(struct slos *slos)
 	 */
 	if (slos->slos_sb->sb_epoch == EPOCH_INVAL) {
 		DEBUG("First time start up for allocator");
-		off = offset * BLKSIZE(slos);
+		off = offset;
 		total = slos->slos_sb->sb_size - (offset * BLKSIZE(slos));
+		wal_off = off + ((total - WAL_CHUNK) / BLKSIZE(slos));
+		wal_allocations.size = WAL_CHUNK;
+		wal_allocations.offset = wal_off;
+		total -= WAL_CHUNK;
 
 		KASSERT(fbtree_size(OTREE(slos)) == 0, ("Bad size\n"));
 		KASSERT(fbtree_size(STREE(slos)) == 0, ("Bad size\n"));

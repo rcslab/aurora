@@ -45,6 +45,7 @@ SDT_PROBE_DEFINE3(slos, , , slsfs_vnodeblk, "uint64_t", "uint64_t", "int");
 
 /* 5 GiB */
 static const size_t MAX_WAL_SIZE = 5368709000;
+static size_t wal_space_used = 0;
 
 static int
 slsfs_inactive(struct vop_inactive_args *args)
@@ -102,9 +103,17 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 {
 	struct vnode *vp = args->a_vp;
 	struct slos_node *svp = SLSVP(vp);
-
+	struct fbtree *tree = &svp->sn_tree;
 	if (vp == slos.slsfs_inodes) {
 		DEBUG("Special vnode trying to be reclaimed");
+	}
+	/* Keeping this here for now
+	 * TODO: Need to figure out why some vnodes have 1 dirty btree node when
+	 * reclaimed
+	 */
+	if (svp->sn_status == SLOS_DIRTY || FBTREE_DIRTYCNT(tree)) {
+		DEBUG2("RECLAIMING DIRTY NODE %d %d\n",
+		    vp->v_bufobj.bo_dirty.bv_cnt, FBTREE_DIRTYCNT(tree));
 	}
 
 	vp->v_data = NULL;
@@ -652,8 +661,8 @@ slsfs_read(struct vop_read_args *args)
 			gbflag |= GB_UNMAPPED;
 		}
 
-		error = slsfs_retrieve_buf(
-		    vp, uio->uio_offset, resid, uio->uio_rw, gbflag, &bp);
+		error = slsfs_retrieve_buf(vp, uio->uio_offset, resid,
+		    uio->uio_rw, gbflag, &bp);
 		if (error) {
 			DEBUG1("Problem getting buffer for write %d", error);
 			return (error);
@@ -683,6 +692,33 @@ slsfs_read(struct vop_read_args *args)
 	}
 
 	return (error);
+}
+
+static int
+slsfs_wal_bmap(struct vop_bmap_args *ap)
+{
+	struct vnode *vp = ap->a_vp;
+	struct slos_node *svp = SLSVP(vp);
+	struct slos *slos = VPSLOS(vp);
+	struct slos_inode *ino = &SLSINO(svp);
+	size_t off = ino->ino_wal_segment.offset;
+	size_t size_b = ino->ino_wal_segment.size / BLKSIZE(slos);
+	uint64_t pbno = off + ap->a_bn;
+
+	if (ap->a_bop != NULL)
+		*ap->a_bop = &ap->a_vp->v_bufobj;
+	if (ap->a_bnp != NULL)
+		*ap->a_bnp = pbno;
+	if (ap->a_runp != NULL) {
+		// Calculate how much left
+		*ap->a_runp = (size_b - (pbno - off));
+	}
+
+	if (ap->a_runb != NULL) {
+		*ap->a_runb = (pbno - off);
+	}
+
+	return (0);
 }
 
 static int
@@ -1784,6 +1820,11 @@ slsfs_ioctl(struct vop_ioctl_args *ap)
 		wal_args = (struct slsfs_create_wal_args *)ap->a_data;
 		error = _slsfs_create_wal(wal_args->path, wal_args->flags,
 		    wal_args->mode, wal_args->size, &fd);
+		if (error) {
+			td->td_retval[0] = -1;
+			return (error);
+		}
+
 		td->td_retval[0] = fd;
 		return (error);
 
@@ -1966,18 +2007,21 @@ slsfs_pathconf(struct vop_pathconf_args *args)
 static int
 slsfs_wal_strategy(struct vop_strategy_args *args)
 {
+	struct buf *bp = args->a_bp;
 	struct vnode *vp = args->a_vp;
 	struct slos *slos = VPSLOS(vp);
-	struct buf *bp = args->a_bp;
-	KASSERT(SLS_ISWAL(vp), ("Using sls wal strategy not on a WAL object"));
+	size_t fsbsize = vp->v_bufobj.bo_bsize;
+	size_t devbsize = slos->slos_vp->v_bufobj.bo_bsize;
 
-	g_vfs_strategy(&slos->slos_vp->v_bufobj, bp);
-	return 0;
+	bp->b_blkno *= (fsbsize / devbsize);
+	bp->b_iooffset = dbtob(bp->b_blkno);
+	BO_STRATEGY(&slos->slos_vp->v_bufobj, bp);
+	return (0);
 }
 
 static int
 slsfs_retrieve_wal_buf(struct vnode *vp, uint64_t offset, uint64_t size,
-    enum uio_rw rw, int gbflag, struct buf **bp)
+    enum uio_rw rw, int gbflag, int seqcount, struct buf **bp)
 {
 	struct buf *tempbuf = NULL;
 	struct slos_node *svp = SLSVP(vp);
@@ -1985,22 +2029,34 @@ slsfs_retrieve_wal_buf(struct vnode *vp, uint64_t offset, uint64_t size,
 	size_t blksize = IOSIZE(svp);
 	uint64_t lbno = (offset / blksize);
 	uint64_t pbno = ptr.offset + (offset / blksize);
+	int error = 0;
+	uint64_t newsize = omin(size, MAXBCACHEBUF);
 
-	tempbuf = getblk(vp, lbno, blksize, 0, 0, gbflag);
+	if (rw == UIO_READ) {
+		if ((vp->v_mount->mnt_flag & MNT_NOCLUSTERR) == 0) {
+			error = cluster_read(vp, svp->sn_ino.ino_size, lbno,
+			    blksize, NOCRED, offset + size, seqcount, gbflag,
+			    &tempbuf);
+		} else {
+			error = bread_gb(vp, lbno, newsize, NOCRED, gbflag,
+			    &tempbuf);
+		}
+	} else if (rw == UIO_WRITE) {
+		tempbuf = getblk(vp, lbno, newsize, 0, 0, gbflag);
+		if (offset > roundup(SLSINO(SLSVP(vp)).ino_size, blksize)) {
+			vfs_bio_clrbuf(tempbuf);
+		}
+	}
+
 	if (tempbuf == NULL) {
 		*bp = NULL;
 		return (EIO);
 	}
 
-	/* Check if this is a new block */
-	if (offset > roundup(SLSINO(SLSVP(vp)).ino_size, blksize)) {
-		vfs_bio_clrbuf(tempbuf);
-	}
 	tempbuf->b_blkno = pbno;
-	tempbuf->b_iooffset = dbtob(tempbuf->b_blkno);
 	*bp = tempbuf;
 
-	return (0);
+	return (error);
 }
 
 /*
@@ -2070,7 +2126,7 @@ slsfs_wal_write(struct vop_write_args *args)
 		}
 
 		error = slsfs_retrieve_wal_buf(vp, uio->uio_offset,
-		    uio->uio_resid, uio->uio_rw, gbflag, &bp);
+		    uio->uio_resid, uio->uio_rw, gbflag, 0, &bp);
 		if (error) {
 			DEBUG1("Problem getting buffer for write %d", error);
 			return (error);
@@ -2127,6 +2183,7 @@ slsfs_wal_read(struct vop_read_args *args)
 	struct slos_node *svp = SLSVP(vp);
 	size_t blksize = IOSIZE(svp);
 	struct uio *uio = args->a_uio;
+	int seqcount = args->a_ioflag >> IO_SEQSHIFT;
 
 	svp = SLSVP(vp);
 	sivp = &SLSINO(svp);
@@ -2151,7 +2208,7 @@ slsfs_wal_read(struct vop_read_args *args)
 
 	while (resid > 0) {
 		error = slsfs_retrieve_wal_buf(vp, uio->uio_offset, resid,
-		    uio->uio_rw, gbflag, &bp);
+		    uio->uio_rw, gbflag, seqcount, &bp);
 		if (error) {
 			DEBUG1("Problem getting buffer for write %d", error);
 			return (error);
@@ -2201,10 +2258,11 @@ slsfs_wal_allocate_extent(struct vnode *vp, size_t size)
 	ino = &svp->sn_ino;
 	slos = VPSLOS(vp);
 
-	error = slos_blkalloc(slos, size, &ino->ino_wal_segment);
+	error = slos_blkalloc_wal(slos, size, &ino->ino_wal_segment);
 	if (error != 0)
 		return error;
 
+	wal_space_used += ino->ino_wal_segment.size;
 	svp->sn_ino.ino_size = 0;
 	slos_update(svp);
 
@@ -2214,7 +2272,7 @@ slsfs_wal_allocate_extent(struct vnode *vp, size_t size)
 static int
 slsfs_wal_fsync(struct vop_fsync_args *ap)
 {
-	return (vn_fsync_buf(ap->a_vp, MNT_WAIT));
+	return (vn_fsync_buf(ap->a_vp, ap->a_waitfor));
 }
 
 int
@@ -2256,7 +2314,7 @@ _slsfs_create_wal(char *path, int flags, int mode, size_t size, int *ret)
 	error = slsfs_wal_allocate_extent(vp, size);
 	if (error != 0) {
 		*ret = fd;
-		return (error);
+		return (-1);
 	}
 
 	*ret = fd;
@@ -2318,7 +2376,7 @@ struct vop_vector slsfs_wal_vnodeops = {
 	.vop_reallocblks = VOP_PANIC, // TODO
 	.vop_write = slsfs_wal_write,
 	.vop_access = slsfs_access,
-	.vop_bmap = vop_stdbmap,
+	.vop_bmap = slsfs_wal_bmap,
 	.vop_cachedlookup = slsfs_lookup,
 	.vop_close = slsfs_close,
 	.vop_create = slsfs_create,
