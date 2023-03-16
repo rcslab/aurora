@@ -80,7 +80,7 @@ slssyscall_fork(struct thread *td, void *data)
 	pid_t pid;
 
 	/* Don't race with an exiting module when adding the child to Aurora. */
-	error = sls_startop(true);
+	error = sls_startop();
 	if (error != 0)
 		return (error);
 

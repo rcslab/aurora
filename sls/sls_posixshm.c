@@ -132,7 +132,7 @@ slsshm_slsid(struct file *fp, uint64_t *slsidp)
 
 static int
 slsshm_checkpoint(
-    struct file *fp, struct sls_record *rec, struct slsckpt_data *sckpt_data)
+    struct file *fp, struct sbuf *sb, struct slsckpt_data *sckpt_data)
 {
 	struct slsposixshm slsposixshm;
 	struct shmfd *shmfd;
@@ -156,7 +156,7 @@ slsshm_checkpoint(
 	 * the metadata is small enough that we can checkpoint
 	 * multiple times, and restore only once.
 	 */
-	error = sbuf_bcat(rec->srec_sb, &slsposixshm, sizeof(slsposixshm));
+	error = sbuf_bcat(sb, &slsposixshm, sizeof(slsposixshm));
 	if (error != 0)
 		return (error);
 

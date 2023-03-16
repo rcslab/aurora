@@ -192,9 +192,9 @@ error:
 int
 slsckpt_vnode_serialize(struct slsckpt_data *sckpt_data)
 {
-	struct sls_record *rec;
 	struct slskv_iter iter;
 	struct vnode *vp;
+	uintptr_t exists;
 	struct sbuf *sb;
 	int error;
 
@@ -202,7 +202,7 @@ slsckpt_vnode_serialize(struct slsckpt_data *sckpt_data)
 	{
 		/* Check if we have already serialized this vnode. */
 		if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t)vp,
-			(uintptr_t *)&rec) == 0) {
+			&exists) == 0) {
 			KV_ABORT(iter);
 			return (0);
 		}
@@ -214,13 +214,11 @@ slsckpt_vnode_serialize(struct slsckpt_data *sckpt_data)
 			return (error);
 		}
 
-		/* Whether we have a path or not, create the new record. */
-		rec = sls_getrecord(sb, (uint64_t)vp, SLOSREC_VNODE);
-		error = slskv_add(
-		    sckpt_data->sckpt_rectable, (uint64_t)vp, (uintptr_t)rec);
+		error = slsckpt_addrecord(
+		    sckpt_data, (uint64_t)vp, sb, SLOSREC_VNODE);
 		if (error != 0) {
 			KV_ABORT(iter);
-			sls_record_destroy(rec);
+			sbuf_delete(sb);
 			return (error);
 		}
 	}
@@ -331,7 +329,7 @@ slsvn_slsid(struct file *fp, uint64_t *slsidp)
 
 static int
 slsvn_checkpoint(
-    struct file *fp, struct sls_record *rec, struct slsckpt_data *sckpt_data)
+    struct file *fp, struct sbuf *sb, struct slsckpt_data *sckpt_data)
 {
 	struct vnode *vp = (struct vnode *)fp->f_vnode;
 	int error;
@@ -359,7 +357,7 @@ slsvn_checkpoint(
 		return (EINVAL);
 
 	/* Otherwise we checkpoint the tty slave. */
-	error = slspts_checkpoint_vnode(vp, rec);
+	error = slspts_checkpoint_vnode(vp, sb);
 	if (error != 0)
 		return (error);
 

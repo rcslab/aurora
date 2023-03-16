@@ -126,7 +126,6 @@ static int
 slsckpt_metadata(
     struct proc *p, slsset *procset, struct slsckpt_data *sckpt_data)
 {
-	struct sls_record *rec;
 	struct sbuf *sb;
 	int error = 0;
 
@@ -180,11 +179,7 @@ slsckpt_metadata(
 	if (error != 0)
 		goto out;
 
-	rec = sls_getrecord(sb, (uint64_t)p, SLOSREC_PROC);
-	error = slskv_add(
-	    sckpt_data->sckpt_rectable, (uint64_t)p, (uintptr_t)rec);
-	if (error != 0)
-		sls_record_destroy(rec);
+	error = slsckpt_addrecord(sckpt_data, (uint64_t)p, sb, SLOSREC_PROC);
 
 out:
 
@@ -229,7 +224,7 @@ slsckpt_compact_single(struct slspart *slsp, struct slsckpt_data *sckpt)
 	slsckpt_drop(sckpt);
 }
 
-static void
+void
 slsckpt_compact(struct slspart *slsp, struct slsckpt_data *sckpt)
 {
 	struct slsckpt_data *old_sckpt;
@@ -262,11 +257,71 @@ slsckpt_compact(struct slspart *slsp, struct slsckpt_data *sckpt)
 }
 
 static int
+slsckpt_io_slos(struct slspart *slsp, struct slsckpt_data *sckpt_data)
+{
+	int error;
+
+	error = sls_write_slos(slsp->slsp_oid, sckpt_data);
+	if (error != 0)
+		return (error);
+
+	SDT_PROBE1(sls, , sls_ckpt, , "Initiating IO to disk");
+
+	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
+	taskqueue_drain_all(slos.slos_tq);
+	error = slsfs_wakeup_syncer(0);
+
+	SDT_PROBE1(sls, , sls_ckpt, , "Draining taskqueue");
+
+	return (error);
+}
+
+static int
+slsckpt_io_file(struct slspart *slsp, struct slsckpt_data *sckpt_data)
+{
+	struct vnode *vp = (struct vnode *)slsp->slsp_backend;
+	struct thread *td = curthread;
+	int error;
+
+	error = sls_write_file(slsp, sckpt_data);
+	if (error != 0)
+		return (error);
+
+	SDT_PROBE1(sls, , sls_ckpt, , "Initiating IO to disk");
+
+	VOP_LOCK(vp, LK_EXCLUSIVE);
+	error = VOP_FSYNC(vp, MNT_WAIT, td);
+	VOP_UNLOCK(vp, 0);
+
+	SDT_PROBE1(sls, , sls_ckpt, , "Draining taskqueue");
+
+	return (error);
+}
+
+static int
+slsckpt_io_socket(struct slspart *slsp, struct slsckpt_data *sckpt_data)
+{
+	int error;
+
+	error = sls_write_socket(slsp, sckpt_data);
+	if (error != 0)
+		return (error);
+
+	SDT_PROBE1(sls, , sls_ckpt, , "Initiating IO to remote server");
+
+	/* The write routine is currently synchronous, no draining necessary. */
+
+	return (error);
+}
+
+static int
 slsckpt_initio(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 {
 	int error;
 
-	KASSERT(slsp->slsp_target == SLS_OSD, ("invalid target for IO"));
+	/* No need to flush memory backends. */
+	if (slsp->slsp_target == SLS_MEM)
+		return (0);
 
 	/* Create a record for every vnode. */
 	/*
@@ -280,13 +335,34 @@ slsckpt_initio(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 
 	SDT_PROBE1(sls, , sls_ckpt, , "Serializing vnodes");
 
-	error = sls_write_slos(slsp->slsp_oid, sckpt_data);
-	if (error != 0) {
-		DEBUG1("Writing to disk failed with %d", error);
+	error = sbuf_finish(sckpt_data->sckpt_meta);
+	if (error != 0)
 		return (error);
-	}
 
-	return (0);
+	error = sbuf_finish(sckpt_data->sckpt_dataid);
+	if (error != 0)
+		return (error);
+
+	/* Initiate IO, if necessary. */
+	switch (slsp->slsp_target) {
+	case SLS_SOCKSND:
+		return (EOPNOTSUPP);
+
+	case SLS_SOCKRCV:
+		return (EOPNOTSUPP);
+
+	case SLS_FILE:
+		return (EOPNOTSUPP);
+
+	case SLS_OSD:
+		return (slsckpt_io_slos(slsp, sckpt_data));
+
+	case SLS_MEM:
+		return (0);
+
+	default:
+		panic("using invalid backend %d\n", slsp->slsp_target);
+	}
 }
 
 /*
@@ -382,38 +458,18 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 	SDT_PROBE1(sls, , sls_ckpt, , "Continuing the process");
 	SDT_PROBE0(sls, , , stopclock_finish);
 
-	/* Initiate IO, if necessary. */
-	if (slsp->slsp_target == SLS_OSD) {
-		/*
-		 * HACK: For Metropolis we want to measure
-		 * the storage density only of deltas, since
-		 * full checkpoint space usage is amortized.
-		 * Use a sysctl to blackhole full checkpoints.
-		 */
-		if (!sls_only_flush_deltas ||
-		    ((slsp->slsp_mode == SLS_DELTA) &&
-			(slsp->slsp_sckpt != NULL))) {
-			error = slsckpt_initio(slsp, sckpt);
-			if (error != 0)
-				DEBUG1("slsckpt_initio failed with %d", error);
-		}
-
-		SDT_PROBE1(sls, , sls_ckpt, , "Initiating IO to disk");
-	}
-
-	SDT_PROBE1(sls, , sls_ckpt, , "Object compaction");
-
-	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
-	if (slsp->slsp_target == SLS_OSD) {
-		taskqueue_drain_all(slos.slos_tq);
-		error = slsfs_wakeup_syncer(0);
+	/*
+	 * HACK: For Metropolis we want to measure
+	 * the storage density only of deltas, since
+	 * full checkpoint space usage is amortized.
+	 * Use a sysctl to blackhole full checkpoints.
+	 */
+	if (!sls_only_flush_deltas ||
+	    ((slsp->slsp_mode == SLS_DELTA) && (slsp->slsp_sckpt != NULL))) {
+		error = slsckpt_initio(slsp, sckpt);
 		if (error != 0)
-			printf(
-			    "Error %d when calling slsfs_wakeup_syncer from the SLS\n",
-			    error);
+			DEBUG1("slsckpt_initio failed with %d", error);
 	}
-
-	SDT_PROBE1(sls, , sls_ckpt, , "Draining taskqueue");
 
 	/* Advance the current major epoch. */
 	slsp_epoch_advance(slsp, nextepoch);
@@ -1033,7 +1089,6 @@ sls_checkpointd(struct sls_checkpointd_args *args)
 	DEBUG("Stopped checkpointing");
 
 out:
-
 	/* Drop the reference we got for the SLS process. */
 	slsp_deref(slsp);
 

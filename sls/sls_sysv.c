@@ -25,7 +25,6 @@ int
 slsckpt_sysvshm(struct slsckpt_data *sckpt)
 {
 	struct slssysvshm slssysvshm;
-	struct sls_record *rec;
 	struct sbuf *sb = NULL;
 	int error, i;
 
@@ -66,18 +65,11 @@ slsckpt_sysvshm(struct slsckpt_data *sckpt)
 	if (error != 0)
 		goto error;
 
-	rec = sls_getrecord(sb, (uint64_t)shmsegs, SLOSREC_SYSVSHM);
-	error = slskv_add(
-	    sckpt->sckpt_rectable, (uint64_t)shmsegs, (uintptr_t)rec);
+	error = slsckpt_addrecord(
+	    sckpt, (uint64_t)shmsegs, sb, SLOSREC_SYSVSHM);
 
-	if (error != 0) {
-		sls_record_destroy(rec);
-		return (error);
-	}
-
-	return (0);
 error:
-	if (sb != NULL)
+	if (error != 0 && sb != NULL)
 		sbuf_delete(sb);
 
 	return (error);

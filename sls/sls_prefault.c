@@ -94,7 +94,7 @@ slspre_vector_populated(uint64_t prefaultid, vm_object_t obj)
 	    0) {
 		slskv_del(slsm.slsm_prefault, prefaultid);
 		KASSERT(slspre->pre_size == obj->size,
-		    ("prefaut vector %lx has size %ld insteda of expected %ld",
+		    ("prefault vector %lx has size %ld insteda of expected %ld",
 			prefaultid, slspre->pre_size, obj->size));
 
 		slspre_destroy(slspre);

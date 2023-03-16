@@ -424,6 +424,8 @@ slsrest_ttyfixup(struct proc *p)
 
 	fd = curthread->td_retval[0];
 	pttyfp = FDTOFP(p, fd);
+	if (pttyfp == NULL)
+		return (EBADF);
 	ret = fhold(pttyfp);
 	error = kern_close(td, fd);
 	if (error != 0)
@@ -803,9 +805,7 @@ slsrest_ckptshadow(struct slsrest_data *restdata, struct slsckpt_data *sckpt)
 	struct slskv_iter iter;
 	int error;
 
-	/*
-	 * Go through the original table apply shadowing. We do not need to
-	 */
+	/* Go through the original table apply shadowing. */
 	KV_FOREACH(sckpt->sckpt_shadowtable, iter, obj, shadow)
 	{
 		/* XXX This should never happen afaik. Make sure and remove. */
@@ -834,7 +834,7 @@ slsrest_ckptshadow(struct slsrest_data *restdata, struct slsckpt_data *sckpt)
  * after restoring.
  */
 static int
-slsrest_make_checkpoint(struct slspart *slsp, struct slsrest_data *restdata)
+slsrest_data_backend(struct slspart *slsp, struct slsrest_data *restdata)
 {
 	struct slsckpt_data *sckpt;
 	struct slskv_iter iter;
@@ -844,6 +844,11 @@ slsrest_make_checkpoint(struct slspart *slsp, struct slsrest_data *restdata)
 	char *buf;
 	int error;
 
+	/*
+	 * Read in the SLOS. This call creates the sckpt's vnode and
+	 * VM object tables.
+	 */
+
 	/* Possibly preload the objtable with existing values. */
 	if (SLSP_DELTAREST(slsp) && slsp->slsp_sckpt != NULL) {
 		error = slsrest_ckptshadow(restdata, slsp->slsp_sckpt);
@@ -852,10 +857,25 @@ slsrest_make_checkpoint(struct slspart *slsp, struct slsrest_data *restdata)
 	}
 
 	/* Bring in the whole checkpoint in the form of SLOS records. */
-	error = sls_read_slos(slsp, &sckpt, restdata->objtable);
-	if (error != 0) {
-		DEBUG1("Reading the SLOS failed with %d", error);
-		return (error);
+	switch (slsp->slsp_target) {
+	case SLS_OSD:
+		error = sls_read_slos(slsp, &sckpt, restdata->objtable);
+		if (error != 0) {
+			DEBUG1("Reading the SLOS failed with %d", error);
+			return (error);
+		}
+		break;
+
+	case SLS_FILE:
+		return (EOPNOTSUPP);
+
+	case SLS_SOCKRCV:
+		return (EOPNOTSUPP);
+
+	case SLS_MEM:
+	case SLS_SOCKSND:
+	default:
+		return (EOPNOTSUPP);
 	}
 
 	/* We already have the vnodes for memory checkpoints. */
@@ -885,7 +905,33 @@ slsrest_make_checkpoint(struct slspart *slsp, struct slsrest_data *restdata)
 		return (error);
 	}
 
+	if (slsp->slsp_target == SLS_OSD)
+		taskqueue_drain_all(slos.slos_tq);
+
 	restdata->sckpt = sckpt;
+
+	return (0);
+}
+
+static int
+slsrest_data_memory(struct slspart *slsp, struct slsrest_data **restdatap)
+{
+	int error;
+
+	/* If we already have a checkpoint in memory, reuse it. */
+	if (slsp->slsp_sckpt == NULL)
+		return (EINVAL);
+
+	slsckpt_hold(slsp->slsp_sckpt);
+	(*restdatap)->sckpt = slsp->slsp_sckpt;
+
+	/* Create the VM object shadow table. */
+	error = slsrest_ckptshadow(*restdatap, slsp->slsp_sckpt);
+	if (error != 0) {
+		DEBUG2(
+		    "%s: shadowing objects failed with %d\n", __func__, error);
+		return (error);
+	}
 
 	return (0);
 }
@@ -924,51 +970,42 @@ slsrest_data(struct slspart *slsp, struct slsrest_data **restdatap)
 	restdata->slsp = slsp;
 
 	SDT_PROBE1(sls, , sls_rest, , "Initializing restdata");
-	/* If we already have a checkpoint in memory, reuse it. */
-	if (slsp->slsp_target != SLS_OSD) {
-		if (slsp->slsp_sckpt == NULL) {
-			error = EINVAL;
+
+	switch (slsp->slsp_target) {
+	case SLS_SOCKSND:
+		error = EOPNOTSUPP;
+		goto error;
+
+	case SLS_MEM:
+		error = slsrest_data_memory(slsp, &restdata);
+		if (error != 0)
 			goto error;
-		}
-		slsckpt_hold(slsp->slsp_sckpt);
 		restdata->sckpt = slsp->slsp_sckpt;
 
-		/* Create the VM object shadow table. */
-		error = slsrest_ckptshadow(restdata, slsp->slsp_sckpt);
-		if (error != 0) {
-			DEBUG2("%s: shadowing objects failed with %d\n",
-			    __func__, error);
-			goto error;
-		}
-
 		SDT_PROBE1(sls, , sls_rest, , "Creating objtable");
-		*restdatap = restdata;
-		return (0);
+
+		break;
+
+	case SLS_SOCKRCV:
+	case SLS_OSD:
+	case SLS_FILE:
+		error = slsrest_data_backend(slsp, restdata);
+		if (error != 0)
+			goto error;
+
+		SDT_PROBE1(sls, , sls_rest, , "Creating sckpt");
+
+		break;
+
+	default:
+		panic("using invalid backend %d\n", slsp->slsp_target);
 	}
 
-	/*
-	 * If there is no checkpoint in memory, bring one in. This incidentally
-	 * creates a new sckpt_data structure we can reuse after we are done.
-	 */
-
-	/*
-	 * Read in the SLOS. This call creates the sckpt's vnode and
-	 * VM object tables.
-	 */
-	error = slsrest_make_checkpoint(slsp, restdata);
-	if (error != 0) {
-		DEBUG2("%s: checkpoint creation failed with %d\n", __func__,
-		    error);
-		goto error;
-	}
-
-	SDT_PROBE1(sls, , sls_rest, , "Creating sckpt");
 	*restdatap = restdata;
 
 	return (0);
 
 error:
-
 	uma_zfree(slsrest_zone, restdata);
 	return (error);
 }
@@ -1026,8 +1063,6 @@ sls_rest(struct slspart *slsp, uint64_t rest_stopped)
 		slsckpt_hold(restdata->sckpt);
 		slsp->slsp_sckpt = restdata->sckpt;
 	}
-
-	taskqueue_drain_all(slos.slos_tq);
 
 	/*
 	 * Iterate through the metadata; each entry represents either

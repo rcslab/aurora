@@ -52,7 +52,7 @@
 
 static int
 slspipe_checkpoint(
-    struct file *fp, struct sls_record *rec, struct slsckpt_data *sckpt_data)
+    struct file *fp, struct sbuf *sb, struct slsckpt_data *sckpt_data)
 {
 	struct pipe *pipe, *peer;
 	struct slspipe info;
@@ -78,12 +78,11 @@ slspipe_checkpoint(
 	info.peer = (uint64_t)peer;
 
 	/* Write out the data. */
-	error = sbuf_bcat(rec->srec_sb, (void *)&info, sizeof(info));
+	error = sbuf_bcat(sb, (void *)&info, sizeof(info));
 	if (error != 0)
 		return (error);
 
-	error = sbuf_bcat(
-	    rec->srec_sb, pipe->pipe_buffer.buffer, pipe->pipe_buffer.cnt);
+	error = sbuf_bcat(sb, pipe->pipe_buffer.buffer, pipe->pipe_buffer.cnt);
 	if (error != 0)
 		return (error);
 

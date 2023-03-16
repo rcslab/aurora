@@ -10,6 +10,7 @@
 #include <vm/vm_param.h>
 
 #include "sls_internal.h"
+#include "sls_io.h"
 #include "sls_table.h"
 
 /* Point at which we cut off the prefault vector when printing out. */
@@ -36,7 +37,7 @@ slspre_track_entries(vm_map_t map, char *buf, struct file *fp)
 		    entry->start, entry->end, objid, entry->protection, type);
 		len = strnlen(buf, SLSPG_BUFSZ);
 
-		error = slsfp_write(fp, buf, len);
+		error = slsio_fpwrite(fp, buf, len);
 		if (error != 0)
 			return (error);
 	}
@@ -68,7 +69,7 @@ slspre_track_vnodes(vm_map_t map, char *buf, struct file *fp)
 		snprintf(
 		    buf, SLSPG_BUFSZ, "V %p %ld\n", obj->handle, obj->size);
 
-		error = slsfp_write(fp, buf, strnlen(buf, SLSPG_BUFSZ));
+		error = slsio_fpwrite(fp, buf, strnlen(buf, SLSPG_BUFSZ));
 		if (error != 0) {
 			free(buf, M_SLSMM);
 			return (error);
@@ -156,7 +157,7 @@ slspre_track_pages(vm_map_t map, pmap_t pmap, char *buf, struct file *fp)
 			vm_page_unhold(m);
 			vm_page_unlock(m);
 
-			error = slsfp_write(fp, buf, len);
+			error = slsio_fpwrite(fp, buf, len);
 			if (error != 0) {
 				free(buf, M_SLSMM);
 				return (error);

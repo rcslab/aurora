@@ -9,6 +9,7 @@
 #include <sys/limits.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
+#include <sys/md5.h>
 #include <sys/module.h>
 #include <sys/mutex.h>
 #include <sys/protosw.h>
@@ -23,10 +24,15 @@
 #include <sys/vnode.h>
 #include <sys/wait.h>
 
+#include <vm/vm_page.h>
+#include <vm/vm_param.h>
+
 #include "debug.h"
 #include "sls_internal.h"
+#include "sls_io.h"
 #include "sls_ioctl.h"
 #include "sls_kv.h"
+#include "sls_message.h"
 #include "sls_metropolis.h"
 #include "sls_pager.h"
 #include "sls_prefault.h"
@@ -258,12 +264,18 @@ sls_checkpoint(struct sls_checkpoint_args *args)
 	int error = 0;
 
 	/* Take another reference for the worker thread. */
-	if (sls_startop(true) != 0)
+	if (sls_startop() != 0)
 		return (EBUSY);
 
 	/* Get the partition to be checkpointed. */
 	slsp = slsp_find(args->oid);
 	if (slsp == NULL) {
+		sls_finishop();
+		return (EINVAL);
+	}
+
+	if (SLSP_NOCKPT(slsp)) {
+		slsp_deref(slsp);
 		sls_finishop();
 		return (EINVAL);
 	}
@@ -345,7 +357,7 @@ sls_restore(struct sls_restore_args *args)
 	int error;
 
 	/* Try to get a reference to the module. */
-	if (sls_startop(true) != 0)
+	if (sls_startop() != 0)
 		return (EBUSY);
 
 	/* Get the partition to be checkpointed. */
@@ -417,21 +429,63 @@ sls_attach(struct sls_attach_args *args)
 	return (0);
 }
 
+static int
+sls_socket_receive(struct slspart *slsp)
+{
+	return (EOPNOTSUPP);
+}
+
+static int
+sls_receive_stop(struct slspart *slsp)
+{
+	struct file *fp = (struct file *)slsp->slsp_backend;
+	struct slsmsg_done *donemsg;
+	union slsmsg msg;
+
+	donemsg = (struct slsmsg_done *)&msg;
+	donemsg->slsmsg_type = SLSMSG_DONE;
+
+	return (slsio_fpwrite(fp, &msg, sizeof(msg)));
+}
+
+static int
+sls_receive_stopall(void)
+{
+	struct slskv_iter iter;
+	struct slspart *slsp;
+	uint64_t oid;
+	int error;
+
+	KV_FOREACH(slsm.slsm_parts, iter, oid, slsp)
+	{
+		if (slsp->slsp_target != SLS_SOCKRCV)
+			continue;
+
+		error = sls_receive_stop(slsp);
+		if (error != 0) {
+			KV_ABORT(iter);
+			return (error);
+		}
+	}
+
+	return (0);
+}
+
 /* Create a new, empty partition in the SLS. */
 static int
 sls_partadd(struct sls_partadd_args *args)
 {
 	struct slspart *slsp = NULL;
+	struct proc *p = curproc;
+	void *backend = NULL;
+	struct file *fp;
+	int target;
 	int error;
 
-	/* We are only using the SLOS for now. Later we will be able to use the
-	 * network. */
-	if ((args->attr.attr_target != SLS_OSD) &&
-	    (args->attr.attr_target != SLS_MEM))
-		return (EINVAL);
+	target = args->attr.attr_target;
 
 	/* Only full checkpoints make sense if in-memory. */
-	if (args->attr.attr_target == SLS_MEM)
+	if (target == SLS_MEM)
 		args->attr.attr_mode = SLS_FULL;
 
 	/*
@@ -441,17 +495,55 @@ sls_partadd(struct sls_partadd_args *args)
 	if (args->attr.attr_mode >= SLS_MODES)
 		return (EINVAL);
 
-	if (args->attr.attr_target >= SLS_TARGETS)
+	if (target >= SLS_TARGETS)
 		return (EINVAL);
 
 	/* Check if the OID is in range. */
 	if (args->oid < SLS_OIDMIN || args->oid > SLS_OIDMAX)
 		return (EINVAL);
 
+	if (args->backendfd >= 0) {
+		switch (target) {
+		case SLS_OSD:
+		case SLS_MEM:
+			return (EINVAL);
+		case SLS_SOCKSND:
+		case SLS_SOCKRCV:
+			fp = FDTOFP(p, args->backendfd);
+			if (fp == NULL || fp->f_type != DTYPE_SOCKET)
+				return (EINVAL);
+			/*
+			 * Sockets are torn down when the last
+			 * userspace reference to the fp is gone,
+			 * so we must keep the fp apart from the socket.
+			 */
+
+			backend = (void *)fp;
+			break;
+
+		case SLS_FILE:
+			fp = FDTOFP(p, args->backendfd);
+			if (fp == NULL || fp->f_type != DTYPE_VNODE)
+				return (ENOTDIR);
+
+			backend = (void *)fp->f_vnode;
+			break;
+		default:
+			return (EINVAL);
+		}
+	}
+
 	/* Copy the SLS attributes to be given to the new process. */
-	error = slsp_add(args->oid, args->attr, &slsp);
+	error = slsp_add(args->oid, args->attr, backend, (void *)&slsp);
 	if (error != 0)
 		return (error);
+
+	if (args->attr.attr_target == SLS_SOCKRCV)
+		return (sls_socket_receive(slsp));
+
+	/* Only register SLOS partitions. */
+	if (args->attr.attr_target != SLS_OSD)
+		return (0);
 
 	/* Write out the serial representation. */
 	ssparts[args->oid].sspart_valid = true;
@@ -717,7 +809,7 @@ sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
 {
 	int error = 0;
 
-	if (sls_startop(true))
+	if (sls_startop())
 		return (EBUSY);
 
 	switch (cmd) {
@@ -805,6 +897,7 @@ sls_partadd_default_osd(void)
 	partadd_args.attr.attr_period = 0;
 	partadd_args.attr.attr_flags = SLSATTR_IGNUNLINKED;
 	partadd_args.attr.attr_amplification = 1;
+	partadd_args.backendfd = -1;
 
 	return (sls_partadd(&partadd_args));
 }
@@ -828,6 +921,7 @@ sls_partadd_default_mem(void)
 	partadd_args.attr.attr_period = 0;
 	partadd_args.attr.attr_flags = SLSATTR_IGNUNLINKED;
 	partadd_args.attr.attr_amplification = 1;
+	partadd_args.backendfd = -1;
 
 	return (sls_partadd(&partadd_args));
 }
@@ -1024,8 +1118,10 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		/* Kill all processes in Aurora, sleep till they exit. */
 		DEBUG("Killing all processes in Aurora...");
 		error = sls_prockillall();
-		if (error != 0)
+		if (error != 0) {
+			SLS_UNLOCK();
 			return (EBUSY);
+		}
 
 		SLS_UNLOCK();
 

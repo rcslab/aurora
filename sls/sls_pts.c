@@ -217,7 +217,7 @@ out:
 
 static int
 slspts_checkpoint(
-    struct file *fp, struct sls_record *rec, struct slsckpt_data *sckpt_data)
+    struct file *fp, struct sbuf *sb, struct slsckpt_data *sckpt_data)
 {
 	struct tty *tty = (struct tty *)fp->f_data;
 	struct slspts slspts;
@@ -243,16 +243,16 @@ slspts_checkpoint(
 	    ((tty->t_flags & TF_BUSY) == 0), ("PTS checkpointed while busy"));
 
 	/* Add it to the record. */
-	error = sbuf_bcat(rec->srec_sb, (void *)&slspts, sizeof(slspts));
+	error = sbuf_bcat(sb, (void *)&slspts, sizeof(slspts));
 	if (error != 0)
 		return (error);
 
 	/* Get the data. */
-	error = slsckpt_ttyinq_read(&tty->t_inq, rec->srec_sb);
+	error = slsckpt_ttyinq_read(&tty->t_inq, sb);
 	if (error != 0)
 		return (error);
 
-	error = slsckpt_ttyoutq_read(&tty->t_outq, rec->srec_sb);
+	error = slsckpt_ttyoutq_read(&tty->t_outq, sb);
 	if (error != 0)
 		return (error);
 
@@ -260,7 +260,7 @@ slspts_checkpoint(
 }
 
 int
-slspts_checkpoint_vnode(struct vnode *vp, struct sls_record *rec)
+slspts_checkpoint_vnode(struct vnode *vp, struct sbuf *sb)
 {
 	struct slspts slspts;
 	int error;
@@ -275,7 +275,7 @@ slspts_checkpoint_vnode(struct vnode *vp, struct sls_record *rec)
 	/* We don't need anything else, it's in the master's record. */
 
 	/* Add it to the record. */
-	error = sbuf_bcat(rec->srec_sb, (void *)&slspts, sizeof(slspts));
+	error = sbuf_bcat(sb, (void *)&slspts, sizeof(slspts));
 	if (error != 0)
 		return (error);
 

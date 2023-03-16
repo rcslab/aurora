@@ -5,8 +5,11 @@
 #include <sys/bitstring.h>
 #include <sys/condvar.h>
 #include <sys/fcntl.h>
+#include <sys/file.h>
+#include <sys/filedesc.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
+#include <sys/proc.h>
 #include <sys/queue.h>
 #include <sys/sdt.h>
 #include <sys/stat.h>
@@ -53,6 +56,8 @@ struct slsckpt_data {
 	struct sls_attr sckpt_attr;	    /* Attributes of the partition */
 #define sckpt_mode sckpt_attr.attr_mode
 #define sckpt_target sckpt_attr.attr_target
+	struct sbuf *sckpt_meta;   /* Serialized metadata records */
+	struct sbuf *sckpt_dataid; /* Serialized data records */
 };
 
 /* An in-memory version of an Aurora record. */
@@ -87,7 +92,18 @@ extern struct sls_metadata slsm;
 
 struct sls_record *sls_getrecord(
     struct sbuf *sb, uint64_t slsid, uint64_t type);
-#define FDTOFP(p, fd) (p->p_fd->fd_files->fdt_ofiles[fd].fde_file)
+
+static inline struct file *
+FDTOFP(struct proc *p, int fd)
+{
+	if (fd < 0)
+		return (NULL);
+
+	if (fd >= p->p_fd->fd_files->fdt_nfiles)
+		return (NULL);
+
+	return (p->p_fd->fd_files->fdt_ofiles[fd].fde_file);
+}
 
 /* The number of buckets for the hashtable used for the processes */
 #define SLSP_BUCKETS (64)
@@ -165,10 +181,10 @@ SDT_PROVIDER_DECLARE(sls);
 /* Start an SLS ioctl operation. This guards global module state (not partition
  * state). */
 static inline int
-sls_startop(bool allow_concurrent)
+sls_startop()
 {
 	SLS_LOCK();
-	if (SLS_EXITING() || (!allow_concurrent && (slsm.slsm_inprog > 0))) {
+	if (SLS_EXITING()) {
 		SLS_UNLOCK();
 		return (EBUSY);
 	}
@@ -209,6 +225,9 @@ int slsckpt_gather(
 bool slsckpt_prepare_state(struct slspart *slsp, bool *retry);
 void slsckpt_stop(slsset *procset, struct proc *pcaller);
 void slsckpt_cont(slsset *procset, struct proc *pcaller);
+void slsckpt_compact(struct slspart *slsp, struct slsckpt_data *sckpt);
+
+void sls_sockrcvd(struct slspart *slsp);
 int slspre_resident(struct slspart *slsp, struct file *fp);
 
 MALLOC_DECLARE(M_SLSMM);
@@ -216,5 +235,11 @@ MALLOC_DECLARE(M_SLSREC);
 
 SDT_PROVIDER_DECLARE(sls);
 SDT_PROBE_DECLARE(sls, , sls_rest, );
+
+static inline int
+sls_isdata(uint64_t type)
+{
+	return (type == SLOSREC_VMOBJ);
+}
 
 #endif /* _SLS_INTERNAL_H_ */

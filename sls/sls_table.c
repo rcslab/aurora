@@ -9,6 +9,7 @@
 #include <sys/kernel.h>
 #include <sys/limits.h>
 #include <sys/malloc.h>
+#include <sys/md5.h>
 #include <sys/mman.h>
 #include <sys/module.h>
 #include <sys/pcpu.h>
@@ -47,6 +48,7 @@
 
 #include "debug.h"
 #include "sls_internal.h"
+#include "sls_io.h"
 #include "sls_kv.h"
 #include "sls_pager.h"
 #include "sls_partition.h"
@@ -119,142 +121,6 @@ slstable_fini(void)
 
 	if (slstable_task_zone != NULL)
 		uma_zdestroy(slstable_task_zone);
-}
-
-static int
-sls_isdata(uint64_t type)
-{
-	return (type == SLOSREC_VMOBJ);
-}
-
-/*
- * Open a SLOS inode as a file pointer for IO. The kern_openat() call
- * uses paths and allocates file descriptor table entries, and we want
- * neither of those things.
- */
-static int
-slsfp_open_vnode(uint64_t oid, bool create, struct file **fpp)
-{
-	struct thread *td = curthread;
-	int mode = FREAD | FWRITE;
-	struct vnode *vp;
-	struct file *fp;
-	int error;
-
-	if (create) {
-		/* Try to create the node, if not already there, wrap it in a
-		 * vnode. */
-		error = slos_svpalloc(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
-		if (error != 0)
-			return (error);
-	}
-
-	/*
-	 * Allocate a file structure. The descriptor to reference it
-	 * is allocated and set by finstall() below.
-	 */
-	error = falloc_noinstall(td, &fp);
-	if (error != 0)
-		return (error);
-	/*
-	 * An extra reference on `fp' has been held for us by
-	 * falloc_noinstall().
-	 */
-
-	/* Get the vnode for the record and open it. */
-	error = VFS_VGET(slos.slsfs_mount, oid, LK_EXCLUSIVE, &vp);
-	if (error != 0) {
-		fdrop(fp, td);
-		return (error);
-	}
-
-	/* Open the record for writing. */
-	error = vn_open_vnode(vp, mode, td->td_ucred, td, fp);
-	if (error != 0) {
-		vput(vp);
-		fdrop(fp, td);
-		return (error);
-	}
-
-	/*
-	 * Store the vnode, for any f_type. Typically, the vnode use
-	 * count is decremented by direct call to vn_closefile() for
-	 * files that switched type in the cdevsw fdopen() method.
-	 */
-	KASSERT(fp->f_ops == &badfileops, ("file methods already set"));
-	fp->f_vnode = vp;
-	fp->f_seqcount = 1;
-	finit(fp, mode, DTYPE_VNODE, vp, &vnops);
-
-	VOP_UNLOCK(vp, 0);
-
-	*fpp = fp;
-	/*
-	 * Release our private reference, leaving the one associated with
-	 * the descriptor table intact.
-	 */
-	return (0);
-}
-
-static int
-slsfp_doio(struct file *fp, void *buf, size_t len, enum uio_rw rw)
-{
-	struct thread *td = curthread;
-	size_t iosize = 0;
-	uint64_t back = 0;
-	struct iovec aiov;
-	struct uio auio;
-	int error = 0;
-
-	ASSERT_VOP_LOCKED(vp, ("vnode %p is unlocked", vp));
-
-	aiov.iov_base = buf;
-	aiov.iov_len = len;
-	slos_uioinit(&auio, -1, rw, &aiov, 1);
-
-	/* If we don't want to do anything just return. */
-	if (sls_drop_io)
-		return (0);
-
-	/* Do the IO itself. */
-	iosize = auio.uio_resid;
-
-	while (auio.uio_resid > 0) {
-		back = auio.uio_resid;
-		if (auio.uio_rw == UIO_WRITE) {
-			error = fo_write(fp, &auio, td->td_ucred, 0, td);
-		} else {
-			error = fo_read(fp, &auio, td->td_ucred, 0, td);
-		}
-		if (error != 0) {
-			goto out;
-		}
-
-		if (back == auio.uio_resid)
-			break;
-	}
-
-	if (auio.uio_rw == UIO_WRITE)
-		sls_bytes_written_vfs += iosize;
-	else
-		sls_bytes_read_vfs += iosize;
-out:
-
-	sls_io_initiated += 1;
-
-	return (error);
-}
-
-int
-slsfp_read(struct file *fp, void *buf, size_t size)
-{
-	return (slsfp_doio(fp, buf, size, UIO_READ));
-}
-
-int
-slsfp_write(struct file *fp, void *buf, size_t size)
-{
-	return (slsfp_doio(fp, buf, size, UIO_WRITE));
 }
 
 /* Creates an in-memory Aurora record. */
@@ -379,7 +245,7 @@ sls_readrec_buf(struct file *fp, size_t len, struct sbuf **sbp)
 		return (ENOMEM);
 
 	/* Read the data from the vnode. */
-	error = slsfp_read(fp, buf, len);
+	error = slsio_fpread(fp, buf, len);
 	if (error != 0) {
 		SBFREE(buf);
 		return (error);
@@ -401,8 +267,8 @@ sls_readrec_buf(struct file *fp, size_t len, struct sbuf **sbp)
 /*
  * Reads in the metadata record representing one or more SLS info structs.
  */
-static int
-sls_readmeta_slos(char *buf, size_t buflen, struct slskv_table *table)
+int
+sls_readmeta(char *buf, size_t buflen, struct slskv_table *table)
 {
 	struct sls_record *rec, *stored_rec;
 	size_t recsize, remaining;
@@ -509,11 +375,8 @@ sls_object_populate(vm_object_t object, vm_pindex_t start, vm_pindex_t end)
 
 	for (offset = 0; offset != count; offset += (1 + rahead)) {
 		m = vm_page_grab(object, start + offset, VM_ALLOC_NORMAL);
-		if (m == NULL) {
-			printf("No page with offset %ld for %lx\n",
-			    start + offset, object->objid);
-			continue;
-		}
+		if (m == NULL)
+			panic("No page");
 
 		KASSERT(
 		    m->valid == 0, ("page has valid bitfield %d", m->valid));
@@ -521,10 +384,13 @@ sls_object_populate(vm_object_t object, vm_pindex_t start, vm_pindex_t end)
 		rahead = count - offset - 1;
 		orig = rahead;
 		rv = vm_pager_get_pages(object, &m, 1, NULL, &rahead);
+
 		vm_page_xunbusy(m);
 
-		if (rv != VM_PAGER_OK)
-			return (rv);
+		if (rv != VM_PAGER_OK) {
+			DEBUG1("Pager failed to page in with %d\n", rv);
+			return (EIO);
+		}
 	}
 
 	return (0);
@@ -641,6 +507,7 @@ sls_get_extents(
 
 	*extentsp = extents;
 	*numextentsp = numextents;
+
 	return (0);
 }
 
@@ -669,6 +536,7 @@ sls_readdata_slos(struct vnode *vp, vm_object_t obj)
 	}
 
 	free(extents, M_SLSMM);
+
 	return (0);
 }
 
@@ -832,14 +700,18 @@ sls_readdata(struct slspart *slsp, struct file *fp, uint64_t slsid,
 	    ("uninitialized object of type %d", obj->type));
 
 	if (SLSP_PREFAULT(slsp) || SLSP_DELTAREST(slsp)) {
+		/*
+		 * Even we have no prefault vector or can't prefault
+		 * pages in, we can keep going since we have created
+		 * the object.
+		 */
 		error = slskv_find(
 		    slsm.slsm_prefault, slsid, (uintptr_t *)&slspre);
-
 		if (error != 0)
-			return (ENOENT);
+			return (0);
 
-		KASSERT(obj->objid == slsid, ("new object's objid is wrong"));
-		error = sls_readdata_prefault(fp->f_vnode, obj, slspre);
+		KASSERT(obj->objid == slsid, ("New object's objid is wrong"));
+		sls_readdata_prefault(fp->f_vnode, obj, slspre);
 		if (error != 0)
 			goto error;
 
@@ -849,7 +721,7 @@ sls_readdata(struct slspart *slsp, struct file *fp, uint64_t slsid,
 			goto error;
 	}
 
-	return (0);
+	return (error);
 
 error:
 	VM_OBJECT_WUNLOCK(obj);
@@ -889,7 +761,7 @@ sls_read_slos_manifest(uint64_t oid, char **bufp, size_t *buflenp)
 	int error;
 	char *buf;
 
-	error = slsfp_open_vnode(oid, false, &fp);
+	error = slsio_open_sls(oid, false, &fp);
 	if (error != 0)
 		return (error);
 
@@ -901,7 +773,7 @@ sls_read_slos_manifest(uint64_t oid, char **bufp, size_t *buflenp)
 	}
 
 	buf = malloc(st.len, M_SLSMM, M_WAITOK);
-	error = slsfp_read(fp, buf, st.len);
+	error = slsio_fpread(fp, buf, st.len);
 	if (error != 0) {
 		fdrop(fp, td);
 		return (error);
@@ -926,7 +798,7 @@ sls_read_slos_datarec(struct slspart *slsp, uint64_t oid,
 	int error, ret;
 
 	/* Get the vnode for the record and open it. */
-	error = slsfp_open_vnode(oid, false, &fp);
+	error = slsio_open_sls(oid, false, &fp);
 	if (error != 0)
 		return (error);
 
@@ -1062,7 +934,7 @@ sls_read_slos(struct slspart *slsp, struct slsckpt_data **sckptp,
 	SDT_PROBE1(sls, , sls_rest, , "Getting data");
 
 	/* Extract all metadata records. */
-	error = sls_readmeta_slos(buf, buflen, sckpt->sckpt_rectable);
+	error = sls_readmeta(buf, buflen, sckpt->sckpt_rectable);
 	if (error != 0) {
 		DEBUG1("%s: reading the metadata failed\n", __func__);
 		goto error;
@@ -1128,6 +1000,7 @@ sls_writeobj_data(struct vnode *vp, vm_object_t obj, size_t offset)
 			KASSERT(retry == false, ("out of buffers"));
 			break;
 		}
+
 		/*
 		 * The pindex from which we're going to search for the next run
 		 * of pages.
@@ -1177,7 +1050,7 @@ static int __attribute__((noinline)) sls_writemeta_slos(
 
 	len = sbuf_len(sb);
 
-	error = slsfp_open_vnode(rec->srec_id, true, &fp);
+	error = slsio_open_sls(rec->srec_id, true, &fp);
 	if (error != 0)
 		return (error);
 
@@ -1194,7 +1067,7 @@ static int __attribute__((noinline)) sls_writemeta_slos(
 	}
 
 	/* Keep reading until we get all the info. */
-	error = slsfp_write(fp, record, len);
+	error = slsio_fpwrite(fp, record, len);
 	if (error != 0)
 		goto error;
 
@@ -1353,90 +1226,42 @@ sls_write_slos_dataregion(struct slsckpt_data *sckpt_data)
 int
 sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt)
 {
-	struct sbuf *sb_manifest, *sb_meta, *sb_data;
-	uint64_t data_records = 0;
+	struct sbuf *sb_manifest;
 	struct sls_record *rec;
 	struct slskv_iter iter;
+	uint64_t numids;
 	uint64_t slsid;
-	size_t len;
 	int error;
 
 	/* Create a record for metadata, data, and the manifest itself. */
 	sb_manifest = sbuf_new_auto();
-	sb_meta = sbuf_new_auto();
-	sb_data = sbuf_new_auto();
 
 	KV_FOREACH(sckpt->sckpt_rectable, iter, slsid, rec)
 	{
-		/* Create eachkrecord in parallel. */
-		if (sls_isdata(rec->srec_type)) {
-			error = sls_writedata_slos(rec, sckpt);
-			if (error != 0)
-				printf("Writing to the SLOS failed with %d\n",
-				    error);
+		/* Create each record in parallel. */
+		if (!sls_isdata(rec->srec_type))
+			continue;
 
-			/*
-			 * Attach the new record directly to the manifest.
-			 * The end result is an array of data record OIDs, then
-			 * an array of (record, len, string) metadata records.
-			 */
-			error = sbuf_bcat(
-			    sb_data, &rec->srec_id, sizeof(rec->srec_id));
-			if (error != 0) {
-				KV_ABORT(iter);
-				goto out;
-			}
-			data_records += 1;
-		} else {
-			/*
-			 * Append the metadata record, length, and data.
-			 */
-			error = sbuf_bcat(sb_meta, rec, sizeof(*rec));
-			if (error != 0)
-				goto out;
-
-			len = sbuf_len(rec->srec_sb);
-			error = sbuf_bcat(sb_meta, &len, sizeof(size_t));
-			if (error != 0)
-				goto out;
-
-			error = sbuf_bcat(sb_meta, sbuf_data(rec->srec_sb),
-			    sbuf_len(rec->srec_sb));
-			if (error != 0)
-				goto out;
-		}
+		error = sls_writedata_slos(rec, sckpt);
+		if (error != 0)
+			printf("Writing data failed with %d\n", error);
 	}
-
-	/* We got all the metadata and data. */
-	sbuf_finish(sb_data);
-	sbuf_finish(sb_meta);
-
-	/*
-	 * XXX INTERMEDIATE PIVOT SOLUTION: First append all VM object IDs to
-	 * the manifest. Write out an SLS ID of 0. Then write out the
-	 * concatenation of all metadata from the manifest.
-	 *
-	 * When we read it back in slos_read_manifest we can use strnlen to find
-	 * the list of VM object SLSIDs. We then parse out the rest of the
-	 * records.
-	 *
-	 * THE CORRECT SOLUTION: Don't add the records in the table in the first
-	 * place, use the record table to prevent duplication only. Directly
-	 * append records and data to a unified metadata record.
-	 */
 
 	/*
 	 * Prepend the data array with its size.
 	 */
-	error = sbuf_bcat(sb_manifest, &data_records, sizeof(data_records));
+	numids = sbuf_len(sckpt->sckpt_dataid) / sizeof(uint64_t);
+	error = sbuf_bcat(sb_manifest, &numids, sizeof(numids));
 	if (error != 0)
 		goto out;
 
-	error = sbuf_bcat(sb_manifest, sbuf_data(sb_data), sbuf_len(sb_data));
+	error = sbuf_bcat(sb_manifest, sbuf_data(sckpt->sckpt_dataid),
+	    sbuf_len(sckpt->sckpt_dataid));
 	if (error != 0)
 		goto out;
 
-	error = sbuf_bcat(sb_manifest, sbuf_data(sb_meta), sbuf_len(sb_meta));
+	error = sbuf_bcat(sb_manifest, sbuf_data(sckpt->sckpt_meta),
+	    sbuf_len(sckpt->sckpt_meta));
 	if (error != 0)
 		goto out;
 
@@ -1448,8 +1273,6 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt)
 		goto out;
 
 out:
-	sbuf_delete(sb_data);
-	sbuf_delete(sb_meta);
 	sbuf_delete(sb_manifest);
 	taskqueue_drain_all(slsm.slsm_tabletq);
 
@@ -1468,11 +1291,11 @@ sls_export_ssparts(void)
 		return (0);
 
 	/* Get the vnode for the record and open it. */
-	error = slsfp_open_vnode(SLOS_SLSPART_INODE, true, &fp);
+	error = slsio_open_sls(SLOS_SLSPART_INODE, true, &fp);
 	if (error != 0)
 		return (error);
 
-	error = slsfp_write(fp, ssparts, ssparts_len);
+	error = slsio_fpwrite(fp, ssparts, ssparts_len);
 	DEBUG1("Wrote %ld bytes for partitions\n", ssparts_len);
 
 	fdrop(fp, td);
@@ -1490,7 +1313,7 @@ sls_import_ssparts(void)
 	DEBUG1("[SSPART] Reading %ld bytes for partitions\n", ssparts_len);
 
 	/* Get the vnode for the record and open it. */
-	error = slsfp_open_vnode(SLOS_SLSPART_INODE, false, &fp);
+	error = slsio_open_sls(SLOS_SLSPART_INODE, false, &fp);
 	if (error != 0) {
 		/*
 		 * There were no partitions to speak of, because
@@ -1501,7 +1324,7 @@ sls_import_ssparts(void)
 		return (0);
 	}
 
-	error = slsfp_read(fp, ssparts, ssparts_len);
+	error = slsio_fpread(fp, ssparts, ssparts_len);
 	if (error != 0) {
 		fdrop(fp, td);
 		return (error);
@@ -1591,17 +1414,17 @@ slspre_export(void)
 	iosize = sbuf_len(sb);
 
 	/* Get the vnode for the record and open it. */
-	error = slsfp_open_vnode(SLOS_SLSPREFAULT_INODE, true, &fp);
+	error = slsio_open_sls(SLOS_SLSPREFAULT_INODE, true, &fp);
 	if (error != 0) {
 		sbuf_delete(sb);
 		return (error);
 	}
 
-	error = slsfp_write(fp, &iosize, sizeof(iosize));
+	error = slsio_fpwrite(fp, &iosize, sizeof(iosize));
 	if (error != 0)
 		goto done;
 
-	error = slsfp_write(fp, sbuf_data(sb), iosize);
+	error = slsio_fpwrite(fp, sbuf_data(sb), iosize);
 	if (error != 0)
 		goto done;
 
@@ -1626,7 +1449,7 @@ slspre_import(void)
 	int error;
 
 	/* Get the vnode for the record and open it. */
-	error = slsfp_open_vnode(SLOS_SLSPREFAULT_INODE, false, &fp);
+	error = slsio_open_sls(SLOS_SLSPREFAULT_INODE, false, &fp);
 	if (error != 0) {
 		/*
 		 * There is no inode for prefault vectors if the SLOS
@@ -1636,17 +1459,17 @@ slspre_import(void)
 		return (0);
 	}
 
-	error = slsfp_read(fp, &size, sizeof(size));
+	error = slsio_fpread(fp, &size, sizeof(size));
 	if (error != 0)
 		goto done;
 
 	DEBUG1("[SLSPRE] Reading %ld bytes\n", size);
 	while (size > 0) {
-		error = slsfp_read(fp, &objid, sizeof(objid));
+		error = slsio_fpread(fp, &objid, sizeof(objid));
 		if (error != 0)
 			break;
 
-		error = slsfp_read(fp, &bitlen, sizeof(bitlen));
+		error = slsio_fpread(fp, &bitlen, sizeof(bitlen));
 		if (error != 0)
 			break;
 
@@ -1656,7 +1479,7 @@ slspre_import(void)
 			break;
 
 		/* Read it in. */
-		error = slsfp_read(fp, slspre->pre_map, bitstr_size(bitlen));
+		error = slsio_fpread(fp, slspre->pre_map, bitstr_size(bitlen));
 		if (error != 0)
 			break;
 

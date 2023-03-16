@@ -63,9 +63,23 @@ slsckpt_zone_init(void *mem, int size, int flags __unused)
 	if (error != 0)
 		goto error;
 
+	sckpt->sckpt_meta = sbuf_new_auto();
+	if (sckpt->sckpt_meta == NULL)
+		goto error;
+
+	sckpt->sckpt_dataid = sbuf_new_auto();
+	if (sckpt->sckpt_dataid == NULL)
+		goto error;
+
 	return (0);
 
 error:
+
+	if (sckpt->sckpt_dataid != NULL)
+		sbuf_delete(sckpt->sckpt_dataid);
+
+	if (sckpt->sckpt_meta != NULL)
+		sbuf_delete(sckpt->sckpt_meta);
 
 	if (sckpt != NULL) {
 		slskv_destroy(sckpt->sckpt_vntable);
@@ -81,6 +95,8 @@ slsckpt_zone_fini(void *mem, int size)
 {
 	struct slsckpt_data *sckpt = (struct slsckpt_data *)mem;
 
+	sbuf_delete(sckpt->sckpt_dataid);
+	sbuf_delete(sckpt->sckpt_meta);
 	slsset_destroy(sckpt->sckpt_vntable);
 	slskv_destroy(sckpt->sckpt_shadowtable);
 	slskv_destroy(sckpt->sckpt_rectable);
@@ -98,6 +114,9 @@ slsckpt_zone_ctor(void *mem, int size, void *arg, int flags __unused)
 		attr = (struct sls_attr *)arg;
 		memcpy(&sckpt->sckpt_attr, attr, sizeof(sckpt->sckpt_attr));
 	}
+
+	sbuf_clear(sckpt->sckpt_meta);
+	sbuf_clear(sckpt->sckpt_dataid);
 
 	return (0);
 }
@@ -129,6 +148,9 @@ slsckpt_zone_dtor(void *mem, int size, void *arg)
 
 	KV_FOREACH_POP(sckpt->sckpt_rectable, slsid, rec)
 	sls_record_destroy(rec);
+
+	sbuf_clear(sckpt->sckpt_dataid);
+	sbuf_clear(sckpt->sckpt_meta);
 }
 
 int
@@ -188,6 +210,52 @@ slsckpt_drop(struct slsckpt_data *sckpt)
 	/* Free if that was the last reference. */
 	if (release)
 		uma_zfree(slsckpt_zone, sckpt);
+}
+
+int
+slsckpt_addrecord(
+    struct slsckpt_data *sckpt, uint64_t slsid, struct sbuf *sb, uint64_t type)
+{
+	struct sls_record *rec;
+	size_t len;
+	int error;
+
+	rec = sls_getrecord(sb, slsid, type);
+	if (rec == NULL)
+		return (ENOMEM);
+
+	/* XXX Avoid this altogether for metadata records, keep a hashtable or
+	 * something. */
+	error = slskv_add(sckpt->sckpt_rectable, slsid, (uintptr_t)rec);
+	if (error != 0) {
+		sls_record_destroy(rec);
+		return (error);
+	}
+
+	/* Only create */
+	if (type == SLOSREC_VMOBJ) {
+		error = sbuf_bcat(sckpt->sckpt_dataid, &slsid, sizeof(slsid));
+		return (error);
+	}
+
+	/*
+	 * Append the metadata record, length, and data.
+	 */
+	error = sbuf_bcat(sckpt->sckpt_meta, rec, sizeof(*rec));
+	if (error != 0)
+		return (error);
+
+	len = sbuf_len(rec->srec_sb);
+	error = sbuf_bcat(sckpt->sckpt_meta, &len, sizeof(len));
+	if (error != 0)
+		return (error);
+
+	error = sbuf_bcat(
+	    sckpt->sckpt_meta, sbuf_data(rec->srec_sb), sbuf_len(rec->srec_sb));
+	if (error != 0)
+		return (error);
+
+	return (0);
 }
 
 struct slspart *
@@ -301,9 +369,13 @@ slsp_detachall(struct slspart *slsp)
  * Create a new struct slspart to be entered into the SLS.
  */
 static int
-slsp_init(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
+slsp_init(
+    uint64_t oid, struct sls_attr attr, void *backend, struct slspart **slspp)
 {
+	struct thread *td = curthread;
 	struct slspart *slsp = NULL;
+	char *fullpath = "";
+	char *freepath = NULL;
 	int error;
 
 	/* Create the new partition. */
@@ -315,10 +387,43 @@ slsp_init(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
 	slsp->slsp_status = SLSP_AVAILABLE;
 	slsp->slsp_epoch = SLSPART_EPOCHINIT;
 	slsp->slsp_nextepoch = slsp->slsp_epoch + 1;
+	slsp->slsp_backend = backend;
+
 	/* Create the set of held processes. */
 	error = slsset_create(&slsp->slsp_procs);
 	if (error != 0)
 		goto error;
+
+	switch (slsp->slsp_target) {
+	case SLS_FILE:
+		error = vn_fullpath(
+		    td, slsp->slsp_backend, &fullpath, &freepath);
+		if (error != 0) {
+			free(freepath, M_TEMP);
+			goto error;
+		}
+
+		vref(slsp->slsp_backend);
+
+		strncpy(slsp->slsp_name, fullpath, PATH_MAX);
+		free(freepath, M_TEMP);
+		break;
+
+	case SLS_SOCKSND:
+	case SLS_SOCKRCV:
+		if (!fhold((struct file *)slsp->slsp_backend)) {
+			error = EBADF;
+			goto error;
+		}
+
+	case SLS_MEM:
+	case SLS_OSD:
+		/* XXX Add a name for the OSD partitions. */
+		break;
+
+	default:
+		panic("invalid partition target %d\n", slsp->slsp_target);
+	}
 
 	mtx_init(&slsp->slsp_syncmtx, "slssync", NULL, MTX_DEF);
 	cv_init(&slsp->slsp_synccv, "slssync");
@@ -346,6 +451,9 @@ error:
 static void
 slsp_fini(struct slspart *slsp)
 {
+	struct thread *td = curthread;
+	int backend;
+
 	/* Remove all processes currently in the partition from the SLS. */
 	slsp_detachall(slsp);
 
@@ -364,12 +472,38 @@ slsp_fini(struct slspart *slsp)
 	if (slsp->slsp_sckpt != NULL)
 		slsckpt_drop(slsp->slsp_sckpt);
 
+	backend = slsp->slsp_attr.attr_target;
+	switch (backend) {
+	case SLS_SOCKSND:
+		fdrop((struct file *)slsp->slsp_backend, td);
+		slsp->slsp_backend = NULL;
+		break;
+
+	case SLS_FILE:
+		vrele((struct vnode *)slsp->slsp_backend);
+		slsp->slsp_backend = NULL;
+		break;
+
+	case SLS_SOCKRCV:
+		fdrop((struct file *)slsp->slsp_backend, td);
+		slsp->slsp_backend = NULL;
+		break;
+
+	case SLS_MEM:
+	case SLS_OSD:
+		break;
+
+	default:
+		printf("BUG: Invalid backend %d\n", backend);
+	}
+
 	free(slsp, M_SLSMM);
 }
 
 /* Add a partition with unique ID oid to the SLS. */
 int
-slsp_add(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
+slsp_add(
+    uint64_t oid, struct sls_attr attr, void *backend, struct slspart **slspp)
 {
 	struct slspart *slsp;
 	int error;
@@ -387,7 +521,7 @@ slsp_add(uint64_t oid, struct sls_attr attr, struct slspart **slspp)
 	}
 
 	/* If we didn't find it, create one. */
-	error = slsp_init(oid, attr, &slsp);
+	error = slsp_init(oid, attr, backend, &slsp);
 	if (error != 0)
 		return (error);
 
@@ -646,7 +780,7 @@ sslsp_deserialize(void)
 
 		/* Create the in-memory representation. */
 		error = slsp_add(
-		    ssparts[i].sspart_oid, ssparts[i].sspart_attr, &slsp);
+		    ssparts[i].sspart_oid, ssparts[i].sspart_attr, NULL, &slsp);
 		if (error != 0)
 			return (error);
 

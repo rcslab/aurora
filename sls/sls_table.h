@@ -40,7 +40,11 @@ void slstable_fini(void);
 int sls_import_ssparts(void);
 int sls_export_ssparts(void);
 
-int slsfp_read(struct file *fp, void *buf, size_t size);
-int slsfp_write(struct file *fp, void *buf, size_t size);
+int sls_readmeta(char *buf, size_t buflen, struct slskv_table *table);
+
+int sls_read_file(struct slspart *slsp, struct slsckpt_data **sckpt,
+    struct slskv_table *objtable);
+int sls_write_file(struct slspart *slsp, struct slsckpt_data *sckpt);
+int sls_write_socket(struct slspart *slsp, struct slsckpt_data *sckpt);
 
 #endif /* _SLSTABLE_H_ */

@@ -65,10 +65,12 @@ struct slspart {
 	uint64_t slsp_epoch;	  /* Current epoch, for ckpt on disk */
 	uint64_t slsp_nextepoch; /* Epoch the caller's operations will be in
 				    after completion*/
+	void *slsp_backend; /* Opaque backend pointer, dependent on type */
 
 	struct slsmetr slsp_metr; /* Local Metropolis state */
 
 	LIST_ENTRY(slspart) slsp_parts; /* List of active SLS partitions */
+	char slsp_name[PATH_MAX];	/* Path for the partition*/
 #define slsp_target slsp_attr.attr_target
 #define slsp_mode slsp_attr.attr_mode
 #define slsp_amplification slsp_attr.attr_amplification
@@ -82,7 +84,8 @@ struct slspart *slsp_find(uint64_t oid);
 int slsp_attach(uint64_t oid, pid_t pid);
 int slsp_detach(uint64_t oid, pid_t pid);
 
-int slsp_add(uint64_t oid, struct sls_attr attr, struct slspart **slspp);
+int slsp_add(
+    uint64_t oid, struct sls_attr attr, void *backend, struct slspart **slspp);
 void slsp_del(uint64_t oid);
 
 void slsp_delall(void);
@@ -112,11 +115,14 @@ bool slsp_restorable(struct slspart *slsp);
 #define SLSP_PREFAULT(slsp) (SLSATTR_ISPREFAULT((slsp)->slsp_attr))
 #define SLSP_PRECOPY(slsp) (SLSATTR_ISPRECOPY((slsp->slsp_attr)))
 #define SLSP_DELTAREST(slsp) (SLSATTR_ISDELTAREST((slsp->slsp_attr)))
+#define SLSP_NOCKPT(slsp) (SLSATTR_ISNOCKPT((slsp->slsp_attr)))
 
 extern uma_zone_t slsckpt_zone;
 struct slsckpt_data *slsckpt_alloc(struct sls_attr *attr);
 void slsckpt_hold(struct slsckpt_data *sckpt);
 void slsckpt_drop(struct slsckpt_data *sckpt);
+int slsckpt_addrecord(
+    struct slsckpt_data *sckpt, uint64_t slsid, struct sbuf *sb, uint64_t type);
 
 extern struct slspart_serial ssparts[];
 int sslsp_deserialize(void);

@@ -40,7 +40,6 @@ slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt)
 {
 	vm_object_t curobj, backer;
 	struct slsvmobject info;
-	struct sls_record *rec;
 	struct sbuf *sb;
 	int error;
 
@@ -106,14 +105,9 @@ slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt)
 	    ("device object has a backer"));
 	KASSERT(info.slsid != 0, ("object has an ID of 0"));
 
-	rec = sls_getrecord(sb, info.slsid, SLOSREC_VMOBJ);
-
-	error = slskv_add(
-	    sckpt->sckpt_rectable, (uint64_t)info.slsid, (uintptr_t)rec);
-	if (error != 0) {
-		sls_record_destroy(rec);
+	error = slsckpt_addrecord(sckpt, info.slsid, sb, SLOSREC_VMOBJ);
+	if (error != 0)
 		goto error;
-	}
 
 	return (0);
 
@@ -208,11 +202,12 @@ slsvmobj_restore(struct slsvmobject *info, struct slsckpt_data *sckpt,
 		 * into the address space, as in the case of executables,
 		 * in vmentry_rest.
 		 */
-
 		error = slskv_find(
 		    sckpt->sckpt_vntable, info->vnode, (uintptr_t *)&vp);
-		if (error != 0)
+		if (error != 0) {
+			printf("FAILED\n");
 			return (error);
+		}
 
 		if (sckpt->sckpt_attr.attr_target == SLS_OSD)
 			slspre_vnode(vp, sckpt->sckpt_attr);
@@ -224,6 +219,7 @@ slsvmobj_restore(struct slsvmobject *info, struct slsckpt_data *sckpt,
 		object = vp->v_object;
 		KASSERT(object != NULL, ("vnode is backed by NULL object"));
 		vm_object_reference(object);
+
 		break;
 
 		/*

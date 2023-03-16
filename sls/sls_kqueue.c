@@ -331,7 +331,7 @@ slskq_sockhack(struct proc *p, struct kqueue *kq)
 
 		/* Filter out everything but connected inet sockets. */
 		fp = FDTOFP(p, fd);
-		if (fp->f_type != DTYPE_SOCKET)
+		if (fp == NULL || fp->f_type != DTYPE_SOCKET)
 			continue;
 
 		so = (struct socket *)fp->f_data;
@@ -482,7 +482,7 @@ slskq_restore_knotes_all(struct proc *p, struct slskv_table *kevtable)
 
 		/* We only want kqueue-backed open files. */
 		fp = FDTOFP(p, fd);
-		if (fp->f_type != DTYPE_KQUEUE)
+		if (fp == NULL || fp->f_type != DTYPE_KQUEUE)
 			continue;
 
 		/* If we're a kqueue, we _have_ to have a set, even if empty. */
@@ -508,8 +508,8 @@ slskq_slsid(struct file *fp, uint64_t *slsidp)
 }
 
 static int
-slskq_checkpoint(struct file *fp, struct sls_record *rec,
-    struct slsckpt_data *sckpt_data __unused)
+slskq_checkpoint(
+    struct file *fp, struct sbuf *sb, struct slsckpt_data *sckpt_data)
 {
 	struct proc *p = curproc;
 	struct kqueue *kq;
@@ -520,7 +520,7 @@ slskq_checkpoint(struct file *fp, struct sls_record *rec,
 	if (error != 0)
 		return (error);
 
-	error = slskq_checkpoint_kqueue(p, kq, rec->srec_sb);
+	error = slskq_checkpoint_kqueue(p, kq, sb);
 
 	kqueue_release(kq, 0);
 

@@ -80,7 +80,7 @@ slsfile_slsid_invalid(struct file *fp, uint64_t *slsidp)
 
 static int
 slsfile_checkpoint_invalid(
-    struct file *fp, struct sls_record *rec, struct slsckpt_data *sckpt_data)
+    struct file *fp, struct sbuf *rec, struct slsckpt_data *sckpt)
 {
 	return (EINVAL);
 }
@@ -131,10 +131,10 @@ slsfile_slsid(struct file *fp, uint64_t *slsidp)
 
 static int
 slsfile_checkpoint(
-    struct file *fp, struct sls_record *rec, struct slsckpt_data *sckpt_data)
+    struct file *fp, struct sbuf *sb, struct slsckpt_data *sckpt_data)
 {
 	return (
-	    (slsfile_ops[fp->f_type]->slsfile_checkpoint)(fp, rec, sckpt_data));
+	    (slsfile_ops[fp->f_type]->slsfile_checkpoint)(fp, sb, sckpt_data));
 }
 
 static int
@@ -177,7 +177,7 @@ slsfile_extractfp(int fd, struct file **fpp)
 	struct file *fp = FDTOFP(td->td_proc, fd);
 
 	/* Get a reference on behalf of the hashtable. */
-	if (!fhold(fp))
+	if (fp == NULL || !fhold(fp))
 		return (EBADF);
 
 	/*
@@ -191,19 +191,19 @@ slsfile_extractfp(int fd, struct file **fpp)
 }
 
 static int
-slsfile_setinfo(struct file *fp, struct sls_record *rec, int type)
+slsfile_setinfo(struct file *fp, uint64_t slsid, struct sbuf *sb, int type)
 {
 	struct slsfile info;
 	int error;
 
 	info.magic = SLSFILE_ID;
-	info.slsid = rec->srec_id;
+	info.slsid = slsid;
 	info.type = type;
 	info.flag = fp->f_flag;
 	info.offset = fp->f_offset;
 	info.vnode = (uint64_t)fp->f_vnode;
 
-	error = sbuf_bcat(rec->srec_sb, (void *)&info, sizeof(info));
+	error = sbuf_bcat(sb, (void *)&info, sizeof(info));
 	if (error != 0)
 		return (error);
 
@@ -220,25 +220,28 @@ slsfile_setinfo(struct file *fp, struct sls_record *rec, int type)
 static int __attribute__((noinline)) slsckpt_file(
     struct file *fp, uint64_t *fpslsid, struct slsckpt_data *sckpt_data)
 {
-	struct sls_record *rec;
+	uintptr_t existing;
+	struct sbuf *sb;
 	uint64_t slsid;
 	int error;
 	int type;
+
+	sb = sbuf_new_auto();
+	if (sb == NULL)
+		return (ENOMEM);
 
 	/* Get the unique ID and create an empty record. */
 	error = slsfile_slsid(fp, &slsid);
 	if (error != 0)
 		return (error);
 
-	rec = sls_getrecord_empty(slsid, SLOSREC_FILE);
-
 	/*
 	 * Try to add the record into the table. If it is not inserted,
 	 * it's already there and we're done.
 	 */
-	error = slskv_add(sckpt_data->sckpt_rectable, slsid, (uintptr_t)rec);
-	if (error != 0) {
-		sls_record_destroy(rec);
+	error = slskv_find(sckpt_data->sckpt_rectable, slsid, &existing);
+	if (error == 0) {
+		sbuf_delete(sb);
 		*fpslsid = slsid;
 		return (0);
 	}
@@ -247,19 +250,24 @@ static int __attribute__((noinline)) slsckpt_file(
 	type = (slsfile_is_ttyvp(fp)) ? DTYPE_PTS : fp->f_type;
 
 	/* Set generic file info. */
-	error = slsfile_setinfo(fp, rec, type);
+	error = slsfile_setinfo(fp, slsid, sb, type);
 	if (error != 0)
 		goto error;
 
 	/* Grab file type specific state. */
-	error = slsfile_checkpoint(fp, rec, sckpt_data);
+	error = slsfile_checkpoint(fp, sb, sckpt_data);
 	if (error != 0)
 		goto error;
 
-	/* Seal the record to prevent further changes. */
-	error = sls_record_seal(rec);
+	error = sbuf_finish(sb);
 	if (error != 0)
 		goto error;
+
+	error = slsckpt_addrecord(sckpt_data, slsid, sb, SLOSREC_FILE);
+	if (error != 0) {
+		sbuf_finish(sb);
+		return (error);
+	}
 
 	/* Propagage to the caller the ID we found. */
 	*fpslsid = slsid;
@@ -267,9 +275,8 @@ static int __attribute__((noinline)) slsckpt_file(
 	return (0);
 
 error:
-	/* Destroy the incomplete record. */
-	slskv_del(sckpt_data->sckpt_rectable, slsid);
-	sls_record_destroy(rec);
+	/* Destroy the incomplete buffer. */
+	sbuf_delete(sb);
 
 	return (error);
 }
@@ -351,7 +358,7 @@ slsckpt_filedesc(
 		fp = FDTOFP(p, fd);
 
 		/* Check if the file is currently supported by SLS. */
-		if (!slsfile_supported(fp)) {
+		if (fp == NULL || !slsfile_supported(fp)) {
 			continue;
 		}
 

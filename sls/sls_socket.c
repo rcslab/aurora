@@ -144,7 +144,7 @@ slsckpt_sock_in(struct socket *so, struct slssock *info)
 
 static int
 slssock_checkpoint(
-    struct file *fp, struct sls_record *rec, struct slsckpt_data *sckpt_data)
+    struct file *fp, struct sbuf *sb, struct slsckpt_data *sckpt_data)
 {
 	struct socket *so = (struct socket *)fp->f_data;
 	struct slssock info;
@@ -205,7 +205,7 @@ slssock_checkpoint(
 		info.family = AF_UNSPEC;
 
 	/* Write it out to the SLS record. */
-	error = sbuf_bcat(rec->srec_sb, (void *)&info, sizeof(info));
+	error = sbuf_bcat(sb, (void *)&info, sizeof(info));
 	if (error != 0)
 		return (error);
 

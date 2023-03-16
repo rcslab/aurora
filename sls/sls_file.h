@@ -14,7 +14,7 @@
 #define UNADDR_MAX (104)
 #define DEVFS_ROOT "/dev/"
 
-int slspts_checkpoint_vnode(struct vnode *vp, struct sls_record *rec);
+int slspts_checkpoint_vnode(struct vnode *vp, struct sbuf *sb);
 
 int slskq_restore_knotes_all(struct proc *p, struct slskv_table *kevtable);
 
@@ -37,8 +37,8 @@ void slsfile_attemptclose(int fd);
 struct slsfile_ops {
 	bool (*slsfile_supported)(struct file *);
 	int (*slsfile_slsid)(struct file *, uint64_t *);
-	int (*slsfile_checkpoint)(struct file *fp, struct sls_record *rec,
-	    struct slsckpt_data *sckpt_data);
+	int (*slsfile_checkpoint)(
+	    struct file *fp, struct sbuf *sb, struct slsckpt_data *sckpt_data);
 	int (*slsfile_restore)(void *slsbacker, struct slsfile *finfo,
 	    struct slsrest_data *restdata, struct file **fpp);
 };
