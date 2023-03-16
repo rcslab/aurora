@@ -46,9 +46,8 @@ uma_zone_t slsckpt_zone;
 struct slspart_serial ssparts[SLS_OIDRANGE];
 
 static int
-slsckpt_zone_init(void *mem, int size, int flags __unused)
+slsckpt_init(struct slsckpt_data *sckpt)
 {
-	struct slsckpt_data *sckpt = (struct slsckpt_data *)mem;
 	int error;
 
 	error = slskv_create(&sckpt->sckpt_rectable);
@@ -71,6 +70,8 @@ slsckpt_zone_init(void *mem, int size, int flags __unused)
 	if (sckpt->sckpt_dataid == NULL)
 		goto error;
 
+	refcount_init(&sckpt->sckpt_refcount, 1);
+
 	return (0);
 
 error:
@@ -91,46 +92,26 @@ error:
 }
 
 static void
-slsckpt_zone_fini(void *mem, int size)
+slsckpt_fini(struct slsckpt_data *sckpt)
 {
-	struct slsckpt_data *sckpt = (struct slsckpt_data *)mem;
+	KASSERT(
+	    sckpt->sckpt_refcount == 0, ("deinitializing referenced sckpt"));
 
 	sbuf_delete(sckpt->sckpt_dataid);
 	sbuf_delete(sckpt->sckpt_meta);
 	slsset_destroy(sckpt->sckpt_vntable);
 	slskv_destroy(sckpt->sckpt_shadowtable);
 	slskv_destroy(sckpt->sckpt_rectable);
+	free(sckpt, M_SLSMM);
 }
 
-static int
-slsckpt_zone_ctor(void *mem, int size, void *arg, int flags __unused)
+void
+slsckpt_clear(struct slsckpt_data *sckpt)
 {
-	struct slsckpt_data *sckpt = (struct slsckpt_data *)mem;
-	struct sls_attr *attr;
-
-	refcount_init(&sckpt->sckpt_refcount, 0);
-
-	if (arg != NULL) {
-		attr = (struct sls_attr *)arg;
-		memcpy(&sckpt->sckpt_attr, attr, sizeof(sckpt->sckpt_attr));
-	}
-
-	sbuf_clear(sckpt->sckpt_meta);
-	sbuf_clear(sckpt->sckpt_dataid);
-
-	return (0);
-}
-
-static void
-slsckpt_zone_dtor(void *mem, int size, void *arg)
-{
-	struct slsckpt_data *sckpt = (struct slsckpt_data *)mem;
 	vm_object_t obj, shadow;
 	struct sls_record *rec;
 	struct vnode *vp;
 	uint64_t slsid;
-
-	KASSERT(sckpt->sckpt_refcount == 0, ("freeing referenced sckpt"));
 
 	/* Collapse all objects now being backed. */
 	KV_FOREACH_POP(sckpt->sckpt_shadowtable, obj, shadow)
@@ -153,41 +134,20 @@ slsckpt_zone_dtor(void *mem, int size, void *arg)
 	sbuf_clear(sckpt->sckpt_meta);
 }
 
-int
-slsckpt_zoneinit(void)
-{
-	slsckpt_zone = uma_zcreate("slsckpt", sizeof(struct slsckpt_data),
-	    slsckpt_zone_ctor, slsckpt_zone_dtor, slsckpt_zone_init,
-	    slsckpt_zone_fini, UMA_ALIGNOF(struct slsckpt_data), 0);
-	if (slsckpt_zone == NULL)
-		return (ENOMEM);
-
-	uma_prealloc(slsckpt_zone, SLSCKPT_ZONEWARM);
-
-	return (0);
-}
-
-void
-slsckpt_zonefini(void)
-{
-	if (slsckpt_zone != NULL)
-		uma_zdestroy(slsckpt_zone);
-}
-
 struct slsckpt_data *
 slsckpt_alloc(struct sls_attr *attr)
 {
 	struct slsckpt_data *sckpt;
+	int error;
 
-	sckpt = uma_zalloc_arg(slsckpt_zone, attr, M_WAITOK);
-	/*
-	 * Reinitialize the reference count. We initialize to 0 in
-	 * the constructor because sls_zonewarm() directly uses
-	 * the destructor instead of slsckpt_drop(). If we initialized
-	 * to 1, the destructor would be freeing an sckpt that is
-	 * still being referenced, causing a KASSERT fail.
-	 */
-	refcount_init(&sckpt->sckpt_refcount, 1);
+	sckpt = malloc(sizeof(*sckpt), M_SLSMM, M_WAITOK | M_ZERO);
+	error = slsckpt_init(sckpt);
+	if (error != 0) {
+		free(sckpt, M_SLSMM);
+		return (0);
+	}
+
+	memcpy(&sckpt->sckpt_attr, attr, sizeof(sckpt->sckpt_attr));
 
 	return (sckpt);
 }
@@ -208,8 +168,10 @@ slsckpt_drop(struct slsckpt_data *sckpt)
 	release = refcount_release(&sckpt->sckpt_refcount);
 
 	/* Free if that was the last reference. */
-	if (release)
-		uma_zfree(slsckpt_zone, sckpt);
+	if (release) {
+		slsckpt_clear(sckpt);
+		slsckpt_fini(sckpt);
+	}
 }
 
 int
@@ -388,6 +350,7 @@ slsp_init(
 	slsp->slsp_epoch = SLSPART_EPOCHINIT;
 	slsp->slsp_nextepoch = slsp->slsp_epoch + 1;
 	slsp->slsp_backend = backend;
+	slsp->slsp_blanksckpt = NULL;
 
 	/* Create the set of held processes. */
 	error = slsset_create(&slsp->slsp_procs);
@@ -456,6 +419,11 @@ slsp_fini(struct slspart *slsp)
 
 	/* Remove all processes currently in the partition from the SLS. */
 	slsp_detachall(slsp);
+
+	if (slsp->slsp_blanksckpt != NULL) {
+		slsckpt_drop(slsp->slsp_blanksckpt);
+		slsp->slsp_blanksckpt = NULL;
+	}
 
 	/* Destroy the synchronization mutexes/condition variables. */
 	mtx_assert(&slsp->slsp_syncmtx, MA_NOTOWNED);

@@ -204,9 +204,6 @@ sls_finishop(void)
 	SLS_UNLOCK();
 }
 
-int slsckpt_zoneinit(void);
-void slsckpt_zonefini(void);
-
 int slsrest_zoneinit(void);
 void slsrest_zonefini(void);
 

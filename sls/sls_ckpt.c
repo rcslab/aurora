@@ -241,7 +241,9 @@ slsckpt_compact(struct slspart *slsp, struct slsckpt_data *sckpt)
 						     0;
 			slsvm_objtable_collapse(
 			    old_sckpt->sckpt_shadowtable, objtable);
-			slsckpt_drop(old_sckpt);
+
+			slsckpt_clear(old_sckpt);
+			slsp->slsp_blanksckpt = old_sckpt;
 		}
 
 		return;
@@ -386,7 +388,11 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 #ifdef KTR
 	KVSET_FOREACH(procset, iter, p) { slsvm_print_vmspace(p->p_vmspace); }
 #endif
-	sckpt = slsckpt_alloc(&slsp->slsp_attr);
+	sckpt = slsp->slsp_blanksckpt;
+	slsp->slsp_blanksckpt = NULL;
+
+	if (sckpt == NULL)
+		sckpt = slsckpt_alloc(&slsp->slsp_attr);
 	if (sckpt == NULL)
 		return (ENOMEM);
 

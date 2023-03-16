@@ -1076,11 +1076,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		if (error != 0)
 			return (error);
 
-		/* Initialize checkpoint state. Depends on the KV zone. */
-		error = slsckpt_zoneinit();
-		if (error != 0)
-			return (error);
-
 		/* Initialize restore state. Depends on the KV zone. */
 		error = slsrest_zoneinit();
 		if (error != 0)
@@ -1159,7 +1154,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		DEBUG("Cleaning up image and module state...");
 
 		slsrest_zonefini();
-		slsckpt_zonefini();
 
 		slstable_fini();
 		slsm_fini_contents();

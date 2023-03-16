@@ -71,6 +71,7 @@ struct slspart {
 
 	LIST_ENTRY(slspart) slsp_parts; /* List of active SLS partitions */
 	char slsp_name[PATH_MAX];	/* Path for the partition*/
+	struct slsckpt_data *slsp_blanksckpt; /* Used for deltas */
 #define slsp_target slsp_attr.attr_target
 #define slsp_mode slsp_attr.attr_mode
 #define slsp_amplification slsp_attr.attr_amplification
@@ -119,6 +120,7 @@ bool slsp_restorable(struct slspart *slsp);
 
 extern uma_zone_t slsckpt_zone;
 struct slsckpt_data *slsckpt_alloc(struct sls_attr *attr);
+void slsckpt_clear(struct slsckpt_data *sckpt);
 void slsckpt_hold(struct slsckpt_data *sckpt);
 void slsckpt_drop(struct slsckpt_data *sckpt);
 int slsckpt_addrecord(
