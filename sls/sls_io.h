@@ -7,5 +7,7 @@ int slsio_fpread(struct file *fp, void *buf, size_t size);
 int slsio_fpwrite(struct file *fp, void *buf, size_t size);
 int slsio_fdread(int fd, char *buf, size_t len, off_t *offp);
 int slsio_fdwrite(int fd, char *buf, size_t len, off_t *offp);
+int slsio_fdwritev(int fd, struct iovec *aiov, size_t count, off_t *offp);
+int sls_write_rcvdone(struct slspart *slsp);
 
 #endif /* _SLS_IO_H_ */

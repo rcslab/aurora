@@ -4,6 +4,7 @@
 #include <sys/lock.h>
 #include <sys/proc.h>
 #include <sys/rwlock.h>
+#include <sys/taskqueue.h>
 
 #include <vm/vm.h>
 #include <vm/vm_object.h>
@@ -19,23 +20,48 @@
 #include "sls_table.h"
 #include "sls_vm.h"
 
-/*
- * XXX Write pages one at a time. Contiguous IOs require using UIOs as scatter/
- * gather arrays as designed. We can do this after we ensure correctness.
- */
+#define MAXIO (64)
+
+static int
+sls_writedata_file_write(
+    int fd, struct iovec *aiov, size_t count, size_t off, vm_page_t *ms)
+{
+	int error;
+	int i;
+
+	error = slsio_fdwritev(fd, aiov, count, &off);
+	for (i = 0; i < count; i++) {
+		ms[i]->oflags &= ~VPO_SWAPINPROG;
+	}
+
+	return (error);
+}
+
 static int
 sls_writedata_file_pages(int fd, vm_object_t obj)
 {
-	vm_pindex_t pindex;
+	struct iovec aiov[MAXIO];
+	vm_page_t ms[MAXIO];
+	vm_pindex_t pinit;
 	int error = 0;
 	vm_page_t m;
+	size_t index;
 	off_t off;
 
 	VM_OBJECT_WLOCK(obj);
 	vm_object_pip_add(obj, 1);
 
-	pindex = 0;
-	while ((m = vm_page_find_least(obj, pindex)) != NULL) {
+	index = 0;
+	for (m = vm_page_find_least(obj, 0), pinit = m->pindex; m != NULL;
+	     m = TAILQ_NEXT(m, listq)) {
+		if ((m->pindex != pinit + index) || (index == MAXIO)) {
+			VM_OBJECT_WUNLOCK(obj);
+			error = sls_writedata_file_write(
+			    fd, aiov, index, off, ms);
+			VM_OBJECT_WLOCK(obj);
+
+			index = 0;
+		}
 
 		KASSERT(m->object == obj,
 		    ("page %p in object %p "
@@ -44,23 +70,26 @@ sls_writedata_file_pages(int fd, vm_object_t obj)
 		KASSERT(pagesizes[m->psind] <= PAGE_SIZE,
 		    ("dumping page %p with size %ld", m, pagesizes[m->psind]));
 
-		off = (m->pindex + SLOS_OBJOFF) * PAGE_SIZE;
+		if (index == 0) {
+			off = (m->pindex + SLOS_OBJOFF) * PAGE_SIZE;
+			pinit = m->pindex;
+		}
 
 		m->oflags |= VPO_SWAPINPROG;
-		VM_OBJECT_WUNLOCK(obj);
-
-		error = slsio_fdwrite(
-		    fd, (char *)PHYS_TO_DMAP(m->phys_addr), PAGE_SIZE, &off);
-
-		VM_OBJECT_WLOCK(obj);
-		m->oflags &= ~VPO_SWAPINPROG;
+		aiov[index].iov_base = (char *)PHYS_TO_DMAP(m->phys_addr);
+		aiov[index].iov_len = PAGE_SIZE;
+		ms[index] = m;
+		index += 1;
 
 		if (error != 0)
 			break;
-
-		pindex += 1;
 	}
-	KASSERT(m == NULL, ("not null"));
+
+	if (index > 0) {
+		VM_OBJECT_WUNLOCK(obj);
+		error = sls_writedata_file_write(fd, aiov, index, off, ms);
+		VM_OBJECT_WLOCK(obj);
+	}
 
 	vm_object_pip_add(obj, -1);
 	VM_OBJECT_WUNLOCK(obj);
@@ -68,9 +97,8 @@ sls_writedata_file_pages(int fd, vm_object_t obj)
 	return (error);
 }
 
-static int
-sls_writedata_file(
-    int recfd, struct sls_record *rec, struct slsckpt_data *sckpt)
+static int __attribute__((noinline))
+sls_writedata_file(int recfd, struct sls_record *rec)
 {
 	struct slsvmobject *vminfo;
 	vm_object_t obj;
@@ -125,16 +153,53 @@ sls_write_file_setup(struct slspart *slsp, char *fullpath, int *manfdp)
 	return (slsio_open_vfs(fullpath, manfdp));
 }
 
-int
+static void
+sls_wfdtask(void *ctx, int __unused pending)
+{
+	union slstable_taskctx *taskctx = (union slstable_taskctx *)ctx;
+	struct slstable_wfdctx *wfdctx = &taskctx->wfd;
+	struct slspart *slsp = wfdctx->slsp;
+	struct sls_record *rec = wfdctx->rec;
+	struct thread *td = curthread;
+	char *fullpath;
+	int error;
+	int recfd;
+	int ret;
+
+	fullpath = malloc(PATH_MAX, M_SLSMM, M_WAITOK);
+
+	snprintf(fullpath, PATH_MAX, "%s/%lu/%lu", slsp->slsp_name,
+	    slsp->slsp_epoch, rec->srec_id);
+	error = slsio_open_vfs(fullpath, &recfd);
+	if (error != 0) {
+		printf("ckpt data slsio_open_vfs failed with %d\n", error);
+		free(fullpath, M_SLSMM);
+		return;
+	}
+
+	/* This call consumes the file descriptor. */
+	error = sls_writedata_file(recfd, rec);
+	ret = kern_close(td, recfd);
+	if (ret != 0)
+		printf("ckpt data kern_close failed with %d\n", ret);
+
+	free(fullpath, M_SLSMM);
+
+	uma_zfree(slstable_task_zone, taskctx);
+}
+
+int __attribute__((noinline))
 sls_write_file(struct slspart *slsp, struct slsckpt_data *sckpt)
 {
+	union slstable_taskctx *taskctx;
+	struct slstable_wfdctx *wfdctx;
 	struct thread *td = curthread;
 	struct sls_record *rec;
 	struct slskv_iter iter;
-	int manfd, recfd;
 	uint64_t numids;
 	char *fullpath;
 	uint64_t slsid;
+	int manfd;
 	int error;
 	int ret;
 
@@ -146,6 +211,8 @@ sls_write_file(struct slspart *slsp, struct slsckpt_data *sckpt)
 		return (error);
 	}
 
+	SDT_PROBE1(sls, , sls_ckpt, , "Opening the directory");
+
 	KV_FOREACH(sckpt->sckpt_rectable, iter, slsid, rec)
 	{
 		/* Create each record in parallel. */
@@ -155,21 +222,17 @@ sls_write_file(struct slspart *slsp, struct slsckpt_data *sckpt)
 		KASSERT(
 		    slsid == rec->srec_id, ("record is under the wrong key"));
 
-		snprintf(fullpath, PATH_MAX, "%s/%lu/%lu", slsp->slsp_name,
-		    slsp->slsp_epoch, slsid);
-		error = slsio_open_vfs(fullpath, &recfd);
-		if (error != 0)
-			goto out;
-
-		/* This call consumes the file descriptor. */
-		error = sls_writedata_file(recfd, rec, sckpt);
-		ret = kern_close(td, recfd);
-		if (ret != 0)
-			printf("ckpt data kern_close failed with %d\n", ret);
-
-		if (error != 0)
-			goto out;
+		taskctx = uma_zalloc(slstable_task_zone, M_WAITOK);
+		wfdctx = &taskctx->wfd;
+		wfdctx->slsp = slsp;
+		wfdctx->rec = rec;
+		TASK_INIT(&wfdctx->tk, 0, &sls_wfdtask, &wfdctx->tk);
+		taskqueue_enqueue(slsm.slsm_tabletq, &wfdctx->tk);
 	}
+
+	taskqueue_drain_all(slsm.slsm_tabletq);
+
+	SDT_PROBE1(sls, , sls_ckpt, , "Writing out the records");
 
 	numids = sbuf_len(sckpt->sckpt_dataid) / sizeof(uint64_t);
 	error = slsio_fdwrite(manfd, (char *)&numids, sizeof(uint64_t), NULL);
@@ -185,6 +248,7 @@ sls_write_file(struct slspart *slsp, struct slsckpt_data *sckpt)
 	error = slsio_fdwrite(manfd, sbuf_data(sckpt->sckpt_meta),
 	    sbuf_len(sckpt->sckpt_meta), NULL);
 
+	SDT_PROBE1(sls, , sls_ckpt, , "Writing out the manfiest");
 	/* XXX Add the current epoch as an extended attribute. */
 
 out:

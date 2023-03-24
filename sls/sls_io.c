@@ -60,6 +60,37 @@ slsio_fdread(int fd, char *buf, size_t len, off_t *offp)
 }
 
 int
+slsio_fdwritev(int fd, struct iovec *aiov, size_t count, off_t *offp)
+{
+	/* XXX HACK. We normally compute uio_resid. */
+	size_t len = count * PAGE_SIZE;
+	struct thread *td = curthread;
+	struct uio auio;
+	int error;
+
+	if (len > IOSIZE_MAX)
+		return (EINVAL);
+
+	auio.uio_iov = aiov;
+	auio.uio_iovcnt = count;
+
+	auio.uio_resid = len;
+	auio.uio_segflg = UIO_SYSSPACE;
+
+	if (offp != NULL)
+		error = kern_pwritev(td, fd, &auio, *offp);
+	else
+		error = kern_writev(td, fd, &auio);
+
+	if (error != 0)
+		return (error);
+
+	KASSERT(td->td_retval[0] == len,
+	    ("wrote %ld, expected %ld", td->td_retval[0], len));
+	return (0);
+}
+
+int
 slsio_fdwrite(int fd, char *buf, size_t len, off_t *offp)
 {
 	struct thread *td = curthread;

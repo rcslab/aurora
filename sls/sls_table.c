@@ -72,16 +72,7 @@ static bool ssparts_imported = 0;
 uint64_t sls_prefault_anonpages = 0;
 uint64_t sls_prefault_anonios = 0;
 
-static uma_zone_t slstable_task_zone;
-
-struct slstable_taskctx {
-	struct task tk;
-	struct slspart *slsp;
-	uint64_t oid;
-	struct slskv_table *rectable;
-	struct slskv_table *objtable;
-	uint64_t *error;
-};
+uma_zone_t slstable_task_zone;
 
 int
 slstable_init(void)
@@ -99,8 +90,8 @@ slstable_init(void)
 		return (error);
 
 	slstable_task_zone = uma_zcreate("slstable",
-	    sizeof(struct slstable_taskctx), NULL, NULL, NULL, NULL,
-	    UMA_ALIGNOF(struct slstable_taskctx), 0);
+	    sizeof(union slstable_taskctx), NULL, NULL, NULL, NULL,
+	    UMA_ALIGNOF(union slstable_taskctx), 0);
 	if (slstable_task_zone == NULL)
 		return (ENOMEM);
 
@@ -821,9 +812,10 @@ sls_read_slos_datarec(struct slspart *slsp, uint64_t oid,
 }
 
 static void
-slstable_task(void *ctx, int __unused pending)
+slstable_readtask(void *ctx, int __unused pending)
 {
-	struct slstable_taskctx *task = (struct slstable_taskctx *)ctx;
+	union slstable_taskctx *taskctx = (union slstable_taskctx *)ctx;
+	struct slstable_readctx *readctx = &taskctx->read;
 	int error;
 
 	/*
@@ -831,15 +823,15 @@ slstable_task(void *ctx, int __unused pending)
 	 * actual memory along with the metadata.
 	 */
 	error = sls_read_slos_datarec(
-	    task->slsp, task->oid, task->rectable, task->objtable);
+	    readctx->slsp, readctx->oid, readctx->rectable, readctx->objtable);
 	/*
 	 * Just one error is enough to stop execution, so don't worry
 	 * about overwriting existing errors.
 	 */
 	if (error != 0)
-		atomic_set_64(task->error, 1);
+		atomic_set_int(readctx->error, 1);
 
-	uma_zfree(slstable_task_zone, task);
+	uma_zfree(slstable_task_zone, taskctx);
 }
 
 static int
@@ -847,9 +839,10 @@ sls_read_slos_datarec_all(struct slspart *slsp, char **bufp, size_t *buflenp,
     struct slskv_table *rectable, struct slskv_table *objtable)
 {
 	size_t original_buflen, data_buflen, data_idlen;
-	struct slstable_taskctx *ctx;
-	uint64_t error = 0;
+	union slstable_taskctx *taskctx;
+	struct slstable_readctx *readctx;
 	uint64_t *data_ids;
+	int error = 0;
 	char *buf;
 	int i;
 
@@ -873,14 +866,15 @@ sls_read_slos_datarec_all(struct slspart *slsp, char **bufp, size_t *buflenp,
 
 	for (i = 0; i < data_idlen; i++) {
 		/* Create a new task. */
-		ctx = uma_zalloc(slstable_task_zone, M_WAITOK);
-		ctx->slsp = slsp;
-		ctx->oid = data_ids[i];
-		ctx->objtable = objtable;
-		ctx->rectable = rectable;
-		ctx->error = &error;
-		TASK_INIT(&ctx->tk, 0, &slstable_task, &ctx->tk);
-		taskqueue_enqueue(slsm.slsm_tabletq, &ctx->tk);
+		taskctx = uma_zalloc(slstable_task_zone, M_WAITOK);
+		readctx = &taskctx->read;
+		readctx->slsp = slsp;
+		readctx->oid = data_ids[i];
+		readctx->objtable = objtable;
+		readctx->rectable = rectable;
+		readctx->error = &error;
+		TASK_INIT(&readctx->tk, 0, &slstable_readtask, &readctx->tk);
+		taskqueue_enqueue(slsm.slsm_tabletq, &readctx->tk);
 	}
 
 	taskqueue_drain_all(slsm.slsm_tabletq);
@@ -1110,7 +1104,6 @@ sls_writedata_slos(struct sls_record *rec, struct slsckpt_data *sckpt)
 	vm_object_t obj;
 	size_t offset;
 	size_t i;
-
 	if (rec->srec_type != SLOSREC_VMOBJ)
 		panic("invalid type %lx for metadata", rec->srec_type);
 
@@ -1170,6 +1163,20 @@ out:
 	return (ret);
 }
 
+static void
+slstable_writetask(void *ctx, int __unused pending)
+{
+	union slstable_taskctx *taskctx = (union slstable_taskctx *)ctx;
+	struct slstable_writectx *writectx = &taskctx->write;
+	int error = 0;
+
+	error = sls_writedata_slos(writectx->rec, writectx->sckpt);
+	if (error != 0)
+		atomic_set_int(writectx->error, 1);
+
+	uma_zfree(slstable_task_zone, taskctx);
+}
+
 static int __attribute__((noinline))
 sls_write_slos_manifest(uint64_t oid, struct sbuf *sb)
 {
@@ -1210,7 +1217,6 @@ sls_write_slos_dataregion(struct slsckpt_data *sckpt_data)
 		error = sls_writedata_slos(rec, sckpt_data);
 		if (error != 0) {
 			KV_ABORT(iter);
-			printf("Writing to the SLOS failed with %d\n", error);
 			return (error);
 		}
 	}
@@ -1226,6 +1232,8 @@ sls_write_slos_dataregion(struct slsckpt_data *sckpt_data)
 int
 sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt)
 {
+	union slstable_taskctx *taskctx;
+	struct slstable_writectx *writectx;
 	struct sbuf *sb_manifest;
 	struct sls_record *rec;
 	struct slskv_iter iter;
@@ -1242,9 +1250,12 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt)
 		if (!sls_isdata(rec->srec_type))
 			continue;
 
-		error = sls_writedata_slos(rec, sckpt);
-		if (error != 0)
-			printf("Writing data failed with %d\n", error);
+		taskctx = uma_zalloc(slstable_task_zone, M_WAITOK);
+		writectx = &taskctx->write;
+		writectx->rec = rec;
+		writectx->sckpt = sckpt;
+		TASK_INIT(&writectx->tk, 0, &slstable_writetask, &writectx->tk);
+		taskqueue_enqueue(slsm.slsm_tabletq, &writectx->tk);
 	}
 
 	/*
@@ -1265,12 +1276,12 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt)
 	if (error != 0)
 		goto out;
 
+	taskqueue_drain_all(slsm.slsm_tabletq);
+
 	/*
 	 * Write the huge metadata block.
 	 */
 	error = sls_write_slos_manifest(oid, sb_manifest);
-	if (error != 0)
-		goto out;
 
 out:
 	sbuf_delete(sb_manifest);

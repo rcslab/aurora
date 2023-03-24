@@ -231,6 +231,7 @@ MALLOC_DECLARE(M_SLSMM);
 MALLOC_DECLARE(M_SLSREC);
 
 SDT_PROVIDER_DECLARE(sls);
+SDT_PROBE_DECLARE(sls, , sls_ckpt, );
 SDT_PROBE_DECLARE(sls, , sls_rest, );
 
 static inline int
@@ -238,5 +239,36 @@ sls_isdata(uint64_t type)
 {
 	return (type == SLOSREC_VMOBJ);
 }
+
+extern uma_zone_t slstable_task_zone;
+
+struct slstable_readctx {
+	struct task tk;
+	struct slspart *slsp;
+	uint64_t oid;
+	struct slskv_table *rectable;
+	struct slskv_table *objtable;
+	int *error;
+};
+
+struct slstable_writectx {
+	struct task tk;
+	struct sls_record *rec;
+	struct slsckpt_data *sckpt;
+	int *error;
+};
+
+struct slstable_wfdctx {
+	struct task tk;
+	struct slspart *slsp;
+	struct sls_record *rec;
+	int *error;
+};
+
+union slstable_taskctx {
+	struct slstable_readctx read;
+	struct slstable_writectx write;
+	struct slstable_wfdctx wfd;
+};
 
 #endif /* _SLS_INTERNAL_H_ */
