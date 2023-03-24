@@ -867,7 +867,12 @@ slsrest_data_backend(struct slspart *slsp, struct slsrest_data *restdata)
 		break;
 
 	case SLS_FILE:
-		return (EOPNOTSUPP);
+		error = sls_read_file(slsp, &sckpt, restdata->objtable);
+		if (error != 0) {
+			DEBUG1("Reading from a file failed with %d", error);
+			return (error);
+		}
+		break;
 
 	case SLS_SOCKRCV:
 		return (EOPNOTSUPP);

@@ -354,7 +354,7 @@ slsckpt_initio(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 		return (EOPNOTSUPP);
 
 	case SLS_FILE:
-		return (EOPNOTSUPP);
+		return (slsckpt_io_file(slsp, sckpt_data));
 
 	case SLS_OSD:
 		return (slsckpt_io_slos(slsp, sckpt_data));
