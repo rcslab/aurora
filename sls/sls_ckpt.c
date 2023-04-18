@@ -669,6 +669,8 @@ slsckpt_dataregion_dump(struct slsckpt_dataregion_dump_args *args)
 
 	free(args, M_SLSMM);
 
+	sls_finishop();
+
 	/* Remove the reference taken by the initial ioctl call. */
 	kthread_exit();
 }
@@ -691,9 +693,12 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	 * purposes), we have to have checkpointed the whole partition before
 	 * checkpointing individual regions.
 	 */
-	if ((slsp->slsp_target == SLS_MEM) || (slsp->slsp_mode == SLS_DELTA))
-		if (slsp->slsp_sckpt == NULL)
+	if ((slsp->slsp_target == SLS_MEM) || (slsp->slsp_mode == SLS_DELTA)) {
+		if (slsp->slsp_sckpt == NULL) {
+			sls_finishop();
 			return (EINVAL);
+		}
+	}
 
 	/* Wait till we can start checkpointing. */
 	if (slsp_setstate(slsp, SLSP_AVAILABLE, SLSP_CHECKPOINTING, true) !=
@@ -702,6 +707,8 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 		/* Once a partition is detached its state cannot change.  */
 		KASSERT(slsp->slsp_status == SLSP_DETACHED,
 		    ("Blocking slsp_setstate() on live partition failed"));
+
+		sls_finishop();
 
 		/* Tried to checkpoint a removed partition. */
 		return (EINVAL);
@@ -790,6 +797,8 @@ error_single:
 
 	/* Remove the reference taken by the initial ioctl call. */
 	slsp_deref(slsp);
+
+	sls_finishop();
 
 	return (error);
 }

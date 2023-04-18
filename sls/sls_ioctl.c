@@ -632,13 +632,18 @@ sls_memsnap(struct sls_memsnap_args *args)
 	uint64_t nextepoch;
 	int error = 0;
 
+	/* Take another reference for the worker thread. */
+	if (sls_startop() != 0)
+		return (EBUSY);
+
 	/*
 	 * Try to find the process. The partition is released inside the
 	 * operation.
 	 */
 	slsp = slsp_find(args->oid);
-	if (slsp == NULL)
+	if (slsp == NULL) {
 		return (EINVAL);
+	}
 
 	PHOLD(p);
 	error = slsckpt_dataregion(slsp, curproc, args->addr, &nextepoch);
