@@ -28,7 +28,8 @@
 #include "sls_prefault.h"
 #include "sls_vm.h"
 
-int sls_objprotect = 0;
+int sls_objprotect = 1;
+int sls_tracebuf = 1;
 SDT_PROBE_DEFINE(sls, , , procset_loop);
 
 #define SLS_TRACEBUF_SIZE (32768)
@@ -334,6 +335,12 @@ slsvm_entry_protect(struct proc *p, struct vm_map_entry *entry)
 	if (obj->resident_page_count == 0)
 		return;
 
+	if (!sls_objprotect) {
+		pmap_protect(pmap, entry->start, entry->end,
+		    entry->protection & ~VM_PROT_WRITE);
+		return;
+	}
+
 	PMAP_LOCK(pmap);
 	TAILQ_FOREACH (m, &obj->memq, listq) {
 		vm_offset_t addr = entry->start - entry->offset +
@@ -544,7 +551,10 @@ slsvm_proc_shadow(struct proc *p, struct slsckpt_data *sckpt, bool is_fullckpt)
 	bool protect;
 	int error;
 
-	protect = slsvm_tracebuf_invalidate(p);
+	if (sls_objprotect)
+		protect = slsvm_tracebuf_invalidate(p);
+	else
+		protect = true;
 
 	header = &p->p_vmspace->vm_map.header;
 	for (entry = header->next; entry != header; entry = entry->next) {
@@ -554,9 +564,11 @@ slsvm_proc_shadow(struct proc *p, struct slsckpt_data *sckpt, bool is_fullckpt)
 			return (error);
 	}
 
-	PMAP_LOCK(pmap);
-	pmap_invalidate_all(pmap);
-	PMAP_UNLOCK(pmap);
+	if (sls_objprotect) {
+		PMAP_LOCK(pmap);
+		pmap_invalidate_all(pmap);
+		PMAP_UNLOCK(pmap);
+	}
 
 	return (0);
 }

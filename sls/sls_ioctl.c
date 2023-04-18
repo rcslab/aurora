@@ -48,6 +48,7 @@ SDT_PROVIDER_DEFINE(sls);
 
 /* Variables set using sysctls. */
 extern int sls_objprotect;
+extern int sls_tracebuf;
 extern int sls_only_flush_deltas;
 extern uint64_t sls_successful_restores;
 
@@ -774,8 +775,11 @@ sls_sysctl_init(void)
 	    "async_slos", CTLFLAG_RW, &sls_async_slos, 0,
 	    "Asynchronous SLOS writes");
 	(void)SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
-	    "objprotect", CTLFLAG_RW, &sls_objprotect, 0,
+	    "objprotect", CTLFLAG_RW, &sls_objprotect, 1,
 	    "Traverse VM objects instead of entries when applying COW");
+	(void)SYSCTL_ADD_UINT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "tracebuf", CTLFLAG_RW, &sls_tracebuf, 1,
+	    "Use the pmap trace buffer when protecting pages");
 	(void)SYSCTL_ADD_INT(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "only_flush_deltas", CTLFLAG_RD, &sls_only_flush_deltas, 0,
 	    "Only flush delta checkponits, blackhole the full ones");
