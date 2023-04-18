@@ -188,6 +188,7 @@ srdx_retrieve(struct slos_rdxtree *stree, daddr_t lblkno, bool dirty,
 		bp->b_flags |= B_MANAGED | B_CLUSTEROK;
 
 		STREE_SYNC_DBG("[RETRIEVE] %p\n", bp);
+		BP_UNSET_NEEDSCOW(bp);
 
 		/* Initiate the read for the requested data. */
 		td->td_ru.ru_inblock++;
@@ -287,6 +288,7 @@ srdx_create(
 	bp->b_flags |= B_MANAGED | B_CLUSTEROK;
 
 	STREE_SYNC_DBG("[CREATE] %p\n", bp);
+	BP_UNSET_NEEDSCOW(bp);
 
 	srdx = uma_zalloc_arg(slos_rdxnode_zone, bp, M_NOWAIT);
 	if (srdx == NULL) {
@@ -335,6 +337,7 @@ srdx_destroy(struct slos_rdxnode *srdx)
 
 	SRDX_DBG("(SRDX) Destroying %p (buffer %p)\n", srdx, bp);
 	/* Disassociate the node from the buffer and free both of them. */
+	KASSERT(!BP_NEEDSCOW(bp), ("destroying buffer %p in need of COW", bp));
 	BP_SRDX_SET(bp, NULL);
 	bp->b_flags &= ~B_MANAGED;
 
@@ -876,6 +879,293 @@ stree_extent_find(struct slos_rdxtree *stree, uint64_t offset, diskptr_t *ptr)
 
 		ptr->size += BLKSIZE(&slos);
 	}
+
+	return (0);
+}
+
+/*
+ * ============ Checkpoint related functions. ============
+ */
+
+static void
+stree_rootchange(struct slos_rdxtree *stree, diskptr_t ptr)
+{
+	struct slos_node *svp = SLSVP(stree->stree_vp);
+
+	svp->sn_ino.ino_btree = ptr;
+	stree->stree_root = ptr.offset;
+	if (svp != SLSVP(slos.slsfs_inodes))
+		slos_update(svp);
+}
+
+static int
+srdx_forcecopy(
+    struct slos_rdxtree *stree, struct slos_rdxnode *srdx, diskptr_t *ptrp)
+{
+	struct bufobj *bo = &stree->stree_vp->v_bufobj;
+	b_xflags_t xflags;
+	struct buf *bp;
+	daddr_t oldoff;
+	diskptr_t ptr;
+	int error;
+
+	ASSERT_VOP_LOCKED(stree->stree_vp, "slosradix");
+
+	bp = srdx->srdx_buf;
+	BUF_ASSERT_LOCKED(bp);
+
+	/* If already COWed, we're done. */
+	if (BP_NEEDSCOW(bp)) {
+		*ptrp = DISKPTR_NULL;
+		return (0);
+	}
+
+	error = slos_blkalloc(&slos, BLKSIZE(&slos), &ptr);
+	if (error != 0) {
+		*ptrp = DISKPTR_NULL;
+		return (ENOMEM);
+	}
+
+	BO_LOCK(bo);
+
+	STREE_SYNC_DBG("[FORCECOPY] %p\n", bp);
+	BP_SET_NEEDSCOW(bp);
+
+	xflags = bp->b_xflags;
+	buf_vlist_remove(bp);
+
+	oldoff = bp->b_lblkno;
+	/*
+	 * We are changing both the logical and the physical block numbers,
+	 * which are identical for tree nodes anyway. This is the only place
+	 * we manually set the logical block number, since slsfs_retrieve_buf()
+	 * takes care of it everywhere else.
+	 */
+	bp->b_lblkno = ptr.offset;
+	bp->b_blkno = ptr.offset;
+
+	buf_vlist_add(bp, bo, xflags);
+
+	BO_UNLOCK(bo);
+
+	*ptrp = ptr;
+	BUF_ASSERT_LOCKED(bp);
+
+	return (0);
+}
+
+/*
+ * Force copy all tree nodes in a path from the root to a key
+ * containing the key.
+ */
+static int
+stree_forcecopy(struct slos_rdxtree *stree, uint64_t key)
+{
+	struct slos_rdxnode *srdxpath[STREE_DEPTH];
+	uint64_t localkeys[STREE_DEPTH];
+	diskptr_t newptrs[STREE_DEPTH];
+	struct slos_rdxnode *srdx, *schild;
+	diskblk_t localvalue;
+	uint64_t localkey;
+	diskblk_t bptr;
+	diskptr_t ptr;
+	int error;
+	int depth;
+
+	ASSERT_VOP_LOCKED(stree->stree_vp, "slosradix");
+
+	KASSERT(key < stree->stree_max,
+	    ("Key %lx out of bounds %ld", key, stree->stree_max));
+
+	/*
+	 * At this point the retrieval is read only, we have dirtied the parents
+	 * of the dirty nodes during the insert.
+	 */
+	error = srdx_retrieve(stree, stree->stree_root, false, &srdx);
+	if (error != 0)
+		panic("Needs proper cleanup here");
+
+	/* Traverse the path, copying throughout. */
+	for (depth = 0; depth < STREE_DEPTH - 1; depth++) {
+		localkey = stree_localkey(stree, key, depth);
+		KASSERT(localkey < stree->stree_srdxcap,
+		    ("invalid local key %lx %lx", localkey,
+			stree->stree_srdxcap));
+
+		localvalue = srdx->srdx_vals[localkey];
+		/*
+		 * In the case the stored key was in a node that was later
+		 * deleted, the path to the key terminates at some point. We
+		 * only need to handle the path up to the point where it is
+		 * valid.
+		 *
+		 * XXX Implement the above. We currently don't have branch
+		 * deletes, so the case below cannot happen. Modify this
+		 * function to accurately reflect the above description.
+		 */
+		if (!STREE_VALVALID(localvalue)) {
+			for (int i = 0; i < stree->stree_srdxcap; stree++) {
+				localvalue = srdx->srdx_vals[localkey];
+			}
+
+			panic(
+			    "[%p] COW key %lx %lx leads to invalid path depth %d (inode %lx)",
+			    srdx, key, localkey, depth,
+			    SLSVP(stree->stree_vp)->sn_ino.ino_pid);
+		}
+
+		KASSERT(localvalue.offset != srdx->srdx_buf->b_lblkno,
+		    ("loop detected"));
+		error = srdx_retrieve(stree, localvalue.offset, false, &schild);
+		if (error != 0) {
+			panic("Needs proper cleanup here");
+		}
+
+		STREE_ITER_DBG("[%d] Retrieving %p\n", __LINE__, schild);
+		STREE_ITER_DBG(
+		    "[%d] Insert depth %d (%p)\n", __LINE__, depth, schild);
+
+		srdxpath[depth] = srdx;
+		localkeys[depth] = localkey;
+		srdx_forcecopy(stree, srdx, &newptrs[depth]);
+
+		srdx = schild;
+	}
+
+	/*
+	 * XXX Same point as above regarding the recursive deletes.
+	 * Use a maxdepth variable instead of STREE_DEPTH.
+	 */
+	KASSERT(
+	    depth == STREE_DEPTH - 1, ("stopped before we reached the bottom"));
+	srdxpath[depth] = srdx;
+	localkeys[depth] = localkey;
+	srdx_forcecopy(stree, srdx, &newptrs[depth]);
+
+	/* Mend the pointers on the path. */
+	for (depth = 0; depth < STREE_DEPTH - 1; depth++) {
+		ptr = newptrs[depth + 1];
+		if (ptr.offset == DISKPTR_NULL.offset)
+			continue;
+
+		srdx = srdxpath[depth];
+		bptr = (diskblk_t) { ptr.offset, ptr.epoch };
+		srdx->srdx_vals[localkeys[depth]] = bptr;
+	}
+
+	/* All nodes fixed, flush them out. */
+	for (depth = 0; depth < STREE_DEPTH; depth++) {
+		srdx = srdxpath[depth];
+		BUF_ASSERT_LOCKED(srdx->srdx_buf);
+		srdx_release(srdx);
+		BUF_ASSERT_UNLOCKED(srdx->srdx_buf);
+	}
+
+	/* Fix up the tree root in the inode. */
+	if (newptrs[0].offset != DISKPTR_NULL.offset)
+		stree_rootchange(stree, newptrs[0]);
+
+	return (0);
+}
+
+int
+stree_sync(struct slos_rdxtree *stree)
+{
+	/* XXX To be implemented in a future patch. */
+	struct bufobj *bo = &stree->stree_vp->v_bufobj;
+	struct slos_rdxnode *srdx;
+	struct buf *bp, *tbd;
+	int attempts = 0;
+	int error = 0;
+
+	VOP_LOCK(stree->stree_vp, LK_EXCLUSIVE);
+
+	BO_LOCK(bo);
+tryagain:
+	BO_UNLOCK(bo);
+	if (bo->bo_dirty.bv_cnt) {
+		TAILQ_FOREACH_SAFE (bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
+			srdx = BP_SRDX_GET(bp);
+			BUF_ASSERT_UNLOCKED(bp);
+
+			STREE_SYNC_DBG("[TRAVERSE] %p\n", bp);
+			stree_forcecopy(stree, srdx->srdx_key);
+		}
+
+		BO_LOCK(bo);
+
+		/* Apply COW to every tree buffer. */
+		TAILQ_FOREACH_SAFE (bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
+			/* XXX Use the COW bit properly  */
+			if (!BP_NEEDSCOW(bp)) {
+				if (attempts > 100) {
+					panic(
+					    "btree not synced after 100 attempts");
+				}
+				attempts++;
+				goto tryagain;
+			}
+		}
+
+		/* Now that everything is COWed and immutable, flush it to the
+		 * disk. */
+		TAILQ_FOREACH_SAFE (bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
+			error = BUF_LOCK(
+			    bp, LK_EXCLUSIVE | LK_INTERLOCK, BO_LOCKPTR(bo));
+			if (error != 0) {
+				panic("Unhandled BUF_LOCK failure %d\n", error);
+			}
+
+			if (!BP_NEEDSCOW(bp)) {
+				panic("Buffer is not COW anymore");
+			}
+
+			BP_UNSET_NEEDSCOW(bp);
+			bawrite(bp);
+			BO_LOCK(bo);
+		}
+
+		/* Ensure everything was properly flushed. */
+		MPASS(bo->bo_dirty.bv_cnt == 0);
+		BO_UNLOCK(bo);
+	}
+
+	BO_LOCK(bo);
+
+	error = bufobj_wwait(bo, 0, 0);
+	MPASS(error == 0);
+
+	TAILQ_FOREACH_SAFE (bp, &bo->bo_clean.bv_hd, b_bobufs, tbd) {
+		error = BUF_LOCK(
+		    bp, LK_EXCLUSIVE | LK_INTERLOCK, BO_LOCKPTR(bo));
+		if (error != 0) {
+			panic("Unhandled BUF_LOCK failure %d\n", error);
+		}
+		if (bp->b_flags & B_MANAGED) {
+			/*
+			 * Catch any buffers moved to the clean queue between
+			 * us marking dirty buffers and initiating :he writes.
+			 */
+			if (BP_NEEDSCOW(bp))
+				BP_UNSET_NEEDSCOW(bp);
+
+			srdx = BP_SRDX_GET(bp);
+			if (srdx == NULL)
+				panic("Managed buffer without an srdx\n");
+			srdx_destroy(srdx);
+		} else {
+			bremfree(bp);
+			brelse(bp);
+		}
+		BO_LOCK(bo);
+	}
+
+	error = bufobj_wwait(bo, 0, 0);
+	MPASS(error == 0);
+
+	BO_UNLOCK(bo);
+
+	VOP_UNLOCK(stree->stree_vp, 0);
 
 	return (0);
 }

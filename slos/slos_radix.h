@@ -56,7 +56,17 @@ int stree_extent_find(
 	} while (0)
 #define BP_SRDX_GET(bp) ((struct slos_rdxnode *)(bp)->b_fsprivate2)
 
+#define SLOSBP_NEEDSCOW (0x01UL)
+
+#define SLOSBP(bp) ((bp)->b_fsprivate3)
+
+#define BP_NEEDSCOW(bp) (SLOSBP(bp) != NULL)
+#define BP_UNSET_NEEDSCOW(bp) (SLOSBP(bp) = (void *)0)
+#define BP_SET_NEEDSCOW(bp) (SLOSBP(bp) = (void *)1)
+
 int slos_radix_init(void);
 void slos_radix_fini(void);
+
+int stree_sync(struct slos_rdxtree *stree);
 
 #endif /* _SLOS_RADIX_H_ */
