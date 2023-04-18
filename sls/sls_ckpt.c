@@ -224,7 +224,7 @@ slsckpt_compact_single(struct slspart *slsp, struct slsckpt_data *sckpt)
 	slsckpt_drop(sckpt);
 }
 
-void
+static void
 slsckpt_compact(struct slspart *slsp, struct slsckpt_data *sckpt)
 {
 	struct slsckpt_data *old_sckpt;
@@ -477,14 +477,14 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 			DEBUG1("slsckpt_initio failed with %d", error);
 	}
 
-	/* Advance the current major epoch. */
-	slsp_epoch_advance(slsp, nextepoch);
-
 	/*
 	 * Collapse the shadows. Do it before making the partition available to
 	 * safely execute with region checkpoints.
 	 */
 	slsckpt_compact(slsp, sckpt);
+
+	/* Advance the current major epoch. */
+	slsp_epoch_advance(slsp, nextepoch);
 
 	/*
 	 * Mark the partition as available. We don't have pipelining, so we wait

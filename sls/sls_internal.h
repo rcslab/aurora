@@ -222,7 +222,6 @@ int slsckpt_gather(
 bool slsckpt_prepare_state(struct slspart *slsp, bool *retry);
 void slsckpt_stop(slsset *procset, struct proc *pcaller);
 void slsckpt_cont(slsset *procset, struct proc *pcaller);
-void slsckpt_compact(struct slspart *slsp, struct slsckpt_data *sckpt);
 
 void sls_sockrcvd(struct slspart *slsp);
 int slspre_resident(struct slspart *slsp, struct file *fp);
