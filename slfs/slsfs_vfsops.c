@@ -50,6 +50,9 @@
 
 static MALLOC_DEFINE(M_SLSFS, "slsfs_mount", "SLSFS mount structures");
 
+void slos_radix_init(void);
+void slos_radix_fini(void);
+
 static vfs_root_t slsfs_root;
 static vfs_statfs_t slsfs_statfs;
 static vfs_vget_t slsfs_vget;
@@ -87,6 +90,8 @@ slsfs_init(struct vfsconf *vfsp)
 		return (ENOMEM);
 	}
 
+	slos_radix_init();
+
 	return (0);
 }
 
@@ -103,6 +108,7 @@ slsfs_uninit(struct vfsconf *vfsp)
 
 	SLOS_UNLOCK(&slos);
 
+	slos_radix_fini();
 	uma_zdestroy(fnode_zone);
 	uma_zdestroy(fnode_trie_zone);
 	slos_uninit();

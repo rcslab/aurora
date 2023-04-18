@@ -25,14 +25,20 @@
  */
 typedef uint64_t bnode_ptr;
 
-/* Physical extent on-disk pointer */
+/* Physical extent on-disk pointer. */
 struct slos_diskptr {
-	uint64_t
-	    offset;    /* The block offset of the first block of the region. */
+	uint64_t offset; /* The block of the first extent block. */
 	uint64_t size; /* The size of the region in bytes. */
 	uint64_t epoch;
 };
 typedef struct slos_diskptr diskptr_t;
+
+/* A single physical on-disk block. */
+struct slos_diskblk {
+	uint64_t offset;
+	uint64_t epoch;
+};
+typedef struct slos_diskblk diskblk_t;
 
 /* Shorthands for creating disk pointers. */
 #define DISKPTR(blkno, size)     \
