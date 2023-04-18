@@ -37,8 +37,16 @@ int stree_init(struct vnode *vp, daddr_t daddr, struct slos_rdxtree **streep);
 void stree_rootcreate(struct slos_rdxtree *stree, diskptr_t ptr);
 void stree_destroy(struct slos_rdxtree *stree);
 
-#define STREE_INVAL \
-	((diskblk_t) { 0xbabababababababaULL, 0xcdcdcdcdcdcdcdcdULL })
+int stree_insert(struct slos_rdxtree *stree, uint64_t key, diskblk_t value);
+int stree_find(struct slos_rdxtree *stree, uint64_t key, diskblk_t *value);
+int stree_delete(struct slos_rdxtree *stree, uint64_t key);
+
+int stree_extent_replace(
+    struct slos_rdxtree *stree, uint64_t offset, diskptr_t ptr);
+int stree_extent_find(
+    struct slos_rdxtree *stree, uint64_t offset, diskptr_t *ptr);
+
+#define STREE_INVAL ((diskblk_t) { 0xbabababababababaULL, 0xcdcdcdcdcdcdcdcdULL })
 #define STREE_VALSIZE (sizeof(diskblk_t))
 #define STREE_VALVALID(value) ((value).offset != STREE_INVAL.offset)
 

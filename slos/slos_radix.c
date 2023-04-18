@@ -420,3 +420,462 @@ stree_rootcreate(struct slos_rdxtree *stree, diskptr_t ptr)
 	srdx_create(stree, &ptr, &srdx);
 	srdx_release(srdx);
 }
+
+/*
+ * ============ Basic tree traversal operations ============
+ */
+
+static int
+stree_leaf(struct slos_rdxtree *stree, uint64_t key, bool insert,
+    struct slos_rdxnode **srdxp)
+{
+	struct slos_rdxnode *srdx, *schild;
+	diskblk_t localvalue;
+	uint64_t localkey;
+	diskptr_t ptr;
+	int depth;
+	int error;
+
+	KASSERT(key < stree->stree_max, ("Key out of bounds"));
+
+	ASSERT_VOP_LOCKED(stree->stree_vp, "streeleaf");
+
+	error = srdx_retrieve(stree, stree->stree_root, insert, &srdx);
+	if (error != 0)
+		return (error);
+
+	for (depth = 0; depth < STREE_DEPTH - 1; depth++) {
+		localkey = stree_localkey(stree, key, depth);
+		KASSERT(localkey < stree->stree_srdxcap,
+		    ("invalid local key %lx %lx", localkey,
+			stree->stree_srdxcap));
+		localvalue = srdx->srdx_vals[localkey];
+
+		/* Check if intermedate node is actually allocated. */
+		if (!STREE_VALVALID(localvalue)) {
+			/* Only inserts create missing intermediates. */
+			if (!insert) {
+				srdx_release(srdx);
+				*srdxp = NULL;
+				return (0);
+			}
+
+			ptr = DISKPTR_NULL;
+			error = srdx_create(stree, &ptr, &schild);
+			if (error != 0) {
+				srdx_release(srdx);
+				return (error);
+			}
+
+			STREE_DBG("[%d] Creating %p\n", __LINE__, schild);
+			localvalue = (diskblk_t) { ptr.offset, ptr.epoch };
+			srdx->srdx_vals[localkey] = localvalue;
+		} else {
+			error = srdx_retrieve(
+			    stree, localvalue.offset, insert, &schild);
+			if (error != 0) {
+				srdx_release(srdx);
+				return (error);
+			}
+			STREE_DBG("[%d] Retrieving %p\n", __LINE__, schild);
+		}
+
+		srdx_release(srdx);
+		if (insert)
+			srdx->srdx_key = key;
+		srdx = schild;
+	}
+
+	STREE_DBG("[%d] Leaf return %p\n", __LINE__, srdx);
+	if (insert)
+		srdx->srdx_key = key;
+	*srdxp = srdx;
+
+	return (0);
+}
+
+int
+stree_insert(struct slos_rdxtree *stree, uint64_t key, diskblk_t value)
+{
+	struct slos_rdxnode *srdx;
+	uint64_t localkey;
+	int error;
+	/* Decide on how many levels we have, what sizes we are */
+
+	ASSERT_VOP_LOCKED(stree->stree_vp, "stree");
+
+	error = stree_leaf(stree, key, true, &srdx);
+	if (error != 0) {
+		return (error);
+	}
+
+	KASSERT(STREE_VALVALID(value),
+	    ("overflow in existing value (%lx, %lx)", value.offset,
+		value.epoch));
+
+	localkey = stree_localkey(stree, key, STREE_DEPTH - 1);
+	srdx->srdx_vals[localkey] = value;
+
+	STREE_DBG("[%d] Releasing %p\n", __LINE__, srdx);
+	srdx_release(srdx);
+
+	return (0);
+}
+
+int
+stree_find(struct slos_rdxtree *stree, uint64_t key, diskblk_t *value)
+{
+	struct slos_rdxnode *srdx;
+	diskblk_t localval;
+	uint64_t localkey;
+	int error;
+
+	ASSERT_VOP_LOCKED(stree->stree_vp, "streefind");
+
+	error = stree_leaf(stree, key, false, &srdx);
+	if (error != 0)
+		return (error);
+
+	/* Check if we found the element. */
+	if (srdx == NULL) {
+		*value = STREE_INVAL;
+		return (0);
+	}
+
+	localkey = stree_localkey(stree, key, STREE_DEPTH - 1);
+	localval = srdx->srdx_vals[localkey];
+
+	/*
+	 * Finding an invalid value at the last level still counts
+	 * as finding a value, the caller handles the "miss". This
+	 * is, useful, e.g., when finding empty unallocated ranges.
+	 */
+
+	STREE_DBG("[%d] Releasing %p\n", __LINE__, srdx);
+	srdx_release(srdx);
+
+	*value = localval;
+
+	return (0);
+}
+
+int
+stree_delete(struct slos_rdxtree *stree, uint64_t key)
+{
+	struct slos_rdxnode *srdx;
+	uint64_t localkey;
+	int error;
+	/* Decide on how many levels we have, what sizes we are */
+
+	/*
+	 * DANGER: THE CODE ASSUMES WE CANNOT EMPTY OUT BLOCKS WHICH IS NOT TRUE
+	 * IN THE GENERAL CASE! TO FIX THIS EITHER WE MUST EAGERLY REMOVE TREE
+	 * NODES IN THE DELETE OPERATION (WHICH SHOULD BE EASY).
+	 */
+
+	ASSERT_VOP_LOCKED(stree->stree_vp, "streedelete");
+
+	error = stree_leaf(stree, key, false, &srdx);
+	if (error != 0)
+		return (error);
+
+	/* Deleting nonexistent keys is always successful. */
+	if (srdx == NULL)
+		return (0);
+
+	localkey = stree_localkey(stree, key, STREE_DEPTH - 1);
+	srdx->srdx_vals[localkey] = STREE_INVAL;
+
+	STREE_DBG("[%d] Releasing  %p\n", __LINE__, srdx);
+	srdx_release(srdx);
+
+	return (0);
+}
+
+/*
+ * ============ Extent functions for buffer retrieval. Used mostly ============
+ * ============    in slsfs_strategy() and slsfs_retrieve_buf().    ============
+ */
+
+struct stree_iter {
+	struct slos_rdxnode *siter_nodes[STREE_DEPTH];
+	struct slos_rdxtree *siter_stree;
+	uint64_t siter_key;
+	bool siter_addmissing;
+};
+
+static int
+siter_start(struct slos_rdxtree *stree, uint64_t key, bool addmissing,
+    struct stree_iter *siter)
+{
+	struct slos_rdxnode *srdx, *schild;
+	diskblk_t localvalue;
+	uint64_t localkey;
+	diskptr_t ptr;
+	int error;
+	int depth;
+	int i;
+
+	ASSERT_VOP_LOCKED(stree->stree_vp, "streestart");
+
+	siter->siter_stree = stree;
+	siter->siter_key = key;
+	siter->siter_addmissing = addmissing;
+	for (depth = 0; depth < STREE_DEPTH; depth++)
+		siter->siter_nodes[depth] = NULL;
+
+	KASSERT(key < stree->stree_max,
+	    ("Key %lx out of bounds %ld", key, stree->stree_max));
+
+	error = srdx_retrieve(stree, stree->stree_root, addmissing, &srdx);
+	if (error != 0)
+		panic("Needs proper cleanup here");
+
+	for (depth = 0; depth < STREE_DEPTH - 1; depth++) {
+		localkey = stree_localkey(stree, siter->siter_key, depth);
+		KASSERT(localkey < stree->stree_srdxcap,
+		    ("invalid local key %lx %lx", localkey,
+			stree->stree_srdxcap));
+		localvalue = srdx->srdx_vals[localkey];
+
+		/* Check if intermediate node is actually allocated. */
+		if (!STREE_VALVALID(localvalue)) {
+			if (!siter->siter_addmissing)
+				goto error;
+
+			/* Create any missing nodes. */
+			ptr = DISKPTR_NULL;
+			error = srdx_create(stree, &ptr, &schild);
+			if (error != 0) {
+				panic("Needs proper cleanup here");
+			}
+
+			localvalue = (diskblk_t) { ptr.offset, ptr.epoch };
+			STREE_ITER_DBG("[%d] Creating %lx\n", __LINE__, schild);
+			srdx->srdx_vals[localkey] = localvalue;
+		} else {
+			error = srdx_retrieve(
+			    stree, localvalue.offset, addmissing, &schild);
+			if (error != 0) {
+				panic("Needs proper cleanup here");
+			}
+			STREE_ITER_DBG(
+			    "[%d] Retrieving %p\n", __LINE__, schild);
+		}
+
+		STREE_ITER_DBG(
+		    "[%d] Insert depth %d (%p)\n", __LINE__, depth, schild);
+		siter->siter_nodes[depth] = srdx;
+		srdx->srdx_key = siter->siter_key;
+		srdx = schild;
+	}
+
+	srdx->srdx_key = key;
+	siter->siter_nodes[depth] = srdx;
+	return (0);
+
+error:
+	/* Release all nodes already held. */
+	for (i = 0; i < depth; i++) {
+		if (siter->siter_nodes[i] == NULL)
+			continue;
+
+		srdx_release(siter->siter_nodes[i]);
+	}
+	srdx_release(srdx);
+
+	return (EINVAL);
+}
+
+static int
+siter_iter(struct stree_iter *siter)
+{
+	struct slos_rdxtree *stree = siter->siter_stree;
+	struct slos_rdxnode *srdx, *schild;
+	diskblk_t localvalue;
+	uint64_t localkey;
+	diskptr_t ptr;
+	int depth;
+	int error;
+	int i;
+
+	if (siter->siter_key + 1 == stree->stree_max)
+		goto error;
+
+	for (depth = STREE_DEPTH - 1; depth >= 0; depth--) {
+		localkey = stree_localkey(stree, siter->siter_key, depth);
+		if (localkey + 1 < stree->stree_srdxcap)
+			break;
+
+		STREE_ITER_DBG("[%d] Releasing depth %d (%p)\n", __LINE__,
+		    depth, siter->siter_nodes[depth]);
+		srdx_release(siter->siter_nodes[depth]);
+		siter->siter_nodes[depth] = NULL;
+	}
+
+	siter->siter_key += 1;
+
+	for (srdx = siter->siter_nodes[depth], siter->siter_nodes[depth] = NULL;
+	     depth < STREE_DEPTH - 1; depth++) {
+		localkey = stree_localkey(stree, siter->siter_key, depth);
+		KASSERT(localkey < stree->stree_srdxcap,
+		    ("invalid local key %lx %lx", localkey,
+			stree->stree_srdxcap));
+		localvalue = srdx->srdx_vals[localkey];
+
+		/* Check if intermediate node is actually allocated. */
+		if (!STREE_VALVALID(localvalue)) {
+			if (!siter->siter_addmissing)
+				goto error;
+
+			ptr = DISKPTR_NULL;
+			error = srdx_create(stree, &ptr, &schild);
+			if (error != 0) {
+				panic("Needs proper cleanup here");
+			}
+
+			localvalue = (diskblk_t) { ptr.offset, ptr.epoch };
+			srdx->srdx_vals[localkey] = localvalue;
+			STREE_ITER_DBG("[%d] Creating %p\n", __LINE__, schild);
+		} else {
+			error = srdx_retrieve(stree, localvalue.offset,
+			    siter->siter_addmissing, &schild);
+			if (error != 0) {
+				panic("Needs proper cleanup here");
+			}
+			STREE_ITER_DBG(
+			    "[%d] Retrieving %p\n", __LINE__, schild);
+		}
+
+		STREE_ITER_DBG(
+		    "[%d] Replace depth %d (%p)\n", __LINE__, depth, schild);
+		siter->siter_nodes[depth] = srdx;
+		srdx->srdx_key = siter->siter_key;
+		srdx = schild;
+	}
+
+	srdx->srdx_key = siter->siter_key;
+	siter->siter_nodes[depth] = srdx;
+
+	return (0);
+
+error:
+	/* Release all nodes already held. */
+	for (i = 0; i < STREE_DEPTH; i++) {
+		if (siter->siter_nodes[i] == NULL)
+			continue;
+
+		srdx_release(siter->siter_nodes[i]);
+	}
+	srdx_release(srdx);
+
+	return (EINVAL);
+}
+
+static void
+siter_access(struct stree_iter *siter, diskblk_t *value)
+{
+	struct slos_rdxnode *srdx = siter->siter_nodes[STREE_DEPTH - 1];
+	uint64_t localkey;
+
+	if (siter->siter_key == siter->siter_stree->stree_max) {
+		*value = STREE_INVAL;
+		return;
+	}
+
+	localkey = stree_localkey(
+	    siter->siter_stree, siter->siter_key, STREE_DEPTH - 1);
+	*value = srdx->srdx_vals[localkey];
+}
+
+static void
+siter_replace(struct stree_iter *siter, diskblk_t value)
+{
+	struct slos_rdxnode *srdx = siter->siter_nodes[STREE_DEPTH - 1];
+	uint64_t localkey;
+
+	localkey = stree_localkey(
+	    siter->siter_stree, siter->siter_key, STREE_DEPTH - 1);
+	srdx->srdx_vals[localkey] = value;
+}
+
+static void
+siter_end(struct stree_iter *siter)
+{
+	int depth;
+
+	for (depth = 0; depth < STREE_DEPTH; depth++) {
+		if (siter->siter_nodes[depth] == NULL)
+			continue;
+		srdx_release(siter->siter_nodes[depth]);
+		siter->siter_nodes[depth] = NULL;
+	}
+
+	siter->siter_key = siter->siter_stree->stree_max;
+}
+
+int
+stree_extent_replace(struct slos_rdxtree *stree, uint64_t offset, diskptr_t ptr)
+{
+	struct stree_iter siter;
+	diskblk_t pblk;
+	int error;
+
+	error = siter_start(stree, offset, true, &siter);
+	KASSERT(error == 0, ("siter_start failed in insert mode"));
+
+	while (ptr.size > 0) {
+		/* Replace a single block. */
+		pblk = (diskblk_t) { ptr.offset, ptr.epoch };
+		siter_replace(&siter, pblk);
+
+		ptr.offset += 1;
+		ptr.size -= BLKSIZE(&slos);
+
+		error = siter_iter(&siter);
+		KASSERT(error == 0, ("siter_iter failed in insert mode"));
+	}
+	siter_end(&siter);
+
+	return (0);
+}
+
+/*
+ * Get the largest possible extent starting from the given offset.
+ * The extent must start from an already valid block.
+ */
+int
+stree_extent_find(struct slos_rdxtree *stree, uint64_t offset, diskptr_t *ptr)
+{
+	struct stree_iter siter;
+	diskblk_t pblk;
+	size_t blklen;
+	int error;
+
+	error = siter_start(stree, offset, false, &siter);
+	if (error != 0) {
+		ptr->offset = STREE_INVAL.offset;
+		ptr->size = 0;
+		ptr->epoch = STREE_INVAL.epoch;
+		return (0);
+	}
+
+	siter_access(&siter, &pblk);
+	ptr->offset = pblk.offset;
+	ptr->size = BLKSIZE(&slos);
+	ptr->epoch = pblk.epoch;
+
+	for (blklen = 1; siter_iter(&siter) == 0; blklen++) {
+		siter_access(&siter, &pblk);
+
+		/* Roll the pointer as far as possible. */
+		if (ptr->offset + blklen != pblk.offset) {
+			siter_end(&siter);
+			break;
+		}
+
+		ptr->size += BLKSIZE(&slos);
+	}
+
+	return (0);
+}
