@@ -636,6 +636,16 @@ slsckpt_dataregion_dump(struct slsckpt_dataregion_dump_args *args)
 
 	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Writing out the data");
 
+	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
+	if (slsp->slsp_target == SLS_OSD) {
+		taskqueue_drain_all(slos.slos_tq);
+		/* XXX Using MNT_WAIT is causing a deadlock right now. */
+		VFS_SYNC(slos.slsfs_mount,
+		    (sls_vfs_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
+	}
+
+	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Draining the taskqueue");
+
 	/*
 	 * We compact before turning the checkpoint available, because we modify
 	 * the partition's current checkpoint data.
@@ -646,16 +656,6 @@ slsckpt_dataregion_dump(struct slsckpt_dataregion_dump_args *args)
 		slsckpt_drop(sckpt_data);
 
 	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Compacting the data");
-
-	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
-	if (slsp->slsp_target == SLS_OSD) {
-		taskqueue_drain_all(slos.slos_tq);
-		/* XXX Using MNT_WAIT is causing a deadlock right now. */
-		VFS_SYNC(slos.slsfs_mount,
-		    (sls_vfs_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
-	}
-
-	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Draining the taskqueue");
 
 	slsp_epoch_advance(slsp, nextepoch);
 
@@ -687,6 +687,8 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	struct slsckpt_dataregion_dump_args *dump_args;
 	struct slsckpt_data *sckpt = NULL;
 	int stateerr, error;
+
+	sls_ckpt_attempted += 1;
 
 	/*
 	 * Unless doing full checkpoints (which are there just for benchmarking
@@ -777,6 +779,8 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 		slsp_epoch_advance(slsp, *nextepoch);
 		return (error);
 	}
+
+	sls_ckpt_done += 1;
 
 	return (0);
 
