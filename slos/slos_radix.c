@@ -1169,3 +1169,364 @@ tryagain:
 
 	return (0);
 }
+
+/*
+ * ============ Sparse extent operations. ============
+ * ============     Used by the SLS.	  ============
+ */
+
+static inline int
+stree_localkey_increment(struct slos_rdxtree *stree, uint64_t *key, int depth)
+{
+	uint64_t movbits = (STREE_DEPTH - 1 - depth) * fls(stree->stree_mask);
+
+	if (*key == stree->stree_max)
+		return (EINVAL);
+
+	/* Zero out the bits before the local key. */
+	if (movbits > 0)
+		*key = *key & ~((1ULL << movbits) - 1);
+	/* Increment the local key. */
+	*key = *key + (1ULL << movbits);
+	return (0);
+}
+
+/*
+ * Find the first valid value in the node with a key >= the one given.
+ */
+static bool
+stree_siter_moveright(struct slos_rdxnode *srdx, uint64_t *key, int depth)
+{
+	struct slos_rdxtree *stree = srdx->srdx_tree;
+	uint64_t localkey;
+	diskblk_t localvalue;
+
+	for (;;) {
+		localkey = stree_localkey(stree, *key, depth);
+		/* Will trigger if the tree is empty. */
+		KASSERT(localkey < stree->stree_srdxcap,
+		    ("invalid local key %lx %lx", localkey,
+			stree->stree_srdxcap));
+
+		/* Go down if possible, otherwise go up. */
+		localvalue = srdx->srdx_vals[localkey];
+		if (STREE_VALVALID(localvalue))
+			return true;
+
+		/* Reached the end of the node. */
+		if (localkey + 1 == stree->stree_srdxcap)
+			return false;
+
+		stree_localkey_increment(stree, key, depth);
+	}
+}
+
+static bool
+stree_siter_moveup(struct stree_iter *siter, uint64_t *keyp, int *depthp)
+{
+	struct slos_rdxtree *stree = siter->siter_stree;
+	diskblk_t localvalue;
+	uint64_t key = *keyp;
+	int depth = *depthp;
+	uint64_t localkey;
+	bool found;
+	uint64_t oldkey;
+
+	for (;;) {
+		oldkey = key;
+
+		/* Go as far up as possible to continue scanning right. */
+		localkey = stree_localkey(stree, key, depth);
+		while (localkey + 1 == stree->stree_srdxcap) {
+
+			if (siter->siter_nodes[depth] != NULL) {
+				srdx_release(siter->siter_nodes[depth]);
+				siter->siter_nodes[depth] = NULL;
+			}
+
+			if (depth == 0) {
+				*depthp = depth;
+				*keyp = key;
+				return (false);
+			}
+
+			depth -= 1;
+			localkey = stree_localkey(stree, key, depth);
+		}
+
+		/* Move to the right. */
+		stree_localkey_increment(stree, &key, depth);
+
+		found = stree_siter_moveright(
+		    siter->siter_nodes[depth], &key, depth);
+		if (found) {
+			localkey = stree_localkey(stree, key, depth);
+			localvalue =
+			    siter->siter_nodes[depth]->srdx_vals[localkey];
+			KASSERT(STREE_VALVALID(localvalue),
+			    ("stopped on invalid value"));
+			break;
+		}
+
+		if (oldkey == key) {
+			panic("loop");
+		}
+	}
+
+	*depthp = depth;
+	*keyp = key;
+	return (true);
+}
+
+/*
+ * Find the closest extent to the right of the key. If the key
+ * is in the middle of an extent, we ignore the part to the left.
+ */
+static int
+siter_extent_keymin_start(
+    struct slos_rdxtree *stree, uint64_t key, struct stree_iter *siter)
+{
+	struct slos_rdxnode *srdx, *schild;
+	diskblk_t localvalue;
+	uint64_t localkey;
+	bool found;
+	int error;
+	int depth;
+
+	ASSERT_VOP_LOCKED(stree->stree_vp, "streestart");
+
+	siter->siter_stree = stree;
+	siter->siter_key = key;
+	siter->siter_addmissing = false;
+	for (depth = 0; depth < STREE_DEPTH; depth++)
+		siter->siter_nodes[depth] = NULL;
+
+	KASSERT(key < stree->stree_max,
+	    ("Key %lx out of bounds %ld", key, stree->stree_max));
+
+	error = srdx_retrieve(stree, stree->stree_root, false, &srdx);
+	if (error != 0)
+		panic("Needs proper cleanup here");
+
+	for (depth = 0; depth < STREE_DEPTH; depth++) {
+		siter->siter_nodes[depth] = srdx;
+
+		srdx = siter->siter_nodes[depth];
+		found = stree_siter_moveright(srdx, &key, depth);
+		if (!found) {
+			KASSERT(depth > 0, ("already at the top level"));
+
+			/*
+			 * The only way we fail is if the key rolled over.
+			 * In that case it is safe to move one level up.
+			 */
+			KASSERT(stree_localkey(stree, key, depth) + 1 ==
+				stree->stree_srdxcap,
+			    ("key not at the edge of the node"));
+
+			found = stree_siter_moveup(siter, &key, &depth);
+			if (!found)
+				panic("No keys to our right (handle)");
+			srdx = siter->siter_nodes[depth];
+		}
+
+		localkey = stree_localkey(stree, key, depth);
+		localvalue = srdx->srdx_vals[localkey];
+		KASSERT(STREE_VALVALID(localvalue), ("invalid local value"));
+
+		if (depth == STREE_DEPTH - 1) {
+			found = stree_siter_moveright(srdx, &key, depth);
+			MPASS(found);
+			break;
+		}
+
+		error = srdx_retrieve(stree, localvalue.offset, false, &schild);
+		if (error != 0) {
+			panic("Needs proper cleanup here");
+		}
+
+		srdx = schild;
+	}
+
+	siter->siter_key = key;
+	siter->siter_nodes[depth] = srdx;
+	return (0);
+}
+
+/*
+ * siter_keymin is our stree_iter start with modifications
+ * stree_extent_next is the userspace siter_iter
+ * stree_extent_find is similar to the existing one, but
+ * uses the two functions above
+ */
+
+static int
+siter_extent_keymin_next(struct stree_iter *siter)
+{
+	struct slos_rdxtree *stree = siter->siter_stree;
+	struct slos_rdxnode *srdx = NULL, *schild;
+	uint64_t key = siter->siter_key;
+	diskblk_t localvalue;
+	uint64_t localkey;
+	bool found;
+	int depth;
+	int error;
+
+	ASSERT_VOP_LOCKED(stree->stree_vp, "streeiter");
+
+	if (key + 1 == stree->stree_max)
+		goto iterdone;
+
+	depth = STREE_DEPTH - 1;
+	found = stree_siter_moveup(siter, &key, &depth);
+	if (!found)
+		goto iterdone;
+
+	srdx = siter->siter_nodes[depth];
+	siter->siter_nodes[depth] = NULL;
+	for (;;) {
+		/* Move laterally. */
+		found = stree_siter_moveright(srdx, &key, depth);
+		KASSERT(
+		    found, ("did not find next value during keymin iteration"));
+		localkey = stree_localkey(stree, key, depth);
+
+		localvalue = srdx->srdx_vals[localkey];
+		KASSERT(STREE_VALVALID(localvalue), ("invalid local value"));
+
+		if (depth == STREE_DEPTH - 1)
+			break;
+
+		/* Move downwards. */
+		error = srdx_retrieve(stree, localvalue.offset, false, &schild);
+		if (error != 0)
+			panic("Needs proper cleanup here");
+
+		KASSERT(siter->siter_nodes[depth] == NULL,
+		    ("overwriting existing node"));
+		siter->siter_nodes[depth] = srdx;
+		srdx = schild;
+
+		depth += 1;
+	}
+
+	siter->siter_key = key;
+	siter->siter_nodes[depth] = srdx;
+
+	return (0);
+
+iterdone:
+	siter_end(siter);
+	if (srdx != NULL)
+		srdx_release(srdx);
+
+	return (EINVAL);
+}
+
+/*
+ * Get the largest possible extent starting from the given offset.
+ * The extent must start from an already valid block. The iterator
+ * points to the next valid extent by the end of the function.
+ */
+static int
+siter_extent_keymin_find(struct stree_iter *siter, diskptr_t *ptr)
+{
+	uint64_t key = siter->siter_key;
+	diskblk_t pblk;
+	size_t blklen;
+
+	siter_access(siter, &pblk);
+
+	if (!STREE_VALVALID(pblk)) {
+		ptr->offset = STREE_INVAL.offset;
+		ptr->size = 0;
+		ptr->epoch = STREE_INVAL.epoch;
+		return (EINVAL);
+	}
+
+	ptr->offset = pblk.offset;
+	ptr->size = BLKSIZE(&slos);
+	ptr->epoch = pblk.epoch;
+
+	for (blklen = 1; siter_extent_keymin_next(siter) == 0; blklen++) {
+		/* Ensure the data is logically contiguous. */
+		if (key + blklen != siter->siter_key)
+			break;
+
+		/* Ensure the data is physically contiguous. */
+		siter_access(siter, &pblk);
+		if (ptr->offset + blklen != pblk.offset) {
+			siter_end(siter);
+			break;
+		}
+
+		if (ptr->size == MAXBCACHEBUF)
+			break;
+
+		ptr->size += BLKSIZE(&slos);
+	}
+
+	return (0);
+}
+
+int
+stree_numextents(struct slos_rdxtree *stree, uint64_t *numextentsp)
+{
+	uint64_t start = *numextentsp;
+	struct stree_iter siter;
+	uint64_t numextents = 0;
+	diskptr_t ptr;
+	int error;
+
+	error = siter_extent_keymin_start(stree, start, &siter);
+	if (error != 0) {
+		*numextentsp = 0;
+		return (0);
+	}
+
+	uint64_t past = siter.siter_key;
+	while (siter_extent_keymin_find(&siter, &ptr) == 0) {
+		numextents += 1;
+		if (siter.siter_key == past) {
+			diskblk_t pblk;
+			siter_access(&siter, &pblk);
+			panic("[%lx] Loop on %lx (%s)\n",
+			    SLSVP(stree->stree_vp)->sn_ino.ino_pid, past,
+			    STREE_VALVALID(pblk) ? "yes" : "no");
+		}
+		past = siter.siter_key;
+	}
+
+	*numextentsp = numextents;
+
+	return (0);
+}
+
+int
+stree_getextents(struct slos_rdxtree *stree, struct slos_extent *extents)
+{
+	uint64_t key = extents[0].sxt_lblkno;
+	struct stree_iter siter;
+	diskptr_t ptr;
+	int error;
+	int i;
+
+	error = siter_extent_keymin_start(stree, key, &siter);
+	if (error != 0)
+		return (error);
+	key = siter.siter_key;
+
+	for (i = 0; siter_extent_keymin_find(&siter, &ptr) == 0; i++) {
+
+		KASSERT(ptr.size > 0, ("extent unexpectedly missing"));
+
+		extents[i].sxt_lblkno = key;
+		extents[i].sxt_cnt = ptr.size / BLKSIZE(&slos);
+
+		key = siter.siter_key;
+	}
+
+	KASSERT(key == stree->stree_max, ("did not fully traverse the tree"));
+
+	return (0);
+}

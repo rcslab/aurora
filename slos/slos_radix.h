@@ -69,4 +69,7 @@ void slos_radix_fini(void);
 
 int stree_sync(struct slos_rdxtree *stree);
 
+int stree_numextents(struct slos_rdxtree *stree, uint64_t *numextentsp);
+int stree_getextents(struct slos_rdxtree *stree, struct slos_extent *extents);
+
 #endif /* _SLOS_RADIX_H_ */
