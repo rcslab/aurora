@@ -643,6 +643,7 @@ sls_memsnap(struct sls_memsnap_args *args)
 	 */
 	slsp = slsp_find(args->oid);
 	if (slsp == NULL) {
+		sls_finishop();
 		return (EINVAL);
 	}
 
