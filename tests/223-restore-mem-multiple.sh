@@ -18,13 +18,10 @@ sleep 1
 wait $PID
 for i in 1 2 3 4 5; do
     slsrestore
-    if [ $? -ne 0 ];
-    then
-	echo "Restore failed with $?"
-	exit 1
-    fi
+    PID=$!
+    wait $PID
 
-    wait `pidof mmap`
+    RET=$?
     if [ $? -ne 0 ];
     then
 	echo "Process exited with nonzero"

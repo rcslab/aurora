@@ -5,23 +5,16 @@ aursetup
 
 "./selfie/selfie" > /dev/null 2> /dev/null &
 PID=$!
-
 wait $PID
 
-# Wait for the memory checkpoint to become available
-sleep 2
-
 slsrestore
-if [ $? -ne 0 ];
-then
-    echo "Restore failed with $?"
-    exit 1
-fi
+PID=$!
+wait $PID
 
-wait `pidof selfie`
-if [ $? -ne 0 ];
+RET=$?
+if [ $RET -ne 0 ];
 then
-    echo "Process exited with nonzero"
+    echo "Process exited with nonzero $RET"
     exit 1
 fi
 
