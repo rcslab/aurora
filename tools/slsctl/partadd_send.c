@@ -50,7 +50,6 @@ partadd_send_socket(uint64_t oid, char *addr, int port, int *fdp)
 
 	sa.sin_family = AF_INET;
 	sa.sin_port = htons(port);
-	printf("optarg %s port %d\n", optarg, port);
 	error = inet_pton(AF_INET, optarg, &sa.sin_addr.s_addr);
 	if (error == -1) {
 		perror("inet_pton");

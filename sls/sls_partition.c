@@ -327,17 +327,73 @@ slsp_detachall(struct slspart *slsp)
 	return (0);
 }
 
+static int
+slsp_init_filename(struct slspart *slsp, struct vnode *vp)
+{
+	struct thread *td = curthread;
+	char *freepath = NULL;
+	char *fullpath = "";
+	int error;
+
+	error = vn_fullpath(td, vp, &fullpath, &freepath);
+	if (error != 0) {
+		free(freepath, M_TEMP);
+		return (error);
+	}
+
+	strncpy(slsp->slsp_name, fullpath, PATH_MAX);
+	free(freepath, M_TEMP);
+
+	return (0);
+}
+
+static int
+slsp_init_rcvname(struct slspart *slsp, int fd)
+{
+	socklen_t alen = PATH_MAX - sizeof(alen);
+	struct thread *td = curthread;
+	struct sockaddr *sa;
+	int error;
+
+	error = kern_getsockname(td, fd, &sa, &alen);
+	if (error != 0)
+		return (error);
+
+	memcpy(slsp->slsp_name, &alen, sizeof(alen));
+	memcpy(&slsp->slsp_name[sizeof(alen)], sa, alen);
+	free(sa, M_SONAME);
+
+	return (0);
+}
+
+static int
+slsp_init_sndname(struct slspart *slsp, int fd)
+{
+	socklen_t alen = PATH_MAX - sizeof(alen);
+	struct thread *td = curthread;
+	struct sockaddr *sa;
+	int error;
+
+	error = kern_getpeername(td, fd, &sa, &alen);
+	if (error != 0)
+		return (error);
+
+	memcpy(slsp->slsp_name, &alen, sizeof(alen));
+	memcpy(&slsp->slsp_name[sizeof(alen)], sa, alen);
+	free(sa, M_SONAME);
+
+	return (0);
+}
+
 /*
  * Create a new struct slspart to be entered into the SLS.
  */
 static int
-slsp_init(
-    uint64_t oid, struct sls_attr attr, void *backend, struct slspart **slspp)
+slsp_init(uint64_t oid, struct sls_attr attr, int fd, struct slspart **slspp)
 {
 	struct thread *td = curthread;
 	struct slspart *slsp = NULL;
-	char *fullpath = "";
-	char *freepath = NULL;
+	struct file *fp;
 	int error;
 
 	/* Create the new partition. */
@@ -349,7 +405,7 @@ slsp_init(
 	slsp->slsp_status = SLSP_AVAILABLE;
 	slsp->slsp_epoch = SLSPART_EPOCHINIT;
 	slsp->slsp_nextepoch = slsp->slsp_epoch + 1;
-	slsp->slsp_backend = backend;
+	slsp->slsp_backend = NULL;
 	slsp->slsp_blanksckpt = NULL;
 
 	/* Create the set of held processes. */
@@ -357,27 +413,35 @@ slsp_init(
 	if (error != 0)
 		goto error;
 
+	fp = (fd >= 0) ? FDTOFP(td->td_proc, fd) : NULL;
+
 	switch (slsp->slsp_target) {
 	case SLS_FILE:
-		error = vn_fullpath(
-		    td, slsp->slsp_backend, &fullpath, &freepath);
-		if (error != 0) {
-			free(freepath, M_TEMP);
-			goto error;
-		}
+		error = slsp_init_filename(slsp, fp->f_vnode);
+		if (error != 0)
+			break;
 
+		slsp->slsp_backend = fp->f_vnode;
 		vref(slsp->slsp_backend);
 
-		strncpy(slsp->slsp_name, fullpath, PATH_MAX);
-		free(freepath, M_TEMP);
 		break;
 
 	case SLS_SOCKSND:
+		error = slsp_init_sndname(slsp, fd);
+		break;
+
 	case SLS_SOCKRCV:
-		if (!fhold((struct file *)slsp->slsp_backend)) {
+		error = slsp_init_rcvname(slsp, fd);
+		if (error != 0)
+			break;
+
+		if (!fhold((struct file *)fp)) {
 			error = EBADF;
 			goto error;
 		}
+
+		slsp->slsp_backend = fp;
+		break;
 
 	case SLS_MEM:
 	case SLS_OSD:
@@ -442,11 +506,6 @@ slsp_fini(struct slspart *slsp)
 
 	backend = slsp->slsp_attr.attr_target;
 	switch (backend) {
-	case SLS_SOCKSND:
-		fdrop((struct file *)slsp->slsp_backend, td);
-		slsp->slsp_backend = NULL;
-		break;
-
 	case SLS_FILE:
 		vrele((struct vnode *)slsp->slsp_backend);
 		slsp->slsp_backend = NULL;
@@ -457,6 +516,7 @@ slsp_fini(struct slspart *slsp)
 		slsp->slsp_backend = NULL;
 		break;
 
+	case SLS_SOCKSND:
 	case SLS_MEM:
 	case SLS_OSD:
 		break;
@@ -470,8 +530,7 @@ slsp_fini(struct slspart *slsp)
 
 /* Add a partition with unique ID oid to the SLS. */
 int
-slsp_add(
-    uint64_t oid, struct sls_attr attr, void *backend, struct slspart **slspp)
+slsp_add(uint64_t oid, struct sls_attr attr, int fd, struct slspart **slspp)
 {
 	struct slspart *slsp;
 	int error;
@@ -489,7 +548,7 @@ slsp_add(
 	}
 
 	/* If we didn't find it, create one. */
-	error = slsp_init(oid, attr, backend, &slsp);
+	error = slsp_init(oid, attr, fd, &slsp);
 	if (error != 0)
 		return (error);
 
@@ -748,7 +807,7 @@ sslsp_deserialize(void)
 
 		/* Create the in-memory representation. */
 		error = slsp_add(
-		    ssparts[i].sspart_oid, ssparts[i].sspart_attr, NULL, &slsp);
+		    ssparts[i].sspart_oid, ssparts[i].sspart_attr, -1, &slsp);
 		if (error != 0)
 			return (error);
 

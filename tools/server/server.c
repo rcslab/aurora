@@ -42,6 +42,7 @@ struct slsmsg_server {
 	int slssrv_rootfd;
 	int slssrv_epochfd;
 	int slssrv_recfd;
+	bool slssrv_done;
 
 	uint64_t slssrv_curoid;
 	char *slssrv_recmapping;
@@ -61,6 +62,7 @@ slssrv_init(struct slsmsg_server *srv, char *root)
 		.slssrv_rootfd = -1,
 		.slssrv_epochfd = -1,
 		.slssrv_recfd = -1,
+		.slssrv_done = false,
 		.slssrv_root = root,
 	};
 }
@@ -152,6 +154,13 @@ slssrv_connect(struct slsmsg_server *srv)
 	    ntohs(inaddr.sin_port));
 
 	srv->slssrv_connsock = fd;
+}
+
+void
+slssrv_disconnect(struct slsmsg_server *srv)
+{
+	close(srv->slssrv_connsock);
+	srv->slssrv_connsock = -1;
 }
 
 int
@@ -327,7 +336,7 @@ slssrv_teardownckpt(struct slsmsg_server *srv, union slsmsg *msg)
 		srv->slssrv_recmapping = NULL;
 		srv->slssrv_maplen = 0;
 
-		close(srv->slssrv_epochfd);
+		close(srv->slssrv_recfd);
 		srv->slssrv_recfd = -1;
 	}
 
@@ -340,7 +349,7 @@ slssrv_teardownckpt(struct slsmsg_server *srv, union slsmsg *msg)
 }
 
 int
-slssrv_recvmsg(struct slsmsg_server *srv, bool *donep)
+slssrv_recvmsg(struct slsmsg_server *srv)
 {
 	enum slsmsgtype msgtype;
 	ssize_t received;
@@ -353,6 +362,8 @@ slssrv_recvmsg(struct slsmsg_server *srv, bool *donep)
 		exit(EX_PROTOCOL);
 	}
 
+	printf("The size of the message is %ld, expected %ld\n", received,
+	    sizeof(msg));
 	assert(received == sizeof(msg));
 
 	/* The first member of all message structs is their type. */
@@ -368,6 +379,7 @@ slssrv_recvmsg(struct slsmsg_server *srv, bool *donep)
 	switch (msgtype) {
 	case SLSMSG_REGISTER:
 		error = slssrv_register(srv, &msg);
+		slssrv_disconnect(srv);
 		break;
 
 	case SLSMSG_CKPTSTART:
@@ -384,12 +396,12 @@ slssrv_recvmsg(struct slsmsg_server *srv, bool *donep)
 
 	case SLSMSG_CKPTDONE:
 		error = slssrv_teardownckpt(srv, &msg);
-		/* XXX Temporary till we flesh out the protocol. */
-		*donep = 0;
+		slssrv_disconnect(srv);
 		break;
 
 	case SLSMSG_DONE:
-		*donep = true;
+		srv->slssrv_done = true;
+		slssrv_disconnect(srv);
 		error = 0;
 		break;
 
@@ -401,12 +413,28 @@ slssrv_recvmsg(struct slsmsg_server *srv, bool *donep)
 	return (error);
 }
 
+void
+server_loop(struct slsmsg_server *srv)
+{
+	int error;
+
+	if (srv->slssrv_connsock == -1)
+		slssrv_connect(srv);
+
+	while (srv->slssrv_connsock != -1) {
+		error = slssrv_recvmsg(srv);
+		if (error != 0) {
+			fprintf(stderr, "Error %d for server\n", error);
+			break;
+		}
+	}
+}
+
 int
 main(int argc, char **argv)
 {
 	struct slsmsg_server srv;
 	char *root;
-	bool done;
 	int error;
 
 	if (argc != 2) {
@@ -423,14 +451,8 @@ main(int argc, char **argv)
 
 	slssrv_init(&srv, root);
 	slssrv_listen(&srv, PORT);
-	slssrv_connect(&srv);
-
-	do {
-		error = slssrv_recvmsg(&srv, &done);
-		if (error != 0)
-			break;
-	} while (!done);
-
+	while (!srv.slssrv_done)
+		server_loop(&srv);
 	slssrv_fini(&srv);
 
 	return (0);

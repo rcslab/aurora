@@ -86,7 +86,7 @@ int slsp_attach(uint64_t oid, pid_t pid);
 int slsp_detach(uint64_t oid, pid_t pid);
 
 int slsp_add(
-    uint64_t oid, struct sls_attr attr, void *backend, struct slspart **slspp);
+    uint64_t oid, struct sls_attr attr, int fd, struct slspart **slspp);
 void slsp_del(uint64_t oid);
 
 void slsp_delall(void);

@@ -224,7 +224,7 @@ slsckpt_compact_single(struct slspart *slsp, struct slsckpt_data *sckpt)
 	slsckpt_drop(sckpt);
 }
 
-static void
+void
 slsckpt_compact(struct slspart *slsp, struct slsckpt_data *sckpt)
 {
 	struct slsckpt_data *old_sckpt;
@@ -348,7 +348,7 @@ slsckpt_initio(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 	/* Initiate IO, if necessary. */
 	switch (slsp->slsp_target) {
 	case SLS_SOCKSND:
-		return (EOPNOTSUPP);
+		return (slsckpt_io_socket(slsp, sckpt_data));
 
 	case SLS_SOCKRCV:
 		return (EOPNOTSUPP);

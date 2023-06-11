@@ -23,6 +23,7 @@
 
 static struct option partadd_recv_longopts[] = {
 	{ "address", required_argument, NULL, 'A' },
+	{ "delta", required_argument, NULL, 'd' },
 	{ "oid", required_argument, NULL, 'o' },
 	{ "port", required_argument, NULL, 'P' },
 	{ NULL, no_argument, NULL, 0 },
@@ -51,7 +52,6 @@ partadd_recv_socket(uint64_t oid, char *addr, int port, int *fdp)
 
 	sa.sin_family = AF_INET;
 	sa.sin_port = htons(port);
-	printf("optarg %s port %d\n", optarg, port);
 	error = inet_pton(AF_INET, optarg, &sa.sin_addr.s_addr);
 	if (error == -1) {
 		perror("inet_pton");
@@ -108,8 +108,8 @@ partadd_recv_main(int argc, char *argv[])
 		.attr_amplification = 1,
 	};
 
-	while ((opt = getopt_long(
-		    argc, argv, "A:o:P:", partadd_recv_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "A:do:P:", partadd_recv_longopts,
+		    NULL)) != -1) {
 		switch (opt) {
 		case 'A':
 			if (port == 0 || oid == 0) {
@@ -119,6 +119,10 @@ partadd_recv_main(int argc, char *argv[])
 			}
 
 			partadd_recv_socket(oid, optarg, port, &fd);
+			break;
+
+		case 'd':
+			attr.attr_mode = SLS_DELTA;
 			break;
 
 		case 'o':

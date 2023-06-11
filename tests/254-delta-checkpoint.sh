@@ -10,7 +10,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-slsctl partadd -b slos -o $OID -d
+slsctl partadd slos -o $OID -d
 
 ./delta/delta >/dev/null 2>/dev/null &
 

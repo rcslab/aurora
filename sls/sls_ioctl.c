@@ -433,20 +433,31 @@ sls_attach(struct sls_attach_args *args)
 static int
 sls_socket_receive(struct slspart *slsp)
 {
-	return (EOPNOTSUPP);
-}
-
-static int
-sls_receive_stop(struct slspart *slsp)
-{
 	struct file *fp = (struct file *)slsp->slsp_backend;
-	struct slsmsg_done *donemsg;
-	union slsmsg msg;
+	struct thread *td = curthread;
+	int error;
 
-	donemsg = (struct slsmsg_done *)&msg;
-	donemsg->slsmsg_type = SLSMSG_DONE;
+	if (!fhold(fp))
+		return (EBADF);
 
-	return (slsio_fpwrite(fp, &msg, sizeof(msg)));
+	if (sls_startop()) {
+		fdrop(fp, td);
+		return (EBUSY);
+	}
+
+	slsp_ref(slsp);
+
+	/* Create the daemon. */
+	error = kthread_add((void (*)(void *))sls_sockrcvd, (void *)slsp, NULL,
+	    NULL, 0, 0, "sls_sockrecvd");
+	if (error != 0) {
+		slsp_deref(slsp);
+		fdrop(fp, td);
+		sls_finishop();
+		return (error);
+	}
+
+	return (0);
 }
 
 static int
@@ -462,7 +473,7 @@ sls_receive_stopall(void)
 		if (slsp->slsp_target != SLS_SOCKRCV)
 			continue;
 
-		error = sls_receive_stop(slsp);
+		error = sls_write_rcvdone(slsp);
 		if (error != 0) {
 			KV_ABORT(iter);
 			return (error);
@@ -477,8 +488,8 @@ static int
 sls_partadd(struct sls_partadd_args *args)
 {
 	struct slspart *slsp = NULL;
+	int fd = args->backendfd;
 	struct proc *p = curproc;
-	void *backend = NULL;
 	struct file *fp;
 	int target;
 	int error;
@@ -503,31 +514,33 @@ sls_partadd(struct sls_partadd_args *args)
 	if (args->oid < SLS_OIDMIN || args->oid > SLS_OIDMAX)
 		return (EINVAL);
 
-	if (args->backendfd >= 0) {
+	/* File and remote backends need a descriptor argument. */
+	if (target == SLS_FILE || target == SLS_SOCKRCV ||
+	    target == SLS_SOCKSND) {
+		if (fd < 0)
+			return (EINVAL);
+	}
+
+	if (fd >= 0) {
+		fp = FDTOFP(p, fd);
+
 		switch (target) {
 		case SLS_OSD:
 		case SLS_MEM:
 			return (EINVAL);
 		case SLS_SOCKSND:
 		case SLS_SOCKRCV:
-			fp = FDTOFP(p, args->backendfd);
-			if (fp == NULL || fp->f_type != DTYPE_SOCKET)
+			if (fp->f_type != DTYPE_SOCKET)
 				return (EINVAL);
-			/*
-			 * Sockets are torn down when the last
-			 * userspace reference to the fp is gone,
-			 * so we must keep the fp apart from the socket.
-			 */
-
-			backend = (void *)fp;
 			break;
 
 		case SLS_FILE:
-			fp = FDTOFP(p, args->backendfd);
-			if (fp == NULL || fp->f_type != DTYPE_VNODE)
+			if (fp->f_type != DTYPE_VNODE)
 				return (ENOTDIR);
 
-			backend = (void *)fp->f_vnode;
+			if (fp->f_vnode->v_type != VDIR)
+				return (ENOTDIR);
+
 			break;
 		default:
 			return (EINVAL);
@@ -535,7 +548,7 @@ sls_partadd(struct sls_partadd_args *args)
 	}
 
 	/* Copy the SLS attributes to be given to the new process. */
-	error = slsp_add(args->oid, args->attr, backend, (void *)&slsp);
+	error = slsp_add(args->oid, args->attr, fd, (void *)&slsp);
 	if (error != 0)
 		return (error);
 
@@ -1029,22 +1042,10 @@ sls_hook_detach(void)
 	slssyscall_finisysvec();
 }
 
-static void
-sls_flush_operations(void)
-{
-	SLS_ASSERT_LOCKED();
-
-	/* Wait for all operations to be done. */
-	while (slsm.slsm_inprog > 0)
-		cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
-	slsm.slsm_exiting = 1;
-}
-
 static int
 SLSHandler(struct module *inModule, int inEvent, void *inArg)
 {
 	int error = 0;
-	struct vnode __unused *vp = NULL;
 
 	switch (inEvent) {
 	case MOD_LOAD:
@@ -1115,10 +1116,19 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 
 	case MOD_UNLOAD:
 
+		slsm.slsm_exiting = 1;
+
+		error = sls_receive_stopall();
+		if (error != 0) {
+			SLS_UNLOCK();
+			return (error);
+		}
+
 		SLS_LOCK();
 
-		/* Signal that we're exiting and wait for threads to finish. */
-		sls_flush_operations();
+		/* Wait for all operations to be done. */
+		while (slsm.slsm_inprog > 0)
+			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
 
 		/* Kill all processes in Aurora, sleep till they exit. */
 		DEBUG("Killing all processes in Aurora...");

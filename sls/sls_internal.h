@@ -224,6 +224,7 @@ void slsckpt_stop(slsset *procset, struct proc *pcaller);
 void slsckpt_cont(slsset *procset, struct proc *pcaller);
 
 void sls_sockrcvd(struct slspart *slsp);
+int sls_write_rcvdone(struct slspart *slsp);
 int slspre_resident(struct slspart *slsp, struct file *fp);
 
 MALLOC_DECLARE(M_SLSMM);
@@ -270,4 +271,5 @@ union slstable_taskctx {
 	struct slstable_wfdctx wfd;
 };
 
+void slsckpt_compact(struct slspart *slsp, struct slsckpt_data *sckpt);
 #endif /* _SLS_INTERNAL_H_ */

@@ -837,6 +837,7 @@ static int
 slsrest_data_backend(struct slspart *slsp, struct slsrest_data *restdata)
 {
 	struct slsckpt_data *sckpt;
+	vm_object_t object, unused;
 	struct slskv_iter iter;
 	struct sls_record *rec;
 	uint64_t slsid;
@@ -875,7 +876,17 @@ slsrest_data_backend(struct slspart *slsp, struct slsrest_data *restdata)
 		break;
 
 	case SLS_SOCKRCV:
-		return (EOPNOTSUPP);
+		slsckpt_hold(slsp->slsp_sckpt);
+		sckpt = slsp->slsp_sckpt;
+
+		KV_FOREACH_POP(sckpt->sckpt_shadowtable, object, unused)
+		{
+			error = slskv_add(restdata->objtable, object->objid,
+			    (uintptr_t)object);
+			KASSERT(error == 0, ("duplicate object"));
+		}
+
+		break;
 
 	case SLS_MEM:
 	case SLS_SOCKSND:
