@@ -8,11 +8,13 @@
 #include <sys/filio.h>
 #include <sys/kernel.h>
 #include <sys/ktr.h>
+#include <sys/mman.h>
 #include <sys/module.h>
 #include <sys/mount.h>
 #include <sys/namei.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
+#include <sys/rwlock.h>
 #include <sys/stat.h>
 #include <sys/syscallsubr.h>
 #include <sys/ucred.h>
@@ -20,9 +22,14 @@
 #include <sys/vnode.h>
 
 #include <vm/vm.h>
+#include <vm/pmap.h>
 #include <vm/vm_extern.h>
+#include <vm/vm_map.h>
+#include <vm/vm_object.h>
+#include <vm/vm_page.h>
 #include <vm/vnode_pager.h>
 
+#include <machine/pmap.h>
 #include <machine/vmparam.h>
 
 #include <geom/geom_vfs.h>
@@ -124,7 +131,14 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 	 * TODO:
 	 * While rerunning seqwrite-4t-64k twice vfs_hash_remove blew up
 	 */
-	vnode_destroy_vobject(vp);
+	if (!SLS_ISSAS(vp)) {
+		vnode_destroy_vobject(vp);
+	} else if (svp->sn_obj != NULL) {
+		vm_object_deallocate(svp->sn_obj);
+		svp->sn_obj = NULL;
+		svp->sn_addr = (vm_offset_t)NULL;
+	}
+
 	if (vp->v_type != VCHR) {
 		cache_purge(vp);
 		if (vp != slos.slsfs_inodes)
@@ -1270,10 +1284,19 @@ slsfs_setattr(struct vop_setattr_args *args)
 
 		if (SLS_ISWAL(vp))
 			return (EPERM);
-
-		error = slos_truncate(vp, vap->va_size);
-		if (error) {
-			return (error);
+		/*
+		 * For SAS objects we only use truncate to adjust the size in
+		 * the file metadata. The underlying object is already large
+		 * enough accommodate the maximum size and is not affected.
+		 * There are no buffers to remove or OBJT_VNODE objects to
+		 * adjust.
+		 */
+		if (SLS_ISSAS(vp)) {
+			node->sn_ino.ino_size = vap->va_size;
+		} else {
+			error = slos_truncate(vp, vap->va_size);
+			if (error)
+				return (error);
 		}
 	}
 
@@ -1769,6 +1792,62 @@ slsfs_mountsnapshot(int index)
 }
 
 static int
+slsfs_sas_create(char *path, size_t size, int *ret)
+{
+	uint64_t *sas_new_addr = &slos.slos_sb->sb_sas_addr;
+	struct thread *td = curthread;
+	int flags = O_CREAT | O_RDWR;
+	struct slos_node *svp;
+	struct vnode *vp;
+	struct file *fp;
+	int mode = 0666;
+	int error;
+	int fd;
+
+	if (size == 0) {
+		*ret = -1;
+		return EINVAL;
+	}
+
+	size = roundup(size, PAGE_SIZE);
+	if (size > MAX_SAS_SIZE)
+		return EINVAL;
+
+	error = kern_openat(td, AT_FDCWD, path, UIO_SYSSPACE, flags, mode);
+	if (error != 0) {
+		*ret = -1;
+		return (error);
+	}
+
+	fd = td->td_retval[0];
+	error = fget(td, fd, &cap_no_rights, &fp);
+	if (error != 0) {
+		*ret = fd;
+		return (error);
+	}
+
+	vp = fp->f_vnode;
+	vp->v_op = &slsfs_sas_vnodeops;
+
+	svp = SLSVP(vp);
+	svp->sn_addr = atomic_fetchadd_64(sas_new_addr, size + PAGE_SIZE);
+	if (svp->sn_addr + size >= SLS_SAS_MAXADDR)
+		panic("Reached the end of the SAS");
+
+	svp->sn_obj = vm_object_allocate(OBJT_DEFAULT, atop(size));
+	if (svp->sn_obj != NULL) {
+		svp->sn_obj->flags |= OBJ_NOSPLIT;
+		kern_close(td, fd);
+		fd = -1;
+	}
+
+	fdrop(fp, td);
+
+	*ret = fd;
+	return 0;
+}
+
+static int
 slsfs_ioctl(struct vop_ioctl_args *ap)
 {
 	uint64_t *numextentsp;
@@ -1784,6 +1863,7 @@ slsfs_ioctl(struct vop_ioctl_args *ap)
 	struct slos_extent *extents;
 	struct slsfs_getsnapinfo *info = NULL;
 	struct slsfs_create_wal_args *wal_args = NULL;
+	struct slsfs_sas_create_args *sas_args = NULL;
 
 	switch (com) {
 	case SLS_NUM_EXTENTS:
@@ -1827,6 +1907,17 @@ slsfs_ioctl(struct vop_ioctl_args *ap)
 
 		td->td_retval[0] = fd;
 		return (error);
+
+	case SLSFS_SAS_CREATE:
+		sas_args = (struct slsfs_sas_create_args *)ap->a_data;
+		error = slsfs_sas_create(sas_args->path, sas_args->size, &fd);
+		if (error != 0) {
+			td->td_retval[0] = -1;
+			return (error);
+		}
+
+		td->td_retval[0] = 0;
+		return (0);
 
 	case FIOSEEKDATA: // Fallthrough
 	case FIOSEEKHOLE:
@@ -2321,6 +2412,121 @@ _slsfs_create_wal(char *path, int flags, int mode, size_t size, int *ret)
 	return 0;
 }
 
+/*
+ * Find the top-level object starting from its original SAS-backed
+ * ancestor. VM objects normally lock from shadow to parent, starting
+ * from the object directly accessible from the VM entry. We have to
+ * start searching the other way, so we back off if we come across
+ * a locked object in the chain to avoid a deadlock.
+ */
+static int
+slsfs_sas_find_top_object(vm_object_t origobj, vm_object_t *objp)
+{
+	vm_object_t obj, shadow;
+	bool locked;
+
+	obj = origobj;
+	VM_OBJECT_WLOCK(obj);
+	while (obj->shadow_count > 0) {
+		KASSERT(obj->shadow_count == 1, ("SAS object overly shadowed"));
+		shadow = LIST_FIRST(&obj->shadow_head);
+
+		locked = VM_OBJECT_TRYWLOCK(shadow);
+		VM_OBJECT_WUNLOCK(obj);
+		if (!locked)
+			return (EAGAIN);
+
+		obj = shadow;
+	}
+	vm_object_reference_locked(obj);
+	VM_OBJECT_WUNLOCK(obj);
+
+	*objp = obj;
+	return (0);
+}
+
+static int
+slsfs_sas_mmap(struct thread *td, struct vnode *vp, vm_offset_t *addrp)
+{
+	vm_prot_t prot = VM_PROT_READ | VM_PROT_WRITE;
+	struct slos_node *svp = SLSVP(vp);
+	vm_offset_t addr = svp->sn_addr;
+	struct proc *p = td->td_proc;
+	vm_map_t map = &p->p_vmspace->vm_map;
+	vm_object_t obj;
+	int error;
+
+	error = slsfs_sas_find_top_object(svp->sn_obj, &obj);
+	while (error == EAGAIN) {
+		pause_sbt("sasmap", SBT_1US * 100, 0, C_HARDCLOCK);
+		error = slsfs_sas_find_top_object(svp->sn_obj, &obj);
+	}
+
+	if (error != 0)
+		return (error);
+
+	vm_map_lock(map);
+	/*
+	 * XXX Using minherit() to make this mapping shadowable causes all hell
+	 * to break loose. We control how we use the mappings so we ensure
+	 * this does not happen from userspace. The correct solution requires
+	 * adding a flag for SAS mappings that prevents minherit() calls.
+	 */
+	error = vm_map_insert(map, obj, 0, addr, addr + ptoa(obj->size), prot,
+	    prot, MAP_NO_MERGE | MAP_INHERIT_SHARE);
+	vm_map_unlock(map);
+	if (error != 0) {
+		vm_object_deallocate(obj);
+		return (error);
+	}
+
+	*addrp = addr;
+	return (0);
+}
+
+static int
+slsfs_sas_ioctl(struct vop_ioctl_args *ap)
+{
+	struct thread *td = curthread;
+	struct vnode *vp = ap->a_vp;
+	u_long com = ap->a_command;
+	int error;
+	vm_offset_t addr;
+
+	switch (com) {
+	case SLSFS_SAS_MAP:
+		addr = *(vm_offset_t *)ap->a_data;
+		KASSERT(SLS_ISSAS(vp), ("mapping non-SAS node"));
+		error = slsfs_sas_mmap(td, vp, &addr);
+		if (error != 0)
+			return (error);
+
+		memcpy(ap->a_data, &addr, sizeof(void *));
+		return (0);
+
+	default:
+		return (EINVAL);
+	}
+
+	return (0);
+}
+
+static void
+slsfs_sas_destroy(struct vnode *vp)
+{
+	struct slos_node *svp = SLSVP(vp);
+	vm_object_t obj = svp->sn_obj;
+
+	if (obj == NULL)
+		return;
+
+	KASSERT(obj != NULL, ("Unbacked SAS node"));
+	vm_object_deallocate(obj);
+
+	svp->sn_obj = NULL;
+	svp->sn_addr = (vm_offset_t)NULL;
+}
+
 struct vop_vector slsfs_fifoops = {
 	.vop_default = &fifo_specops,
 	.vop_fsync = VOP_PANIC,
@@ -2400,6 +2606,41 @@ struct vop_vector slsfs_wal_vnodeops = {
 	.vop_rmdir = slsfs_rmdir,
 	.vop_setattr = slsfs_setattr,
 	.vop_strategy = slsfs_wal_strategy,
+	.vop_symlink = slsfs_symlink,
+	.vop_whiteout = VOP_PANIC, // TODO
+};
+
+struct vop_vector slsfs_sas_vnodeops = {
+	.vop_default = &default_vnodeops,
+	.vop_fsync = VOP_PANIC,
+	.vop_read = VOP_PANIC,
+	.vop_reallocblks = VOP_PANIC, // TODO
+	.vop_write = VOP_PANIC,
+	.vop_access = slsfs_access,
+	.vop_bmap = VOP_PANIC,
+	.vop_cachedlookup = slsfs_lookup,
+	.vop_close = slsfs_close,
+	.vop_create = slsfs_create,
+	.vop_getattr = slsfs_getattr,
+	.vop_inactive = slsfs_inactive,
+	.vop_ioctl = slsfs_sas_ioctl,
+	.vop_link = slsfs_link,
+	.vop_lookup = vfs_cache_lookup,
+	.vop_pathconf = slsfs_pathconf,
+	.vop_markatime = slsfs_markatime,
+	.vop_mkdir = VOP_PANIC,
+	.vop_mknod = VOP_PANIC,
+	.vop_open = slsfs_open,
+	.vop_poll = VOP_PANIC,
+	.vop_print = slsfs_print,
+	.vop_readdir = VOP_PANIC,
+	.vop_readlink = VOP_PANIC,
+	.vop_reclaim = slsfs_reclaim,
+	.vop_remove = slsfs_remove,
+	.vop_rename = slsfs_rename,
+	.vop_rmdir = VOP_PANIC,
+	.vop_setattr = slsfs_setattr,
+	.vop_strategy = VOP_PANIC,
 	.vop_symlink = slsfs_symlink,
 	.vop_whiteout = VOP_PANIC, // TODO
 };

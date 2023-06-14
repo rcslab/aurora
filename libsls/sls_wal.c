@@ -7,6 +7,7 @@
 #include <stdalign.h>
 #include <stdatomic.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -282,4 +283,49 @@ slsfs_create_wal(char *path, int flags, int mode, size_t size)
 	close(pfd);
 
 	return (walfd);
+}
+
+int
+slsfs_sas_create(char *path, size_t size)
+{
+	struct slsfs_sas_create_args args;
+	char dupstr[PATH_MAX];
+	int pfd, walfd;
+	char *dir;
+
+	memset(args.path, '\0', PATH_MAX);
+	strncpy(args.path, path, strlen(path));
+	args.size = size;
+
+	memset(dupstr, '\0', PATH_MAX);
+	strncpy(dupstr, path, strlen(path));
+
+	dir = dirname(dupstr);
+	if (dir == NULL) {
+		return (EINVAL);
+	}
+
+	pfd = open(dir, O_RDONLY);
+	walfd = ioctl(pfd, SLSFS_SAS_CREATE, &args);
+	close(pfd);
+
+	return (walfd);
+}
+
+int
+slsfs_sas_map(int fd, void **addrp)
+{
+	struct slsfs_sas_create_args args;
+	void *addr;
+	int error;
+
+	error = ioctl(fd, SLSFS_SAS_MAP, &addr);
+	if (error != 0) {
+		perror("sas_map");
+		return (1);
+	}
+
+	*addrp = addr;
+
+	return (0);
 }

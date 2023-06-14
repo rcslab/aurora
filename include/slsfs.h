@@ -48,12 +48,19 @@ struct slsfs_create_wal_args {
 	int mode;
 };
 
+struct slsfs_sas_create_args {
+	char path[PATH_MAX];
+	size_t size;
+};
+
 #define SLSFS_SNAP (0x1)
 
 #define SLSFS_GET_SNAP _IOWR('N', 100, struct slsfs_getsnapinfo)
 #define SLSFS_MOUNT_SNAP _IOWR('N', 101, struct slsfs_getsnapinfo)
 #define SLSFS_COUNT_CHECKPOINTS _IOR('N', 102, uint64_t)
 #define SLSFS_CREATE_WAL _IOWR('N', 103, struct slsfs_create_wal_args)
+#define SLSFS_SAS_CREATE _IOWR('N', 104, struct slsfs_sas_create_args)
+#define SLSFS_SAS_MAP _IOWR('N', 105, void *)
 
 int slsfs_create_wal(char *path, int flags, int mode, size_t size);
 
@@ -106,5 +113,6 @@ extern int checksum_enabled;
 extern struct vop_vector slsfs_vnodeops;
 extern struct vop_vector slsfs_wal_vnodeops;
 extern struct vop_vector slsfs_fifoops;
+extern struct vop_vector slsfs_sas_vnodeops;
 
 #endif // _SLSFS_H_

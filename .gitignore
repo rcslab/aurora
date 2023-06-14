@@ -16,6 +16,7 @@ tests/delta/delta
 tests/fd/fd
 tests/fifo/fifo
 tests/fork/fork
+tests/forkshm/forkshm
 tests/forkwait/forkwait
 tests/journal/journal
 tests/kqueue/kqueue
@@ -36,6 +37,9 @@ tests/metroparts/metroparts
 tests/metroserver/metroserver
 tests/metrosimple/metrosimple
 tests/register/register
+tests/sas/sas
+tests/sasfork/sasfork
+tests/sasipc/sasipc
 tests/selfie/selfie
 tests/sharemap/sharemap
 tests/signal/signal

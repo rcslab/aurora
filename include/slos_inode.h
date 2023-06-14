@@ -49,6 +49,9 @@ struct slos_rstat {
 #define RECORDDATASIZ(vp) \
 	((vp->sn_slos->slos_sb->sb_bsize) - (sizeof(struct slos_record)))
 
+#define SLS_ISSAS(vp) \
+	(SLSVP(vp) != NULL && SLSVP(vp)->sn_addr != (vm_offset_t)NULL)
+
 /* On-disk SLOS inode. */
 struct slos_inode {
 	int64_t ino_pid; /* process id */
@@ -98,6 +101,8 @@ struct slos_node {
 	struct slos *sn_slos;		  /* Slos the node belong to */
 
 	struct vnode *sn_fdev; /* Fake vnode for btree back */
+	vm_object_t sn_obj;    /* SAS object */
+	vm_offset_t sn_addr;   /* SAS object mapping */
 };
 
 /* Inode flags */

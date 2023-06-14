@@ -37,6 +37,9 @@ int sls_wal_close(struct sls_wal *wal);
 /* Specify a point at which execution will resume after a crash. */
 int sls_wal_savepoint(struct sls_wal *wal);
 
+int slsfs_sas_create(char *path, size_t size);
+int slsfs_sas_map(int fd, void **addrp);
+
 #ifdef __cplusplus
 }
 #endif

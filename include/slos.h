@@ -96,6 +96,7 @@ struct slos_sb {
 	diskptr_t sb_allocoffset; /* Allocator Offset key tree */
 	diskptr_t sb_allocsize;	  /* Allocator Size key tree */
 	diskptr_t sb_cksumtree;	  /* Checksum inode */
+	uint64_t sb_sas_addr;	  /* SAS bump pointer address */
 };
 
 _Static_assert(sizeof(struct slos_sb) < DEV_BSIZE, "Block size wrong");
@@ -105,6 +106,10 @@ _Static_assert(sizeof(struct slos_sb) < DEV_BSIZE, "Block size wrong");
 
 /* Turns an SLS ID to an identifier suitable for the SLOS. */
 #define OIDTOSLSID(OID) ((int)(OID & INT_MAX))
+
+#define SLS_SAS_INITADDR (0x600000000000ULL)
+#define SLS_SAS_MAXADDR (0x700000000000ULL)
+#define MAX_SAS_SIZE (5UL * 1024 * 1024 * 1024)
 
 #ifdef _KERNEL
 

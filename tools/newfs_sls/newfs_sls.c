@@ -110,6 +110,7 @@ main(int argc, const char *argv[])
 	sb->sb_size = size;
 	sb->sb_asize = bsize;
 	sb->sb_used = 0;
+	sb->sb_sas_addr = SLS_SAS_INITADDR;
 
 	for (int i = 0; i < NUMSBS; i++) {
 		sb->sb_index = i;
