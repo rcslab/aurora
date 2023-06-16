@@ -877,12 +877,16 @@ slsckpt_gather_children_once(
 		LIST_FOREACH (pchild, &p->p_children, p_sibling) {
 			if (slsset_find(procset, (uint64_t)pchild) != 0) {
 				/* We found a child that didn't exist before. */
-				if (!SLS_PROCALIVE(pchild))
+				PROC_LOCK(pchild);
+				if (!SLS_PROCALIVE(pchild)) {
+					PROC_UNLOCK(pchild);
 					continue;
+				}
 
 				new_procs += 1;
 
-				PHOLD(pchild);
+				_PHOLD(pchild);
+				PROC_UNLOCK(pchild);
 				error = slsset_add(procset, (uint64_t)pchild);
 				if (error != 0) {
 					KV_ABORT(iter);
