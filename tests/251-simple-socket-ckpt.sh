@@ -42,7 +42,7 @@ PID=$!
 sleep 1
 
 # Start up the server
-$SRCROOT/tools/server/server $CKPTDIR &
+../tools/server/server $CKPTDIR &
 SERVER=$!
 sleep 2
 
