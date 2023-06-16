@@ -781,6 +781,12 @@ sls_sysctl_init(void)
 	    "vfs_sync", CTLFLAG_RW, &sls_vfs_sync, 0,
 	    "Sync to the device after finishing dumping");
 	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "memsnap_attempted", CTLFLAG_RW, &sls_memsnap_attempted, 0,
+	    "Attempted memsnap calls");
+	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "memsnap_done", CTLFLAG_RW, &sls_memsnap_done, 0,
+	    "Successful memsnap calls");
+	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "ckpt_attempted", CTLFLAG_RW, &sls_ckpt_attempted, 0,
 	    "Checkpoints attempted");
 	(void)SYSCTL_ADD_U64(&aurora_ctx, SYSCTL_CHILDREN(root), OID_AUTO,

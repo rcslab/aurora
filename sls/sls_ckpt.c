@@ -64,6 +64,8 @@ int sls_only_flush_deltas = 0;
 uint64_t sls_ckpt_attempted;
 uint64_t sls_ckpt_done;
 uint64_t sls_ckpt_duration;
+uint64_t sls_memsnap_attempted;
+uint64_t sls_memsnap_done;
 
 SDT_PROBE_DEFINE1(sls, , slsckpt_dataregion_dump, , "char *");
 SDT_PROBE_DEFINE1(sls, , slsckpt_dataregion_fillckpt, , "char *");
@@ -672,8 +674,6 @@ slsckpt_dataregion_dump(struct slsckpt_dataregion_dump_args *args)
 }
 
 /*
- * Persist an area of memory of the process. The process must be in a partition.
- * At restore time, the data region has the data grabbed here, instead of the
  * ones created during the previous checkpoint.
  */
 int
@@ -684,7 +684,7 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	struct slsckpt_data *sckpt = NULL;
 	int stateerr, error;
 
-	sls_ckpt_attempted += 1;
+	sls_memsnap_attempted += 1;
 
 	/*
 	 * Unless doing full checkpoints (which are there just for benchmarking
@@ -768,6 +768,7 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 		.sckpt_data = sckpt,
 		.nextepoch = *nextepoch,
 	};
+
 	error = kthread_add((void (*)(void *))slsckpt_dataregion_dump,
 	    dump_args, NULL, NULL, 0, 0, "slsckpt_dataregion_dump");
 	if (error != 0) {
@@ -776,7 +777,7 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 		return (error);
 	}
 
-	sls_ckpt_done += 1;
+	sls_memsnap_done += 1;
 
 	return (0);
 

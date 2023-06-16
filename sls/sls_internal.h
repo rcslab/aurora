@@ -167,6 +167,8 @@ extern uint64_t sls_prefault_anonpages;
 extern uint64_t sls_prefault_vnios;
 extern uint64_t sls_prefault_vnpages;
 
+extern uint64_t sls_memsnap_attempted;
+extern uint64_t sls_memsnap_done;
 extern uint64_t sls_ckpt_attempted;
 extern uint64_t sls_ckpt_done;
 extern uint64_t sls_ckpt_duration;
