@@ -535,10 +535,6 @@ slsckpt_dataregion_getvm(struct slspart *slsp, struct proc *p,
 	if (!contained)
 		return (EINVAL);
 
-	/* Requests must be aligned to a map entry. */
-	if (entry->start != addr)
-		return (EINVAL);
-
 	/* Cannot work with submaps or wired entries. */
 	if (entry->eflags & (MAP_ENTRY_IS_SUB_MAP | MAP_ENTRY_USER_WIRED))
 		return (EINVAL);

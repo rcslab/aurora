@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #define MMAP_SIZE (PAGE_SIZE * 64)
+#define OFFSET (17)
 
 static int
 mmap_anon(void **addr)
@@ -48,6 +49,7 @@ mmap_isfilled(void *addr, char c)
 static struct option memsnap_longopts[] = {
 	{ "poll", no_argument, NULL, 'p' },
 	{ "memory", no_argument, NULL, 'm' },
+	{ "unaligned", no_argument, NULL, 'u' },
 	{ "wait", no_argument, NULL, 'w' },
 	{ NULL, no_argument, NULL, 0 },
 };
@@ -105,7 +107,8 @@ main(int argc, char **argv)
 {
 	enum ckptwait wait;
 	uint64_t nextepoch;
-	void *addr;
+	bool unaligned = false;
+	void *addr, *snapaddr;
 	int error;
 	uint64_t oid;
 	int opt;
@@ -117,8 +120,8 @@ main(int argc, char **argv)
 
 	wait = NOWAIT;
 	oid = SLS_DEFAULT_PARTITION;
-	while ((opt = getopt_long(argc, argv, "mpw", memsnap_longopts, NULL)) !=
-	    -1) {
+	while ((opt = getopt_long(
+		    argc, argv, "mpuw", memsnap_longopts, NULL)) != -1) {
 		switch (opt) {
 		case 'm':
 			oid = SLS_DEFAULT_MPARTITION;
@@ -126,6 +129,10 @@ main(int argc, char **argv)
 
 		case 'p':
 			wait = BUSYWAIT;
+			break;
+
+		case 'u':
+			unaligned = true;
 			break;
 
 		case 'w':
@@ -177,7 +184,9 @@ main(int argc, char **argv)
 		/* Fill the memory region with a different char. */
 		memset(addr, c, MMAP_SIZE);
 
-		error = sls_memsnap_epoch(oid, addr, &nextepoch);
+		snapaddr = (unaligned) ? &((char *)addr)[OFFSET] : addr;
+
+		error = sls_memsnap_epoch(oid, snapaddr, &nextepoch);
 		if (error != 0)
 			exit(1);
 
