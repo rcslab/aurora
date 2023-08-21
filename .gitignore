@@ -120,3 +120,4 @@ criu-results/
 stats.*
 dtraceoutput
 __pycache__
+sls/opt_global.h
