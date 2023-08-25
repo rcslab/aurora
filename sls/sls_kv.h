@@ -14,7 +14,7 @@
 #include <machine/param.h>
 
 /* The number of buckets created. */
-#define SLSKV_BUCKETS (1024)
+#define SLSKV_BUCKETS (16)
 
 /*
  * Generic hashtable data structure. Built on top
