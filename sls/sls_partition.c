@@ -134,22 +134,28 @@ slsckpt_clear(struct slsckpt_data *sckpt)
 	sbuf_clear(sckpt->sckpt_meta);
 }
 
-struct slsckpt_data *
-slsckpt_alloc(struct sls_attr *attr)
+int
+slsckpt_alloc(struct slspart *slsp, struct slsckpt_data **sckptp)
 {
 	struct slsckpt_data *sckpt;
 	int error;
 
-	sckpt = malloc(sizeof(*sckpt), M_SLSMM, M_WAITOK | M_ZERO);
+	sckpt = slsp->slsp_blanksckpt;
+	slsp->slsp_blanksckpt = NULL;
+
+	if (sckpt == NULL)
+		sckpt = malloc(sizeof(*sckpt), M_SLSMM, M_WAITOK | M_ZERO);
+
 	error = slsckpt_init(sckpt);
 	if (error != 0) {
 		free(sckpt, M_SLSMM);
-		return (0);
+		return (error);
 	}
 
-	memcpy(&sckpt->sckpt_attr, attr, sizeof(sckpt->sckpt_attr));
+	memcpy(&sckpt->sckpt_attr, &slsp->slsp_attr, sizeof(sckpt->sckpt_attr));
+	*sckptp = sckpt;
 
-	return (sckpt);
+	return (0);
 }
 
 void
@@ -165,6 +171,7 @@ slsckpt_drop(struct slsckpt_data *sckpt)
 	bool release;
 
 	KASSERT(sckpt->sckpt_refcount > 0, ("dropping unreferenced sckpt"));
+
 	release = refcount_release(&sckpt->sckpt_refcount);
 
 	/* Free if that was the last reference. */

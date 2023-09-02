@@ -48,10 +48,11 @@ static int
 slsrcvd_ckptstart(struct sls_sockrcvd_state *rcvd, struct slsmsg_ckptstart *msg)
 {
 	struct slsckpt_data *sckpt;
+	int error;
 
-	sckpt = slsckpt_alloc(&rcvd->slsrcvd_slsp->slsp_attr);
-	if (sckpt == NULL)
-		return (ENOMEM);
+	error = slsckpt_alloc(rcvd->slsrcvd_slsp, &sckpt);
+	if (error != 0)
+		return (error);
 
 	rcvd->slsrcvd_sckpt = sckpt;
 	rcvd->slsrcvd_epoch = msg->slsmsg_epoch;

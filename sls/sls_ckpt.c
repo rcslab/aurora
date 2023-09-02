@@ -223,7 +223,8 @@ slsckpt_compact_single(struct slspart *slsp, struct slsckpt_data *sckpt)
 	/* Collapse the new table into the old one. */
 	slsvm_objtable_collapsenew(
 	    slsp->slsp_sckpt->sckpt_shadowtable, sckpt->sckpt_shadowtable);
-	slsckpt_drop(sckpt);
+	slsckpt_clear(sckpt);
+	slsp->slsp_blanksckpt = sckpt;
 }
 
 void
@@ -390,13 +391,10 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 #ifdef KTR
 	KVSET_FOREACH(procset, iter, p) { slsvm_print_vmspace(p->p_vmspace); }
 #endif
-	sckpt = slsp->slsp_blanksckpt;
-	slsp->slsp_blanksckpt = NULL;
 
-	if (sckpt == NULL)
-		sckpt = slsckpt_alloc(&slsp->slsp_attr);
-	if (sckpt == NULL)
-		return (ENOMEM);
+	error = slsckpt_alloc(slsp, &sckpt);
+	if (error != 0)
+		return (error);
 
 	SDT_PROBE0(sls, , , meta_start);
 	SDT_PROBE1(sls, , sls_ckpt, , "Creating the checkpoint");
@@ -721,14 +719,9 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 		goto error_single;
 	}
 
-	sckpt = slsckpt_alloc(&slsp->slsp_attr);
-	if (sckpt == NULL) {
-		error = ENOMEM;
-		goto error_single;
-	}
-
-	SDT_PROBE0(sls, , , stopclock_start);
-	SDT_PROBE0(sls, , , meta_start);
+	error = slsckpt_alloc(slsp, &sckpt);
+	if (error != 0)
+		goto error;
 
 	SDT_PROBE1(sls, , slsckpt_dataregion, , "Getting the partition");
 

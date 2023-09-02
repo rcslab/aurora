@@ -899,9 +899,9 @@ sls_read_slos(struct slspart *slsp, struct slsckpt_data **sckptp,
 	size_t buflen;
 	int error;
 
-	sckpt = slsckpt_alloc(&slsp->slsp_attr);
-	if (sckpt == NULL)
-		return (ENOMEM);
+	error = slsckpt_alloc(slsp, &sckpt);
+	if (error != 0)
+		return (error);
 
 	SDT_PROBE1(sls, , sls_rest, , "Allocating checkpoint");
 
