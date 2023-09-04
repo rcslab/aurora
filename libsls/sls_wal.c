@@ -329,3 +329,73 @@ slsfs_sas_map(int fd, void **addrp)
 
 	return (0);
 }
+
+int
+sas_trace_start(int fd)
+{
+	int error;
+
+	error = ioctl(fd, SLSFS_SAS_TRACE_START);
+	if (error != 0) {
+		perror("sas_trace_start");
+		return (1);
+	}
+
+	return (0);
+}
+
+int
+sas_trace_end(int fd)
+{
+	int error;
+
+	error = ioctl(fd, SLSFS_SAS_TRACE_END);
+	if (error != 0) {
+		perror("sas_trace_end");
+		return (1);
+	}
+
+	return (0);
+}
+
+int
+sas_trace_commit(int fd)
+{
+	int error;
+
+	error = ioctl(fd, SLSFS_SAS_TRACE_COMMIT);
+	if (error != 0) {
+		perror("sas_trace_commit");
+		return (1);
+	}
+
+	return (0);
+}
+
+int
+sas_trace_abort(int fd)
+{
+	int error;
+
+	error = ioctl(fd, SLSFS_SAS_TRACE_ABORT);
+	if (error != 0) {
+		perror("sas_trace_abort");
+		return (1);
+	}
+
+	return (0);
+}
+
+int
+sas_refresh_protection(int fd)
+{
+	int error;
+
+	error = ioctl(fd, SLSFS_SAS_REFRESH_PROTECTION);
+	if (error != 0) {
+		perror("sas_trace_abort");
+		return (1);
+	}
+
+	return (0);
+}

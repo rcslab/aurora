@@ -90,6 +90,9 @@ slsfs_init(struct vfsconf *vfsp)
 		return (ENOMEM);
 	}
 
+	sls_writefault_hook = slsfs_sas_trace_update;
+	sas_cow_hook = sas_test_cow;
+
 	slos_radix_init();
 
 	return (0);
@@ -105,6 +108,16 @@ slsfs_uninit(struct vfsconf *vfsp)
 	SLOS_LOCK(&slos);
 	KASSERT(slos_getstate(&slos) == SLOS_UNMOUNTED,
 	    ("destroying SLOS with state %d", slos_getstate(&slos)));
+
+	/*
+	 * XXX This is not racy with possible callers already calling
+	 * into the hook code because of the implicit assumption
+	 * that all SAS users have inserted themselves in Aurora.
+	 * This is NOT enforced by the code but should not matter
+	 * for our purposes right now.
+	 */
+	sls_writefault_hook = NULL;
+	sas_cow_hook = NULL;
 
 	SLOS_UNLOCK(&slos);
 

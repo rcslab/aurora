@@ -36,6 +36,9 @@ struct sysctl_ctx_list slos_ctx;
 uint64_t slos_bytes_opened;
 static int slos_count_opened_bytes;
 
+extern uint64_t slsfs_sas_aborts;
+extern uint64_t slsfs_sas_commits;
+
 #ifdef INVARIANTS
 static void
 slos_node_dtor(void *mem, int size, void *arg)
@@ -119,6 +122,11 @@ slos_init(void)
 	    "Direct buffer IOs initiated");
 	(void)SYSCTL_ADD_U64(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "io_done", CTLFLAG_RD, &slos_io_done, 0, "Direct buffer IOs done");
+	(void)SYSCTL_ADD_U64(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "sas_commits", CTLFLAG_RD, &slsfs_sas_commits, 0,
+	    "SAS commits done");
+	(void)SYSCTL_ADD_U64(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "sas_aborts", CTLFLAG_RD, &slsfs_sas_aborts, 0, "SAS aborts done");
 
 	/* Get a new unique identifier generator. */
 	slsid_unr = new_unrhdr(SLOS_SYSTEM_MAX, INT_MAX, NULL);

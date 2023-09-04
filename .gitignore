@@ -40,6 +40,7 @@ tests/register/register
 tests/sas/sas
 tests/sasfork/sasfork
 tests/sasipc/sasipc
+tests/sastrack/sastrack
 tests/selfie/selfie
 tests/sharemap/sharemap
 tests/signal/signal

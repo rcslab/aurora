@@ -17,6 +17,7 @@
 #include <sys/rwlock.h>
 #include <sys/stat.h>
 #include <sys/syscallsubr.h>
+#include <sys/taskqueue.h>
 #include <sys/ucred.h>
 #include <sys/unistd.h>
 #include <sys/vnode.h>
@@ -50,9 +51,23 @@ SDT_PROVIDER_DEFINE(slos);
 SDT_PROBE_DEFINE3(slos, , , slsfs_deviceblk, "uint64_t", "uint64_t", "int");
 SDT_PROBE_DEFINE3(slos, , , slsfs_vnodeblk, "uint64_t", "uint64_t", "int");
 
+SDT_PROVIDER_DEFINE(sas);
+SDT_PROBE_DEFINE4(sas, , , start, "long", "long", "long", "long");
+SDT_PROBE_DEFINE0(sas, , , protect);
+SDT_PROBE_DEFINE1(sas, , , write, "long");
+SDT_PROBE_DEFINE0(sas, , , block);
+
 /* 5 GiB */
 static const size_t MAX_WAL_SIZE = 5368709000;
 static size_t wal_space_used = 0;
+
+uint64_t slsfs_sas_tracks;
+uint64_t slsfs_sas_aborts;
+uint64_t slsfs_sas_attempts;
+uint64_t slsfs_sas_copies;
+
+uint64_t slsfs_sas_commits;
+long slsfs_sas_inserts, slsfs_sas_removes;
 
 static int
 slsfs_inactive(struct vop_inactive_args *args)
@@ -1847,6 +1862,333 @@ slsfs_sas_create(char *path, size_t size, int *ret)
 	return 0;
 }
 
+static void
+slsfs_sas_page_track(vm_offset_t vaddr, struct pglist *pglist, vm_page_t m)
+{
+	vm_page_lock(m);
+
+	TAILQ_INSERT_HEAD(pglist, m, snapq);
+	m->vaddr = vaddr;
+
+	atomic_add_64(&slsfs_sas_inserts, 1);
+
+	vm_page_unlock(m);
+}
+
+static void
+slsfs_sas_page_untrack_unlocked(struct pglist *pglist, vm_page_t m)
+{
+
+	m->vaddr = 0;
+	TAILQ_REMOVE(pglist, m, snapq);
+
+	atomic_add_64(&slsfs_sas_removes, 1);
+}
+
+static void
+slsfs_sas_page_untrack(struct pglist *pglist, vm_page_t m)
+{
+	vm_page_lock(m);
+	slsfs_sas_page_untrack_unlocked(pglist, m);
+	vm_page_unlock(m);
+}
+
+static void
+slsfs_sas_refresh_protection(void)
+{
+	struct pmap *pmap = &curproc->p_vmspace->vm_pmap;
+	pmap_protect(pmap, SLS_SAS_INITADDR, SLS_SAS_MAXADDR, VM_PROT_READ);
+}
+
+void
+slsfs_sas_trace_update(vm_offset_t vaddr, vm_map_t map, vm_page_t m,
+    int fault_type)
+{
+	if ((map->flags & MAP_SNAP_TRACE) == 0)
+		return;
+
+	atomic_add_64(&slsfs_sas_attempts, 1);
+
+	if ((fault_type & (VM_PROT_WRITE | VM_PROT_COPY)) == 0)
+		return;
+
+	if (vaddr >= SLS_SAS_MAXADDR)
+		return;
+	if (vaddr < SLS_SAS_INITADDR)
+		return;
+
+	/* XXX Find out why we may fault a page twice. */
+	if (m->vaddr != 0)
+		return;
+
+	atomic_add_64(&slsfs_sas_tracks, 1);
+	slsfs_sas_page_track(vaddr, &curthread->td_snaplist, m);
+}
+
+struct slsfs_sas_commit_args {
+	struct task tk;
+	struct pglist pglist;
+};
+
+static __attribute__((noinline)) struct vnode *
+slsfs_sas_getvp(uint64_t oid)
+{
+	struct vnode *vp;
+	int error;
+
+	error = slos_svpalloc(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
+	if (error != 0) {
+		printf("%s:%d error %d\n", __func__, __LINE__, error);
+		return (NULL);
+	}
+
+	error = VFS_VGET(slos.slsfs_mount, oid, LK_EXCLUSIVE, &vp);
+	if (error != 0) {
+		printf("%s:%d error %d\n", __func__, __LINE__, error);
+		return (NULL);
+	}
+
+	return (vp);
+}
+
+static void
+sas_pager_done(struct buf *bp)
+{
+	vm_page_t m;
+	int i;
+
+	for (i = 0; i < bp->b_npages; i++) {
+		m = bp->b_pages[i];
+		bp->b_pages[i] = NULL;
+
+		m->flags &= ~VPO_SASCOW;
+	}
+
+	bp->b_bufsize = bp->b_bcount = 0;
+	bp->b_npages = 0;
+	bdone(bp);
+}
+
+static int
+sas_bawrite(struct vnode *vp, vm_page_t *ma, size_t mlen)
+{
+	size_t off, size;
+	struct buf *bp;
+	int i;
+
+	off = PAGE_SIZE * (ma[0]->pindex + SLOS_OBJOFF);
+	size = PAGE_SIZE * mlen;
+
+	bp = trypbuf(&slos_pbufcnt);
+	KASSERT(bp != NULL, ("failed to grab buffer"));
+	while (bp == NULL) {
+		pause_sbt("saspbf", 30 * SBT_1US, 0, 0);
+		bp = trypbuf(&slos_pbufcnt);
+	}
+
+	bp->b_data = unmapped_buf;
+	bp->b_lblkno = ma[0]->pindex + SLOS_OBJOFF;
+	bp->b_iocmd = BIO_WRITE;
+
+	bp->b_resid = bp->b_bufsize = bp->b_bcount = mlen * PAGE_SIZE;
+	bp->b_iocmd = BIO_WRITE;
+	bp->b_iodone = sas_pager_done;
+
+	bp->b_npages = mlen;
+	for (i = 0; i < mlen; i++)
+		bp->b_pages[i] = ma[i];
+
+	slos_iotask_create(vp, bp, true);
+
+	return (0);
+}
+
+#define MAX_PAGES (16)
+
+static int __attribute__((noinline))
+sas_genio(struct vnode *vp, struct pglist *snaplist, uint64_t oid)
+{
+	vm_page_t ma[MAX_PAGES];
+	vm_pindex_t pindex;
+	vm_page_t m, mtmp;
+	size_t mlen;
+
+	pindex = 0;
+	mlen = 0;
+	TAILQ_FOREACH_SAFE (m, snaplist, snapq, mtmp) {
+		vm_page_lock(m);
+		if (m->object == NULL) {
+			vm_page_unlock(m);
+			continue;
+		}
+		if (m->object->objid == oid) {
+			ma[mlen++] = m;
+			slsfs_sas_page_untrack_unlocked(snaplist, m);
+		}
+
+		vm_page_unlock(m);
+
+		if (mlen == MAX_PAGES) {
+			sas_bawrite(vp, ma, mlen);
+			mlen = 0;
+		}
+	}
+
+	if (mlen > 0)
+		sas_bawrite(vp, ma, mlen);
+
+	return (0);
+}
+
+void
+sas_test_cow(vm_offset_t vaddr, vm_page_t *m)
+{
+	vm_page_t oldm, newm;
+	vm_object_t obj;
+
+	if (((*m)->flags & VPO_SASCOW) == 0)
+		return;
+
+	if (vaddr < SLS_SAS_INITADDR || vaddr < SLS_SAS_MAXADDR)
+		return;
+
+	oldm = *m;
+	vm_page_lock(oldm);
+	if (oldm->object == NULL) {
+		vm_page_unlock(oldm);
+		return;
+	}
+	obj = oldm->object;
+
+	VM_OBJECT_WLOCK(obj);
+	vm_page_remove(oldm);
+	vm_page_unlock(oldm);
+	vm_page_xunbusy(oldm);
+
+	pmap_remove_all(oldm);
+
+	newm = vm_page_alloc(obj, oldm->pindex, VM_ALLOC_WAITOK);
+	pmap_copy_page(oldm, newm);
+	newm->flags = VM_PAGE_BITS_ALL;
+	vm_page_xbusy(newm);
+	*m = newm;
+	VM_OBJECT_WUNLOCK(obj);
+
+	/* Check if the IO finished while we were applying COW. */
+	vm_page_lock(oldm);
+	if ((oldm->flags & VPO_SASCOW) == 0) {
+		vm_page_unlock(oldm);
+		vm_page_free(oldm);
+	}
+
+	oldm->flags &= ~VPO_SASCOW;
+	vm_page_unlock(oldm);
+
+	atomic_add_64(&slsfs_sas_copies, 1);
+}
+
+#define MAX_SAS (256)
+
+static __attribute__((noinline)) void
+slsfs_sas_trace_commit(void)
+{
+	struct pglist *snaplist = &curthread->td_snaplist;
+	struct pmap *pmap = &curproc->p_vmspace->vm_pmap;
+	size_t written = 0;
+	vm_page_t m, mtmp;
+	struct vnode *vp;
+	uint64_t oid;
+
+	SDT_PROBE4(sas, , , start, slsfs_sas_tracks, slsfs_sas_removes,
+	    slsfs_sas_attempts, slsfs_sas_copies);
+	slsfs_sas_tracks = 0;
+	slsfs_sas_removes = 0;
+	slsfs_sas_attempts = 0;
+
+	PMAP_LOCK(pmap);
+	TAILQ_FOREACH_SAFE (m, snaplist, snapq, mtmp) {
+		if (m->object == NULL) {
+			slsfs_sas_page_untrack(snaplist, m);
+			continue;
+		}
+
+		written += 1;
+		pmap_protect_page(pmap, m->vaddr, VM_PROT_READ);
+		m->flags |= VPO_SASCOW;
+	}
+
+	pmap_invalidate_all(pmap);
+	PMAP_UNLOCK(pmap);
+
+	SDT_PROBE0(sas, , , protect);
+
+	while (!TAILQ_EMPTY(snaplist)) {
+		oid = TAILQ_FIRST(snaplist)->object->objid;
+		vp = slsfs_sas_getvp(oid);
+		sas_genio(vp, snaplist, oid);
+		vput(vp);
+	}
+
+	SDT_PROBE1(sas, , , write, written);
+
+	taskqueue_drain_all(slos.slos_tq);
+	SDT_PROBE0(sas, , , block);
+
+	atomic_add_64(&slsfs_sas_commits, 1);
+}
+
+static int
+slsfs_sas_trace_start(void)
+{
+	vm_map_t map = &curproc->p_vmspace->vm_map;
+
+	vm_map_lock(map);
+	/* This should grab any fork-&-exec looping cases */
+	KASSERT((map->flags & MAP_SNAP_TRACE) == 0,
+	    ("map already being traced"));
+
+	map->flags |= MAP_SNAP_TRACE;
+	vm_map_unlock(map);
+
+	slsfs_sas_refresh_protection();
+
+	return (0);
+}
+
+static void
+slsfs_sas_trace_abort(void)
+{
+	struct pglist *snaplist = &curthread->td_snaplist;
+	pmap_t pmap = &curproc->p_vmspace->vm_pmap;
+	vm_page_t m, mtmp;
+
+	TAILQ_FOREACH_SAFE (m, snaplist, snapq, mtmp) {
+		slsfs_sas_page_untrack(snaplist, m);
+		pmap_protect_page(pmap, m->vaddr, VM_PROT_READ);
+	}
+
+	PMAP_LOCK(pmap);
+	pmap_invalidate_all(pmap);
+	PMAP_UNLOCK(pmap);
+
+	atomic_add_64(&slsfs_sas_aborts, 1);
+}
+
+static void
+slsfs_sas_trace_end(void)
+{
+	vm_map_t map = &curproc->p_vmspace->vm_map;
+
+	slsfs_sas_trace_abort();
+
+	vm_map_lock(map);
+
+	KASSERT((map->flags & MAP_SNAP_TRACE) != 0, ("map not being traced"));
+
+	map->flags &= ~MAP_SNAP_TRACE;
+	vm_map_unlock(map);
+}
+
 static int
 slsfs_ioctl(struct vop_ioctl_args *ap)
 {
@@ -2502,6 +2844,26 @@ slsfs_sas_ioctl(struct vop_ioctl_args *ap)
 			return (error);
 
 		memcpy(ap->a_data, &addr, sizeof(void *));
+		return (0);
+
+	case SLSFS_SAS_TRACE_START:
+		slsfs_sas_trace_start();
+		return (0);
+
+	case SLSFS_SAS_TRACE_END:
+		slsfs_sas_trace_end();
+		return (0);
+
+	case SLSFS_SAS_TRACE_ABORT:
+		slsfs_sas_trace_abort();
+		return (0);
+
+	case SLSFS_SAS_TRACE_COMMIT:
+		slsfs_sas_trace_commit();
+		return (0);
+
+	case SLSFS_SAS_REFRESH_PROTECTION:
+		slsfs_sas_refresh_protection();
 		return (0);
 
 	default:

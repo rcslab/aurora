@@ -210,6 +210,17 @@ extern uint64_t checkpoints;
 extern uint64_t checkpointtime;
 
 int slsfs_wakeup_syncer(int is_exiting);
+
+extern void (*sls_writefault_hook)(vm_offset_t vaddr, vm_map_t map, vm_page_t m,
+    int fault_type);
+extern void (*sas_cow_hook)(vm_offset_t vaddr, vm_page_t *m);
+void slsfs_sas_trace_update(vm_offset_t vaddr, vm_map_t map, vm_page_t m,
+    int fault_type);
+void sas_test_cow(vm_offset_t vaddr, vm_page_t *m);
+
+/* XXX Double defined here and in sls_ioctl.h */
+#define SLOS_OBJOFF (64)
+
 #endif
 
 #endif /* _SLOS_H_ */
