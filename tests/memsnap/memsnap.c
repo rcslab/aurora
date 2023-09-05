@@ -13,6 +13,7 @@
 
 #define MMAP_SIZE (PAGE_SIZE * 64)
 #define OFFSET (17)
+#define OID (1055)
 
 static int
 mmap_anon(void **addr)
@@ -47,8 +48,9 @@ mmap_isfilled(void *addr, char c)
 }
 
 static struct option memsnap_longopts[] = {
-	{ "poll", no_argument, NULL, 'p' },
 	{ "memory", no_argument, NULL, 'm' },
+	{ "poll", no_argument, NULL, 'p' },
+	{ "sync", no_argument, NULL, 's' },
 	{ "unaligned", no_argument, NULL, 'u' },
 	{ "wait", no_argument, NULL, 'w' },
 	{ NULL, no_argument, NULL, 0 },
@@ -58,6 +60,7 @@ enum ckptwait {
 	NOWAIT,
 	BUSYWAIT,
 	BLOCK,
+	SYNC,
 };
 
 static void
@@ -67,6 +70,7 @@ wait_for_sls(uint64_t nextepoch, uint64_t oid, enum ckptwait ckptwait)
 	int error;
 
 	switch (ckptwait) {
+	case SYNC:
 	case NOWAIT:
 		/* Nothing to do. */
 		break;
@@ -107,11 +111,19 @@ main(int argc, char **argv)
 {
 	enum ckptwait wait;
 	uint64_t nextepoch;
+	struct sls_attr attr;
 	bool unaligned = false;
 	void *addr, *snapaddr;
 	int error;
 	uint64_t oid;
 	int opt;
+
+	attr = (struct sls_attr) {
+		.attr_target = SLS_OSD,
+		.attr_mode = SLS_DELTA,
+		.attr_flags = SLSATTR_IGNUNLINKED | SLSATTR_ASYNCSNAP,
+		.attr_amplification = 1,
+	};
 
 	/* Create the anonymous mapping*/
 	error = mmap_anon(&addr);
@@ -119,9 +131,9 @@ main(int argc, char **argv)
 		exit(1);
 
 	wait = NOWAIT;
-	oid = SLS_DEFAULT_PARTITION;
-	while ((opt = getopt_long(
-		    argc, argv, "mpuw", memsnap_longopts, NULL)) != -1) {
+	oid = OID;
+	while ((opt = getopt_long(argc, argv, "mpsuw", memsnap_longopts,
+		    NULL)) != -1) {
 		switch (opt) {
 		case 'm':
 			oid = SLS_DEFAULT_MPARTITION;
@@ -129,6 +141,11 @@ main(int argc, char **argv)
 
 		case 'p':
 			wait = BUSYWAIT;
+			break;
+
+		case 's':
+			attr.attr_flags = SLSATTR_IGNUNLINKED;
+			wait = SYNC;
 			break;
 
 		case 'u':
@@ -140,9 +157,17 @@ main(int argc, char **argv)
 			break;
 
 		default:
-			printf("Usage:./memsnap [-m] [-w]\n");
+			printf("Usage:./memsnap [-pmsuw] \n");
 			exit(1);
 			break;
+		}
+	}
+
+	if (oid != SLS_DEFAULT_MPARTITION) {
+		error = sls_partadd(oid, attr, -1);
+		if (error != 0) {
+			perror("sls_partadd");
+			exit(1);
 		}
 	}
 
@@ -172,7 +197,7 @@ main(int argc, char **argv)
 	 * We can only wait for the SLS to flush if we are not a restored
 	 * process. We know that because the check above failed.
 	 */
-	wait_for_sls(nextepoch, oid, wait);
+	wait_for_sls(nextepoch, oid, (wait != SYNC) ? wait : BLOCK);
 
 	if (!mmap_isfilled(addr, 'a')) {
 		printf("Memory corruption: %.16s\n", (char *)addr);

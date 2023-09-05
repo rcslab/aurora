@@ -1,5 +1,7 @@
 #!/bin/sh
 
+OID=1055
+
 . aurora
 aursetup
 
@@ -12,7 +14,8 @@ sleep 1
 
 wait $PID
 
-slsosdrestore
+slsctl restore -o $OID &
+PID=$!
 if [ $? -ne 0 ];
 then
     echo "Restore failed with $?"
@@ -20,7 +23,7 @@ then
 fi
 
 # Get the error value, it should be zero.
-wait $!
+wait $PID
 if [ $? -ne 0 ];
 then
     echo "Process exited with nonzero"

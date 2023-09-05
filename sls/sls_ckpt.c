@@ -67,15 +67,18 @@ uint64_t sls_ckpt_duration;
 uint64_t sls_memsnap_attempted;
 uint64_t sls_memsnap_done;
 
-SDT_PROBE_DEFINE1(sls, , slsckpt_dataregion_dump, , "char *");
-SDT_PROBE_DEFINE1(sls, , slsckpt_dataregion_fillckpt, , "char *");
-SDT_PROBE_DEFINE1(sls, , slsckpt_dataregion, , "char *");
+SDT_PROBE_DEFINE1(sls, , fillckpt, , "char *");
 SDT_PROBE_DEFINE1(sls, , sls_checkpointd, , "char *");
 SDT_PROBE_DEFINE1(sls, , sls_ckpt, , "char *");
 SDT_PROBE_DEFINE0(sls, , , stopclock_start);
 SDT_PROBE_DEFINE0(sls, , , meta_start);
 SDT_PROBE_DEFINE0(sls, , , stopclock_finish);
 SDT_PROBE_DEFINE0(sls, , , meta_finish);
+SDT_PROBE_DEFINE0(sls, , , enter);
+SDT_PROBE_DEFINE0(sls, , , cow);
+SDT_PROBE_DEFINE0(sls, , , write);
+SDT_PROBE_DEFINE0(sls, , , wait);
+SDT_PROBE_DEFINE0(sls, , , cleanup);
 
 /*
  * Stop the processes, and wait until they are truly not running.
@@ -566,7 +569,7 @@ slsckpt_dataregion_fillckpt(struct slspart *slsp, struct proc *p,
 	if (error != 0)
 		return (error);
 
-	SDT_PROBE1(sls, , slsckpt_dataregion_fillckpt, , "Getting the object");
+	SDT_PROBE1(sls, , fillckpt, , "Getting the object");
 	KASSERT(
 	    OBJT_ISANONYMOUS(obj), ("getting metadata for non anonymous obj"));
 
@@ -579,15 +582,14 @@ slsckpt_dataregion_fillckpt(struct slspart *slsp, struct proc *p,
 	if (error != 0)
 		return (error);
 
-	SDT_PROBE1(
-	    sls, , slsckpt_dataregion_fillckpt, , "Object checkpointing");
+	SDT_PROBE1(sls, , fillckpt, , "Object checkpointing");
 	/* Get the data and shadow it for the entry. */
 	error = slsvm_entry_shadow(p, sckpt_data->sckpt_shadowtable, entry,
 	    slsckpt_isfullckpt(slsp), true);
 	if (error != 0)
 		return (error);
 
-	SDT_PROBE1(sls, , slsckpt_dataregion_fillckpt, , "Object shadowing");
+	SDT_PROBE1(sls, , fillckpt, , "Object shadowing");
 
 	return (0);
 }
@@ -617,30 +619,10 @@ struct slsckpt_dataregion_dump_args {
 };
 
 static void
-slsckpt_dataregion_dump(struct slsckpt_dataregion_dump_args *args)
+slsckpt_dataregion_cleanup(struct slsckpt_data *sckpt_data,
+    struct slspart *slsp, uint64_t nextepoch)
 {
-	struct slsckpt_data *sckpt_data = args->sckpt_data;
-	uint64_t nextepoch = args->nextepoch;
-	struct slspart *slsp = args->slsp;
-	int stateerr, error;
-
-	if (slsp->slsp_target == SLS_OSD) {
-		error = sls_write_slos_dataregion(sckpt_data);
-		if (error != 0)
-			DEBUG1("slsckpt_initio failed with %d", error);
-	}
-
-	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Writing out the data");
-
-	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
-	if (slsp->slsp_target == SLS_OSD) {
-		taskqueue_drain_all(slos.slos_tq);
-		/* XXX Using MNT_WAIT is causing a deadlock right now. */
-		VFS_SYNC(slos.slsfs_mount,
-		    (sls_vfs_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
-	}
-
-	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Draining the taskqueue");
+	int stateerr;
 
 	/*
 	 * We compact before turning the checkpoint available, because we modify
@@ -651,24 +633,57 @@ slsckpt_dataregion_dump(struct slsckpt_dataregion_dump_args *args)
 	else
 		slsckpt_drop(sckpt_data);
 
-	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Compacting the data");
-
 	slsp_epoch_advance(slsp, nextepoch);
-
-	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Advancing the epoch");
 
 	stateerr = slsp_setstate(
 	    slsp, SLSP_CHECKPOINTING, SLSP_AVAILABLE, false);
 	KASSERT(stateerr == 0, ("partition not in ckpt state"));
 
 	slsp_deref(slsp);
+}
 
-	free(args, M_SLSMM);
+static __attribute__((noinline)) void
+slsckpt_dataregion_dump(struct slsckpt_data *sckpt_data, struct slspart *slsp,
+    uint64_t nextepoch)
+{
+	int error;
+
+	if (slsp->slsp_target == SLS_OSD) {
+		error = sls_write_slos_dataregion(sckpt_data);
+		if (error != 0) {
+			printf("%s: %d\n", __func__, __LINE__);
+			DEBUG1("slsckpt_initio failed with %d", error);
+		}
+	}
+
+	SDT_PROBE0(sls, , , write);
+	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
+	if (slsp->slsp_target == SLS_OSD) {
+		taskqueue_drain_all(slos.slos_tq);
+		/* XXX Using MNT_WAIT is causing a deadlock right now. */
+		VFS_SYNC(slos.slsfs_mount,
+		    (sls_vfs_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
+	}
+
+	SDT_PROBE0(sls, , , wait);
+	slsckpt_dataregion_cleanup(sckpt_data, slsp, nextepoch);
+
+	SDT_PROBE0(sls, , , cleanup);
 
 	sls_finishop();
+}
 
-	/* Remove the reference taken by the initial ioctl call. */
-	kthread_exit();
+static __attribute__((noinline)) void
+slsckpt_dataregion_dumptask(void *ctx, int __unused pending)
+{
+	union slstable_taskctx *taskctx = (union slstable_taskctx *)ctx;
+	struct slstable_msnapctx *msnapctx = &taskctx->msnap;
+	struct slsckpt_data *sckpt_data = msnapctx->sckpt;
+	uint64_t nextepoch = msnapctx->nextepoch;
+	struct slspart *slsp = msnapctx->slsp;
+
+	uma_zfree(slstable_task_zone, taskctx);
+	slsckpt_dataregion_dump(sckpt_data, slsp, nextepoch);
 }
 
 /*
@@ -678,8 +693,9 @@ int
 slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
     uint64_t *nextepoch)
 {
-	struct slsckpt_dataregion_dump_args *dump_args;
+	struct slstable_msnapctx *msnapctx;
 	struct slsckpt_data *sckpt = NULL;
+	union slstable_taskctx *taskctx;
 	int stateerr, error;
 
 	sls_memsnap_attempted += 1;
@@ -719,18 +735,16 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 		goto error_single;
 	}
 
+	SDT_PROBE0(sls, , , enter);
+
 	error = slsckpt_alloc(slsp, &sckpt);
 	if (error != 0)
 		goto error;
-
-	SDT_PROBE1(sls, , slsckpt_dataregion, , "Getting the partition");
 
 	/* Single thread to avoid races with other threads. */
 	PROC_LOCK(p);
 	thread_single(p, SINGLE_BOUNDARY);
 	PROC_UNLOCK(p);
-
-	SDT_PROBE1(sls, , slsckpt_dataregion, , "Single threading");
 
 	/* Add the data and metadata. This also shadows the object. */
 	error = slsckpt_dataregion_fillckpt(slsp, p, addr, sckpt);
@@ -738,8 +752,6 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 		error = EINVAL;
 		goto error;
 	}
-
-	SDT_PROBE1(sls, , slsckpt_dataregion, , "Filling in the data");
 
 	/* Preadvance the epoch, the kthread will advance it. */
 	*nextepoch = slsp_epoch_preadvance(slsp);
@@ -749,26 +761,22 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	thread_single_end(p, SINGLE_BOUNDARY);
 	PROC_UNLOCK(p);
 
-	SDT_PROBE0(sls, , , stopclock_finish);
+	SDT_PROBE0(sls, , , cow);
 
-	/*
-	 * Create a thread to asynchronously take care of the dumping.
-	 * The caller can wait for the epoch to advance using sls_epoch_wait().
-	 */
-	dump_args = malloc(sizeof(*dump_args), M_SLSMM, M_WAITOK);
-	*dump_args = (struct slsckpt_dataregion_dump_args) {
-		.slsp = slsp,
-		.sckpt_data = sckpt,
-		.nextepoch = *nextepoch,
-	};
-
-	error = kthread_add((void (*)(void *))slsckpt_dataregion_dump,
-	    dump_args, NULL, NULL, 0, 0, "slsckpt_dataregion_dump");
-	if (error != 0) {
-		DEBUG1("ERROR: sls_dataregion_dump failed with %d", error);
-		slsp_epoch_advance(slsp, *nextepoch);
-		return (error);
+	if (!SLSATTR_ISASYNCSNAP(slsp->slsp_attr)) {
+		slsckpt_dataregion_dump(sckpt, slsp, *nextepoch);
+		sls_memsnap_done += 1;
+		return (0);
 	}
+
+	taskctx = uma_zalloc(slstable_task_zone, M_WAITOK);
+	msnapctx = &taskctx->msnap;
+	msnapctx->slsp = slsp;
+	msnapctx->sckpt = sckpt;
+	msnapctx->nextepoch = *nextepoch;
+	TASK_INIT(&msnapctx->tk, 0, &slsckpt_dataregion_dumptask,
+	    &msnapctx->tk);
+	taskqueue_enqueue(slsm.slsm_tabletq, &msnapctx->tk);
 
 	sls_memsnap_done += 1;
 
