@@ -143,13 +143,14 @@ slsckpt_alloc(struct slspart *slsp, struct slsckpt_data **sckptp)
 	sckpt = slsp->slsp_blanksckpt;
 	slsp->slsp_blanksckpt = NULL;
 
-	if (sckpt == NULL)
+	if (sckpt == NULL) {
 		sckpt = malloc(sizeof(*sckpt), M_SLSMM, M_WAITOK | M_ZERO);
 
-	error = slsckpt_init(sckpt);
-	if (error != 0) {
-		free(sckpt, M_SLSMM);
-		return (error);
+		error = slsckpt_init(sckpt);
+		if (error != 0) {
+			free(sckpt, M_SLSMM);
+			return (error);
+		}
 	}
 
 	memcpy(&sckpt->sckpt_attr, &slsp->slsp_attr, sizeof(sckpt->sckpt_attr));
