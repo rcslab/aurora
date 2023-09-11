@@ -44,29 +44,12 @@ slsmetropolis_set(uint64_t oid, struct file *fp, int flags)
 }
 
 static int
-slsmetropolis_attach(struct proc *p)
-{
-	struct sls_attach_args attach_args;
-
-	/*
-	 * We have the PID of the new process, add it to the partition. We find
-	 * the PID of our partition based on our PID.
-	 */
-	attach_args = (struct sls_attach_args) {
-		.oid = p->p_auroid,
-		.pid = p->p_pid,
-	};
-
-	/* Attach the new process into the partition, and Aurora in general. */
-	return (sls_attach(&attach_args));
-}
-
-static int
 slsmetropolis_register(struct thread *td, int s, int flags)
 {
 	struct sls_checkpoint_args checkpoint_args;
 	struct proc *p = td->td_proc;
 	struct file *fp;
+	bool attached;
 	int error;
 
 	/* Avoid races with the slsmetropolis_fork() call that created us. */
@@ -79,27 +62,14 @@ slsmetropolis_register(struct thread *td, int s, int flags)
 	/*
 	 * No need to attach if already in the partition.
 	 */
-	if (!sls_proc_inpart(p->p_auroid, p)) {
 
-		/*
-		 * XXX Is there an easy way of finding
-		 * out whether the process is already
-		 * in a partition?
-		 */
+	attached = sls_proc_attached(p->p_auroid, p);
+	SLS_UNLOCK();
 
-		/* We got our Aurora ID, no need to hold the lock anymore. */
-		SLS_UNLOCK();
-		/* XXX This is a race condition, what if someone
-		 * tries to attach us after we unlock? */
-
-		error = slsmetropolis_attach(p);
+	if (!attached) {
+		error = slsp_attach(p->p_auroid, p, true);
 		if (error != 0)
 			return (error);
-
-	} else {
-
-		/* Just unlock we're good to go. */
-		SLS_UNLOCK();
 	}
 
 	/*

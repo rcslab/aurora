@@ -372,12 +372,7 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 	{
 
 		/* Insert the process into Aurora. */
-		SLS_LOCK();
-		PROC_LOCK(p);
-		/* Transient processes are not in Metropolis mode. */
-		sls_procadd(slsp->slsp_oid, p, false);
-		PROC_UNLOCK(p);
-		SLS_UNLOCK();
+		slsp_attach(slsp->slsp_oid, p, false);
 
 		error = slsckpt_metadata(p, procset, sckpt);
 		if (error != 0) {

@@ -37,6 +37,7 @@
 #include "sls_internal.h"
 #include "sls_partition.h"
 #include "sls_prefault.h"
+#include "sls_syscall.h"
 #include "sls_table.h"
 #include "sls_vm.h"
 
@@ -273,34 +274,49 @@ slsp_hasproc(struct slspart *slsp, pid_t pid)
 
 /* Attach a process to the partition. */
 int
-slsp_attach(uint64_t oid, pid_t pid)
+slsp_attach(uint64_t oid, struct proc *p, bool metropolis)
 {
 	struct slspart *slsp;
 	int error;
 
+	SLS_LOCK();
+	PROC_LOCK(p);
+
 	/* We cannot checkpoint the kernel. */
-	if (pid == 0) {
+	if (p->p_pid == 0) {
 		DEBUG("Trying to attach the kernel to a partition");
-		return (EINVAL);
+		goto error;
 	}
 
 	/* Make sure the PID isn't in the SLS already. */
-	if (slsset_find(slsm.slsm_procs, pid) == 0)
-		return (EINVAL);
+	if (slsset_find(slsm.slsm_procs, p->p_pid) == 0)
+		goto error;
 
 	/* Make sure the partition actually exists. */
 	if (slskv_find(slsm.slsm_parts, oid, (uintptr_t *)&slsp) != 0)
-		return (EINVAL);
+		goto error;
 
-	error = slskv_add(slsm.slsm_procs, pid, (uintptr_t)oid);
+	error = slskv_add(slsm.slsm_procs, p->p_pid, (uintptr_t)oid);
 	KASSERT(error == 0, ("PID already in the SLS"));
 
-	error = slsset_add(slsp->slsp_procs, pid);
+	error = slsset_add(slsp->slsp_procs, p->p_pid);
 	KASSERT(error == 0, ("PID already in the partition"));
 
 	slsp->slsp_procnum += 1;
 
+	/* Check if we're already in Aurora. */
+	sls_procadd(oid, p, metropolis);
+
+	PROC_UNLOCK(p);
+	SLS_UNLOCK();
+
 	return (0);
+
+error:
+	PROC_UNLOCK(p);
+	SLS_UNLOCK();
+
+	return (EINVAL);
 }
 
 /* Detach a process from the partition. */

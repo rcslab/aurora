@@ -56,7 +56,7 @@ struct sls_metadata slsm;
 struct sysctl_ctx_list aurora_ctx;
 
 bool
-sls_proc_inpart(uint64_t oid, struct proc *p)
+sls_proc_attached(uint64_t oid, struct proc *p)
 {
 	struct slskv_iter iter;
 	struct slspart *slsp;
@@ -82,19 +82,12 @@ sls_proc_inpart(uint64_t oid, struct proc *p)
 }
 
 bool
-sls_proc_insls(struct proc *p)
+sls_proc_registered(struct proc *p)
 {
-	struct proc *aurp;
-
 	SLS_ASSERT_LOCKED();
 
 	/* Check if we're already in Aurora. */
-	LIST_FOREACH (aurp, &slsm.slsm_plist, p_aurlist) {
-		if (aurp == p)
-			return (true);
-	}
-
-	return (false);
+	return (p->p_auroid != 0);
 }
 
 /* Add a process into Aurora. */
@@ -105,7 +98,7 @@ sls_procadd(uint64_t oid, struct proc *p, bool metropolis)
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 
 	/* Check if we're already in Aurora. */
-	if (sls_proc_insls(p))
+	if (sls_proc_registered(p))
 		return;
 
 	p->p_auroid = oid;
@@ -124,7 +117,7 @@ sls_procremove(struct proc *p)
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 
 	/* Check if we're already in Aurora. */
-	if (!sls_proc_insls(p))
+	if (!sls_proc_registered(p))
 		return;
 
 	LIST_REMOVE(p, p_aurlist);
@@ -149,7 +142,7 @@ sls_prockillall(void)
 		kern_psignal(p, SIGKILL);
 		PROC_UNLOCK(p);
 
-		while (sls_proc_insls(p))
+		while (sls_proc_registered(p))
 			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
 	}
 
@@ -414,20 +407,10 @@ sls_attach(struct sls_attach_args *args)
 		return (error);
 
 	/* Try to add the new process. */
-	error = slsp_attach(args->oid, args->pid);
-	if (error != 0) {
-		PRELE(p);
-		return (error);
-	}
-
-	SLS_LOCK();
-	PROC_LOCK(p);
-	sls_procadd(args->oid, p, false);
-	PROC_UNLOCK(p);
-	SLS_UNLOCK();
+	error = slsp_attach(args->oid, p, false);
 
 	PRELE(p);
-	return (0);
+	return (error);
 }
 
 static int

@@ -82,7 +82,7 @@ LIST_HEAD(slsp_list, slspart);
 struct slspart *slsp_find_locked(uint64_t oid);
 struct slspart *slsp_find(uint64_t oid);
 
-int slsp_attach(uint64_t oid, pid_t pid);
+int slsp_attach(uint64_t oid, struct proc *p, bool metropolis);
 int slsp_detach(uint64_t oid, pid_t pid);
 
 int slsp_add(
