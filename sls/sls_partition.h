@@ -129,4 +129,30 @@ int slsckpt_addrecord(
 extern struct slspart_serial ssparts[];
 int sslsp_deserialize(void);
 
+static inline bool
+slsp_isfullckpt(struct slspart *slsp)
+{
+
+	if (slsp->slsp_target == SLS_MEM)
+		return (false);
+
+	return (slsp->slsp_target == SLS_FULL);
+}
+
+static inline bool
+slsp_proc_in_part(struct slspart *slsp, struct proc *p)
+{
+	struct slskv_iter iter;
+	uint64_t pid;
+
+	/* Make sure the process is in the partition. */
+	KVSET_FOREACH(slsp->slsp_procs, iter, pid)
+	{
+		if (p->p_pid == (pid_t)pid)
+			return (true);
+	}
+
+	return (false);
+}
+
 #endif /* _SLSPART_H_ */
