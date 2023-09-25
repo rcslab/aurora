@@ -110,7 +110,7 @@ int
 main(int argc, char **argv)
 {
 	enum ckptwait wait;
-	uint64_t nextepoch;
+	uint64_t nextepoch = 1;
 	struct sls_attr attr;
 	bool unaligned = false;
 	void *addr, *snapaddr;
