@@ -24,10 +24,14 @@ then
     exit 1
 fi
 
+sleep 1
+
 wait `pidof mmap`
-if [ $? -ne 0 ];
+
+EXIT=$?
+if [ $EXIT -ne 0 ];
 then
-    echo "Process exited with nonzero"
+    echo "Restored process exited with $EXIT"
     exit 1
 fi
 
@@ -38,5 +42,3 @@ if [ $? -ne 0 ]; then
 fi
 
 exit 0
-
-

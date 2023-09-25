@@ -22,14 +22,15 @@
 	((obj != NULL) &&     \
 	    ((obj->type == OBJT_DEFAULT) || (obj->type == OBJT_SWAP)))
 
+int slsvm_entry_shadow_single(struct proc *p, struct slskv_table *table,
+    vm_map_entry_t entry);
 int slsvm_entry_shadow(struct proc *p, struct slskv_table *table,
-    vm_map_entry_t entry, bool is_fullckpt, bool protect);
+    vm_map_entry_t entry, bool need_protect);
 void slsvm_objtable_collapsenew(
     struct slskv_table *objtable, struct slskv_table *newtable);
 void slsvm_objtable_collapse(
     struct slskv_table *objtable, struct slskv_table *newtable);
-int slsvm_procset_shadow(
-    slsset *procset, struct slsckpt_data *sckpt, bool is_fullckpt);
+int slsvm_procset_shadow(slsset *procset, struct slsckpt_data *sckpt);
 void slsvm_forceshadow(
     vm_object_t shadow, vm_object_t source, vm_ooffset_t offset);
 

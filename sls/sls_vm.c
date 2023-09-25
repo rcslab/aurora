@@ -419,7 +419,7 @@ slsvm_object_copy(struct proc *p, struct vm_map_entry *entry, vm_object_t obj)
  */
 int
 slsvm_entry_shadow(struct proc *p, struct slskv_table *table,
-    vm_map_entry_t entry, bool is_fullckpt, bool protect)
+    vm_map_entry_t entry, bool need_protect)
 {
 	vm_object_t obj, vmshadow;
 	int error;
@@ -471,7 +471,7 @@ slsvm_entry_shadow(struct proc *p, struct slskv_table *table,
 		 * There is no race with the process here for the
 		 * entry, so there is no need to lock the map.
 		 */
-		if (protect)
+		if (need_protect)
 			slsvm_entry_protect(p, entry);
 		entry->object.vm_object = vmshadow;
 		VM_OBJECT_WLOCK(vmshadow);
@@ -482,20 +482,11 @@ slsvm_entry_shadow(struct proc *p, struct slskv_table *table,
 	}
 
 	/* Shadow the object, retain it in Aurora. */
-	if (protect)
+	if (need_protect)
 		slsvm_entry_protect(p, entry);
 	error = slsvm_object_shadow(table, &entry->object.vm_object);
 	if (error != 0)
 		return (error);
-
-	/*
-	 * We use is_fullckpt for the sole reason of taking numbers for full
-	 * checkpoints.  Full checkpoints make zero sense as a concept, since we
-	 * have the guarantee that objects that have been dumped once have been
-	 * unmodified. Checkpointing an object with the OBJ_AURORA flag for any
-	 * reason other than comparing naive and delta checkpoints is just
-	 * stupid.
-	 */
 
 	while (OBJT_ISANONYMOUS(obj) && ((obj->flags & OBJ_AURORA) == 0)) {
 		obj = obj->backing_object;
@@ -521,8 +512,10 @@ slsvm_tracebuf_invalidate(struct proc *p)
 		return (true);
 	}
 
-	if (pmt->pmt_index == pmt->pmt_size)
+	if (pmt->pmt_index == pmt->pmt_size) {
+		pmt->pmt_index = 0;
 		return (true);
+	}
 
 	for (i = 0; i < pmt->pmt_index; i++) {
 		pte = pmt->pmt_ptes[i];
@@ -538,33 +531,55 @@ slsvm_tracebuf_invalidate(struct proc *p)
 	return (false);
 }
 
+int
+slsvm_entry_shadow_single(struct proc *p, struct slskv_table *table,
+    vm_map_entry_t entry)
+{
+	pmap_t pmap = &p->p_vmspace->vm_pmap;
+	bool need_protect;
+	int error;
+
+	need_protect = (sls_tracebuf) ? slsvm_tracebuf_invalidate(p) : true;
+
+	error = slsvm_entry_shadow(p, table, entry, need_protect);
+
+	/* If the entries did not need protection we are using the trace buffer.
+	 */
+	if (!need_protect || sls_objprotect) {
+		PMAP_LOCK(pmap);
+		pmap_invalidate_all(pmap);
+		PMAP_UNLOCK(pmap);
+	}
+
+	return (error);
+}
+
 /*
  * Get all objects accessible through the VM entries of the checkpointed
  * process. This causes any CoW objects shared among memory maps to split into
  * two.
  */
 static int
-slsvm_proc_shadow(struct proc *p, struct slsckpt_data *sckpt, bool is_fullckpt)
+slsvm_proc_shadow(struct proc *p, struct slsckpt_data *sckpt)
 {
 	pmap_t pmap = &p->p_vmspace->vm_pmap;
 	struct vm_map_entry *entry, *header;
-	bool protect;
+	bool need_protect;
 	int error;
 
-	if (sls_objprotect)
-		protect = slsvm_tracebuf_invalidate(p);
-	else
-		protect = true;
+	need_protect = (sls_tracebuf) ? slsvm_tracebuf_invalidate(p) : true;
 
 	header = &p->p_vmspace->vm_map.header;
 	for (entry = header->next; entry != header; entry = entry->next) {
-		error = slsvm_entry_shadow(
-		    p, sckpt->sckpt_shadowtable, entry, is_fullckpt, protect);
+		error = slsvm_entry_shadow(p, sckpt->sckpt_shadowtable, entry,
+		    need_protect);
 		if (error != 0)
 			return (error);
 	}
 
-	if (sls_objprotect) {
+	/* If the entries did not need protection we are using the trace buffer.
+	 */
+	if (!need_protect || sls_objprotect) {
 		PMAP_LOCK(pmap);
 		pmap_invalidate_all(pmap);
 		PMAP_UNLOCK(pmap);
@@ -575,8 +590,7 @@ slsvm_proc_shadow(struct proc *p, struct slsckpt_data *sckpt, bool is_fullckpt)
 
 /* Collapse the backing objects of all processes under checkpoint. */
 int
-slsvm_procset_shadow(
-    slsset *procset, struct slsckpt_data *sckpt, bool is_fullckpt)
+slsvm_procset_shadow(slsset *procset, struct slsckpt_data *sckpt)
 {
 	struct slskv_iter iter;
 	struct proc *p;
@@ -585,7 +599,7 @@ slsvm_procset_shadow(
 	KVSET_FOREACH(procset, iter, p)
 	{
 		SDT_PROBE0(sls, , , procset_loop);
-		error = slsvm_proc_shadow(p, sckpt, is_fullckpt);
+		error = slsvm_proc_shadow(p, sckpt);
 		if (error != 0) {
 			KV_ABORT(iter);
 			return (error);

@@ -388,7 +388,7 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 
 	SDT_PROBE0(sls, , , meta_finish);
 	/* Shadow the objects to be dumped. */
-	error = slsvm_procset_shadow(procset, sckpt, slsp_isfullckpt(slsp));
+	error = slsvm_procset_shadow(procset, sckpt);
 	if (error != 0) {
 		DEBUG1("shadowing failed with %d\n", error);
 		slsckpt_cont(procset, pcaller);

@@ -12,6 +12,7 @@ tests/testbench.log
 tests/ktrdump.log
 tests/array/array
 tests/compute/compute
+tests/shadow/shadow
 tests/delta/delta
 tests/fd/fd
 tests/fifo/fifo
@@ -23,6 +24,7 @@ tests/kqueue/kqueue
 tests/llist/llist
 tests/main/main
 tests/memory/memory
+tests/memshadow/memshadow
 tests/memsnap/memsnap
 tests/metropolis/metropolis
 tests/mmap/mmap
