@@ -151,7 +151,7 @@ struct slsfiledesc {
 	u_short fd_cmask;
 	uint64_t fd_lastfile;
 	/* Needs to be last to ease (de)serialization is trivial. */
-	uint64_t fd_table[0];
+	uint64_t fd_table[];
 };
 
 #define SLSPIPE_ID 0x736c7499

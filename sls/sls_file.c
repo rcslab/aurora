@@ -336,7 +336,8 @@ slsckpt_filedesc(
 		return (error);
 
 	/* The end of the struct is a variable length array. */
-	fd_size = sizeof(*slsfdp) * sizeof(uint64_t) * (fdp->fd_lastfile - 1);
+	fd_size = sizeof(*slsfdp) + ((fdp->fd_lastfile + 1) * sizeof(uint64_t));
+
 	slsfdp = malloc(fd_size, M_SLSMM, M_WAITOK | M_ZERO);
 
 	slsfdp->cdir = (uint64_t)fdp->fd_cdir;
