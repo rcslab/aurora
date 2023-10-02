@@ -12,6 +12,7 @@
 #include "sls_private.h"
 
 static int _slsfd = -1;
+static int _metrfd = -1;
 
 /* Generic ioctl for the SLS device. */
 int
@@ -34,7 +35,29 @@ sls_ioctl(long ionum, void *args)
 		return (-1);
 	}
 
-	// close(fd);
+	return (status);
+}
+
+/* Generic ioctl for the SLS device. */
+int
+metr_ioctl(long ionum, void *args)
+{
+	int status;
+
+	if (_metrfd < 0) {
+		_metrfd = open("/dev/metropolis", O_RDWR);
+		if (_metrfd < 0) {
+			fprintf(stderr,
+			    "ERROR: Could not open SLS Metropolis: %m\n");
+			return (-1);
+		}
+	}
+
+	status = ioctl(_metrfd, ionum, args);
+	if (status < 0) {
+		fprintf(stderr, "ERROR: Metropolis proc ioctl failed: %m\n");
+		return (-1);
+	}
 
 	return (status);
 }

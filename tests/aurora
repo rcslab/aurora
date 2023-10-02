@@ -37,10 +37,12 @@ aursetup()
     slsnewfs
     slsmount
     kldload sls
+    kldload metropolis
 }
 
 aurteardown()
 {
+    kldunload metropolis
     kldunload sls
     slsunmount
     kldunload slos

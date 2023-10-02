@@ -104,7 +104,7 @@ slssyscall_fork(struct thread *td, void *data)
 	/* If the vector isn't the vanilla Aurora one, we we're in Metropolis.
 	 */
 	in_metropolis = curproc->p_sysent != &slssyscall_sysvec;
-	sls_procadd(curproc->p_auroid, p, in_metropolis);
+	sls_procadd_unlocked(curproc->p_auroid, p, in_metropolis);
 
 	PROC_UNLOCK(p);
 	SLS_UNLOCK();

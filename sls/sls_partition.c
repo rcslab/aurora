@@ -305,7 +305,7 @@ slsp_attach(uint64_t oid, struct proc *p, bool metropolis)
 	slsp->slsp_procnum += 1;
 
 	/* Check if we're already in Aurora. */
-	sls_procadd(oid, p, metropolis);
+	sls_procadd_unlocked(oid, p, metropolis);
 
 	PROC_UNLOCK(p);
 	SLS_UNLOCK();

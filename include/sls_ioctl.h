@@ -64,7 +64,7 @@ struct sls_memsnap_args {
 	    *nextepoch; /* Epoch at which the checkpoint will be persistent */
 };
 
-struct sls_metropolis_args {
+struct metr_register_args {
 	uint64_t oid; /* The OID of the partition for Metropolis mode */
 };
 
@@ -73,7 +73,7 @@ struct sls_insls_args {
 	bool *insls;   /* Is the process in a partition? */
 };
 
-struct sls_metropolis_spawn_args {
+struct metr_invoke_args {
 	uint64_t oid; /* The OID of the Metropolis partition */
 	int s;	      /* The socket to be connected */
 };
@@ -90,10 +90,11 @@ struct sls_pgresident_args {
 #define SLS_PARTDEL _IOW('d', 5, struct sls_partdel_args)
 #define SLS_EPOCHWAIT _IOWR('d', 6, struct sls_epochwait_args)
 #define SLS_MEMSNAP _IOWR('d', 7, struct sls_memsnap_args)
-#define SLS_METROPOLIS _IOWR('d', 8, struct sls_metropolis_args)
-#define SLS_INSLS _IOWR('d', 9, struct sls_insls_args)
-#define SLS_METROPOLIS_SPAWN _IOWR('d', 10, struct sls_metropolis_spawn_args)
-#define SLS_PGRESIDENT _IOWR('d', 11, struct sls_pgresident_args)
+#define SLS_INSLS _IOWR('d', 8, struct sls_insls_args)
+#define SLS_PGRESIDENT _IOWR('d', 9, struct sls_pgresident_args)
+
+#define METR_REGISTER _IOWR('e', 1, struct metr_register_args)
+#define METR_INVOKE _IOWR('e', 2, struct metr_invoke_args)
 
 #define SLS_DEFAULT_PARTITION 5115
 #define SLS_DEFAULT_MPARTITION 5116

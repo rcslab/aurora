@@ -92,7 +92,7 @@ sls_proc_registered(struct proc *p)
 
 /* Add a process into Aurora. */
 void
-sls_procadd(uint64_t oid, struct proc *p, bool metropolis)
+sls_procadd_unlocked(uint64_t oid, struct proc *p, bool metropolis)
 {
 	SLS_ASSERT_LOCKED();
 	PROC_LOCK_ASSERT(p, MA_OWNED);
@@ -107,6 +107,17 @@ sls_procadd(uint64_t oid, struct proc *p, bool metropolis)
 		p->p_sysent = &slsmetropolis_sysvec;
 
 	LIST_INSERT_HEAD(&slsm.slsm_plist, p, p_aurlist);
+}
+
+/* Add a process into Aurora. */
+void
+sls_procadd(uint64_t oid, struct proc *p, bool metropolis)
+{
+	SLS_LOCK();
+	PROC_LOCK(p);
+	sls_procadd_unlocked(oid, p, metropolis);
+	PROC_UNLOCK(p);
+	SLS_UNLOCK();
 }
 
 /* Remove a process from Aurora. */
@@ -150,97 +161,6 @@ sls_prockillall(void)
 	KASSERT(LIST_EMPTY(&slsm.slsm_plist), ("processes still in Aurora"));
 
 	return (0);
-}
-
-/*
- * Called by the initial Metropolis function. Replaces the syscall vector with
- * one that has overloaded execve() and accept() calls. The accept() call is
- * really what we are after here, since it is used to demarcate the point in
- * which we checkpoint the function. We also overload execve(), which normally
- * override the system call vector, and fork(), so that new processes
- * dynamically enter themselves into the partition.
- *
- * The initial process entering Metropolis mode is NOT in Metropolis. This
- * allows us to use it to set up a new environment for each new Metropolis
- * instance.
- */
-static int
-sls_metropolis(struct sls_metropolis_args *args)
-{
-	struct proc *p = curthread->td_proc;
-	struct slspart *slsp;
-
-	/* Check if the partition actually exists. */
-	slsp = slsp_find(args->oid);
-	if (slsp == NULL) {
-		SLS_UNLOCK();
-		return (EINVAL);
-	}
-
-	SLS_LOCK();
-	slsp_deref_locked(slsp);
-
-	/* Add the process in Aurora. */
-	PROC_LOCK(p);
-	/* The process isn't being checkpointed, but is in the SLS. */
-	sls_procadd(args->oid, p, true);
-	PROC_UNLOCK(p);
-	SLS_UNLOCK();
-
-	return (0);
-}
-
-/*
- * Create a new Metropolis process, handing it off a connected socket in the
- * process.
- */
-static int
-sls_metropolis_spawn(struct sls_metropolis_spawn_args *args)
-{
-	struct sls_restore_args rest_args;
-	struct thread *td = curthread;
-	struct slsmetr *slsmetr;
-	struct slspart *slsp;
-	int error;
-
-	slsp = slsp_find(args->oid);
-	if (slsp == NULL) {
-		DEBUG1("%s: partition not found\n", __func__);
-		return (ENOENT);
-	}
-	slsmetr = &slsp->slsp_metr;
-
-	/*
-	 * Check if the partition is restorable. Certain partitions are
-	 * used only for measuring checkpointing performance and do not
-	 * hold restorable data.
-	 */
-	if (!slsp_restorable(slsp)) {
-		DEBUG1("%s: partition not restorable\n", __func__);
-		slsp_deref(slsp);
-		return (EINVAL);
-	}
-
-	/*
-	 * Get the new connected socket, save it in the partition. This call
-	 * also fills in any information the restore process might need.
-	 */
-	error = kern_accept4(td, args->s, &slsmetr->slsmetr_sa,
-	    &slsmetr->slsmetr_namelen, slsmetr->slsmetr_flags,
-	    &slsmetr->slsmetr_sockfp);
-	slsp_deref(slsp);
-	if (error != 0) {
-		DEBUG1("%s: could not accept connection\n", __func__);
-		return (error);
-	}
-
-	rest_args = (struct sls_restore_args) {
-		.oid = args->oid,
-		.rest_stopped = 0,
-	};
-
-	/* Fully restore the partition. */
-	return (sls_restore(&rest_args));
 }
 
 /*
@@ -862,17 +782,8 @@ sls_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
 		error = sls_memsnap((struct sls_memsnap_args *)data);
 		break;
 
-	case SLS_METROPOLIS:
-		error = sls_metropolis((struct sls_metropolis_args *)data);
-		break;
-
 	case SLS_INSLS:
 		error = sls_insls((struct sls_insls_args *)data);
-		break;
-
-	case SLS_METROPOLIS_SPAWN:
-		error = sls_metropolis_spawn(
-		    (struct sls_metropolis_spawn_args *)data);
 		break;
 
 	case SLS_PGRESIDENT:

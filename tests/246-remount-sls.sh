@@ -22,8 +22,10 @@ fi
 sleep 1
 killandwait $PID
 
+kldunload metropolis
 kldunload sls
 kldload sls
+kldload metropolis
 
 slsosdrestore
 # Killing the workload using a signal makes the restore exit with 3.

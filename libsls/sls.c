@@ -206,12 +206,12 @@ sls_memsnap_epoch(uint64_t oid, void *addr, uint64_t *epoch)
 int
 sls_metropolis(uint64_t oid)
 {
-	struct sls_metropolis_args args;
+	struct metr_register_args args;
 
 	args.oid = oid;
 
-	if (sls_ioctl(SLS_METROPOLIS, &args) < 0) {
-		perror("sls_metropolis");
+	if (metr_ioctl(METR_REGISTER, &args) < 0) {
+		perror("metr_register");
 		return (-1);
 	}
 
@@ -243,12 +243,12 @@ sls_insls(uint64_t *oid, bool *insls)
 int
 sls_metropolis_spawn(uint64_t oid, int s)
 {
-	struct sls_metropolis_spawn_args args;
+	struct metr_invoke_args args;
 
 	args.oid = oid;
 	args.s = s;
 
-	if (sls_ioctl(SLS_METROPOLIS_SPAWN, &args) < 0) {
+	if (metr_ioctl(METR_INVOKE, &args) < 0) {
 		perror("sls_metropolis_spawn");
 		return (-1);
 	}
