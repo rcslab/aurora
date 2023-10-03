@@ -278,7 +278,7 @@ main(int argc, char **argv)
 				.attr_target = SLS_OSD,
 				.attr_mode = SLS_DELTA,
 				.attr_flags = SLSATTR_IGNUNLINKED |
-				    SLSATTR_LAZYREST,
+				    SLSATTR_LAZYREST | SLSATTR_NOPROCFIXUP,
 				.attr_amplification = 1,
 			};
 

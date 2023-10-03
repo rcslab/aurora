@@ -136,7 +136,7 @@ main(int argc, char **argv)
 	/* Use the socket to send a message. */
 	error = getmessage(sock);
 	if (error != 0) {
-		printf("Failed with %d", error);
+		printf("Server failed with %d", error);
 		exit(EX_USAGE);
 	}
 

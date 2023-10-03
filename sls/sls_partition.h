@@ -21,7 +21,6 @@
 
 #include "sls_internal.h"
 #include "sls_kv.h"
-#include "sls_metropolis.h"
 
 #define SLSPART_EPOCHINIT 1 /* Initial epoch for each partition */
 
@@ -31,16 +30,15 @@
 #define SLSP_DETACHED 2	     /* Partition has been detached */
 #define SLSP_RESTORING 3     /* Partition is being restored */
 
+#define SSPART_BUFSIZE (64)
+
 /* On-disk partition. */
 struct slspart_serial {
 	bool sspart_valid;
 	uint64_t sspart_oid;
 	struct sls_attr sspart_attr;
 	uint64_t sspart_epoch;
-	uint64_t sspart_proc;
-	uint64_t sspart_td;
-	int sspart_flags;
-	uint64_t sspart_sockid;
+	char sspart_private[SSPART_BUFSIZE];
 };
 
 /**/
@@ -66,8 +64,6 @@ struct slspart {
 	uint64_t slsp_nextepoch; /* Epoch the caller's operations will be in
 				    after completion*/
 	void *slsp_backend; /* Opaque backend pointer, dependent on type */
-
-	struct slsmetr slsp_metr; /* Local Metropolis state */
 
 	LIST_ENTRY(slspart) slsp_parts; /* List of active SLS partitions */
 	char slsp_name[PATH_MAX];	/* Path for the partition*/

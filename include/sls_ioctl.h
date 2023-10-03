@@ -130,6 +130,8 @@ struct sls_pgresident_args {
 #define SLSATTR_DELTAREST 0x20	/* Delta restores */
 #define SLSATTR_NOCKPT 0x40	/* Partition is not checkpointable */
 #define SLSATTR_ASYNCSNAP 0x80	/* Do memsnap asynchronously */
+/* Do not restore the PID or process tree. */
+#define SLSATTR_NOPROCFIXUP 0x100
 
 #define SLSATTR_FLAGISSET(attr, flag) (((attr).attr_flags & flag) != 0)
 #define SLSATTR_ISIGNUNLINKED(attr) \
@@ -141,6 +143,8 @@ struct sls_pgresident_args {
 #define SLSATTR_ISDELTAREST(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_DELTAREST))
 #define SLSATTR_ISNOCKPT(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_NOCKPT))
 #define SLSATTR_ISASYNCSNAP(attr) (SLSATTR_FLAGISSET((attr), SLSATTR_ASYNCSNAP))
+#define SLSATTR_ISNOPROCFIXUP(attr) \
+	(SLSATTR_FLAGISSET((attr), SLSATTR_NOPROCFIXUP))
 
 #ifdef __cplusplus
 }

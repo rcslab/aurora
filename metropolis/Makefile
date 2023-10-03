@@ -1,7 +1,7 @@
 KMOD	= metropolis
 CLEANFILES = .depend*
 DPSRCS 	= offset.inc
-SRCS	= metr_ioctl.c vnode_if.h
+SRCS	= metr_ioctl.c metr_restore.c metr_syscall.c vnode_if.h
 CFLAGS	+= -DKDTRACE_HOOKS -DSMP -DKLD_TIED -I../include -g
 CLEANFILES = .depend*
 WITH_CTF = 1

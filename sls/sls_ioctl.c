@@ -33,7 +33,6 @@
 #include "sls_ioctl.h"
 #include "sls_kv.h"
 #include "sls_message.h"
-#include "sls_metropolis.h"
 #include "sls_pager.h"
 #include "sls_prefault.h"
 #include "sls_syscall.h"
@@ -55,8 +54,14 @@ extern uint64_t sls_successful_restores;
 struct sls_metadata slsm;
 struct sysctl_ctx_list aurora_ctx;
 
+static bool
+sls_kill_always(struct proc *p)
+{
+	return (true);
+}
+
 static int
-sls_prockillall(void)
+sls_kill_locked(sls_kill_cb cb)
 {
 	struct proc *p, *tmp;
 
@@ -67,6 +72,9 @@ sls_prockillall(void)
 	 * the list using a safe macro, so we are allowed to drop the lock.
 	 */
 	LIST_FOREACH_SAFE (p, &slsm.slsm_plist, p_aurlist, tmp) {
+		if (!cb(p))
+			continue;
+
 		PROC_LOCK(p);
 		kern_psignal(p, SIGKILL);
 		PROC_UNLOCK(p);
@@ -75,10 +83,19 @@ sls_prockillall(void)
 			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
 	}
 
-	/* Ensure all processes are dead. */
-	KASSERT(LIST_EMPTY(&slsm.slsm_plist), ("processes still in Aurora"));
-
 	return (0);
+}
+
+int
+sls_kill(sls_kill_cb cb)
+{
+	int ret;
+
+	SLS_LOCK();
+	ret = sls_kill_locked(cb);
+	SLS_UNLOCK();
+
+	return (ret);
 }
 
 /*
@@ -209,7 +226,6 @@ sls_restore(struct sls_restore_args *args)
 	restd_args = malloc(sizeof(*restd_args), M_SLSMM, M_WAITOK);
 	restd_args->slsp = slsp;
 	restd_args->rest_stopped = args->rest_stopped;
-
 
 	/* Create the daemon. */
 	error = kthread_add((void (*)(void *))sls_restored, restd_args, curproc,
@@ -852,7 +868,6 @@ sls_hook_attach(void)
 {
 	/* Construct the system call vector. */
 	slssyscall_initsysvec();
-	slsmetropolis_initsysvec();
 	sls_exit_hook = sls_exit_procremove;
 }
 
@@ -860,7 +875,6 @@ static void
 sls_hook_detach(void)
 {
 	sls_exit_hook = NULL;
-	slsmetropolis_finisysvec();
 	slssyscall_finisysvec();
 }
 
@@ -954,7 +968,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 
 		/* Kill all processes in Aurora, sleep till they exit. */
 		DEBUG("Killing all processes in Aurora...");
-		error = sls_prockillall();
+		error = sls_kill_locked(sls_kill_always);
 		if (error != 0) {
 			SLS_UNLOCK();
 			return (EBUSY);

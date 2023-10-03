@@ -219,7 +219,10 @@ slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value)
 	struct slskv_pair *newkv;
 	int error;
 
-	newkv = uma_zalloc(slskvpair_zone, M_WAITOK);
+	newkv = uma_zalloc(slskvpair_zone, M_NOWAIT);
+	if (newkv == NULL)
+		return (ENOMEM);
+
 	newkv->key = key;
 	newkv->value = value;
 

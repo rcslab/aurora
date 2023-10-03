@@ -6,6 +6,7 @@
 struct fbtree;
 
 #define SLOS_INODES_ROOT (0)
+#define SLOS_METROPOLIS_INODE (9997)
 #define SLOS_SLSPREFAULT_INODE (9998)
 #define SLOS_SLSPART_INODE (9999)
 #define SLOS_ROOT_INODE (10000)

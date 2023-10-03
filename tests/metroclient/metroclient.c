@@ -107,7 +107,7 @@ main(int argc, char **argv)
 
 	error = putmessage(sock, (struct sockaddr *)&listaddr);
 	if (error != 0) {
-		printf("Failed with %d", error);
+		printf("Client failed with %d", error);
 		exit(EX_USAGE);
 	}
 

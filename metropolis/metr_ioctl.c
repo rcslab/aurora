@@ -21,21 +21,91 @@
 #include <sys/sysctl.h>
 #include <sys/wait.h>
 
-#include "../sls/sls_metropolis.h"
 #include "../sls/sls_partition.h"
 #include "metr_internal.h"
+#include "metr_syscall.h"
 #include "sls_ioctl.h"
 
+MALLOC_DEFINE(M_METR, "metropolis", "METR");
+
 struct metr_metadata metrm;
+
+static bool
+metr_kill_always(struct proc *p)
+{
+	return (p->p_sysent == &metrsys_sysvec);
+}
+
+static int
+metr_import()
+{
+	struct metr_listen *lsp;
+	void *serial;
+	int i;
+
+	for (i = 0; i < METR_MAXLAMBDAS; i++) {
+		KASSERT(sizeof(ssparts[i].sspart_private) >= sizeof(*lsp),
+		    ("buffer too small"));
+
+		lsp = &metrm.metrm_listen[i];
+		serial = ssparts[i].sspart_private;
+		memcpy(lsp, serial, sizeof(*lsp));
+	}
+
+	return (0);
+}
+
+static int
+metr_export()
+{
+	struct metr_listen *lsp;
+	void *serial;
+	int i;
+
+	/* We assume that METR_MAXLAMBDAS <= the number of total partitions. */
+	for (i = 0; i < METR_MAXLAMBDAS; i++) {
+		KASSERT(sizeof(ssparts[i].sspart_private) >= sizeof(*lsp),
+		    ("buffer too small"));
+
+		serial = ssparts[i].sspart_private;
+		lsp = &metrm.metrm_listen[i];
+		memcpy(lsp, serial, sizeof(*lsp));
+	}
+
+	return (0);
+}
 
 static int
 metr_register(struct metr_register_args *args)
 {
 	struct proc *p = curthread->td_proc;
 
-	/* Add the process in Aurora. */
+	/* Add the process into Aurora. */
 	slsp_attach(args->oid, p);
-	p->p_sysent = &slsmetropolis_sysvec;
+	p->p_sysent = &metrsys_sysvec;
+
+	return (0);
+}
+
+static int
+metr_accept(struct thread *td, int s, struct metr_accept *acp, int flags)
+{
+	struct sockaddr_in *sa;
+	int error;
+
+	bzero(acp, sizeof(*acp));
+	acp->metac_salen = sizeof(*sa);
+
+	error = kern_accept4(td, s, (struct sockaddr **)&sa, &acp->metac_salen,
+	    flags, &acp->metac_fp);
+	if (error != 0)
+		return (error);
+
+	KASSERT(acp->metac_salen == sizeof(acp->metac_in),
+	    ("salen %d", acp->metac_salen));
+	memcpy(&acp->metac_in, sa, acp->metac_salen);
+
+	free(sa, M_SONAME);
 
 	return (0);
 }
@@ -47,41 +117,30 @@ metr_register(struct metr_register_args *args)
 static int
 metr_invoke(struct metr_invoke_args *args)
 {
-	struct sls_restore_args rest_args;
 	struct thread *td = curthread;
-	struct slsmetr *slsmetr;
-	struct slspart *slsp;
+	uint64_t oid = args->oid;
+	struct metr_listen *lsp;
+	struct metr_accept ac;
 	int error;
 
-	/*
-	 * XXX Refactor this so that we do not grab the partition here.
-	 * Also make sure that the socket fixup happens entirely outside
-	 * of Aurora.
-	 */
+	if (args->oid >= METR_MAXLAMBDAS)
+		return (EINVAL);
 
-	slsp = slsp_find(args->oid);
-	if (slsp == NULL)
+	lsp = &metrm.metrm_listen[args->oid];
+	if (lsp->metls_proc == 0)
 		return (ENOENT);
-	slsmetr = &slsp->slsp_metr;
 
-	/*
-	 * Get the new connected socket, save it in the partition. This call
-	 * also fills in any information the restore process might need.
-	 */
-	error = kern_accept4(td, args->s, &slsmetr->slsmetr_sa,
-	    &slsmetr->slsmetr_namelen, slsmetr->slsmetr_flags,
-	    &slsmetr->slsmetr_sockfp);
-	slsp_deref(slsp);
+	error = metr_accept(td, args->s, &ac, lsp->metls_flags);
 	if (error != 0)
 		return (error);
 
-	rest_args = (struct sls_restore_args) {
-		.oid = args->oid,
-		.rest_stopped = 0,
-	};
+	error = metr_restore(oid, lsp, &ac);
+	if (error != 0) {
+		fdrop(ac.metac_fp, td);
+		return (error);
+	}
 
-	/* Fully restore the partition. */
-	return (sls_restore(&rest_args));
+	return (0);
 }
 
 static int
@@ -121,6 +180,7 @@ static struct cdevsw metr_cdevsw = {
 static int
 MetrHandler(struct module *inModule, int inEvent, void *inArg)
 {
+	struct cdev *cdev;
 	int error = 0;
 
 	switch (inEvent) {
@@ -129,6 +189,13 @@ MetrHandler(struct module *inModule, int inEvent, void *inArg)
 
 		mtx_init(&metrm.metrm_mtx, "metrm", NULL, MTX_DEF);
 		cv_init(&metrm.metrm_exitcv, "metrm");
+
+		metrsys_initsysvec();
+
+		error = metr_import();
+		if (error != 0)
+			METR_WARN("Could not import lambdas, error %d\n",
+			    error);
 
 		/* Make the SLS available to userspace. */
 		metrm.metrm_cdev = make_dev(&metr_cdevsw, 0, UID_ROOT,
@@ -139,13 +206,24 @@ MetrHandler(struct module *inModule, int inEvent, void *inArg)
 	case MOD_UNLOAD:
 
 		METR_LOCK();
+		cdev = metrm.metrm_cdev;
+		metrm.metrm_cdev = NULL;
+		METR_UNLOCK();
 
-		/*
-		 * Destroy the device, wait for all ioctls in progress. We do
-		 * this without the non-sleepable module lock.
-		 */
-		if (metrm.metrm_cdev != NULL)
-			destroy_dev(metrm.metrm_cdev);
+		if (cdev != NULL)
+			destroy_dev(cdev);
+
+		METR_LOCK();
+		sls_kill(metr_kill_always);
+
+		/* Add reference counting for live processes. */
+
+		error = metr_export();
+		if (error != 0)
+			METR_WARN("Could not export lambdas, error %d\n",
+			    error);
+
+		metrsys_finisysvec();
 
 		cv_destroy(&metrm.metrm_exitcv);
 		mtx_destroy(&metrm.metrm_mtx);

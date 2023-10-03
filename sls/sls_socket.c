@@ -367,52 +367,21 @@ slssock_setopt(int fd, struct slssock *slssock)
 }
 
 static int
-slssock_restore_afinet(struct slssock *slssock, int fd, uint64_t slsmetr_sockid)
+slssock_restore_afinet(struct slssock *slssock, int fd)
 {
 	struct sockaddr_in *inaddr = (struct sockaddr_in *)&slssock->in;
 	struct thread *td = curthread;
-	int error, i;
 
 	/* Check if the socket is bound. */
 	if (slssock->bound == 0)
 		return (0);
 
 	/*
-	 * XXXHACK If this is a listening socket for a Metropolis function,
-	 * assign it a random port, much like accept() does.
-	 *  Try randomly picking a number from 1024 to 65535
-	 *
-	 *  TODO: Every time accept() gets called from this special
-	 *  socket the Metropolis function goes into hibernation, waiting for
-	 *  a warm invocation. Metropolis cleans up unused functions after a
-	 *  timeout.
+	 * We use bind() instead of setting the address directly
+	 * because we need to let the kernel know we are
+	 * reserving the address.
 	 */
-	if (slsmetr_sockid == slssock->slsid) {
-
-		for (i = 0; i < METROPOLIS_RETRIES; i++) {
-			inaddr->sin_port = 1024 + (random() % (65545 - 1024));
-			error = kern_bindat(
-			    td, AT_FDCWD, fd, (struct sockaddr *)inaddr);
-			if (error == 0)
-				return (error);
-		}
-
-		if (error != 0)
-			return (error);
-
-	} else {
-		/*
-		 * We use bind() instead of setting the address directly
-		 * because we need to let the kernel know we are
-		 * reserving the address.
-		 */
-		error = kern_bindat(
-		    td, AT_FDCWD, fd, (struct sockaddr *)inaddr);
-		if (error != 0)
-			return (error);
-	}
-
-	return (0);
+	return (kern_bindat(td, AT_FDCWD, fd, (struct sockaddr *)inaddr));
 }
 
 static int
@@ -565,8 +534,7 @@ slssock_restore(void *slsbacker, struct slsfile *finfo,
 		break;
 
 	case AF_INET:
-		error = slssock_restore_afinet(
-		    slssock, fd, restdata->slsmetr.slsmetr_sockid);
+		error = slssock_restore_afinet(slssock, fd);
 		if (error != 0)
 			goto error;
 		break;

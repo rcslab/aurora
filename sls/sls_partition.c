@@ -280,7 +280,6 @@ slsp_attach(uint64_t oid, struct proc *p)
 	int error;
 
 	SLS_LOCK();
-	PROC_LOCK(p);
 
 	/* We cannot checkpoint the kernel. */
 	if (p->p_pid == 0) {
@@ -305,17 +304,17 @@ slsp_attach(uint64_t oid, struct proc *p)
 	slsp->slsp_procnum += 1;
 
 	/* Check if we're already in Aurora. */
+	PROC_LOCK(p);
 	p->p_auroid = oid;
 	p->p_sysent = &slssyscall_sysvec;
 	LIST_INSERT_HEAD(&slsm.slsm_plist, p, p_aurlist);
-
 	PROC_UNLOCK(p);
+
 	SLS_UNLOCK();
 
 	return (0);
 
 error:
-	PROC_UNLOCK(p);
 	SLS_UNLOCK();
 
 	return (EINVAL);
@@ -837,14 +836,6 @@ sslsp_deserialize(void)
 		if (error != 0)
 			return (error);
 
-		/* Fill in Metropolis state. */
-		slsp->slsp_metr.slsmetr_proc =
-		    ssparts[slsp->slsp_oid].sspart_proc;
-		slsp->slsp_metr.slsmetr_td = ssparts[slsp->slsp_oid].sspart_td;
-		slsp->slsp_metr.slsmetr_flags =
-		    ssparts[slsp->slsp_oid].sspart_flags;
-		slsp->slsp_metr.slsmetr_sockid =
-		    ssparts[slsp->slsp_oid].sspart_sockid;
 	}
 
 	return (0);

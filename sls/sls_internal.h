@@ -67,6 +67,8 @@ struct sls_record {
 	uint64_t srec_type;   /* The record type */
 };
 
+typedef void (*sls_rest_cb)(struct proc *, void *);
+
 /* The data needed to restore an SLS partition. */
 struct slsrest_data {
 	struct slsckpt_data *sckpt;
@@ -81,11 +83,12 @@ struct slsrest_data {
 	    *pgidtable; /* Holds the old-new process group ID pairs */
 	struct slskv_table *sesstable; /* Holds the old-new session ID pairs */
 	struct slspart *slsp;	     /* The partition being restored */
+	sls_rest_cb cb;		       /* SLS restore callback */
+	void *cb_args;		       /* Callback arguments */
 
 	struct cv proccv;   /* Used for synchronization during restores */
 	struct mtx procmtx; /* Used alongside the cv above */
 	int proctds;	    /* Same, used to create a restore time barrier */
-	struct slsmetr slsmetr; /* Metropolis state */
 };
 
 extern struct sls_metadata slsm;
@@ -149,6 +152,9 @@ int slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
     uint64_t *nextepoch);
 void sls_checkpointd(struct sls_checkpointd_args *args);
 void sls_restored(struct sls_restored_args *args);
+
+int sls_rest(struct slspart *slsp, uint64_t rest_stopped, sls_rest_cb sls_cb,
+    void *cb_arg);
 
 extern struct sysctl_ctx_list aurora_ctx;
 
@@ -277,4 +283,8 @@ union slstable_taskctx {
 };
 
 void slsckpt_compact(struct slspart *slsp, struct slsckpt_data *sckpt);
+
+typedef bool (*sls_kill_cb)(struct proc *);
+int sls_kill(sls_kill_cb cb);
+
 #endif /* _SLS_INTERNAL_H_ */

@@ -582,8 +582,7 @@ slsproc_restore_pid(
 
 	KASSERT(p != NULL, ("no process provided"));
 
-	/* Fixing up PIDs gets in the way of Metropolis mode's autoscaling. */
-	if (restdata->slsmetr.slsmetr_proc != 0)
+	if (SLSATTR_ISNOPROCFIXUP(restdata->sckpt->sckpt_attr))
 		return (0);
 
 	sx_xlock(&proctree_lock);
@@ -655,6 +654,8 @@ slsproc_restore_proc(
 	 * This constraint unfortunately serializes the restore procedure,
 	 * since we need a barrier between pgrp/session creation and join.
 	 */
+
+	p->p_oldoid = slsproc->slsid;
 
 	/*
 	 * We can't change the process group of a session leader.

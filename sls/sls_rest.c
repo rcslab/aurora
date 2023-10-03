@@ -477,75 +477,6 @@ error:
 	return (EBADF);
 }
 
-static int
-slsrest_metrsocket(struct proc *p, struct slsrest_data *restdata)
-{
-	struct slsmetr *slsmetr = &restdata->slsmetr;
-	struct thread *td = curthread;
-	struct proc *metrproc;
-	int error;
-	int fd;
-
-	/* Check if the process is the partition's Metropolis process. */
-	error = slskv_find(
-	    restdata->proctable, slsmetr->slsmetr_proc, (uintptr_t *)&metrproc);
-	if (error != 0)
-		return (0);
-
-	if (p != metrproc)
-		return (0);
-
-	FILEDESC_XLOCK(p->p_fd);
-	/* Attach the file into the file table. */
-	error = fdalloc(td, AT_FDCWD, &fd);
-	if (error != 0) {
-		FILEDESC_XUNLOCK(p->p_fd);
-		return (error);
-	}
-
-	_finstall(p->p_fd, slsmetr->slsmetr_sockfp, fd, O_CLOEXEC, NULL);
-	FILEDESC_XUNLOCK(p->p_fd);
-
-	if (slsmetr->slsmetr_addrsa != NULL) {
-		error = copyout(slsmetr->slsmetr_sa, slsmetr->slsmetr_addrsa,
-		    slsmetr->slsmetr_namelen);
-		if (error != 0)
-			printf("Could not write out socket address\n");
-
-		copyout(&slsmetr->slsmetr_namelen, slsmetr->slsmetr_addrlen,
-		    sizeof(slsmetr->slsmetr_namelen));
-		if (error != 0)
-			printf("Could not write out socket address length\n");
-	}
-
-	td->td_retval[0] = fd;
-
-	return (0);
-}
-
-static int
-slsrest_metrfixup(struct proc *p, struct slsrest_data *restdata)
-{
-	struct thread *td;
-	int error;
-
-	/* Attach the socket into this process. */
-	error = slsrest_metrsocket(p, restdata);
-	if (error != 0)
-		return (error);
-
-	/* Find the thread that originally did the call. */
-	FOREACH_THREAD_IN_PROC (p, td) {
-		if (restdata->slsmetr.slsmetr_td == td->td_oldtid) {
-			/* Forward the fd to it. */
-			td->td_retval[0] = curthread->td_retval[0];
-			(p->p_sysent->sv_set_syscall_retval)(td, 0);
-		}
-	}
-
-	return (0);
-}
-
 /* Struct used to set the arguments after forking. */
 struct slsrest_metadata_args {
 	char *buf;
@@ -589,7 +520,6 @@ slsrest_metadata(void *args)
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Single threading");
 
-
 	error = slsvmspace_restore(p, &buf, &buflen, restdata);
 	if (error != 0) {
 		DEBUG1("slsvmspace_restore failed with %", error);
@@ -623,10 +553,8 @@ slsrest_metadata(void *args)
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Restoring kqueues");
 
-	if (restdata->slsmetr.slsmetr_proc != 0)
-		slsrest_metrfixup(p, restdata);
-
-	SDT_PROBE1(sls, , slsrest_metadata, , "Metropolis fixup");
+	if (restdata->cb != NULL)
+		restdata->cb(p, restdata->cb_args);
 
 	/* We're done restoring. If we are the last, notify the parent. */
 	mtx_lock(&restdata->procmtx);
@@ -751,6 +679,9 @@ slsrest_fork(uint64_t rest_stopped, char *buf, size_t buflen,
 	/* Set the function to be executed in the kernel for the new kthread. */
 	td = FIRST_THREAD_IN_PROC(p2);
 	thread_lock(td);
+	/* XXX Set this variable in the kernel instead of here. */
+	td->td_oldtid = 0;
+	KASSERT(td->td_oldtid == 0, ("stale td_oldtid found"));
 
 	/* Set the starting point of execution for the new process. */
 	cpu_fork_kthread_handler(td, slsrest_metadata, (void *)args);
@@ -979,7 +910,6 @@ slsrest_data(struct slspart *slsp, struct slsrest_data **restdatap)
 	 * Shallow copy all Metropolis state. No need for reference counting,
 	 * since the partition is guaranteed to be alive.
 	 */
-	restdata->slsmetr = slsp->slsp_metr;
 	restdata->slsp = slsp;
 
 	SDT_PROBE1(sls, , sls_rest, , "Initializing restdata");
@@ -1023,8 +953,9 @@ error:
 	return (error);
 }
 
-static int __attribute__((noinline))
-sls_rest(struct slspart *slsp, uint64_t rest_stopped)
+int
+sls_rest(struct slspart *slsp, uint64_t rest_stopped, sls_rest_cb cb,
+    void *cb_arg)
 {
 	struct slsrest_data *restdata;
 	struct sls_record *rec;
@@ -1063,6 +994,9 @@ sls_rest(struct slspart *slsp, uint64_t rest_stopped)
 		KASSERT(stateerr == 0, ("state error %d", stateerr));
 		return (error);
 	}
+
+	restdata->cb = cb;
+	restdata->cb_args = cb_arg;
 
 	SDT_PROBE1(sls, , sls_rest, , "Caching data");
 
@@ -1179,7 +1113,7 @@ sls_restored(struct sls_restored_args *args)
 	}
 
 	/* Restore the old process. */
-	error = sls_rest(args->slsp, args->rest_stopped);
+	error = sls_rest(args->slsp, args->rest_stopped, NULL, NULL);
 	if (error != 0)
 		DEBUG1("Error: sls_rest failed with %d", error);
 

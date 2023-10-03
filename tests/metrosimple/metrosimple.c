@@ -17,7 +17,7 @@
 #include <sysexits.h>
 #include <unistd.h>
 
-#define OID (SLS_DEFAULT_PARTITION)
+#define OID (1337)
 #define LOCALHOST ("127.0.0.1")
 #define ORIGSOCKET (7776)
 #define ORIGSOCKETSTR ("7776")
@@ -64,7 +64,7 @@ testsls(uint64_t oid, bool expected)
 	if (!insls)
 		return;
 
-	if (realoid != OID) {
+	if (realoid != oid) {
 		fprintf(
 		    stderr, "Metropolis process is in the wrong partition\n");
 		exit(EX_OSERR);
@@ -166,7 +166,7 @@ testaccept_listening(struct sockaddr_in *sa, int *fd)
  * instance.
  */
 void
-testaccept_parent(bool scale)
+testaccept_parent(uint64_t oid, bool scale)
 {
 	char *args[] = { CLIENT, "-s", SOCKETSTR, NULL };
 	struct sockaddr_in sa;
@@ -204,7 +204,7 @@ testaccept_parent(bool scale)
 		/* Create as many forks as we need. */
 		for (j = 0; j < forks; j++) {
 		retry:
-			error = sls_metropolis_spawn(OID, listsock);
+			error = sls_metropolis_spawn(oid, listsock);
 			if (error == EAGAIN) {
 				printf(
 				    "PID of function already in use, retrying...\n");
@@ -227,11 +227,31 @@ testaccept_parent(bool scale)
 	exit(EX_OK);
 }
 
+void
+sls_setup(uint64_t oid)
+{
+	int error;
+	struct sls_attr attr = (struct sls_attr) {
+		.attr_target = SLS_OSD,
+		.attr_mode = SLS_DELTA,
+		.attr_flags = SLSATTR_IGNUNLINKED | SLSATTR_LAZYREST |
+		    SLSATTR_NOPROCFIXUP,
+		.attr_amplification = 1,
+	};
+
+	error = sls_partadd(oid, attr, -1);
+	if (error != 0) {
+		perror("sls_partadd");
+		exit(EX_OSERR);
+	}
+}
+
 int
 main(int argc, char **argv)
 {
 	char *args[] = { SERVER, "-s", ORIGSOCKETSTR, NULL };
 	bool scale = false;
+	uint64_t oid = OID;
 	bool isaccept4;
 	pid_t pid;
 	int error;
@@ -255,6 +275,8 @@ main(int argc, char **argv)
 		}
 	}
 
+	sls_setup(oid);
+
 	pid = fork();
 	if (pid < 0) {
 		perror("fork");
@@ -265,10 +287,10 @@ main(int argc, char **argv)
 	 * We don't get into Metropolis from the child when using fork(), but
 	 * when calling accept().
 	 */
-	testsls(OID, false);
+	testsls(oid, false);
 
 	if (pid == 0) {
-		error = sls_metropolis(OID);
+		error = sls_metropolis(oid);
 		if (error != 0) {
 			perror("sls_metropolis");
 			exit(EX_OSERR);
@@ -281,7 +303,7 @@ main(int argc, char **argv)
 		}
 	}
 
-	testaccept_parent(scale);
+	testaccept_parent(oid, scale);
 
 	return (0);
 }
