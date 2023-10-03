@@ -34,7 +34,8 @@ metr_register(struct metr_register_args *args)
 	struct proc *p = curthread->td_proc;
 
 	/* Add the process in Aurora. */
-	sls_procadd(args->oid, p, true);
+	slsp_attach(args->oid, p);
+	p->p_sysent = &slsmetropolis_sysvec;
 
 	return (0);
 }

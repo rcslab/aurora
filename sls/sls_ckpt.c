@@ -372,7 +372,7 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 	{
 
 		/* Insert the process into Aurora. */
-		slsp_attach(slsp->slsp_oid, p, false);
+		slsp_attach(slsp->slsp_oid, p);
 
 		error = slsckpt_metadata(p, procset, sckpt);
 		if (error != 0) {

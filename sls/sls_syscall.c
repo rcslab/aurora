@@ -46,7 +46,9 @@ sls_exit_procremove(struct proc *p)
 	SLS_LOCK();
 	PROC_LOCK(p);
 
-	sls_procremove(p);
+	LIST_REMOVE(p, p_aurlist);
+	p->p_auroid = 0;
+
 	cv_signal(&slsm.slsm_exitcv);
 	SLS_UNLOCK();
 }
@@ -74,7 +76,6 @@ static int
 slssyscall_fork(struct thread *td, void *data)
 {
 	struct fork_args *uap = (struct fork_args *)data;
-	bool in_metropolis;
 	struct proc *p;
 	int error;
 	pid_t pid;
@@ -92,23 +93,21 @@ slssyscall_fork(struct thread *td, void *data)
 
 	pid = td->td_retval[0];
 
-	SLS_LOCK();
 	/* Try to find the new process and lock (it might have died already). */
-	p = pfind(pid);
-	if (p == NULL) {
-		SLS_UNLOCK();
+	error = pget(pid, PGET_WANTREAD, &p);
+	if (error != 0) {
 		sls_finishop();
 		return (0);
 	}
 
 	/* If the vector isn't the vanilla Aurora one, we we're in Metropolis.
 	 */
-	in_metropolis = curproc->p_sysent != &slssyscall_sysvec;
-	sls_procadd_unlocked(curproc->p_auroid, p, in_metropolis);
+	slsp_attach(curproc->p_auroid, p);
 
-	PROC_UNLOCK(p);
-	SLS_UNLOCK();
+	/* If this process is in Metropolis so is the child. */
+	p->p_sysent = curproc->p_sysent;
 
+	PRELE(p);
 	sls_finishop();
 
 	return (0);

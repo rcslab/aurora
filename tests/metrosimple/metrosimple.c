@@ -255,12 +255,6 @@ main(int argc, char **argv)
 		}
 	}
 
-	error = sls_metropolis(OID);
-	if (error != 0) {
-		perror("sls_metropolis");
-		exit(EX_OSERR);
-	}
-
 	pid = fork();
 	if (pid < 0) {
 		perror("fork");
@@ -274,6 +268,12 @@ main(int argc, char **argv)
 	testsls(OID, false);
 
 	if (pid == 0) {
+		error = sls_metropolis(OID);
+		if (error != 0) {
+			perror("sls_metropolis");
+			exit(EX_OSERR);
+		}
+
 		error = execve(SERVER, args, NULL);
 		if (error != 0) {
 			perror("execve");

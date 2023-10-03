@@ -55,88 +55,6 @@ extern uint64_t sls_successful_restores;
 struct sls_metadata slsm;
 struct sysctl_ctx_list aurora_ctx;
 
-bool
-sls_proc_attached(uint64_t oid, struct proc *p)
-{
-	struct slskv_iter iter;
-	struct slspart *slsp;
-	uint64_t slsp_pid;
-
-	SLS_ASSERT_LOCKED();
-
-	slsp = slsp_find_locked(oid);
-	if (slsp == NULL)
-		return (false);
-
-	KVSET_FOREACH(slsp->slsp_procs, iter, slsp_pid)
-	{
-		if (p->p_pid == slsp_pid) {
-			KV_ABORT(iter);
-			slsp_deref_locked(slsp);
-			return (true);
-		}
-	}
-
-	slsp_deref_locked(slsp);
-	return (false);
-}
-
-bool
-sls_proc_registered(struct proc *p)
-{
-	SLS_ASSERT_LOCKED();
-
-	/* Check if we're already in Aurora. */
-	return (p->p_auroid != 0);
-}
-
-/* Add a process into Aurora. */
-void
-sls_procadd_unlocked(uint64_t oid, struct proc *p, bool metropolis)
-{
-	SLS_ASSERT_LOCKED();
-	PROC_LOCK_ASSERT(p, MA_OWNED);
-
-	/* Check if we're already in Aurora. */
-	if (sls_proc_registered(p))
-		return;
-
-	p->p_auroid = oid;
-	p->p_sysent = &slssyscall_sysvec;
-	if (metropolis)
-		p->p_sysent = &slsmetropolis_sysvec;
-
-	LIST_INSERT_HEAD(&slsm.slsm_plist, p, p_aurlist);
-}
-
-/* Add a process into Aurora. */
-void
-sls_procadd(uint64_t oid, struct proc *p, bool metropolis)
-{
-	SLS_LOCK();
-	PROC_LOCK(p);
-	sls_procadd_unlocked(oid, p, metropolis);
-	PROC_UNLOCK(p);
-	SLS_UNLOCK();
-}
-
-/* Remove a process from Aurora. */
-void
-sls_procremove(struct proc *p)
-{
-	SLS_ASSERT_LOCKED();
-	PROC_LOCK_ASSERT(p, MA_OWNED);
-
-	/* Check if we're already in Aurora. */
-	if (!sls_proc_registered(p))
-		return;
-
-	LIST_REMOVE(p, p_aurlist);
-	p->p_auroid = 0;
-
-	return;
-}
-
 static int
 sls_prockillall(void)
 {
@@ -153,7 +71,7 @@ sls_prockillall(void)
 		kern_psignal(p, SIGKILL);
 		PROC_UNLOCK(p);
 
-		while (sls_proc_registered(p))
+		while (p->p_auroid != 0)
 			cv_wait(&slsm.slsm_exitcv, &slsm.slsm_mtx);
 	}
 
@@ -327,7 +245,7 @@ sls_attach(struct sls_attach_args *args)
 		return (error);
 
 	/* Try to add the new process. */
-	error = slsp_attach(args->oid, p, false);
+	error = slsp_attach(args->oid, p);
 
 	PRELE(p);
 	return (error);

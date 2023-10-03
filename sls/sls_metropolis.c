@@ -49,7 +49,6 @@ slsmetropolis_register(struct thread *td, int s, int flags)
 	struct sls_checkpoint_args checkpoint_args;
 	struct proc *p = td->td_proc;
 	struct file *fp;
-	bool attached;
 	int error;
 
 	/* Avoid races with the slsmetropolis_fork() call that created us. */
@@ -63,14 +62,7 @@ slsmetropolis_register(struct thread *td, int s, int flags)
 	 * No need to attach if already in the partition.
 	 */
 
-	attached = sls_proc_attached(p->p_auroid, p);
 	SLS_UNLOCK();
-
-	if (!attached) {
-		error = slsp_attach(p->p_auroid, p, true);
-		if (error != 0)
-			return (error);
-	}
 
 	/*
 	 * Trigger the checkpoint. Since we are in the call, the accept() call

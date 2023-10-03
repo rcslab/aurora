@@ -585,7 +585,7 @@ slsrest_metadata(void *args)
 	PROC_UNLOCK(p);
 
 	/* Insert the new process into Aurora. */
-	slsp_attach(restdata->slsp->slsp_oid, p, false);
+	slsp_attach(restdata->slsp->slsp_oid, p);
 
 	SDT_PROBE1(sls, , slsrest_metadata, , "Single threading");
 

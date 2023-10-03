@@ -150,10 +150,6 @@ main(int argc, char **argv)
 		exit(EX_UNAVAILABLE);
 	}
 
-	error = sls_attach(oid, getpid());
-	if (error != 0)
-		exit(EX_OSERR);
-
 	error = sls_checkpoint(oid, true);
 	if (error != 0)
 		exit(EX_OSERR);

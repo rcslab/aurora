@@ -351,7 +351,7 @@ testexit(void)
 int
 main(int argc, char **argv)
 {
-	const char *args[] = { argv[0], "-E", NULL };
+	const char *args[] = { argv[0], NULL };
 	bool testexec = false, testexeced = false, tesexit = false;
 	bool testaccept = false, testfork = false;
 	struct sockaddr_in sa;
@@ -361,8 +361,8 @@ main(int argc, char **argv)
 	pid_t pid;
 	long opt;
 
-	while ((opt = getopt_long(
-		    argc, argv, "4aefEx", metropolis_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "4aefx", metropolis_longopts,
+		    NULL)) != -1) {
 		switch (opt) {
 		case '4':
 			testaccept = true;
@@ -372,14 +372,6 @@ main(int argc, char **argv)
 		case 'a':
 			testaccept = true;
 			isaccept4 = false;
-			break;
-		/*
-		 * The way we test after an exec() is by doing the fork() test.
-		 * The fork() test should pass if we are sjtill using the right
-		 * sycall vector, and fail if not.
-		 */
-		case 'E':
-			testexeced = true;
 			break;
 
 		case 'e':
@@ -403,14 +395,6 @@ main(int argc, char **argv)
 		}
 	}
 
-	/* Do a full checkpoint, unless we already did and called exec(). */
-	if (!testexeced) {
-		error = sls_metropolis(OID);
-		if (error != 0) {
-			perror("sls_metropolis");
-			exit(EX_OSERR);
-		}
-	}
 
 	/* If testing exec(), use this binary but with different arguments*/
 	if (testexec) {
@@ -422,7 +406,7 @@ main(int argc, char **argv)
 	}
 
 	/* Testing fork(), create a child and make sure it's also in Aurora. */
-	if (testfork || testexeced || testaccept) {
+	if (testfork || testaccept) {
 		error = pipe(pipefd);
 		if (error != 0) {
 			perror("pipe");
@@ -452,6 +436,12 @@ main(int argc, char **argv)
 		testaccept_sockaddr(&sa);
 
 		if (pid == 0) {
+			error = sls_metropolis(OID);
+			if (error != 0) {
+				perror("sls_metropolis");
+				exit(EX_OSERR);
+			}
+
 			close(pipefd[0]);
 			testaccept_child(pipefd[1], &sa, isaccept4);
 		} else {
