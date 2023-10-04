@@ -68,6 +68,7 @@ struct slspart {
 	LIST_ENTRY(slspart) slsp_parts; /* List of active SLS partitions */
 	char slsp_name[PATH_MAX];	/* Path for the partition*/
 	struct slsckpt_data *slsp_blanksckpt; /* Used for deltas */
+	struct sls_backend *slsp_bk;	      /* Backend and methods */
 #define slsp_target slsp_attr.attr_target
 #define slsp_mode slsp_attr.attr_mode
 #define slsp_amplification slsp_attr.attr_amplification

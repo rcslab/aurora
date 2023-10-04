@@ -37,9 +37,6 @@ extern unsigned int sls_async_slos;
 int slstable_init(void);
 void slstable_fini(void);
 
-int sls_import_ssparts(void);
-int sls_export_ssparts(void);
-
 int sls_readmeta(char *buf, size_t buflen, struct slskv_table *table);
 
 int sls_read_file(struct slspart *slsp, struct slsckpt_data **sckpt,

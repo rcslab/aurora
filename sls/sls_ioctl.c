@@ -27,10 +27,12 @@
 #include <vm/vm_page.h>
 #include <vm/vm_param.h>
 
+#include <sls_ioctl.h>
+
 #include "debug.h"
+#include "sls_backend.h"
 #include "sls_internal.h"
 #include "sls_io.h"
-#include "sls_ioctl.h"
 #include "sls_kv.h"
 #include "sls_message.h"
 #include "sls_pager.h"
@@ -329,6 +331,7 @@ static int
 sls_partadd(struct sls_partadd_args *args)
 {
 	struct slspart *slsp = NULL;
+	struct sls_backend *slsbk;
 	int fd = args->backendfd;
 	struct proc *p = curproc;
 	struct file *fp;
@@ -396,15 +399,12 @@ sls_partadd(struct sls_partadd_args *args)
 	if (args->attr.attr_target == SLS_SOCKRCV)
 		return (sls_socket_receive(slsp));
 
-	/* Only register SLOS partitions. */
-	if (args->attr.attr_target != SLS_OSD)
-		return (0);
+	LIST_FOREACH (slsbk, &slsm.slsm_backends, bk_backends) {
+		if (slsbk->bk_type != args->attr.attr_target)
+			continue;
 
-	/* Write out the serial representation. */
-	ssparts[args->oid].sspart_valid = true;
-	ssparts[args->oid].sspart_oid = slsp->slsp_oid;
-	ssparts[args->oid].sspart_attr = slsp->slsp_attr;
-	ssparts[args->oid].sspart_epoch = 0;
+		return (slsbk_partadd(slsbk, slsp));
+	}
 
 	return (0);
 }
@@ -878,6 +878,49 @@ sls_hook_detach(void)
 	slssyscall_finisysvec();
 }
 
+static void
+sls_backends_init()
+{
+	struct sls_backend *slsbk;
+	int error;
+
+	error = slsbk_setup(&slosbk_ops, SLS_OSD, &slsbk);
+	if (error != 0)
+		SLS_WARN("slsbk_setup error %d\n", error);
+
+	LIST_INSERT_HEAD(&slsm.slsm_backends, slsbk, bk_backends);
+}
+
+static void
+sls_backends_import(void)
+{
+	struct sls_backend *slsbk;
+	int error;
+
+	LIST_FOREACH (slsbk, &slsm.slsm_backends, bk_backends) {
+		error = slsbk_import(slsbk);
+		if (error != 0)
+			SLS_WARN("slsbk_import error %d\n", error);
+	}
+}
+
+static void
+sls_backends_fini(void)
+{
+	struct sls_backend *slsbk, *bktmp;
+	int error;
+
+	LIST_FOREACH_SAFE (slsbk, &slsm.slsm_backends, bk_backends, bktmp) {
+		error = slsbk_export(slsbk);
+		if (error != 0)
+			SLS_WARN("slsbk_export error %d\n", error);
+
+		error = slsbk_teardown(slsbk);
+		if (error != 0)
+			SLS_WARN("slsbk_teardown error %d\n", error);
+	}
+}
+
 static int
 SLSHandler(struct module *inModule, int inEvent, void *inArg)
 {
@@ -893,20 +936,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		/* Initialize Aurora-related sysctls. */
 		sls_sysctl_init();
 
-		SLOS_LOCK(&slos);
-		if (slos_getstate(&slos) != SLOS_MOUNTED) {
-			SLOS_UNLOCK(&slos);
-			printf("No SLOS mount found. Aborting SLS insert.\n");
-			return (EINVAL);
-		}
-
-		slos_setstate(&slos, SLOS_WITHSLS);
-		SLOS_UNLOCK(&slos);
-
-		/* Read in the serialized partition metadata. */
-		error = sls_import_ssparts();
-		if (error != 0)
-			return (error);
+		sls_backends_init();
 
 		/* Enable the hashtables.*/
 		error = slskv_init();
@@ -934,8 +964,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		/* Commandeer the swap pager. */
 		sls_pager_register();
 
-		/* Import existing partitions. */
-		sslsp_deserialize();
+		sls_backends_import();
 
 		/* Create a default on-disk and in-memory partition. */
 		sls_partadd_default();
@@ -1015,18 +1044,7 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		slsm_fini_contents();
 		slskv_fini();
 
-		error = sls_export_ssparts();
-		if (error != 0)
-			return (error);
-
-		SLOS_LOCK(&slos);
-		/*
-		 * The state might be not be SLOS_WITHSLS if we failed to
-		 * load and are running this as cleanup.
-		 */
-		if (slos_getstate(&slos) == SLOS_WITHSLS)
-			slos_setstate(&slos, SLOS_MOUNTED);
-		SLOS_UNLOCK(&slos);
+		sls_backends_fini();
 
 		sls_sysctl_fini();
 		slsm_fini_locking();

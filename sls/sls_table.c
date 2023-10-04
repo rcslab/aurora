@@ -68,7 +68,6 @@ size_t sls_bytes_read_direct = 0;
 uint64_t sls_pages_grabbed = 0;
 uint64_t sls_io_initiated = 0;
 unsigned int sls_async_slos = 1;
-static bool ssparts_imported = 0;
 uint64_t sls_prefault_anonpages = 0;
 uint64_t sls_prefault_anonios = 0;
 
@@ -1286,66 +1285,6 @@ sls_write_slos(uint64_t oid, struct slsckpt_data *sckpt)
 out:
 	sbuf_delete(sb_manifest);
 	taskqueue_drain_all(slsm.slsm_tabletq);
-
-	return (error);
-}
-
-int
-sls_export_ssparts(void)
-{
-	size_t ssparts_len = sizeof(ssparts[0]) * SLS_OIDRANGE;
-	struct thread *td = curthread;
-	struct file *fp;
-	int error;
-
-	if (!ssparts_imported)
-		return (0);
-
-	/* Get the vnode for the record and open it. */
-	error = slsio_open_sls(SLOS_SLSPART_INODE, true, &fp);
-	if (error != 0)
-		return (error);
-
-	error = slsio_fpwrite(fp, ssparts, ssparts_len);
-	DEBUG1("Wrote %ld bytes for partitions\n", ssparts_len);
-
-	fdrop(fp, td);
-	return (error);
-}
-
-int
-sls_import_ssparts(void)
-{
-	size_t ssparts_len = sizeof(ssparts[0]) * SLS_OIDRANGE;
-	struct thread *td = curthread;
-	struct file *fp;
-	int error;
-
-	DEBUG1("[SSPART] Reading %ld bytes for partitions\n", ssparts_len);
-
-	/* Get the vnode for the record and open it. */
-	error = slsio_open_sls(SLOS_SLSPART_INODE, false, &fp);
-	if (error != 0) {
-		/*
-		 * There were no partitions to speak of, because
-		 * this is the first time we are mounting this SLOS.
-		 */
-		DEBUG("[SSPART] No partitions found\n");
-		ssparts_imported = true;
-		return (0);
-	}
-
-	error = slsio_fpread(fp, ssparts, ssparts_len);
-	if (error != 0) {
-		fdrop(fp, td);
-		return (error);
-	}
-
-	if (error == 0)
-		ssparts_imported = true;
-	DEBUG("[SSPART] Done reading partitions\n");
-
-	fdrop(fp, td);
 
 	return (error);
 }

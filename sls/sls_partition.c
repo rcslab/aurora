@@ -28,11 +28,10 @@
 
 #include <machine/reg.h>
 
-#include <slos.h>
-#include <slos_inode.h>
-#include <sls_data.h>
+#include <sls_ioctl.h>
 
 #include "debug.h"
+#include "sls_backend.h"
 #include "sls_data.h"
 #include "sls_internal.h"
 #include "sls_partition.h"
@@ -44,7 +43,6 @@
 #define SLSCKPT_ZONEWARM (64)
 
 uma_zone_t slsckpt_zone;
-struct slspart_serial ssparts[SLS_OIDRANGE];
 
 static int
 slsckpt_init(struct slsckpt_data *sckpt)
@@ -706,6 +704,8 @@ slsp_epoch_preadvance(struct slspart *slsp)
 void
 slsp_epoch_advance(struct slspart *slsp, uint64_t next_epoch)
 {
+	struct sls_backend *slsbk = slsp->slsp_bk;
+
 	mtx_lock(&slsp->slsp_epochmtx);
 	while (slsp->slsp_epoch + 1 != next_epoch)
 		cv_wait(&slsp->slsp_epochcv, &slsp->slsp_epochmtx);
@@ -713,9 +713,8 @@ slsp_epoch_advance(struct slspart *slsp, uint64_t next_epoch)
 	KASSERT(slsp->slsp_epoch != UINT64_MAX, ("Epoch overflow"));
 	slsp->slsp_epoch += 1;
 
-	/* Update the on-disk representation, it will be sent out automatically.
-	 */
-	ssparts[slsp->slsp_oid].sspart_epoch = slsp->slsp_epoch;
+	if (slsbk != NULL)
+		slsbk_setepoch(slsbk, slsp->slsp_oid, slsp->slsp_epoch);
 
 	cv_broadcast(&slsp->slsp_epochcv);
 
@@ -816,27 +815,4 @@ slsp_restorable(struct slspart *slsp)
 		return (false);
 
 	return (true);
-}
-
-/* Deserialize the already read on-disk partitions. */
-int
-sslsp_deserialize(void)
-{
-	struct slspart *slsp;
-	int error;
-	int i;
-
-	for (i = 0; i < SLS_OIDRANGE; i++) {
-		if (!ssparts[i].sspart_valid)
-			continue;
-
-		/* Create the in-memory representation. */
-		error = slsp_add(
-		    ssparts[i].sspart_oid, ssparts[i].sspart_attr, -1, &slsp);
-		if (error != 0)
-			return (error);
-
-	}
-
-	return (0);
 }
