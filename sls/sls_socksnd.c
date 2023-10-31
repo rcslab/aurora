@@ -215,7 +215,7 @@ sls_write_socket_connect(struct slspart *slsp, int *sockfdp)
 	memcpy(&alen, slsp->slsp_name, sizeof(alen));
 	KASSERT(alen <= sizeof(sa), ("socket name too large"));
 	if (alen > sizeof(sa)) {
-		panic("%d %ld\n", alen, sizeof(sa));
+		SLS_WARN("Socket wame size %d\n", alen);
 		return (ENAMETOOLONG);
 	}
 
@@ -223,14 +223,14 @@ sls_write_socket_connect(struct slspart *slsp, int *sockfdp)
 
 	error = kern_socket(td, AF_INET, SOCK_STREAM, 0);
 	if (error != 0) {
-		panic("kern_socket error %d\n", error);
+		SLS_WARN("kern_socket error %d\n", error);
 		return (error);
 	}
 	sockfd = td->td_retval[0];
 
 	error = kern_connectat(td, AT_FDCWD, sockfd, (struct sockaddr *)&sa);
 	if (error != 0) {
-		panic("kern_connectat error %d\n", error);
+		SLS_WARN("kern_connectat error %d\n", error);
 		kern_close(td, sockfd);
 		return (error);
 	}

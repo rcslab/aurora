@@ -267,7 +267,7 @@ int
 slsload_file(
     struct slsfile *slsfile, void **data, char **bufp, size_t *bufsizep)
 {
-	int error;
+	int error, ret;
 
 	error = sls_info(slsfile, sizeof(*slsfile), bufp, bufsizep);
 	if (error != 0)
@@ -283,44 +283,43 @@ slsload_file(
 	case DTYPE_VNODE:
 	case DTYPE_FIFO:
 		/* Nothing to do, the vnode is already restored. */
+		ret = 0;
 		break;
 
 	case DTYPE_KQUEUE:
 		/*
 		 * The data for the kqueue the kqueue metadata and kevents.
 		 */
-		error = slsload_kqueue((slsset **)data, bufp, bufsizep);
+		ret = slsload_kqueue((slsset **)data, bufp, bufsizep);
 		break;
 
 	case DTYPE_PIPE:
 		*data = malloc(sizeof(struct slspipe), M_SLSMM, M_WAITOK);
-		error = slsload_pipe((struct slspipe *)*data, bufp, bufsizep);
+		ret = slsload_pipe((struct slspipe *)*data, bufp, bufsizep);
 		break;
 
 	case DTYPE_SOCKET:
 		*data = malloc(sizeof(struct slssock), M_SLSMM, M_WAITOK);
-		error = slsload_socket((struct slssock *)*data, bufp, bufsizep);
+		ret = slsload_socket((struct slssock *)*data, bufp, bufsizep);
 		break;
 
 	case DTYPE_PTS:
 		*data = malloc(sizeof(struct slspts), M_SLSMM, M_WAITOK);
-		error = slsload_pts((struct slspts *)*data, bufp, bufsizep);
+		ret = slsload_pts((struct slspts *)*data, bufp, bufsizep);
 		break;
 
 	case DTYPE_SHM:
 		*data = malloc(sizeof(struct slsposixshm), M_SLSMM, M_WAITOK);
-		error = slsload_posixshm(
-		    (struct slsposixshm *)*data, bufp, bufsizep);
+		ret = slsload_posixshm((struct slsposixshm *)*data, bufp,
+		    bufsizep);
 		break;
 
 	default:
-		panic("unhandled file type");
+		SLS_WARN("unhandled file type %d", slsfile->type);
+		ret = EINVAL;
 	}
 
-	if (error != 0)
-		return (error);
-
-	return (0);
+	return (ret);
 }
 
 int

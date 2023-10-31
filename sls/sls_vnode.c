@@ -145,8 +145,12 @@ slsckpt_vnode_serialize_single(
 			DEBUG2(
 			    "vn_fullpath() failed for vnode %p with error %d",
 			    vp, error);
-			if (!allow_unlinked)
-				panic("Unlinked vnode %p not in the SLOS", vp);
+			if (!allow_unlinked) {
+				SLS_WARN("Unlinked vnode %p not in the SLOS\n",
+				    vp);
+				error = EINVAL;
+				goto error;
+			}
 
 			/* Otherwise clean up as if after an error. */
 			slsvnode.ino = 0;

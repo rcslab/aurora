@@ -174,8 +174,9 @@ slssock_checkpoint(
 		break;
 
 	default:
-		panic(
-		    "%s: Unknown protocol family %d\n", __func__, info.family);
+		SLS_WARN("Unknown family %d\n", info.family);
+		error = EINVAL;
+		break;
 	}
 
 	if (error != 0)
@@ -193,7 +194,8 @@ slssock_checkpoint(
 		break;
 
 	default:
-		panic("%s: Unknown protocol type %d\n", __func__, info.type);
+		SLS_WARN("Unknown type %d\n", info.type);
+		return (EINVAL);
 	}
 
 	/*

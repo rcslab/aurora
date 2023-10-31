@@ -324,7 +324,8 @@ slsckpt_initio(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 		return (0);
 
 	default:
-		panic("using invalid backend %d\n", slsp->slsp_target);
+		SLS_WARN("using invalid backend %d\n", slsp->slsp_target);
+		return (EINVAL);
 	}
 }
 

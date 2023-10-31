@@ -151,7 +151,7 @@ slspre_track_pages(vm_map_t map, pmap_t pmap, char *buf, struct file *fp)
 
 			pmap_clear_modify(m);
 			if (pmap_is_modified(m))
-				panic("Did not clear modify bit");
+				SLS_WARN("Did not clear modify bit");
 
 			VM_OBJECT_WUNLOCK(m->object);
 			vm_page_unhold(m);

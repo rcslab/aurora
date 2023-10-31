@@ -279,15 +279,15 @@ static int
 slsrest_dofile(struct slsrest_data *restdata, char *buf, size_t buflen)
 {
 	struct slsfile slsfile;
+	int error, ret;
 	void *data;
-	int error;
 
 	error = slsload_file(&slsfile, &data, &buf, &buflen);
 	if (error != 0)
 		return (error);
 
 	SDT_PROBE0(sls, , , filerest_start);
-	error = slsrest_file(data, &slsfile, restdata);
+	ret = slsrest_file(data, &slsfile, restdata);
 	SDT_PROBE1(sls, , , filerest_return, slsfile.type);
 
 	switch (slsfile.type) {
@@ -316,10 +316,11 @@ slsrest_dofile(struct slsrest_data *restdata, char *buf, size_t buflen)
 		break;
 
 	default:
-		panic("Tried to restore file type %d", slsfile.type);
+		SLS_WARN("Tried to restore file type %d", slsfile.type);
+		ret = EINVAL;
 	}
 
-	return (error);
+	return (ret);
 }
 
 static int
@@ -941,7 +942,9 @@ slsrest_data(struct slspart *slsp, struct slsrest_data **restdatap)
 		break;
 
 	default:
-		panic("using invalid backend %d\n", slsp->slsp_target);
+		SLS_WARN("using invalid backend %d\n", slsp->slsp_target);
+		error = EINVAL;
+		goto error;
 	}
 
 	*restdatap = restdata;

@@ -365,8 +365,10 @@ sls_object_populate(vm_object_t object, vm_pindex_t start, vm_pindex_t end)
 
 	for (offset = 0; offset != count; offset += (1 + rahead)) {
 		m = vm_page_grab(object, start + offset, VM_ALLOC_NORMAL);
-		if (m == NULL)
-			panic("No page");
+		if (m == NULL) {
+			SLS_WARN("Failed to populate page\n");
+			return (EIO);
+		}
 
 		KASSERT(
 		    m->valid == 0, ("page has valid bitfield %d", m->valid));
@@ -378,7 +380,7 @@ sls_object_populate(vm_object_t object, vm_pindex_t start, vm_pindex_t end)
 		vm_page_xunbusy(m);
 
 		if (rv != VM_PAGER_OK) {
-			DEBUG1("Pager failed to page in with %d\n", rv);
+			SLS_WARN("Pager failed to page in with %d\n", rv);
 			return (EIO);
 		}
 	}
@@ -1103,8 +1105,11 @@ sls_writedata_slos(struct sls_record *rec, struct slsckpt_data *sckpt)
 	vm_object_t obj;
 	size_t offset;
 	size_t i;
-	if (rec->srec_type != SLOSREC_VMOBJ)
-		panic("invalid type %lx for metadata", rec->srec_type);
+
+	if (rec->srec_type != SLOSREC_VMOBJ) {
+		SLS_WARN("invalid type %lx for metadata", rec->srec_type);
+		return (EINVAL);
+	}
 
 	KASSERT(amplification > 0, ("amplification is 0"));
 

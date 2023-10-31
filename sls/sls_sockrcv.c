@@ -241,7 +241,8 @@ slsrcvd_recmeta(struct sls_sockrcvd_state *rcvd, struct slsmsg_recmeta *msg)
 		return (slsrcvd_recmeta_vmobject(rcvd, msg));
 
 	default:
-		panic("Wrong");
+		SLS_WARN("Invalid message type %ld\n", msg->slsmsg_rectype);
+		return (EINVAL);
 	}
 }
 
@@ -317,7 +318,8 @@ slsrcvd_message(struct sls_sockrcvd_state *rcvd)
 		break;
 
 	default:
-		panic("Invalid message %d", msgtype);
+		SLS_WARN("Invalid message type %d\n", msgtype);
+		error = EINVAL;
 	}
 
 	return (error);

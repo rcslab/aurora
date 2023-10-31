@@ -455,10 +455,13 @@ slsp_init(uint64_t oid, struct sls_attr attr, int fd, struct slspart **slspp)
 
 	case SLS_SOCKRCV:
 		error = slsp_init_rcvname(slsp, fd);
-		if (error != 0)
+		if (error != 0) {
+			SLS_WARN("init_rcvname error %d\n", error);
 			break;
+		}
 
 		if (!fhold((struct file *)fp)) {
+			SLS_WARN("fhold error\n");
 			error = EBADF;
 			goto error;
 		}
@@ -472,7 +475,8 @@ slsp_init(uint64_t oid, struct sls_attr attr, int fd, struct slspart **slspp)
 		break;
 
 	default:
-		panic("invalid partition target %d\n", slsp->slsp_target);
+		SLS_WARN("invalid target %d\n", slsp->slsp_target);
+		goto error;
 	}
 
 	mtx_init(&slsp->slsp_syncmtx, "slssync", NULL, MTX_DEF);

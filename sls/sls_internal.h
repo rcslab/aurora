@@ -288,9 +288,9 @@ void slsckpt_compact(struct slspart *slsp, struct slsckpt_data *sckpt);
 typedef bool (*sls_kill_cb)(struct proc *);
 int sls_kill(sls_kill_cb cb);
 
-#define SLS_WARN(format, ...)                                               \
-	do {                                                                \
-		printf("(%s:%d) " format, __func__, __LINE__, __VA_ARGS__); \
+#define SLS_WARN(format, ...)                                                 \
+	do {                                                                  \
+		printf("(%s:%d) " format, __func__, __LINE__, ##__VA_ARGS__); \
 	} while (0)
 
 #endif /* _SLS_INTERNAL_H_ */
