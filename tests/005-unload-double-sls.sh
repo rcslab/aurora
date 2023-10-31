@@ -10,6 +10,12 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+kldunload metropolis
+if [ $? -ne 0 ]; then
+    echo "Failed to unload Metropolis"
+    exit 1
+fi
+
 kldunload sls
 if [ $? -ne 0 ]; then
     echo "Failed to unload the SLS"

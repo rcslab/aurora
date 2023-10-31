@@ -878,17 +878,21 @@ sls_hook_detach(void)
 	slssyscall_finisysvec();
 }
 
-static void
+static int
 sls_backends_init()
 {
 	struct sls_backend *slsbk;
 	int error;
 
 	error = slsbk_setup(&slosbk_ops, SLS_OSD, &slsbk);
-	if (error != 0)
+	if (error != 0) {
 		SLS_WARN("slsbk_setup error %d\n", error);
+		return (error);
+	}
 
 	LIST_INSERT_HEAD(&slsm.slsm_backends, slsbk, bk_backends);
+
+	return (0);
 }
 
 static void
@@ -936,10 +940,12 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		/* Initialize Aurora-related sysctls. */
 		sls_sysctl_init();
 
-		sls_backends_init();
-
 		/* Enable the hashtables.*/
 		error = slskv_init();
+		if (error != 0)
+			return (error);
+
+		error = sls_backends_init();
 		if (error != 0)
 			return (error);
 
@@ -1042,9 +1048,10 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 
 		slstable_fini();
 		slsm_fini_contents();
-		slskv_fini();
 
 		sls_backends_fini();
+
+		slskv_fini();
 
 		sls_sysctl_fini();
 		slsm_fini_locking();
