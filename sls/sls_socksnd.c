@@ -20,7 +20,7 @@
 #include "sls_vm.h"
 
 static int
-sls_write_socket_ckptstart(struct slspart *slsp, int sockfd)
+slssnd_ckptstart(struct slspart *slsp, int sockfd)
 {
 	struct slsmsg_ckptstart *ckptmsg;
 	union slsmsg msg;
@@ -37,7 +37,7 @@ sls_write_socket_ckptstart(struct slspart *slsp, int sockfd)
 }
 
 static int
-sls_write_socket_ckptdone(int sockfd)
+slssnd_ckptdone(int sockfd)
 {
 	struct slsmsg_ckptdone *donemsg;
 	union slsmsg msg;
@@ -53,7 +53,7 @@ sls_write_socket_ckptdone(int sockfd)
 }
 
 static int
-sls_write_socket_meta(int sockfd, struct sls_record *rec, size_t totallen)
+slssnd_meta(int sockfd, struct sls_record *rec, size_t totallen)
 {
 	struct slsmsg_recmeta *metamsg;
 	union slsmsg msg;
@@ -92,7 +92,7 @@ md5_page(vm_page_t m)
 }
 
 static int
-sls_write_socket_pages(int sockfd, vm_page_t m, size_t pagecnt)
+slssnd_pages(int sockfd, vm_page_t m, size_t pagecnt)
 {
 	struct slsmsg_recpages *pagemsg;
 	union slsmsg msg;
@@ -145,7 +145,7 @@ sls_writedata_socket_pages(int sockfd, vm_object_t obj, bool *done)
 		m->oflags |= VPO_SWAPINPROG;
 		VM_OBJECT_WUNLOCK(obj);
 
-		error = sls_write_socket_pages(sockfd, m, 1);
+		error = slssnd_pages(sockfd, m, 1);
 
 		VM_OBJECT_WLOCK(obj);
 		m->oflags &= ~VPO_SWAPINPROG;
@@ -183,7 +183,7 @@ sls_writedata_socket(int sockfd, struct sls_record *rec)
 	totalpages = (obj != NULL) ? obj->size + 1 : 1;
 	totalsize = (totalpages + SLOS_OBJOFF) * PAGE_SIZE;
 
-	error = sls_write_socket_meta(sockfd, rec, totalsize);
+	error = slssnd_meta(sockfd, rec, totalsize);
 	if (error != 0)
 		goto out;
 
@@ -204,7 +204,7 @@ out:
 }
 
 static int
-sls_write_socket_connect(struct slspart *slsp, int *sockfdp)
+slssnd_connect(struct slspart *slsp, int *sockfdp)
 {
 	struct thread *td = curthread;
 	struct sockaddr_in sa;
@@ -251,11 +251,11 @@ sls_write_socket(struct slspart *slsp, struct slsckpt_data *sckpt)
 	int error;
 	int ret;
 
-	error = sls_write_socket_connect(slsp, &sockfd);
+	error = slssnd_connect(slsp, &sockfd);
 	if (error != 0)
 		return (error);
 
-	error = sls_write_socket_ckptstart(slsp, sockfd);
+	error = slssnd_ckptstart(slsp, sockfd);
 	if (error != 0)
 		goto out;
 
@@ -297,11 +297,11 @@ sls_write_socket(struct slspart *slsp, struct slsckpt_data *sckpt)
 
 	sls_record_seal(rec);
 
-	error = sls_write_socket_meta(sockfd, rec, sbuf_len(rec->srec_sb));
+	error = slssnd_meta(sockfd, rec, sbuf_len(rec->srec_sb));
 	if (error != 0)
 		goto out;
 
-	error = sls_write_socket_ckptdone(sockfd);
+	error = slssnd_ckptdone(sockfd);
 	if (error != 0)
 		goto out;
 
@@ -326,7 +326,7 @@ sls_write_rcvdone(struct slspart *slsp)
 	int ret;
 	int fd;
 
-	error = sls_write_socket_connect(slsp, &fd);
+	error = slssnd_connect(slsp, &fd);
 	if (error != 0)
 		return (error);
 
