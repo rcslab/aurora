@@ -34,5 +34,6 @@ int slsbk_partadd(struct sls_backend *slsbk, struct slspart *slsp);
 int slsbk_setepoch(struct sls_backend *slsbk, uint64_t oid, uint64_t epoch);
 
 extern struct sls_backend_ops slosbk_ops;
+extern struct sls_backend_ops recvbk_ops;
 
 #endif /* _SLS_BACKEND_H_ */

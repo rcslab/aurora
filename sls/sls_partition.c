@@ -373,7 +373,7 @@ slsp_init_filename(struct slspart *slsp, struct vnode *vp)
 static int
 slsp_init_rcvname(struct slspart *slsp, int fd)
 {
-	socklen_t alen = PATH_MAX - sizeof(alen);
+	socklen_t alen = PATH_MAX;
 	struct thread *td = curthread;
 	struct sockaddr *sa;
 	int error;
@@ -382,8 +382,13 @@ slsp_init_rcvname(struct slspart *slsp, int fd)
 	if (error != 0)
 		return (error);
 
-	memcpy(slsp->slsp_name, &alen, sizeof(alen));
-	memcpy(&slsp->slsp_name[sizeof(alen)], sa, alen);
+	if (alen != sizeof(struct sockaddr_in)) {
+		SLS_WARN("Socket not IPv4");
+		free(sa, M_SONAME);
+		return (error);
+	}
+
+	memcpy(slsp->slsp_name, sa, alen);
 	free(sa, M_SONAME);
 
 	return (0);
@@ -392,7 +397,7 @@ slsp_init_rcvname(struct slspart *slsp, int fd)
 static int
 slsp_init_sndname(struct slspart *slsp, int fd)
 {
-	socklen_t alen = PATH_MAX - sizeof(alen);
+	socklen_t alen = PATH_MAX;
 	struct thread *td = curthread;
 	struct sockaddr *sa;
 	int error;
@@ -401,8 +406,13 @@ slsp_init_sndname(struct slspart *slsp, int fd)
 	if (error != 0)
 		return (error);
 
-	memcpy(slsp->slsp_name, &alen, sizeof(alen));
-	memcpy(&slsp->slsp_name[sizeof(alen)], sa, alen);
+	if (alen != sizeof(struct sockaddr_in)) {
+		SLS_WARN("Socket not IPv4");
+		free(sa, M_SONAME);
+		return (error);
+	}
+
+	memcpy(slsp->slsp_name, sa, alen);
 	free(sa, M_SONAME);
 
 	return (0);

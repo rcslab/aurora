@@ -293,4 +293,6 @@ int sls_kill(sls_kill_cb cb);
 		printf("(%s:%d) " format, __func__, __LINE__, ##__VA_ARGS__); \
 	} while (0)
 
+int slssnd_connect(struct sockaddr_in *sasrc, int *sockfdp);
+
 #endif /* _SLS_INTERNAL_H_ */

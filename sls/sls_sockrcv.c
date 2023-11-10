@@ -1,21 +1,24 @@
 #include <sys/param.h>
+#include <sys/file.h>
 #include <sys/kthread.h>
-#include <sys/ktr.h>
 #include <sys/lock.h>
-#include <sys/proc.h>
+#include <sys/pcpu.h>
 #include <sys/rwlock.h>
+#include <sys/wait.h>
 
 #include <vm/vm.h>
+#include <vm/vm_extern.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
 #include <vm/vm_pager.h>
 
-#include <machine/vmparam.h>
+#include <sls_ioctl.h>
+#include <sls_message.h>
 
-#include "sls_data.h"
+#include "debug.h"
+#include "sls_backend.h"
 #include "sls_internal.h"
 #include "sls_io.h"
-#include "sls_message.h"
 #include "sls_table.h"
 
 struct sls_sockrcvd_state {
@@ -25,6 +28,15 @@ struct sls_sockrcvd_state {
 	struct slspart *slsrcvd_slsp;
 	uint64_t slsrcvd_epoch;
 	vm_object_t slsrcvd_obj;
+};
+
+struct sockaddr_in recvbk_addrs[SLS_OIDRANGE];
+uint64_t recvbk_active;
+
+struct sls_backend_recv {
+	int recvbk_type;
+	struct sls_backend_ops *recvbk_ops;
+	LIST_ENTRY(sls_backend) recvbk_backends;
 };
 
 static void
@@ -57,19 +69,6 @@ slsrcvd_ckptstart(struct sls_sockrcvd_state *rcvd, struct slsmsg_ckptstart *msg)
 	rcvd->slsrcvd_sckpt = sckpt;
 	rcvd->slsrcvd_epoch = msg->slsmsg_epoch;
 	return (0);
-}
-
-#include <sys/md5.h>
-static void
-md5_page(vm_page_t m)
-{
-	char digest[MD5_DIGEST_LENGTH];
-	MD5_CTX md5sum;
-
-	MD5Init(&md5sum);
-	MD5Update(&md5sum, (void *)PHYS_TO_DMAP(m->phys_addr), PAGE_SIZE);
-	MD5Final(digest, &md5sum);
-	printf("Read %lx digest %lx\n", m->pindex, *(uint64_t *)digest);
 }
 
 static int
@@ -365,7 +364,128 @@ out:
 
 	slsrcvd_fini(&rcvd);
 
-	sls_finishop();
+	atomic_subtract_64(&recvbk_active, 1);
 
 	kthread_exit();
 }
+
+static int
+recvbk_setup(struct sls_backend *slsbk)
+{
+	return (0);
+}
+
+static int
+recvbk_teardown(struct sls_backend *slsbk)
+{
+	return (0);
+}
+
+static int
+recvbk_import(struct sls_backend *slsbk)
+{
+	return (0);
+}
+
+static int
+recvbk_terminate(uint64_t oid)
+{
+	struct thread *td = curthread;
+	struct slsmsg_done *donemsg;
+	union slsmsg msg;
+	int error;
+	int fd;
+
+	error = slssnd_connect(&recvbk_addrs[oid], &fd);
+	if (error != 0)
+		return (error);
+
+	donemsg = (struct slsmsg_done *)&msg;
+	donemsg->slsmsg_type = SLSMSG_DONE;
+
+	error = slsio_fdwrite(fd, (char *)&msg, sizeof(msg), NULL);
+	if (error != 0) {
+		SLS_WARN("slsio_fdwrite failed with %d\n", error);
+		return (error);
+	}
+
+	error = kern_close(td, fd);
+	if (error != 0)
+		SLS_WARN("kern_close failed with %d\n", error);
+
+	return (0);
+}
+
+static int
+recvbk_export(struct sls_backend *slsbk)
+{
+	uint64_t oid;
+	int error;
+
+	for (oid = 0; oid < SLS_OIDRANGE; oid++) {
+		if (recvbk_addrs[oid].sin_len == 0)
+			continue;
+
+		error = recvbk_terminate(oid);
+		if (error != 0)
+			return (error);
+	}
+
+	while (recvbk_active > 0)
+		pause_sbt("recvbk", SBT_1MS, 0, C_HARDCLOCK);
+
+	return (0);
+}
+
+static int
+recvbk_partadd(struct sls_backend *slsbk, struct slspart *slsp)
+{
+	struct file *fp = (struct file *)slsp->slsp_backend;
+	struct thread *td = curthread;
+	struct sockaddr_in *sadst;
+	int error;
+
+	if (!fhold(fp))
+		return (EBADF);
+
+	if (sls_startop()) {
+		fdrop(fp, td);
+		return (EBUSY);
+	}
+
+	slsp_ref(slsp);
+
+	sadst = &recvbk_addrs[slsp->slsp_oid];
+	memcpy(sadst, slsp->slsp_name, sizeof(*sadst));
+
+	/* Create the daemon. */
+	error = kthread_add((void (*)(void *))sls_sockrcvd, (void *)slsp, NULL,
+	    NULL, 0, 0, "sls_sockrcvd");
+	if (error != 0) {
+		slsp_deref(slsp);
+		fdrop(fp, td);
+		sls_finishop();
+		return (error);
+	}
+
+	atomic_add_64(&recvbk_active, 1);
+
+	sls_finishop();
+
+	return (0);
+}
+
+static int
+recvbk_setepoch(struct sls_backend *slsbk, uint64_t oid, uint64_t epoch)
+{
+	return (0);
+}
+
+struct sls_backend_ops recvbk_ops = {
+	.slsbk_setup = recvbk_setup,
+	.slsbk_teardown = recvbk_teardown,
+	.slsbk_import = recvbk_import,
+	.slsbk_export = recvbk_export,
+	.slsbk_partadd = recvbk_partadd,
+	.slsbk_setepoch = recvbk_setepoch,
+};

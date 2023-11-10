@@ -269,63 +269,6 @@ sls_attach(struct sls_attach_args *args)
 	return (error);
 }
 
-static int
-sls_socket_receive(struct slspart *slsp)
-{
-	struct file *fp = (struct file *)slsp->slsp_backend;
-	struct thread *td = curthread;
-	int error;
-
-	if (!fhold(fp))
-		return (EBADF);
-
-	if (sls_startop()) {
-		fdrop(fp, td);
-		return (EBUSY);
-	}
-
-	slsp_ref(slsp);
-
-	/* Create the daemon. */
-	error = kthread_add((void (*)(void *))sls_sockrcvd, (void *)slsp, NULL,
-	    NULL, 0, 0, "sls_sockrecvd");
-	if (error != 0) {
-		slsp_deref(slsp);
-		fdrop(fp, td);
-		sls_finishop();
-		return (error);
-	}
-
-	return (0);
-}
-
-static int
-sls_receive_stopall(void)
-{
-	struct slskv_iter iter;
-	struct slspart *slsp;
-	uint64_t oid;
-	int error;
-
-	/* Check if we aborted initialization without setting up a table. */
-	if (slsm.slsm_parts == NULL)
-		return (0);
-
-	KV_FOREACH(slsm.slsm_parts, iter, oid, slsp)
-	{
-		if (slsp->slsp_target != SLS_SOCKRCV)
-			continue;
-
-		error = sls_write_rcvdone(slsp);
-		if (error != 0) {
-			KV_ABORT(iter);
-			return (error);
-		}
-	}
-
-	return (0);
-}
-
 /* Create a new, empty partition in the SLS. */
 static int
 sls_partadd(struct sls_partadd_args *args)
@@ -395,9 +338,6 @@ sls_partadd(struct sls_partadd_args *args)
 	error = slsp_add(args->oid, args->attr, fd, (void *)&slsp);
 	if (error != 0)
 		return (error);
-
-	if (args->attr.attr_target == SLS_SOCKRCV)
-		return (sls_socket_receive(slsp));
 
 	LIST_FOREACH (slsbk, &slsm.slsm_backends, bk_backends) {
 		if (slsbk->bk_type != args->attr.attr_target)
@@ -889,7 +829,13 @@ sls_backends_init()
 		SLS_WARN("slsbk_setup error %d\n", error);
 		return (error);
 	}
+	LIST_INSERT_HEAD(&slsm.slsm_backends, slsbk, bk_backends);
 
+	error = slsbk_setup(&recvbk_ops, SLS_SOCKRCV, &slsbk);
+	if (error != 0) {
+		SLS_WARN("slsbk_setup error %d\n", error);
+		return (error);
+	}
 	LIST_INSERT_HEAD(&slsm.slsm_backends, slsbk, bk_backends);
 
 	return (0);
@@ -909,7 +855,7 @@ sls_backends_import(void)
 }
 
 static void
-sls_backends_fini(void)
+sls_backends_export(void)
 {
 	struct sls_backend *slsbk, *bktmp;
 	int error;
@@ -918,7 +864,16 @@ sls_backends_fini(void)
 		error = slsbk_export(slsbk);
 		if (error != 0)
 			SLS_WARN("slsbk_export error %d\n", error);
+	}
+}
 
+static void
+sls_backends_fini(void)
+{
+	struct sls_backend *slsbk, *bktmp;
+	int error;
+
+	LIST_FOREACH_SAFE (slsbk, &slsm.slsm_backends, bk_backends, bktmp) {
 		error = slsbk_teardown(slsbk);
 		if (error != 0)
 			SLS_WARN("slsbk_teardown error %d\n", error);
@@ -989,12 +944,6 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 
 		slsm.slsm_exiting = 1;
 
-		error = sls_receive_stopall();
-		if (error != 0) {
-			SLS_UNLOCK();
-			return (error);
-		}
-
 		SLS_LOCK();
 
 		/* Wait for all operations to be done. */
@@ -1012,6 +961,8 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		SLS_UNLOCK();
 
 		DEBUG("Turning off the swapper...");
+
+		sls_backends_export();
 
 		/* Destroy all in-memory partition data. */
 		slsp_delall();

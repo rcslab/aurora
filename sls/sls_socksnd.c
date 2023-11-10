@@ -203,23 +203,20 @@ out:
 	return (error);
 }
 
-static int
-slssnd_connect(struct slspart *slsp, int *sockfdp)
+int
+slssnd_connect(struct sockaddr_in *sasrc, int *sockfdp)
 {
 	struct thread *td = curthread;
 	struct sockaddr_in sa;
-	socklen_t alen;
 	int sockfd;
 	int error;
 
-	memcpy(&alen, slsp->slsp_name, sizeof(alen));
-	KASSERT(alen <= sizeof(sa), ("socket name too large"));
-	if (alen > sizeof(sa)) {
-		SLS_WARN("Socket wame size %d\n", alen);
+	if (sasrc->sin_len != sizeof(sa)) {
+		SLS_WARN("Socket name size %d\n", sasrc->sin_len);
 		return (ENAMETOOLONG);
 	}
 
-	memcpy(&sa, &slsp->slsp_name[sizeof(alen)], alen);
+	memcpy(&sa, sasrc, sizeof(sa));
 
 	error = kern_socket(td, AF_INET, SOCK_STREAM, 0);
 	if (error != 0) {
@@ -251,7 +248,7 @@ sls_write_socket(struct slspart *slsp, struct slsckpt_data *sckpt)
 	int error;
 	int ret;
 
-	error = slssnd_connect(slsp, &sockfd);
+	error = slssnd_connect((struct sockaddr_in *)slsp->slsp_name, &sockfd);
 	if (error != 0)
 		return (error);
 
@@ -312,30 +309,6 @@ out:
 	ret = kern_close(td, sockfd);
 	if (ret != 0)
 		printf("kern_close on socket failed with %d\n", ret);
-
-	return (error);
-}
-
-int
-sls_write_rcvdone(struct slspart *slsp)
-{
-	struct thread *td = curthread;
-	struct slsmsg_done *donemsg;
-	union slsmsg msg;
-	int error;
-	int ret;
-	int fd;
-
-	error = slssnd_connect(slsp, &fd);
-	if (error != 0)
-		return (error);
-
-	donemsg = (struct slsmsg_done *)&msg;
-	donemsg->slsmsg_type = SLSMSG_DONE;
-
-	error = slsio_fdwrite(fd, (char *)&msg, sizeof(msg), NULL);
-
-	ret = kern_close(td, fd);
 
 	return (error);
 }
