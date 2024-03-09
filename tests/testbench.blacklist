@@ -1,3 +1,13 @@
 014-remount-check.sh
 229-chroot.sh
 230-chroot-devfs.sh
+232-metropolis.sh
+233-metropolis-fork.sh
+234-metropolis-exec.sh
+235-metropolis-accept.sh
+236-metropolis-exit.sh
+237-metropolis-accept4.sh
+238-metropolis-simple.sh
+239-metropolis-pymetro-multiple.sh
+240-metropolis-partitions.sh
+241-metropolis-partitions-cached.sh
