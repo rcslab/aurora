@@ -29,14 +29,16 @@ Installation
 ------------
 
 Dependencies:
- - FreeBSD 12.1 with Aurora patches
+ - FreeBSD 12.3 with Aurora patches
  - pidof (testbench)
- - python3 (testbench)
 
-Before you begin you must install and configure FreeBSD 12.1 with the Aurora 
+Before you begin you must install and configure FreeBSD 12.3 with the Aurora 
 enabling patches that can be done from our tree or a provided iso image.  The 
 build depends on header changes to FreeBSD and one of four provided kernel 
 configuration files: GENERIC, PERF, FASTDBG, SLOWDBG.
+
+WARNING: If you are building FreeBSD 12.3 with our patches please remember to 
+do so on top of an existing FreeBSD 12.3 system.
 
 ```
 # make
@@ -59,6 +61,9 @@ The basic test suite can be run to verify things are working:
 # cd tests
 # ./testbench
 ```
+
+Please note that testbenches are prefixed with project names.  Disabled 
+testbenches are often from other projects.
 
 Getting Started
 ---------------
@@ -114,4 +119,16 @@ You can restore a process after a system crash using the `restore` command.
 ```
 slsctl restore
 ```
+
+Publications
+------------
+
+ - Emil Tsalapatis, Ryan Hancock, Tavian Barnes, Ali José Mashtizadeh.
+   The Aurora Operating System: Revisiting the Single Level Store.
+   In Proceedings of the 18th Workshop on Hot Topics in Operating Systems 
+   (HotOS ‘21). June, 2021.
+ - Emil Tsalapatis, Ryan Hancock, Tavian Barnes, Ali José Mashtizadeh.
+   The Aurora Single Level Store Operating System
+   In Proceedings of the 28th ACM Symposium on Operating Systems Principles 
+   (SOSP ‘21). September, 2021.
 
